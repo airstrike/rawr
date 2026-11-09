@@ -1330,6 +1330,56 @@ impl<G: 'static + for<'x> Gives<'x, I>, I: Inputs> Regional for Given<G, I> {
 }
 
 thread_local! {
+    /// The `&'a str`s native code gives the marked calls running on this
+    /// thread at a lifetime their results name, innermost last: the
+    /// program's copy of each and where native code's own text is.
+    static NATIVE_TEXTS: RefCell<Vec<(crate::ImmutableString, *const str)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// `text` is the program's copy of native code's `native`, given to a
+/// marked call whose result may borrow it: a crate call the program makes
+/// that borrows `text` for its output borrows `native` instead, so the
+/// result borrows what native code lent, as Rust's would. Kept till the
+/// [`NativeTexts`] the call opened drops.
+#[cfg(feature = "rust-import")]
+pub(crate) fn keep_native_text(text: crate::ImmutableString, native: *const str) {
+    NATIVE_TEXTS.with_borrow_mut(|texts| texts.push((text, native)));
+}
+
+/// Native code's own text that `text` is the program's copy of, while the
+/// call it was given to runs.
+fn native_text(text: &crate::ImmutableString) -> Option<*const str> {
+    NATIVE_TEXTS.with_borrow(|texts| {
+        texts
+            .iter()
+            .rev()
+            .find(|(copy, _)| copy.ptr_eq(text))
+            .map(|&(_, native)| native)
+    })
+}
+
+/// The native texts a marked call is given ([`keep_native_text`]), let
+/// go of when the call ends, however it ends.
+#[cfg(feature = "rust-import")]
+pub(crate) struct NativeTexts(usize);
+
+#[cfg(feature = "rust-import")]
+impl NativeTexts {
+    /// Opens a call's native texts.
+    pub(crate) fn open() -> Self {
+        Self(NATIVE_TEXTS.with_borrow(Vec::len))
+    }
+}
+
+#[cfg(feature = "rust-import")]
+impl Drop for NativeTexts {
+    fn drop(&mut self) {
+        NATIVE_TEXTS.with_borrow_mut(|texts| texts.truncate(self.0));
+    }
+}
+
+thread_local! {
     /// The regions [`open_anchored`] opened on this thread, innermost last.
     static ANCHORS: RefCell<Vec<Nonce>> = const { RefCell::new(Vec::new()) };
     /// The regions [`open_joined`] opened on this thread, innermost last.
@@ -1579,8 +1629,17 @@ impl Pins {
         }
     }
 
-    /// `text`, borrowed for as long as these pins are.
+    /// `text`, borrowed for as long as these pins are, or native code's
+    /// own text when `text` is the program's copy of one a marked call
+    /// keeps ([`keep_native_text`]): nothing is pinned for it.
     pub fn pin(&self, text: crate::ImmutableString) -> &str {
+        if let Some(native) = native_text(&text) {
+            // SAFETY: rustc ties the marked call's result to native code's
+            // `&'a str`, so what the program makes that borrows it outlives
+            // the call only in that result, which native code holds no
+            // longer than its text. The call is still running.
+            return unsafe { &*native };
+        }
         let mut pinned = self
             .strings
             .lock()

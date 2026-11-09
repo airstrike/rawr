@@ -549,3 +549,62 @@ impl<M: Clone, T, R> Widget<M, T, R> for Pressable<'_, M, T> {
         Some(self.message.clone())
     }
 }
+
+/// What a text asks of the theme, as iced's `text::Catalog`: its class
+/// borrows for as long as the text does, so a `Text` is invariant in its
+/// lifetime, as iced's is.
+pub trait TextCatalog {
+    type Class<'a>;
+
+    fn default<'a>() -> Self::Class<'a>;
+
+    fn color(&self, class: &Self::Class<'_>) -> u32;
+}
+
+impl TextCatalog for Theme {
+    type Class<'a> = Box<dyn Fn(&Theme) -> u32 + 'a>;
+
+    fn default<'a>() -> Self::Class<'a> {
+        Box::new(|theme| theme.accent)
+    }
+
+    fn color(&self, class: &Self::Class<'_>) -> u32 {
+        class(self)
+    }
+}
+
+/// A text over borrowed content, as iced's `Text<'a, Theme, Renderer>`.
+pub struct Text<'a, T: TextCatalog = Theme> {
+    content: &'a str,
+    size: u32,
+    class: T::Class<'a>,
+}
+
+pub fn text<'a, T: TextCatalog>(content: &'a str) -> Text<'a, T> {
+    Text {
+        content,
+        size: 16,
+        class: T::default(),
+    }
+}
+
+impl<'a, T: TextCatalog> Text<'a, T> {
+    pub fn size(mut self, size: u32) -> Self {
+        self.size = size;
+        self
+    }
+
+    /// The content it borrows.
+    pub fn content(&self) -> &'a str {
+        self.content
+    }
+
+    pub fn draw(&self, theme: &T) -> String {
+        format!(
+            "{} at {} in {}",
+            self.content,
+            self.size,
+            theme.color(&self.class)
+        )
+    }
+}

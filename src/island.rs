@@ -1688,6 +1688,8 @@ impl Calls {
         // (#1264).
         let mut held = Vec::new();
         let mut texts = Vec::new();
+        // Native code's own texts the result may borrow, for the call.
+        let _native_texts = crate::scope::NativeTexts::open();
         for index in 0..count {
             if reader.bytes.first() == Some(&program::model::island::HANDLE) {
                 reader.byte().map_err(malformed)?;

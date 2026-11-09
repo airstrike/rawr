@@ -884,9 +884,12 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// app's `widget` re-exports, a native style function as a container's
 /// style, and, with its wizard open, the wizard's element over the
 /// catalog native code gives for the call, stacked over the page with
-/// `opaque`; native code maps the element it returns. `rawr
-/// check` passes as `cargo check` does, and `rawr run` prints what `cargo
-/// run` prints.
+/// `opaque`; native code maps the element it returns. A marked
+/// `caption<'a>(label: &'a str)`, as inboard's `sidebar::subtitle`, gives
+/// native code the crate's `Text<'a>`, invariant in its lifetime as iced's
+/// is, which borrows native code's own `label` and which native code
+/// keeps. `rawr check` passes as `cargo check` does, and `rawr run` prints
+/// what `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -923,6 +926,10 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(
         printed.contains("[welcome styled 120, void styled 0, grid styled 251]]))) Some(Home(Inbox(Opened(120))))\n")
             && printed.contains("over opaque sales styled 253] Some(Home(Wizard(Step(3))))\ncatalog read 1\n"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("\ncaption at 12 in 7 on native text true\n"),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.

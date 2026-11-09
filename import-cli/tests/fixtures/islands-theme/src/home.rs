@@ -48,6 +48,13 @@ pub fn empty<'a>() -> Element<'a, u32> {
     crate::widget::void()
 }
 
+/// A caption over native code's own text, as inboard's
+/// `sidebar::subtitle`: the crate's `Text`, invariant in its lifetime,
+/// borrows the `&'a str` native code gives, and native code keeps it.
+pub fn caption<'a>(label: &'a str) -> ui::Text<'a> {
+    ui::text(label).size(12)
+}
+
 /// What the screen's elements give, as inboard's `home::Message`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {

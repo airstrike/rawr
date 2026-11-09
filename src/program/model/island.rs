@@ -63,6 +63,10 @@ pub(crate) const HASHED_SET: u8 = 26;
 /// A hashed map's `[key, value]` entries in native code's order, as
 /// [`HASHED_SET`] holds a set's keys.
 pub(crate) const HASHED_MAP: u8 = 27;
+/// Before the [`STR`] of a `&str` native code gives: the address and
+/// length of native code's own text, which a crate call that borrows the
+/// program's copy for its output borrows instead (`scope::Pins::pin`).
+pub(crate) const KEPT_TEXT: u8 = 28;
 
 /// The first byte of a call's header: the function is a member of the
 /// type before its last segment.
@@ -491,6 +495,24 @@ impl Model {
                 let text = ImmutableString::from(reader.text()?);
                 crate::island::read_text(&text);
                 text.into()
+            }
+            KEPT_TEXT => {
+                let address = reader.count()?;
+                let length = reader.count()?;
+                let value = self.island_read(types, lent, given, part, reader, depth)?;
+                let text = value
+                    .clone()
+                    .into_immutable_string()
+                    .map_err(|actual| format!("a kept `&str` is a `{actual}`"))?;
+                let native = std::ptr::slice_from_raw_parts(
+                    std::ptr::with_exposed_provenance::<u8>(address),
+                    length,
+                ) as *const str;
+                crate::scope::keep_native_text(text, native);
+                // It outlives what the call makes of it, as rustc says, so a
+                // crate call that borrows it makes a value of its own, never
+                // one of a region that ends with the call.
+                crate::scope::lend_static(value)
             }
             ARRAY => {
                 let length = reader.members()?;

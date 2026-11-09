@@ -105,5 +105,13 @@ fn main() {
     let page = pane(&screen, &source, grid::home(&theme), &dark);
     println!("page {} {:?}", page.draw(&dark), page.message());
     println!("catalog read {}", source.reads());
+    let label = String::from("caption");
+    let caption = home::caption(&label);
+    let crate_theme = ui::Theme::custom("crate".to_owned(), 7);
+    println!(
+        "{} on native text {}",
+        caption.draw(&crate_theme),
+        std::ptr::eq(caption.content(), label.as_str())
+    );
     println!("clones {}", theme::clones());
 }
