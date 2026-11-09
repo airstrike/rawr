@@ -1530,6 +1530,7 @@
     {"t":"T1527","issue":1527,"title":"T1527: A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":"0.3.173"},
     {"t":"T1528","issue":1528,"title":"T1528: A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":"87d09b4bd","release":null},
     {"t":"T1529","issue":1529,"title":"T1529: A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1530","issue":1530,"title":"T1530: A given native value inside a by-value parameter was checked against a marked type's mirror, not the marked type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1530","issue":1530,"title":"T1530: A given native value inside a by-value parameter was checked against a marked type's mirror, not the marked type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1531","issue":1531,"title":"T1531: A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
