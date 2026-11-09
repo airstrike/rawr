@@ -79,6 +79,7 @@ pub(super) fn impl_surface_type(
         Ty::Script(definition, arguments) => Type::Script {
             path: models.script_path(*definition),
             arguments: all(arguments)?,
+            holder: models.holder(*definition),
         },
         Ty::Host { proof, arguments } if proof.definition.identity().imported().is_some() => {
             Type::Nominal {
@@ -415,6 +416,7 @@ pub(super) fn imported_surface_type(
             Type::Script {
                 path: models.script_path(*definition),
                 arguments: converted.into_boxed_slice(),
+                holder: models.holder(*definition),
             }
         }
         // An `Option` or a `Result` holding a crate value is Rust's own
@@ -980,6 +982,7 @@ pub(super) fn instance_surface_type(
                 .iter()
                 .map(|argument| instance_surface_type(inference, models, argument))
                 .collect::<Option<_>>()?,
+            holder: models.holder(*definition),
         },
         ty if erased(ty) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::value(),

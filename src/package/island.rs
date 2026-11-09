@@ -311,6 +311,32 @@ pub(crate) fn native_statics<'a>(
     statics
 }
 
+/// The marked types the shadow crate mirrors so that a program value of one
+/// crosses whole, by their paths from the crate root, as `["workspace",
+/// "home", "Message"]`: each visible struct and enum whose every field
+/// crosses. The runner holds a program value of one as its mirror where a
+/// crate's generic takes it, as `Task<Message>` does (#1249). `sources` are
+/// as [`native_statics`] takes them.
+#[cfg(feature = "rust-import")]
+pub(crate) fn mirrors<'a>(
+    sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
+) -> Vec<Vec<ImmutableString>> {
+    let sources = sources
+        .into_iter()
+        .map(|(modules, text, items)| Source {
+            modules,
+            path: Path::new(""),
+            text,
+            items,
+        })
+        .collect::<Vec<_>>();
+    Generator::new(&sources)
+        .crossing
+        .iter()
+        .map(|path| path.split("::").map(ImmutableString::from).collect())
+        .collect()
+}
+
 /// Generate the shadow files of the marked sources of a crate whose root
 /// is native. `module_root` is the directory of the crate root; `sources`
 /// yields each marked source's module path, file, text and items.
@@ -1970,6 +1996,7 @@ impl<'a> Generator<'a> {
         if self.holding.contains(&path) {
             text.push_str(&self.struct_parts(file, declared, &path));
         }
+        text.push_str(&self.mirror_impl(name, &path));
         text
     }
 
@@ -2010,7 +2037,24 @@ impl<'a> Generator<'a> {
         if self.holding.contains(&path) {
             text.push_str(&self.enum_parts(file, declared, &path, &take));
         }
+        text.push_str(&self.mirror_impl(name, &path));
         text
+    }
+
+    /// The `Mirror` impl of the crossing type `name` at `path`, which the
+    /// runner holds a program value as where a crate's generic takes one
+    /// (#1249): a value moves its native parts, as Rust moves it.
+    fn mirror_impl(&self, name: &str, path: &str) -> String {
+        let island = format!("crate::{MODULE}");
+        let give = if self.holding.contains(path) {
+            format!("{island}::Parts::give(self, out);")
+        } else {
+            format!("{island}::Put::put(&self, out);")
+        };
+        format!(
+            "impl {island}::Mirror for {name} {{\n    fn give(self, out: &mut {island}::Out) {{\n        \
+             {give}\n    }}\n}}\n"
+        )
     }
 }
 
@@ -3442,6 +3486,45 @@ pub mod __rawr_island {
     /// A value that comes back from the interpreter.
     pub trait Take: Sized {
         fn take(input: &mut In<'_>) -> Self;
+    }
+
+    /// A marked type native code sees, which the runner holds a program
+    /// value as where a crate's generic takes one, as `Task<Message>` does
+    /// (#1249): a value goes to the interpreter as Rust moves it, its native
+    /// parts moved, and comes back by [`Take`].
+    pub trait Mirror: Take {
+        fn give(self, out: &mut Out);
+    }
+
+    /// The mirror of the program value the runner wrote as `bytes`, its
+    /// native values moved to `natives` (`rawr::island::mirror_out`), at
+    /// `path` from the crate's root.
+    pub fn mirrored<T: Mirror>(
+        path: &'static str,
+        bytes: &[u8],
+        natives: ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
+    ) -> T {
+        let mut natives = natives
+            .into_iter()
+            .map(::std::option::Option::Some)
+            .collect::<::std::vec::Vec<_>>();
+        let mut input = In {
+            bytes,
+            path,
+            natives: &mut natives,
+        };
+        T::take(&mut input)
+    }
+
+    /// A mirror's value on its way to the interpreter: its bytes and the
+    /// native values it gives, for the runner to make the program value of
+    /// (`rawr::island::mirror_in`).
+    pub fn unmirrored<T: Mirror>(
+        value: T,
+    ) -> (::std::vec::Vec<u8>, ::std::vec::Vec<::std::option::Option<Given>>) {
+        let mut out = Out(::std::vec::Vec::new(), ::std::vec::Vec::new());
+        value.give(&mut out);
+        (out.0, out.1)
     }
 
     impl Put for () {

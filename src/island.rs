@@ -696,6 +696,43 @@ pub fn validate(witness: &crate::host::runtime::Witness, value: &Dynamic) -> Res
         .map_err(|error| error.to_string())
 }
 
+/// `value`, a program value of a marked type the runner holds as its
+/// mirror in rawr's copy of the crate, as a crate's generic takes it
+/// (`Task<Message>`, #1249): written as a reply writes a marked function's
+/// value, each native value it holds moved to the natives that come with
+/// the bytes. `Err` names what can't cross.
+pub fn mirror_out(value: &Dynamic) -> Result<(Vec<u8>, Natives), String> {
+    let mut bytes = Vec::new();
+    let mut natives = Natives::new();
+    with_types(|model, _| model.island_write_in(value, None, &mut bytes, &mut natives, 0))?;
+    Ok((bytes, natives))
+}
+
+/// The program value of a mirror native code gives back (#1249), which
+/// [`mirror_out`]'s counterpart in rawr's copy of the crate wrote as
+/// `bytes`, each native value it gives kept by the runner.
+pub fn mirror_in(bytes: &[u8], given: &mut [Option<Given>]) -> Result<Dynamic, String> {
+    with_types(|model, types| model.island_read(types, &[], given, None, &mut Reader { bytes }, 0))
+}
+
+/// `read` of the published generation's model and its crate's script
+/// types: on the thread that owns the program, or the one published last.
+fn with_types<R>(
+    read: impl FnOnce(&program::model::Model, &program::model::island::Types) -> Result<R, String>,
+) -> Result<R, String> {
+    if let Some(current) = current() {
+        return read(
+            current.bootstrap.catalog().authority().model(),
+            &current.calls.types,
+        );
+    }
+    #[cfg(feature = "sync")]
+    if let Some((calls, shared)) = elsewhere() {
+        return read(shared.authority.model(), &calls.types);
+    }
+    Err("no program is published on this thread".to_owned())
+}
+
 /// The entry the program registered for the thread that owns it to run:
 /// its native `main` (D501), or the runtime entry an async `main` gave
 /// (D513.4), whose `block_on` drives the program (D527).

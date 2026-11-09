@@ -422,6 +422,12 @@ impl Scalar {
     }
 }
 
+/// A crate type's name as a witness writes it: its path's last segment.
+fn host_type_name(definition: &crate::host::type_def::Definition) -> String {
+    let path = definition.path();
+    path.rsplit("::").next().unwrap_or_default().to_owned()
+}
+
 /// A pattern literal as Rust spells it.
 pub(super) fn render_literal(literal: &ast::NominalLiteral) -> String {
     match literal {
@@ -855,6 +861,29 @@ impl<'a> Parser<'a> {
                         .collect(),
                 );
             }
+            // A crate enum's variants, whose fields' patterns below a
+            // program's pattern are each a binding, `_` or a part tested at
+            // run time (`host_coverage`), so their types are not needed.
+            Ty::Host { proof, .. } => {
+                let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape() else {
+                    return None;
+                };
+                let identity = type_def::Identity::Host(proof.definition.identity().clone());
+                let owner = host_type_name(&proof.definition);
+                return Some(
+                    variants
+                        .iter()
+                        .map(|variant| Constructor {
+                            key: Key::Enum {
+                                identity: identity.clone(),
+                                variant: nominal::variant::Id::from_text(variant.name()),
+                            },
+                            name: format!("{owner}::{}", variant.name()).into(),
+                            payload: vec![Ty::Unknown; variant.fields().len()].into(),
+                        })
+                        .collect(),
+                );
+            }
             _ => {}
         }
         let definition = resolved.script()?;
@@ -900,6 +929,96 @@ impl<'a> Parser<'a> {
                 })
                 .collect(),
         )
+    }
+
+    /// What `syntax`, a pattern on the crate type `ty` that its arm tests at
+    /// run time, covers of `ty`'s values: a crate enum's variant, with each
+    /// field `_` where its pattern matches anything and else a part that
+    /// covers no whole value, as a literal is. Any other refutable pattern
+    /// covers no whole value. A program's `match` on `Message::Wizard(..)`
+    /// is then exhaustive where rustc's is (#1249).
+    pub(super) fn host_coverage(
+        &self,
+        syntax: &pattern::Syntax,
+        ty: &Ty,
+    ) -> Result<Pattern, Error> {
+        let partial = || Pattern::Constructor {
+            key: Key::Range,
+            name: "_".into(),
+            payload: Box::default(),
+        };
+        if !syntax.may_refute() {
+            return Ok(Pattern::Wildcard);
+        }
+        let referenced = self.referenced(ty);
+        match syntax {
+            pattern::Syntax::At { pattern, .. } | pattern::Syntax::Reference { pattern, .. } => {
+                self.host_coverage(pattern, &referenced)
+            }
+            pattern::Syntax::Or { alternatives, .. } => Ok(Pattern::Or(
+                alternatives
+                    .iter()
+                    .map(|alternative| self.host_coverage(alternative, &referenced))
+                    .collect::<Result<_, _>>()?,
+            )),
+            pattern::Syntax::Enum(written) if !written.host_struct => {
+                let Some(constructor) = self.coverage_constructors(&referenced).and_then(|all| {
+                    all.into_iter().find(|constructor| {
+                        matches!(&constructor.key, Key::Enum { variant, .. }
+                            if variant.name() == written.variant.as_str())
+                    })
+                }) else {
+                    return Ok(partial());
+                };
+                let Ty::Host { proof, .. } = &referenced else {
+                    return Ok(partial());
+                };
+                let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape() else {
+                    return Ok(partial());
+                };
+                let Some(variant) = variants
+                    .iter()
+                    .find(|variant| variant.name() == written.variant.as_str())
+                else {
+                    return Ok(partial());
+                };
+                let discard = pattern::Syntax::Discard {
+                    span: syntax.span(),
+                };
+                let members = match &written.named {
+                    Some((names, _)) => {
+                        let mut members = vec![&discard; variant.fields().len()];
+                        for ((name, _), member) in names.iter().zip(written.payload.iter()) {
+                            if let Some(index) = variant
+                                .fields()
+                                .iter()
+                                .position(|field| field.name() == name.as_str())
+                            {
+                                members[index] = member;
+                            }
+                        }
+                        members
+                    }
+                    None if written.payload.is_empty() => vec![&discard; variant.fields().len()],
+                    None => tuple_members(&written.payload, variant.fields().len(), &discard)?,
+                };
+                Ok(Pattern::Constructor {
+                    key: constructor.key,
+                    name: constructor.name,
+                    payload: members
+                        .into_iter()
+                        .map(|member| {
+                            if member.may_refute() {
+                                partial()
+                            } else {
+                                Pattern::Wildcard
+                            }
+                        })
+                        .collect(),
+                })
+            }
+            _ => Ok(partial()),
+        }
     }
 
     pub(super) fn coverage_pattern_is_covered(

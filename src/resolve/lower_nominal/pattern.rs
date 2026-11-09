@@ -1590,12 +1590,13 @@ impl<'a> Parser<'a> {
                 ty: expected.clone(),
                 mutable: false,
             });
+            let covered = self.host_coverage(syntax, &expected)?;
             return Ok((
                 NominalPattern::Binding {
                     name,
                     expected: self.payload_type(&expected),
                 },
-                coverage::Pattern::Wildcard,
+                covered,
             ));
         }
         match syntax {

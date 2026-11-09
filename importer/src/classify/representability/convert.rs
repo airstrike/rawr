@@ -117,6 +117,27 @@ impl Builtin {
     }
 }
 
+/// The Rust type a runner holds a script type's values as where native
+/// generic code takes one, as `Task<Message>` of a program's `Message`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Holder {
+    /// The runner's proxy, which holds the script value (D594).
+    #[default]
+    Proxy,
+    /// The type's mirror in rawr's copy of a native root's crate, which
+    /// native code names as the marked module's type and which holds the
+    /// value as native code has it, its native parts moved in (#1249).
+    Mirror,
+}
+
+impl Holder {
+    /// Whether it is the runner's proxy.
+    #[must_use]
+    pub const fn is_proxy(&self) -> bool {
+        matches!(self, Self::Proxy)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Type {
     Unit,
@@ -176,11 +197,14 @@ pub enum Type {
     },
     Parameter(u32),
     /// A script type where a native generic takes a Rust type (D594): the
-    /// runner's proxy for it, named by its `path` from the project's crate
-    /// root (`State`, `app::State`), at `arguments` when it is generic.
+    /// Rust type the runner holds it as, named by its `path` from the
+    /// project's crate root (`State`, `app::State`), at `arguments` when it
+    /// is generic.
     Script {
         path: Box<str>,
         arguments: Box<[Type]>,
+        #[serde(default, skip_serializing_if = "Holder::is_proxy")]
+        holder: Holder,
     },
     /// A type parameter no script value fixes, as iced's `Theme` and
     /// `Renderer` of `run` are, which the view's widget gives: rustc infers

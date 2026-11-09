@@ -75,6 +75,10 @@ pub(super) struct Tables {
     pub(super) qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
     /// The app crate whose shadow holds an async `main`'s entry (D513.4).
     pub(super) entry_crate: Option<ImmutableString>,
+    /// The marked types the runner holds as their mirrors in rawr's copy
+    /// of the crate, by package and path (#1249).
+    #[cfg(feature = "rust-import")]
+    pub(super) mirrors: BTreeSet<Box<[ImmutableString]>>,
     /// The crates the program's paths may start with (`Program::crates`).
     pub(super) crates: Option<crate::resolve::extern_prelude::Prelude>,
     /// The type aliases each source names, resolved once with the headers.
@@ -781,6 +785,8 @@ impl Models {
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
+            #[cfg(feature = "rust-import")]
+            mirrors: program.mirrors.clone(),
             crates: program.crates.clone(),
             aliases,
             namespaces: program
@@ -986,6 +992,28 @@ impl Models {
 
     pub(super) fn definition(&self, id: type_def::Id) -> &Nominal {
         &self.by_definition[&id]
+    }
+
+    /// What the runner holds the script type `id`'s values as where a
+    /// crate's generic takes one: the mirror rawr's copy of a native root's
+    /// crate declares for a marked type native code sees, whose values
+    /// native code names (#1249), and else its proxy (D594).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn holder(
+        &self,
+        id: type_def::Id,
+    ) -> rawr_import::classify::representability::convert::Holder {
+        use rawr_import::classify::representability::convert::Holder;
+        let key = self.definition(id).definition().key();
+        let path = std::iter::once(ImmutableString::from(key.package()))
+            .chain(key.modules().iter().cloned())
+            .chain([ImmutableString::from(key.name())])
+            .collect::<Box<[_]>>();
+        if self.mirrors.contains(&path) {
+            Holder::Mirror
+        } else {
+            Holder::Proxy
+        }
     }
 
     /// The path the runner names the script type `id`'s proxy by, its

@@ -1079,13 +1079,13 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
                 .checked_add(std::mem::size_of::<convert::Type>())?
                 .checked_add(type_bytes(member)?)
         }),
-        convert::Type::Script { path, arguments } => {
-            arguments.iter().try_fold(path.len(), |bytes, argument| {
-                bytes
-                    .checked_add(std::mem::size_of::<convert::Type>())?
-                    .checked_add(type_bytes(argument)?)
-            })
-        }
+        convert::Type::Script {
+            path, arguments, ..
+        } => arguments.iter().try_fold(path.len(), |bytes, argument| {
+            bytes
+                .checked_add(std::mem::size_of::<convert::Type>())?
+                .checked_add(type_bytes(argument)?)
+        }),
         convert::Type::Inferred => Some(0),
         convert::Type::Unit
         | convert::Type::Never
@@ -1631,8 +1631,13 @@ impl Framed {
                 self.byte(3);
                 self.0.update(index.to_le_bytes());
             }
-            convert::Type::Script { path, arguments } => {
-                self.byte(13);
+            convert::Type::Script {
+                path,
+                arguments,
+                holder,
+            } => {
+                // A mirror is another Rust type than a proxy of one path.
+                self.byte(if holder.is_proxy() { 13 } else { 18 });
                 self.bytes(path.as_bytes());
                 self.count(arguments.len());
                 for argument in arguments {
