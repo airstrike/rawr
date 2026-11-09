@@ -1336,6 +1336,12 @@ impl std::fmt::Debug for NativeHandle {
         }
     }
 }
+/// A struct the program moved fields out of by value, as Rust leaves a
+/// local's other fields when it moves one out (#834): its fields by
+/// position, each `None` once moved, which drop in order with its slot.
+#[allow(dead_code)]
+struct Parts { of: std::any::TypeId, fields: Vec<Option<Box<dyn Any>>> }
+
 /// A thread's native values, by slot. `call` marks a call's own
 /// (`CallArena`).
 struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32>, call: bool }
@@ -2111,6 +2117,67 @@ impl Arena {
     /// function's result native code takes (#1118).
     fn take_any(&mut self, handle: &NativeHandle) -> Result<Box<dyn Any>, Error> {
         self.take_where(handle, |_| true)
+    }
+
+    /// Whether the value `handle` names is a `T` the program moved fields
+    /// out of (`split`), whose slot holds its fields apart.
+    #[allow(dead_code)]
+    fn parted<T: 'static>(&self, handle: &NativeHandle) -> bool {
+        handle.epoch == self.epoch
+            && self.slots.get(handle.slot as usize).is_some_and(|entry| {
+                entry.generation == handle.generation
+                    && entry
+                        .value
+                        .as_deref()
+                        .and_then(|value| value.downcast_ref::<Parts>())
+                        .is_some_and(|parts| parts.of == std::any::TypeId::of::<T>())
+            })
+    }
+
+    /// Split the `T` `handle` names into its fields where it is, by
+    /// `split`, as Rust leaves a local's other fields when the program
+    /// moves one out by value (#834). `false`, and the value stays whole,
+    /// where it is not plainly in its slot, as a value a home holds is not.
+    #[allow(dead_code)]
+    fn split<T: 'static>(&mut self, handle: &NativeHandle, split: fn(T) -> Vec<Option<Box<dyn Any>>>) -> Result<bool, Error> {
+        self.settle(handle);
+        if self.homed(handle).is_some() {
+            return Ok(false);
+        }
+        let index = self.index::<T>(handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
+        let parts = Parts { of: std::any::TypeId::of::<T>(), fields: split(*value) };
+        self.slots[index].value = Some(Box::new(parts));
+        Ok(true)
+    }
+
+    /// Field `index` of a value `split` parted, moved out of it.
+    #[allow(dead_code)]
+    fn take_part<F: 'static>(&mut self, handle: &NativeHandle, index: usize) -> Result<F, Error> {
+        let slot = self.index_where(handle, |value| value.is::<Parts>())?;
+        let parts = self.slots[slot]
+            .value
+            .as_deref_mut()
+            .and_then(|value| value.downcast_mut::<Parts>())
+            .ok_or(Error::TypeMismatch)?;
+        let field = parts.fields.get_mut(index).ok_or(Error::TypeMismatch)?.take().ok_or(Error::StaleHandle)?;
+        field.downcast::<F>().map(|field| *field).map_err(|_| Error::TypeMismatch)
+    }
+
+    /// `read` of field `index` of a value `split` parted, where it is.
+    #[allow(dead_code)]
+    fn read_part<F: 'static, R>(&self, handle: &NativeHandle, index: usize, read: impl FnOnce(&F) -> R) -> Result<R, Error> {
+        let slot = self.index_where(handle, |value| value.is::<Parts>())?;
+        let field = self.slots[slot]
+            .value
+            .as_deref()
+            .and_then(|value| value.downcast_ref::<Parts>())
+            .and_then(|parts| parts.fields.get(index))
+            .ok_or(Error::TypeMismatch)?
+            .as_deref()
+            .ok_or(Error::StaleHandle)?;
+        field.downcast_ref::<F>().map(read).ok_or(Error::TypeMismatch)
     }
 
     /// The value `handle` names when `is` holds for it: moved out by the
@@ -9316,6 +9383,77 @@ fn render_structural_instance(plan: &Plan, output: &mut Vec<u8>) -> Result<(), r
     output.write_all(b",\n").map_err(request::unwritable)
 }
 
+/// Where the field named `name` that `plan` reads is among its struct's
+/// fields, and the function that splits the struct into them, as Rust
+/// leaves a local's other fields when the program moves one out (#834):
+/// only for a struct whose every field the runner can name (`facade`'s
+/// constructible shape) and that borrows nothing.
+fn field_part(
+    plan: &Plan,
+    name: &str,
+    facade: Option<&crate::surface::facade::Plan>,
+) -> Option<Part> {
+    let whole = structural_type(plan);
+    if carries_lifetimes(&whole) {
+        return None;
+    }
+    let mut owners = facade?
+        .facades()
+        .filter(|facade| facade.root() == plan.export().root_alias())
+        .flat_map(|facade| facade.types())
+        .filter(|ty| ty.path().split("::").eq(plan.export().path()));
+    let owner = owners.next()?;
+    if owners.next().is_some() {
+        return None;
+    }
+    let (_, _, fields, true) = owner.shape().struct_parts()? else {
+        return None;
+    };
+    let index = fields.iter().position(|field| field.name() == name)?;
+    let bound = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| format!("{}: field_{index}", field.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let boxed = (0..fields.len())
+        .map(|index| format!("Some(Box::new(field_{index}) as Box<dyn std::any::Any>)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let split = format!(
+        "(|value: {whole}| {{ let {} {{ {bound} }} = value; vec![{boxed}] }}) as fn({whole}) -> Vec<Option<Box<dyn std::any::Any>>>",
+        rust_path(plan)
+    );
+    Some(Part { index, split })
+}
+
+/// A field among its struct's fields (`field_part`).
+struct Part {
+    /// The field's position in its struct.
+    index: usize,
+    /// The function, written, that splits the struct into its fields.
+    split: String,
+}
+
+/// `read`, the read of a field of type `ty` where its struct is, or the
+/// same read of the field, `field`, where `split` left it once the program
+/// moved another out (`field_part`).
+fn read_parted(
+    part: Option<&Part>,
+    path: &str,
+    ty: &convert::Type,
+    field: &str,
+    read: &str,
+) -> Result<String, request::Error> {
+    let Some(Part { index, .. }) = part else {
+        return Ok(read.to_owned());
+    };
+    let rust = concrete_type(ty).ok_or_else(|| request::drift("a parted field's type"))?;
+    Ok(format!(
+        "if arguments.arena.parted::<{path}>(&handle) {{ arguments.arena.read_part::<{rust}, _>(&handle, {index}, |field| {field})? }} else {{ {read} }}"
+    ))
+}
+
 fn structural_type(plan: &Plan) -> String {
     let path = rust_path(plan);
     let instance = plan.structural_instance();
@@ -10711,6 +10849,9 @@ fn render_adapter_body(
         }
         Operation::StructField { field, .. } => {
             let path = structural_type(plan);
+            // Where the struct's fields are apart once the program moved
+            // one out (`field_part`).
+            let part = field_part(plan, field.name(), facade);
             // A field of a value in a scope frame's region (D558 tier 1), as
             // quick-xml's `Attribute::value`: a copy, which stays in the
             // region when it carries the region's lifetime.
@@ -10829,10 +10970,14 @@ fn render_adapter_body(
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
                     .map_err(request::unwritable)?;
+                let read = format!(
+                    "arguments.arena.shared::<{path}, _>(handle, |input| input.{})?",
+                    field.name()
+                );
                 writeln!(
                     output,
-                    "    let output = arguments.arena.shared::<{path}, _>(handle, |input| input.{})?;",
-                    field.name()
+                    "    let output = {};",
+                    read_parted(part.as_ref(), &path, field.ty(), "*field", &read)?
                 )
                 .map_err(request::unwritable)?;
             } else if plain_value(field.ty()) {
@@ -10856,10 +11001,20 @@ fn render_adapter_body(
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
                     .map_err(request::unwritable)?;
+                let read = format!(
+                    "arguments.arena.shared::<{path}, _>(handle, |input| Clone::clone(&input.{}))?",
+                    field.name()
+                );
                 writeln!(
                     output,
-                    "    let output = arguments.arena.shared::<{path}, _>(handle, |input| Clone::clone(&input.{}))?;",
-                    field.name()
+                    "    let output = {};",
+                    read_parted(
+                        part.as_ref(),
+                        &path,
+                        field.ty(),
+                        "Clone::clone(field)",
+                        &read
+                    )?
                 )
                 .map_err(request::unwritable)?;
             } else {
@@ -10887,16 +11042,37 @@ fn render_adapter_body(
                     render_give(field.ty(), "output", output)?;
                     writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
                 }
+                // A struct whose every field the runner can name is split
+                // into its fields where it is, so its others stay for the
+                // program, as Rust leaves a local's other fields (#834).
+                let (parted, split) = match &part {
+                    Some(Part { index, split }) => {
+                        let field = concrete_type(field.ty())
+                            .ok_or_else(|| request::drift("a moved field's type"))?;
+                        (
+                            format!(
+                                "if arguments.arena.parted::<{path}>(&handle) {{
+        arguments.arena.take_part::<{field}>(&handle, {index})?
+    }} else "
+                            ),
+                            format!(
+                                "
+        _ if arguments.arena.split::<{path}>(&handle, {split})? => arguments.arena.take_part::<{field}>(&handle, {index})?,"
+                            ),
+                        )
+                    }
+                    None => (String::new(), String::new()),
+                };
                 writeln!(
                     output,
                     "    let handle = native_handle(arguments, 0, true)?;
-    let output = match arguments.arena.read_kept::<{path}, _>(&handle, |input| field_copy!(&input.{name}))? {{
-        Some(Some(output)) => output,
+    let output = {parted}{{ match arguments.arena.read_kept::<{path}, _>(&handle, |input| field_copy!(&input.{name}))? {{
+        Some(Some(output)) => output,{split}
         _ => {{
             let input: {path} = arguments.arena.take(handle)?;
             input.{name}
         }}
-    }};",
+    }} }};",
                     name = field.name()
                 )
                 .map_err(request::unwritable)?;
@@ -11173,7 +11349,29 @@ fn render_adapter_body(
             container_parameters,
             ..
         } if signature.scope().is_some() => {
-            render_arguments_with(signature, substitutions, 1, output)?;
+            // A `&'a T` the frame's output keeps with its receiver stays
+            // the program's value until the frame reaches it (`kept_inputs`).
+            let kept = kept_inputs(signature, substitutions)?;
+            for (index, ty) in signature.inputs().iter().enumerate() {
+                if kept.iter().any(|input| input.position == index) {
+                    writeln!(
+                        output,
+                        "    let argument_{index} = (**arguments.values.get_mut({}).ok_or(Error::MissingArgument)?).take();",
+                        index + 1
+                    )
+                    .map_err(request::unwritable)?;
+                } else {
+                    render_take_input(
+                        index,
+                        index + 1,
+                        ty,
+                        signature,
+                        substitutions,
+                        None,
+                        output,
+                    )?;
+                }
+            }
             render_method_opening(
                 plan,
                 &path,
@@ -12517,11 +12715,24 @@ fn render_method_opening(
             Receiver::Shared => ("with_ref", family::Reach::Get),
             _ => ("with", family::Reach::GetMut),
         };
+        // Each `&'a T` the output keeps with the receiver is held as long
+        // as the frame's own pins, or reached where native code lent it.
+        let kept = kept_inputs(signature, substitutions)?;
+        let reached = reach_kept(&kept, ".map_err(runtime_error)");
+        let pinned = if kept.is_empty() {
+            String::new()
+        } else {
+            "let pins = &__rawr_internal::scope::Pins::new();
+            let lender: Option<&__rawr_internal::scope::Region<'_>> = None;"
+                .to_owned()
+        };
+        let reached = format!("{pinned}{reached}");
         let scoped = match container_family(path, &container) {
             Some(family) => format!(
                 "Some(scoped) => __rawr_internal::scope::{claim}::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
             #[allow(unused_mut)]
             let mut receiver = region.{}.map_err(|error| runtime_error(Error::Lent(scoped.name(), error)))?;
+            {reached}
             let made = {call};
             {frame}
         }})
@@ -12535,7 +12746,9 @@ fn render_method_opening(
         } else {
             ""
         };
-        let lent = lent_opening(receiver, signature, &container, &call, &converted, &frame)?;
+        let lent = lent_opening(
+            receiver, signature, &container, &call, &converted, &frame, &kept, &reached,
+        )?;
         return writeln!(
             output,
             "    let scoped = scoped_value(arguments, 0);
@@ -12554,6 +12767,7 @@ fn render_method_opening(
                 let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
                 #[allow(unused_mut)]
                 let mut receiver = {borrow}held.get_mut();
+                {reached}
                 let made = {call};
                 {frame}
             }}
@@ -12598,7 +12812,10 @@ fn render_method_opening(
 /// let Some(lent)`. A lend native code keeps as long as an anchored call's
 /// result is borrowed in that call's region, where the output stays, so the
 /// result may keep it. Any other is reached through its accessor while the
-/// rest of the scope runs, as a frame holds a receiver of the arena.
+/// rest of the scope runs, as a frame holds a receiver of the arena. Each
+/// of `keeps` (`kept_inputs`) is reached beside a kept receiver in its
+/// region, and by `reached` beside another.
+#[allow(clippy::too_many_arguments)]
 fn lent_opening(
     receiver: Receiver,
     signature: &crate::classify::representability::signature::Signature,
@@ -12606,6 +12823,8 @@ fn lent_opening(
     call: &str,
     converted: &str,
     frame: &str,
+    keeps: &[KeptInput],
+    reached: &str,
 ) -> Result<String, request::Error> {
     let mutable = matches!(receiver, Receiver::Mutable);
     let borrow = if mutable { "&mut " } else { "&" };
@@ -12617,13 +12836,25 @@ fn lent_opening(
     } else {
         format!("({taken},)")
     };
+    // Each `&'a T` the output keeps beside the receiver is reached in the
+    // anchored region as well, or shared with its pins.
+    let kept_reached = if keeps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "
+                    let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;
+                    let lender = Some(&*region);{}",
+            reach_kept(keeps, "")
+        )
+    };
     let kept = if mutable {
         String::new()
     } else {
         format!(
             "            if let Some(anchor) = __rawr_internal::scope::anchor().filter(|_| lent.is_kept()) {{
                 let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
-                    let receiver = region.lent::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?;
+                    let receiver = region.lent::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?;{kept_reached}
                     let made = {call};
                     with_arena(|arena| {{
                         let mut values: [&mut Dynamic; 0] = [];
@@ -12648,6 +12879,7 @@ fn lent_opening(
                 #[allow(irrefutable_let_patterns, unused_parens)]
                 if let Some({taken}) = taken.take() {{
                     result = Some((|| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+                        {reached}
                         let made = {call};
                         {frame}
                     }})());
@@ -12656,6 +12888,58 @@ fn lent_opening(
             .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
             return result.ok_or_else(|| failed(__rawr_internal::scope::Error::Busy))?;"
     ))
+}
+
+/// Each input a scope frame's output keeps with its receiver, as
+/// inboard's `wizard.view(catalog, theme)` keeps `theme: &'a Theme`
+/// (`Signature::lends`), by position, with its crate type: a value the
+/// frame shares with its pins, or a lend native code keeps it reaches in
+/// the anchored region (`ViewedArgument`).
+fn kept_inputs(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Vec<KeptInput>, request::Error> {
+    if signature.scope() != Some(crate::classify::representability::signature::Scope::Borrows) {
+        return Ok(Vec::new());
+    }
+    let mut kept = Vec::new();
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if !keeps_borrow(signature, position, declared) {
+            continue;
+        }
+        let input = substituted(declared, signature, substitutions)?;
+        if let convert::Type::Borrowed { .. } = input
+            && let Some(target) = viewed_native(&input)
+        {
+            let rust =
+                concrete_type(target).ok_or_else(|| request::drift("a kept input's type"))?;
+            kept.push(KeptInput { position, rust });
+        }
+    }
+    Ok(kept)
+}
+
+/// An input a scope frame's output keeps with its receiver
+/// (`kept_inputs`).
+struct KeptInput {
+    /// The input's position among the call's inputs.
+    position: usize,
+    /// The crate type it borrows, written.
+    rust: String,
+}
+
+/// The statements that reach each of `kept` (`kept_inputs`), the
+/// program's value it was, at the lifetime of `pins` in `lender`, each
+/// error mapped by `failed`.
+fn reach_kept(kept: &[KeptInput], failed: &str) -> String {
+    let mut written = String::new();
+    for KeptInput { position, rust } in kept {
+        written.push_str(&format!(
+            "
+                let argument_{position} = with_arena(|arena| ViewedArgument::<{rust}>::of(arena, argument_{position})){failed}?.reach(pins, lender){failed}?;"
+        ));
+    }
+    written
 }
 
 /// The call of a method whose receiver is a value in a scope frame's

@@ -6,9 +6,9 @@
 //! its open wizard in an `Option`, its tabs in a `Vec` and its panes, a
 //! marked type over a tab, in a `Vec`, none of which can be cloned.
 
-use ui::{Action, Content, Element, Task};
+use ui::{common, Action, Content, Element, Task};
 
-use super::inbox;
+use super::{inbox, thumbs};
 
 pub mod tab;
 pub mod wizard;
@@ -20,7 +20,14 @@ pub enum Message {
     Edited(Action),
     Inbox(inbox::Message),
     Wizard(wizard::Message),
+    Built(wizard::Message),
     Count,
+}
+
+/// What the screen asks of the workspace, as inboard's `Instruction`.
+#[derive(Debug)]
+pub enum Instruction {
+    Commit(u32),
 }
 
 #[derive(Debug)]
@@ -147,18 +154,20 @@ impl State {
     /// ..)`, shows its child's text. It takes a native grid element by value
     /// inside an `Option` and the inbox's updates as a lent slice, which
     /// the free `inbox::view` keeps, and shows its open wizard, a native
-    /// part of `self`, over the catalog it is given, as inboard's does.
+    /// part of `self`, over the catalog and the theme it is given, as
+    /// inboard's does.
     pub fn view<'a>(
         &'a self,
         inbox: &'a inbox::State,
         updates: &'a [inbox::Update],
         catalog: wizard::View<'a>,
         grid: Option<Element<'a, wizard::Message>>,
+        theme: &'a crate::Theme,
     ) -> Element<'a, Message> {
         if let Some(grid) = grid {
             grid.map(Message::Wizard)
         } else if let Some(wizard) = &self.wizard {
-            wizard.view(catalog).map(Message::Wizard)
+            wizard.view(catalog, theme).map(Message::Wizard)
         } else if inbox.unread == 0 {
             inbox::view(inbox, updates).map(Message::Inbox)
         } else if self.count > 3 {
@@ -180,21 +189,50 @@ impl State {
     }
 }
 
-pub fn update(state: &mut State, message: Message, inbox: &mut inbox::State) -> Task<Message> {
+/// Take `message`, as inboard's `update`: its open wizard, a native part
+/// of `state`, takes its own over the catalog and the thumbnail renderer
+/// it is lent, and says whether it closed or committed.
+pub fn update(
+    state: &mut State,
+    message: Message,
+    inbox: &mut inbox::State,
+    catalog: wizard::View<'_>,
+    thumbs: &mut thumbs::Renderer,
+) -> common::Action<Instruction, Message> {
     match message {
         Message::Edited(action) => {
             state.content.perform(action);
-            Task::none()
+            common::Action::none()
         }
-        Message::Inbox(message) => inbox.update(message).map(Message::Inbox),
-        Message::Wizard(wizard::Message::Step(step)) if step > 2 => Task::done(Message::Count),
+        Message::Inbox(message) => common::Action::task(inbox.update(message).map(Message::Inbox)),
+        Message::Wizard(wizard::Message::Step(step)) if step > 2 => {
+            common::Action::task(Task::done(Message::Count))
+        }
         Message::Wizard(wizard::Message::Step(step)) => {
             state.count += step;
-            Task::none()
+            common::Action::none()
+        }
+        Message::Built(message) => {
+            let Some(wizard) = state.wizard.as_mut() else {
+                return common::Action::none();
+            };
+            let action = wizard.update(message, catalog, thumbs);
+            let task = action.task.map(Message::Built);
+            match action.instruction {
+                Some(wizard::Instruction::Closed) => {
+                    state.wizard = None;
+                    common::Action::task(task)
+                }
+                Some(wizard::Instruction::Commit(step)) => {
+                    state.wizard = None;
+                    common::Action::new(Instruction::Commit(step), task)
+                }
+                None => common::Action::task(task),
+            }
         }
         Message::Count => {
             state.count += STEP;
-            Task::done(Message::Edited(Action::Insert('!')))
+            common::Action::task(Task::done(Message::Edited(Action::Insert('!'))))
         }
     }
 }

@@ -1477,7 +1477,10 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              grid shows grid Some(Wizard(Step(7)))\n\
              wizard shows hello Some(Wizard(Step(5)))\nwizard closed at step 5\n\
              no updates show hello Some(Inbox(Read(0)))\n\
-             updates show tiles 1.2 Some(Inbox(Read(0)))\n"
+             updates show tiles 1.2 Some(Inbox(Read(0)))\n\
+             themed wizard shows dark Some(Wizard(Step(6)))\n\
+             wizard closed at step 11\ncommitted at step 11\nbuilt 3 drew 3\n\
+             wizard closed at step 6\nbuilt 2 drew 5 no wizard over []\n"
             ),
         "{printed}"
     );
@@ -1501,7 +1504,7 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     let whole = fs::read_to_string(&home).unwrap();
     edit(
         &home,
-        "        Message::Wizard(wizard::Message::Step(step)) => {\n            state.count += step;\n            Task::none()\n        }\n",
+        "        Message::Wizard(wizard::Message::Step(step)) => {\n            state.count += step;\n            common::Action::none()\n        }\n",
         "",
     );
     let refused = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

@@ -117,3 +117,38 @@ impl<'a, M> Element<'a, M> {
         }
     }
 }
+
+pub mod common {
+    //! What a screen's `update` gives back, as inboard's `common::Action`:
+    //! an instruction for its parent, if any, and a task over its messages.
+
+    use crate::Task;
+
+    pub struct Action<I, M> {
+        pub instruction: Option<I>,
+        pub task: Task<M>,
+    }
+
+    impl<I, M: 'static> Action<I, M> {
+        pub fn none() -> Self {
+            Self {
+                instruction: None,
+                task: Task::none(),
+            }
+        }
+
+        pub fn new(instruction: I, task: Task<M>) -> Self {
+            Self {
+                instruction: Some(instruction),
+                task,
+            }
+        }
+
+        pub fn task(task: Task<M>) -> Self {
+            Self {
+                instruction: None,
+                task,
+            }
+        }
+    }
+}
