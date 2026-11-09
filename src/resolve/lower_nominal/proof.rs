@@ -189,6 +189,12 @@ impl<'a> Parser<'a> {
                         .iter()
                         .map(|slot| slot.served())
                         .collect::<Box<[_]>>(),
+                    &self.function_items(
+                        operands
+                            .iter()
+                            .filter(|(_, _, receiver)| !*receiver)
+                            .map(|(ty, _, _)| ty.clone()),
+                    ),
                     span,
                 )?;
                 let operands = operands

@@ -1916,6 +1916,24 @@ impl<'a> Parser<'a> {
                 let definition = imported.definition.clone();
                 let alias = imported.alias.cloned();
                 let owner = imported.owner.cloned();
+                // A native module's `&Theme` of a marked `theme` names the
+                // marked type through its mirror: the type marked code has.
+                if let Some(marked) = self.models.mirrored(&definition) {
+                    let arguments = arguments
+                        .iter()
+                        .map(|argument| {
+                            self.instantiate_host_type(
+                                argument,
+                                parameters,
+                                operation,
+                                span,
+                                owner.as_ref(),
+                                alias.as_ref(),
+                            )
+                        })
+                        .collect::<Result<_, _>>()?;
+                    return Ok(Ty::Script(marked, arguments));
+                }
                 Ty::Host {
                     proof: HostTyProof::new(definition, alias.clone(), owner.clone()),
                     arguments: arguments
@@ -2139,7 +2157,8 @@ impl<'a> Parser<'a> {
 
     /// The key of the instance a call of a generic imported item uses:
     /// its types as `collect_imported_call` gives them to the bridge, which
-    /// keys the adapter it generates for them by them. `None` for a call of
+    /// keys the adapter it generates for them by them, and the crate
+    /// functions `items` it passes. `None` for a call of
     /// an item with no instance, which reaches the item's one adapter.
     ///
     /// A type no instance is keyed by is an error at the call, as rustc's
@@ -2150,6 +2169,7 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
         requirements: &[(ImmutableString, Ty, capability::Set)],
         slots: &[rawr_import::surface::instance::Slot],
+        items: &[(u32, [u8; 32])],
         span: Span,
     ) -> Result<Option<[u8; 32]>, Error> {
         // A proof-backed application's call reaches its own adapter.
@@ -2177,8 +2197,8 @@ impl<'a> Parser<'a> {
         let constants = self
             .imported_constants(item, requirements)
             .ok_or_else(|| unknown_const_argument(item, span))?;
-        Ok(Some(rawr_import::surface::instance::key_with_constants(
-            &types, &constants, slots,
+        Ok(Some(rawr_import::surface::instance::key_with_items(
+            &types, &constants, slots, items,
         )))
     }
 

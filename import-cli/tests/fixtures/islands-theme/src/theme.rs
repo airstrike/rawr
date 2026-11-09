@@ -3,7 +3,9 @@
 //! child modules, wraps one's theme in its own enum, converts to and from
 //! that native theme and the crate's, and implements the crate's traits.
 pub mod catalog;
+pub mod container;
 mod palette;
+pub mod text;
 
 pub use palette::{clones, Hue};
 

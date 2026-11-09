@@ -96,9 +96,10 @@ pub struct Program {
     entry_crate: Option<ImmutableString>,
     /// The marked types of a native root that the runner holds as their
     /// mirrors in rawr's copy of the crate where a crate's generic takes
-    /// one, each by its package and path (#1249).
+    /// one, each by its package and path, with its Rust path from the
+    /// crate's name (#1249).
     #[cfg(feature = "rust-import")]
-    mirrors: std::collections::BTreeSet<Box<[ImmutableString]>>,
+    mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
     /// The crates a package's manifest names, which its paths may start
     /// with as rustc's extern prelude has them: none for a lone file.
     /// `None` for a source compiled alone, whose host decides what it
@@ -635,7 +636,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_rust: BTreeMap::new(),
         entry_crate: None,
         #[cfg(feature = "rust-import")]
-        mirrors: std::collections::BTreeSet::new(),
+        mirrors: BTreeMap::new(),
         crates: None,
         features: crate::project::cargo::features::Enabled::default(),
         aliases,

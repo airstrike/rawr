@@ -620,4 +620,29 @@ impl<'a> Parser<'a> {
             })
             .collect()
     }
+
+    /// The crate functions `arguments` pass, each by its input's position
+    /// and its selector's fingerprint, as `.style(theme::text::base)`
+    /// passes one: its instance's own, as the generated adapter keys it
+    /// (`instance::key_with_items`).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn function_items(
+        &self,
+        arguments: impl Iterator<Item = Ty>,
+    ) -> Box<[(u32, [u8; 32])]> {
+        arguments
+            .enumerate()
+            .filter_map(|(position, ty)| {
+                let Ty::ImportedFunctionItem {
+                    item: Some(function),
+                    ..
+                } = self.inference.resolve(&ty)
+                else {
+                    return None;
+                };
+                let selector = function.item.imported_identity()?.fingerprint();
+                Some((u32::try_from(position).unwrap_or(u32::MAX), selector))
+            })
+            .collect()
+    }
 }

@@ -79,6 +79,11 @@ pub(super) struct Tables {
     /// of the crate, by package and path (#1249).
     #[cfg(feature = "rust-import")]
     pub(super) mirrors: BTreeSet<Box<[ImmutableString]>>,
+    /// Each marked type by its mirror's identity, which the native crate's
+    /// signatures name it by: `fn base(theme: &Theme)` in a native module
+    /// takes the marked `Theme`.
+    #[cfg(feature = "rust-import")]
+    pub(super) mirrored: BTreeMap<crate::host::type_def::import::Identity, type_def::Id>,
     /// The crates the program's paths may start with (`Program::crates`).
     pub(super) crates: Option<crate::resolve::extern_prelude::Prelude>,
     /// The type aliases each source names, resolved once with the headers.
@@ -765,6 +770,8 @@ impl Models {
             inherit_names(&mut host_variants, item, expansion);
             inherit_names(&mut aliases, item, expansion);
         }
+        #[cfg(feature = "rust-import")]
+        let mirrored = mirrored(&program.mirrors, &by_definition, &host);
         let tables = Tables {
             runtime,
             host,
@@ -786,7 +793,9 @@ impl Models {
             qualified_rust: program.qualified_rust.clone(),
             entry_crate: program.entry_crate.clone(),
             #[cfg(feature = "rust-import")]
-            mirrors: program.mirrors.clone(),
+            mirrors: program.mirrors.keys().cloned().collect(),
+            #[cfg(feature = "rust-import")]
+            mirrored,
             crates: program.crates.clone(),
             aliases,
             namespaces: program
@@ -1014,6 +1023,18 @@ impl Models {
         } else {
             Holder::Proxy
         }
+    }
+
+    /// The marked type `definition` mirrors in rawr's copy of a native
+    /// root's crate, which marked code holds as itself.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn mirrored(
+        &self,
+        definition: &crate::host::type_def::Definition,
+    ) -> Option<type_def::Id> {
+        self.mirrored
+            .get(definition.identity().imported()?)
+            .copied()
     }
 
     /// The path the runner names the script type `id`'s proxy by, its
@@ -1276,4 +1297,28 @@ impl Nominal {
     pub(super) fn capabilities(&self) -> capability::Set {
         self.definition().capabilities()
     }
+}
+
+/// Each marked type of `by_definition` that rawr's copy of a native root's
+/// crate mirrors, by the identity of the mirror `host` has at its Rust
+/// path (`mirrors`).
+#[cfg(feature = "rust-import")]
+fn mirrored(
+    mirrors: &BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    by_definition: &BTreeMap<type_def::Id, Nominal>,
+    host: &crate::host::Registry,
+) -> BTreeMap<crate::host::type_def::import::Identity, type_def::Id> {
+    by_definition
+        .iter()
+        .filter_map(|(id, nominal)| {
+            let key = nominal.definition().key();
+            let path = std::iter::once(ImmutableString::from(key.package()))
+                .chain(key.modules().iter().cloned())
+                .chain([ImmutableString::from(key.name())])
+                .collect::<Box<[_]>>();
+            let rust = mirrors.get(&path)?.join("::");
+            let identity = host.type_(&rust)?.identity().imported()?;
+            Some((*identity, *id))
+        })
+        .collect()
 }

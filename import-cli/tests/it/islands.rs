@@ -790,9 +790,14 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// that isn't `Clone` crosses (#1469). `Theme::colors(&self) ->
 /// &palette::Colors`, which native style functions call in a loop, gives
 /// `&self.0.colors` where it is, to native code and to the theme's own
-/// `Design` impl, and `name(&self) -> &str` its text (#1468). `rawr check`
-/// passes as `cargo check` does, and `rawr run` prints what `cargo run`
-/// prints.
+/// `Design` impl, and `name(&self) -> &str` its text (#1468). A marked
+/// `home`, as inboard's, imports the marked `theme` beside `widget`'s own
+/// `text` and names the theme's native child modules through it:
+/// `theme::text::SIZE`, and `theme::text::base` and
+/// `theme::container::base`, whose `&Theme` is the marked theme, passed to
+/// the crate's `style` of a `Label<Theme>`, each its own instance, as each
+/// Rust function is its own type. `rawr check` passes as
+/// `cargo check` does, and `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
