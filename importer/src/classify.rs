@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 150;
+const CLASSIFIER_VERSION: u32 = 151;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8974,6 +8974,14 @@ impl<P: api::Phase> Context<'_, P> {
                 definition_is_public(definition)?;
                 match std_binding::of(definition) {
                     Some(Std::String) => Type::Builtin(Builtin::String),
+                    // Only an input (`convert_input`): Rawr holds no
+                    // `fmt::Arguments` a crate gives.
+                    Some(Std::Arguments) => {
+                        return Err(representability::reject::Kind::StdNotRun(
+                            std_binding::Unrun::Other,
+                        )
+                        .into())
+                    }
                     // `PhantomData<T>` holds nothing, and Rawr's is the unit
                     // type, as a script struct's is: palette's `Rgb` has
                     // `standard: PhantomData<S>`.
@@ -10411,6 +10419,19 @@ impl<P: api::Phase> Context<'_, P> {
         if is_str_reference(ty) {
             return Ok(representability::convert::Type::Builtin(
                 representability::convert::Builtin::Str,
+            ));
+        }
+        // `fmt::Arguments`, as log's `Record` takes: Rawr's text of the
+        // program's `format_args!`, formatted into the call.
+        if let model::Type::Definition { id, .. } = ty
+            && let Some(definition) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            && std_binding::of(definition) == Some(Std::Arguments)
+        {
+            return Ok(representability::convert::Type::Builtin(
+                representability::convert::Builtin::Arguments,
             ));
         }
         // A type that holds borrows, as fount's `load(family: &str, catalog:

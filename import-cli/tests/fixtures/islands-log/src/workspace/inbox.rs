@@ -74,6 +74,43 @@ mod folder {
     }
 }
 
+/// A marked value, which marked code formats.
+#[derive(Debug)]
+pub struct Message {
+    pub subject: String,
+    pub unread: bool,
+}
+
+impl std::fmt::Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", self.subject, if self.unread { "*" } else { "" })
+    }
+}
+
+/// Marked values lent to native functions as `&dyn Debug`, `&dyn Display`
+/// and `&dyn LowerHex`, and `format_args!` given as `fmt::Arguments`.
+pub fn crossing() -> String {
+    let message = Message {
+        subject: "hello".to_owned(),
+        unread: true,
+    };
+    let count = 2;
+    let read = Message {
+        subject: "old".to_owned(),
+        unread: false,
+    };
+    [
+        located::sink::debug(&message),
+        located::sink::display(&message),
+        located::sink::both("count", &count, &Some("two")),
+        located::sink::debug(&[Some(Ok::<_, ()>(read)), None]),
+        located::sink::hex(&255),
+        located::sink::arguments(format_args!("{} has {count}", message.subject)),
+        located::sink::unread(&message).to_owned(),
+    ]
+    .join("; ")
+}
+
 /// `module_path!()` in a constant, an inline module and its impl.
 pub fn modules() -> String {
     format!("{TARGET}; {NAMED}; {}", folder::Folder.path())

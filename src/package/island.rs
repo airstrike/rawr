@@ -1611,9 +1611,16 @@ impl<'a> Generator<'a> {
                 },
             );
         }
+        let formats = trait_.is_some_and(formatting);
         for function in functions {
             let member = format!("{prefix}::{}", function.name.text);
-            match self.stub(file, function, owner, false, &member) {
+            let stub = match owner {
+                Owner::Marked(_) if formats && function.name.text == "fmt" => {
+                    Ok(rendered_fmt(&member))
+                }
+                _ => self.stub(file, function, owner, false, &member),
+            };
+            match stub {
                 Ok(stub) => {
                     for line in stub.lines() {
                         let _ = writeln!(text, "    {line}");
@@ -2588,6 +2595,49 @@ fn variant_pattern(variant: &item::Variant, parts: &[String]) -> String {
 /// Each std trait `item` gives a type of the marked crate, by the type's
 /// name: a struct's or enum's derives, or an impl of one for a type with no
 /// parameters, `impl fmt::Debug for Badge` (#1301).
+/// Whether `trait_` is one of std's formatting traits, whose `fmt` writes
+/// a value into a `fmt::Formatter`: `Display`, `Debug`, `LowerHex` and
+/// their kin, by the name an impl writes last.
+fn formatting(trait_: &type_ref::Path) -> bool {
+    let own = matches!(
+        trait_.segments[0].name.text.as_str(),
+        "crate" | "self" | "super"
+    );
+    trait_.segments.last().is_some_and(|last| {
+        !own && last.arguments.is_empty()
+            && matches!(
+                last.name.text.as_str(),
+                "Display"
+                    | "Debug"
+                    | "LowerHex"
+                    | "UpperHex"
+                    | "Octal"
+                    | "Binary"
+                    | "LowerExp"
+                    | "UpperExp"
+                    | "Pointer"
+            )
+    })
+}
+
+/// The `fmt` of a marked impl of a std formatting trait (`formatting`)
+/// for a marked type native code holds a copy of, which the interpreter's
+/// `member` keys: the text the marked `fmt` writes, which the interpreter
+/// renders from the copy when native code formats the value, written into
+/// native code's formatter.
+fn rendered_fmt(member: &str) -> String {
+    let island = format!("crate::{MODULE}");
+    format!(
+        "fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n    \
+         let mut __call = {island}::Call::new({member:?}, true);\n    \
+         __call.argument(self);\n    \
+         __call.argument(&::std::string::String::new());\n    \
+         let mut __reply = __call.send();\n    \
+         let __text: ::std::string::String = __reply.take();\n    \
+         __f.write_str(&__text)\n}}\n"
+    )
+}
+
 fn std_impls(item: &item::Parsed) -> Vec<(&str, Std)> {
     fn derived<'i>(header: &item::Header, name: &'i item::Name) -> Vec<(&'i str, Std)> {
         header

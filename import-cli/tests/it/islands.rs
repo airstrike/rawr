@@ -1983,7 +1983,10 @@ fn checks_and_prints(root: &Path, printed: &str) {
 /// `line!()`, `column!()`, `file!()` and `module_path!()`, nested or not,
 /// are where its outermost call is, a caller's own `line!()` is where the
 /// caller wrote it, and `module_path!()` in a constant or an inline module's
-/// impl is cargo's.
+/// impl is cargo's. A marked value native code is lent as a `&dyn Debug`,
+/// `&dyn Display` or `&dyn LowerHex` is written by its type's own impl,
+/// marked or derived, when native code formats it, and `format_args!` is
+/// the `fmt::Arguments` a crate function takes.
 #[test]
 fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
@@ -1997,7 +2000,12 @@ fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
              same true log true\n\
              ab1 islands_log::workspace::inbox event x34 ab1 2\n\
              src/workspace/inbox.rs:42:5 in islands_log::workspace::inbox\n"
-        ) && printed.contains("; islands_log::workspace::inbox::folder islands_log::"),
+        ) && printed.contains("; islands_log::workspace::inbox::folder islands_log::")
+            && printed.contains(
+                "Message { subject: \"hello\", unread: true }; [hello*]; count=2 (Some(\"two\")); \
+                 [Some(Ok(Message { subject: \"old\", unread: false })), None]; 0xff; \
+                 <hello has 2>; unread\n"
+            ),
         "{printed}"
     );
     checks_and_prints(&root, &printed);

@@ -12,4 +12,5 @@ fn main() {
     println!("{}", inbox::name());
     println!("{}", inbox::traced());
     println!("{}", inbox::modules());
+    println!("{}", inbox::crossing());
 }

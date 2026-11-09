@@ -9,7 +9,9 @@
 //! the script type it stands for.
 //!
 //! Its traits are a closed set: `Send` and `Sync` (with the crate's `sync`
-//! feature), `'static`, `Unpin`, `Clone` and `Debug`. Bounds that pick
+//! feature), `'static`, `Unpin`, `Clone`, `Debug` and `Display`, the last
+//! two rendered by the program when native code formats the value, as a
+//! `&dyn Debug` or `&dyn Display` it was lent. Bounds that pick
 //! behaviour by type alone, such as `Default`, `Deserialize`, `Copy` or a
 //! `TypeId` key, have no meaning here and are refused before the runner is
 //! built.
@@ -61,12 +63,47 @@ impl From<Value> for Dynamic {
 
 impl std::fmt::Debug for Value {
     /// The script type's derived `Debug` text, through the program the
-    /// value belongs to, and else the value's own (review 8).
+    /// value belongs to, and else the value's own (review 8): an `Option`,
+    /// a `Result` or an array as std writes one, each value in it by this
+    /// `Debug`, as a `&dyn Debug` of `Some(message)` is written.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(text) = crate::future::debug(&self.0) {
             return f.write_str(&text);
         }
+        if let Some(option) = self.0.read_lock::<Option<Dynamic>>() {
+            return match &*option {
+                Some(value) => f.debug_tuple("Some").field(&Self(value.clone())).finish(),
+                None => f.write_str("None"),
+            };
+        }
+        if let Some(result) = self.0.read_lock::<Result<Dynamic, Dynamic>>() {
+            let (variant, value) = match &*result {
+                Ok(value) => ("Ok", value),
+                Err(value) => ("Err", value),
+            };
+            return f.debug_tuple(variant).field(&Self(value.clone())).finish();
+        }
+        if let Ok(values) = self.0.as_array_ref() {
+            return f
+                .debug_list()
+                .entries(values.iter().cloned().map(Self))
+                .finish();
+        }
         std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl std::fmt::Display for Value {
+    /// The script type's own `Display` text, through the program the value
+    /// belongs to, and else the value's own, as a number's or a string's:
+    /// rendered only when native code formats it, as a `&dyn Display` it
+    /// was lent.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(feature = "sync")]
+        if let Some(text) = crate::future::display(&self.0) {
+            return f.write_str(&text.map_err(|_| std::fmt::Error)?);
+        }
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -76,7 +113,7 @@ mod tests {
 
     #[test]
     fn value_has_the_closed_trait_set() {
-        fn traits<T: Clone + std::fmt::Debug + Unpin + 'static>() {}
+        fn traits<T: Clone + std::fmt::Debug + std::fmt::Display + Unpin + 'static>() {}
         traits::<Value>();
         #[cfg(feature = "sync")]
         {
@@ -87,5 +124,12 @@ mod tests {
             format!("{:?}", Value::from(crate::Dynamic::from(3_i64))),
             "3"
         );
+        assert_eq!(format!("{}", Value::from(crate::Dynamic::from(3_i64))), "3");
+        let some = crate::Dynamic::from(Some(crate::Dynamic::from(crate::ImmutableString::from(
+            "a",
+        ))));
+        let none = crate::Dynamic::from(None::<crate::Dynamic>);
+        let list = crate::Dynamic::from_array(vec![some, none]);
+        assert_eq!(format!("{:?}", Value::from(list)), r#"[Some("a"), None]"#);
     }
 }

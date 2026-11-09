@@ -12,6 +12,9 @@ use crate::api::model;
 pub(crate) enum Std {
     /// alloc's `String`: rawr's string.
     String,
+    /// core's `fmt::Arguments<'a>`, as an input: rawr's string of the text
+    /// `format_args!` formats, formatted into the call.
+    Arguments,
     /// core's `PhantomData<T>`, which holds nothing: rawr's unit.
     PhantomData,
     /// core's `Option<T>`: rawr's `Option`.
@@ -115,7 +118,7 @@ impl Unrun {
 }
 
 /// Each std definition rawr represents, by its definition path.
-pub(crate) const BINDING: [(&[&str], Std); 24] = [
+pub(crate) const BINDING: [(&[&str], Std); 25] = [
     (&["alloc", "borrow", "Cow"], Std::Cow),
     (&["alloc", "boxed", "Box"], Std::Box),
     (
@@ -144,6 +147,7 @@ pub(crate) const BINDING: [(&[&str], Std); 24] = [
             clone: true,
         },
     ),
+    (&["core", "fmt", "Arguments"], Std::Arguments),
     (&["core", "marker", "PhantomData"], Std::PhantomData),
     (&["core", "ops", "range", "Range"], Std::Range),
     (

@@ -25,6 +25,10 @@ pub enum Builtin {
     /// A `&'static str` input, as iced's `Font::new(name: &'static str)`
     /// takes: Rawr's string, pinned for as long as the runner lives.
     StaticStr,
+    /// A `fmt::Arguments` input, as log's `Record` and tracing's
+    /// `ValueSet` take: Rawr's string of the text `format_args!` formats,
+    /// formatted into the call.
+    Arguments,
     /// An output Rawr cannot hold whose type implements `Display`, as
     /// chrono's `DelayedFormat<StrftimeItems<'a>>`: its text, a `String`.
     Text,
@@ -92,9 +96,12 @@ impl Builtin {
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::Usize => "usize",
-            Self::InclusiveRange | Self::String | Self::Str | Self::StaticStr | Self::Text => {
-                return None
-            }
+            Self::InclusiveRange
+            | Self::String
+            | Self::Str
+            | Self::StaticStr
+            | Self::Text
+            | Self::Arguments => return None,
         })
     }
 
