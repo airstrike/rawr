@@ -891,9 +891,11 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// keeps. A marked `Panel<'a>` of native code's `&'a str` and `Element<'a,
 /// Message>`s, as inboard's `Sidebar<'a, Message>`, is built by native code
 /// through a chain of marked methods by value and by `&mut`, kept between
-/// calls and drawn, and its title is native code's own text (#1557).
-/// `rawr check` passes as `cargo check` does, and `rawr run` prints what
-/// `cargo run` prints.
+/// calls and drawn, and its title is native code's own text (#1557). A
+/// marked `Sidebar<'a, Message>` bounds its generic impl's `content` by the
+/// crate's `IntoContent<'a, Message>` over the impl's own parameters, and a
+/// non-generic marked fn calls it. `rawr check` passes as `cargo check`
+/// does, and `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -942,6 +944,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
+    assert!(printed.contains("\nsidebar 2\n"), "{printed}");
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

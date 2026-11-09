@@ -123,5 +123,6 @@ fn main() {
         "panel on native text {}",
         std::ptr::eq(panel.title(), heading.as_str())
     );
+    println!("sidebar {}", home::sidebar());
     println!("clones {}", theme::clones());
 }
