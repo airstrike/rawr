@@ -25,7 +25,7 @@ use crate::resolve::{type_ref, BindingSite, Error};
 use crate::tokenizer::Token;
 use crate::types::nominal;
 use crate::{ast, receiver, type_def, ImmutableString, Position, Span};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 #[derive(Clone)]
@@ -2086,11 +2086,17 @@ impl<'a> Parser<'a> {
                 reason: "`..` patterns are not allowed here".into(),
                 pattern: *span,
             }),
-            Syntax::Or { alternatives, .. } => {
+            Syntax::Or { alternatives, span } => {
                 let mut proofs = Vec::with_capacity(alternatives.len());
                 let mut coverage = Vec::with_capacity(alternatives.len());
-                let mut first: Option<BTreeMap<ImmutableString, Ty>> = None;
+                let mut host_alternatives: Vec<Vec<super::HostCheck>> =
+                    Vec::with_capacity(alternatives.len());
+                let mut first: Option<(&Syntax, Vec<PatternBinding>)> = None;
                 let outer_names = bound_names.clone();
+                // Each alternative's crate parts take the hidden names from
+                // the same place, so alternatives that differ only below
+                // crate values bind the same hidden names.
+                let checks = self.host_checks.borrow().len();
                 for alternative in alternatives.iter() {
                     let mut names = outer_names.clone();
                     let mut declarations = Vec::new();
@@ -2102,48 +2108,52 @@ impl<'a> Parser<'a> {
                         &mut names,
                         &mut declarations,
                     )?;
-                    let bound = declarations
-                        .iter()
-                        .map(|binding| (binding.name.clone(), binding.ty.clone()))
-                        .collect::<BTreeMap<_, _>>();
+                    let host = self.host_checks.borrow_mut().split_off(checks);
+                    if let (Some(first_proof), Some(first_host)) =
+                        (proofs.first(), host_alternatives.first())
+                        && (!host.is_empty() || !first_host.is_empty())
+                        && *first_proof != proof
+                    {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "an or-pattern whose alternatives differ in more than \
+                                        the library values they test"
+                                .into(),
+                            source: *span,
+                        });
+                    }
                     match &first {
                         None => {
                             *bound_names = names;
-                            binding_declarations.extend(declarations);
-                            first = Some(bound);
+                            binding_declarations.extend(declarations.iter().cloned());
+                            first = Some((alternative, declarations));
                         }
-                        Some(first) => {
+                        Some((first_alternative, first_declarations)) => {
+                            require_same_names(
+                                (first_alternative, first_declarations),
+                                (alternative, &declarations),
+                            )?;
                             // A name has one type in every alternative. The
                             // root pattern makes them one, as rustc does with
                             // `(Some(x), _) | (None, Some(x))` on literals'
                             // `{integer}`s and `None`'s unknown type.
-                            let same = first.len() == bound.len()
-                                && first.keys().all(|name| bound.contains_key(name));
-                            if same {
-                                self.or_binding_types.borrow_mut().extend(first.iter().map(
-                                    |(name, ty)| {
-                                        (
-                                            ty.clone(),
-                                            bound[name].clone(),
-                                            owner.to_string(),
-                                            alternative.span(),
-                                        )
-                                    },
-                                ));
-                            } else {
-                                return Err(Error::InvalidMatch {
-                                    owner: owner.into(),
-                                    reason: "every alternative of an or-pattern must bind the \
-                                             same names with the same types"
-                                        .into(),
-                                    pattern: alternative.span(),
-                                });
-                            }
+                            self.or_binding_types.borrow_mut().extend(
+                                declarations.iter().filter_map(|binding| {
+                                    first_declarations
+                                        .iter()
+                                        .find(|named| named.name == binding.name)
+                                        .map(|named| {
+                                            (named.ty.clone(), binding.ty.clone(), binding.span)
+                                        })
+                                }),
+                            );
                         }
                     }
                     proofs.push(proof);
                     coverage.push(alternative_coverage);
+                    host_alternatives.push(host);
                 }
+                let merged = merge_host_alternatives(host_alternatives, *span)?;
+                self.host_checks.borrow_mut().extend(merged);
                 Ok((
                     NominalPattern::Or(proofs.into_boxed_slice()),
                     coverage::Pattern::Or(coverage.into_boxed_slice()),
@@ -2269,19 +2279,19 @@ impl<'a> Parser<'a> {
         let resolved = self.resolve_root_pattern_parts(syntax, subject);
         let or_types = self.or_binding_types.replace(outer_or_types);
         let resolved = resolved?;
-        for (first, other, owner, span) in or_types {
+        // rustc's E0308 on a binding whose type is not its name's type in
+        // the first alternative.
+        for (first, other, binding) in or_types {
             if !(self.unify_type(&first, &other)
                 && same_inferred(
                     &self.inference.resolve(&first),
                     &self.inference.resolve(&other),
                 ))
             {
-                return Err(Error::InvalidMatch {
-                    owner: owner.into(),
-                    reason: "every alternative of an or-pattern must bind the same names with \
-                             the same types"
-                        .into(),
-                    pattern: span,
+                return Err(Error::TypeMismatch {
+                    expected: self.inference.resolve(&first).name(&self.models),
+                    actual: self.inference.resolve(&other).name(&self.models),
+                    expression: binding,
                 });
             }
         }
@@ -3102,38 +3112,28 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
-            Syntax::Or { alternatives, span } => {
+            Syntax::Or { alternatives, .. } => {
                 // Each alternative binds the same names; the first's
                 // readers bind them, as a facade reads a field the same
                 // way in every variant.
                 let mut tests = Vec::new();
-                let mut first: Option<Host> = None;
+                let mut first: Option<(&Syntax, Host)> = None;
                 let mut irrefutable = false;
                 for alternative in alternatives.iter() {
                     let mut compiled = Host::default();
                     self.host_pattern(alternative, value.clone(), &ty, &mut compiled)?;
-                    let names = |pattern: &Host| {
-                        pattern
-                            .binds
-                            .iter()
-                            .map(|binding| binding.name.clone())
-                            .collect::<BTreeSet<_>>()
-                    };
-                    if let Some(first) = &first
-                        && names(first) != names(&compiled)
-                    {
-                        return Err(Error::InvalidMatch {
-                            owner: ty.name(&self.models),
-                            reason: "each `|` alternative must bind the same names".into(),
-                            pattern: *span,
-                        });
+                    if let Some((first_alternative, first)) = &first {
+                        require_same_names(
+                            (first_alternative, &first.binds),
+                            (alternative, &compiled.binds),
+                        )?;
                     }
                     match compiled.condition() {
                         Some(test) => tests.push(test),
                         None => irrefutable = true,
                     }
                     if first.is_none() {
-                        first = Some(compiled);
+                        first = Some((alternative, compiled));
                     }
                 }
                 if !irrefutable {
@@ -3146,7 +3146,7 @@ impl<'a> Parser<'a> {
                     }
                     out.tests.push(joined);
                 }
-                let first = first.expect("an or-pattern has alternatives");
+                let (_, first) = first.expect("an or-pattern has alternatives");
                 for binding in &first.binds {
                     self.require_new_host_binding(out, &binding.name, binding.span)?;
                 }
@@ -3681,5 +3681,54 @@ impl<'a> Parser<'a> {
             out.bind_part(binding, part, index, copy);
         }
         Ok(())
+    }
+}
+
+/// The crate parts an or-pattern's alternatives test, as one test of
+/// either: the alternatives match the same program values, so where each
+/// tests one crate value, at the same hidden name, the merged check tests
+/// that value against `a | b`.
+fn merge_host_alternatives(
+    alternatives: Vec<Vec<super::HostCheck>>,
+    span: Span,
+) -> Result<Vec<super::HostCheck>, Error> {
+    if alternatives.iter().all(Vec::is_empty) {
+        return Ok(Vec::new());
+    }
+    if alternatives.iter().any(|checks| checks.len() != 1) {
+        return Err(Error::UnsupportedNominalSyntax {
+            construct: "an or-pattern whose alternatives each test more than one library value"
+                .into(),
+            source: span,
+        });
+    }
+    let mut checks = alternatives.into_iter().flatten();
+    let (name, first, ty, mode) = checks.next().expect("an or-pattern has alternatives");
+    let alternatives = std::iter::once(first)
+        .chain(checks.map(|(_, syntax, _, _)| syntax))
+        .collect();
+    Ok(vec![(name, Syntax::Or { alternatives, span }, ty, mode)])
+}
+
+/// rustc's E0408 when one of two alternatives of an or-pattern, each with
+/// the bindings it makes, misses a name the other binds.
+fn require_same_names(
+    first: (&Syntax, &[PatternBinding]),
+    other: (&Syntax, &[PatternBinding]),
+) -> Result<(), Error> {
+    let unbound = |(_, bound): (&Syntax, &[PatternBinding]),
+                   (missing, written): (&Syntax, &[PatternBinding])| {
+        bound
+            .iter()
+            .find(|binding| !written.iter().any(|other| other.name == binding.name))
+            .map(|binding| Error::UnboundAlternative {
+                name: binding.name.clone(),
+                pattern: missing.span(),
+                binding: binding.span,
+            })
+    };
+    match unbound(first, other).or_else(|| unbound(other, first)) {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }

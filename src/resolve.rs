@@ -20,8 +20,8 @@ pub(crate) mod type_ref;
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, AssignTwice, CannotCompare, Described,
-    NonExhaustive, NotFound, PatternFields, Qualified, Refutable, TypeNeeded, Uninitialized,
-    Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
+    NonExhaustive, NotFound, PatternFields, Qualified, Refutable, TypeNeeded, UnboundAlternative,
+    Uninitialized, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     BindingSite, Boxing, Callee, Category, Error, Expansion, MacroScope, MoveCause, Private,
