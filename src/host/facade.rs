@@ -467,7 +467,7 @@ impl Builder {
             Some("module")
         } else if self.type_index(&path).is_ok() {
             Some("type")
-        } else if self.aliases.iter().any(|(alias, _)| *alias == path) {
+        } else if self.alias_index(&path).is_ok() {
             // A re-export such as iced's `widget::Component` names its
             // type; the trait of that name stays the facade's.
             Some("re-export")
@@ -534,17 +534,7 @@ impl Builder {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(target)?);
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -561,7 +551,7 @@ impl Builder {
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.ensure_vacant(&path, "type alias")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path)
+        if self.alias_index(&path).is_ok()
             || self.type_aliases.iter().any(|alias| alias.path == path)
         {
             return Err(host::Error::DuplicateFacadeEntry {
@@ -642,17 +632,7 @@ impl Builder {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(variant)?);
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -674,17 +654,7 @@ impl Builder {
             });
         }
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -703,17 +673,7 @@ impl Builder {
             });
         }
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -1566,6 +1526,32 @@ impl Builder {
     fn type_index(&self, path: &host::path::Path) -> Result<usize, usize> {
         self.types
             .binary_search_by(|definition| definition.path_ref().cmp(path))
+    }
+
+    /// Where the re-export at `path` is, or would go: the builder keeps
+    /// its re-exports in path order, so each is a search.
+    fn alias_index(&self, path: &host::path::Path) -> Result<usize, usize> {
+        self.aliases.binary_search_by(|(alias, _)| alias.cmp(path))
+    }
+
+    /// Re-export `target` at `path`, which no other re-export takes.
+    fn insert_alias(
+        &mut self,
+        path: host::path::Path,
+        target: host::path::Path,
+    ) -> Result<(), host::Error> {
+        let Err(index) = self.alias_index(&path) else {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        };
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.insert(index, (path, target));
+        Ok(())
     }
 
     fn item_index(&self, path: &host::path::Path) -> Result<usize, usize> {
