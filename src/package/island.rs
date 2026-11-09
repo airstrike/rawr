@@ -2266,12 +2266,18 @@ impl<'a> Generator<'a> {
         } else {
             Vec::new()
         };
-        // So is a native anchor the result's elided lifetime names, as
-        // `view(threads: &Store) -> Element<'_, Message>` names `threads`.
+        // So is an anchor the result's elided lifetime names, as
+        // `view(threads: &Store) -> Element<'_, Message>` names `threads`,
+        // native or marked: a marked `sidebar(theme: &Theme) -> Element<'_,
+        // Message>` gives its lent theme on to native code through the
+        // marked `inbox<'a>(theme: &'a Theme)`, whose native call reaches
+        // it in the anchored region.
         if let Some(Anchor::Argument(index)) = anchor
             && matches!(
                 passes[index],
-                Pass::Lend { mutable: false, .. } | Pass::LendSlice { .. }
+                Pass::Lend { mutable: false, .. }
+                    | Pass::LendSlice { .. }
+                    | Pass::LendParts { mutable: false }
             )
             && !lends_kept.contains(&index)
         {
