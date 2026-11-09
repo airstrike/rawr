@@ -1567,6 +1567,7 @@
     {"t":"T1564","issue":1564,"title":"T1564: A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1565","issue":1565,"title":"T1565: A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1566","issue":1566,"title":"T1566: A marked fn returning a crate value that borrows its &str argument fails the native build","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1567","issue":1567,"title":"T1567: A marked fn's &'a str result borrowed from a native &'a str argument is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1567","issue":1567,"title":"T1567: A marked fn's &'a str result borrowed from a native &'a str argument is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1568","issue":1568,"title":"T1568: A bound on the crate's own generic trait with a lifetime argument is refused as unsupported syntax","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
