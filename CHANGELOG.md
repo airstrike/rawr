@@ -183,6 +183,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A project that links a native library rawr's runtime also links, such as psm through stacker, now reuses the runtime rawr warmed when both take it from one package at Cargo-compatible versions. Its first run after an install no longer compiles rawr in the project: inboard's 11-minute first start goes away. (#1480)
 - A marked function can take a native value of borrows by value, as inboard's `catalog: View<'_>`, for the call alone, and a marked method on it works too. (#1225)
 - Inside a marked `view<'a>`, a crate method called on a native `&'a T` lent to the view, such as `inbox.view()`, returns an element that lives as long as the view's own. A crate fn with an `Option<&'a str>` parameter that its output keeps, such as inboard's `sidebar::nav_section(None, ..)`, now imports and runs. (#1496; part of #1413)
+- An or-pattern whose alternatives differ only in the crate values they test, such as `Message::Floor(_, floor::Message::Up) | Message::Floor(_, floor::Message::Down)`, no longer fails with a false RAWR-RESOLVE-MATCH. A name missing from one alternative is rustc's E0408, and a binding of another type is E0308. elevato.rs's browser universe now checks. (#1497; part of #435, #1384)
 
 ## 0.3.171 (2026-11-07)
 

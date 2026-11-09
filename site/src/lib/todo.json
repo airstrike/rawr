@@ -189,7 +189,8 @@
         {"text":"Native code can hold the `Element<'a, Message>` that a marked `view<'a>(&'a self, ..)` or `view(&State) -> Element<'_, Message>` returns while it borrows the state. The element's borrowed text lives as long as Rust says it does, and `.map(Message::Wizard)` on such an element works inside the view.","issues":[1473]},
         {"text":"A project that links a native library rawr's runtime also links, such as psm through stacker, now reuses the runtime rawr warmed when both take it from one package at Cargo-compatible versions. Its first run after an install no longer compiles rawr in the project: inboard's 11-minute first start goes away.","issues":[1480]},
         {"text":"A marked function can take a native value of borrows by value, as inboard's `catalog: View<'_>`, for the call alone, and a marked method on it works too.","issues":[1225]},
-        {"text":"Inside a marked `view<'a>`, a crate method called on a native `&'a T` lent to the view, such as `inbox.view()`, returns an element that lives as long as the view's own. A crate fn with an `Option<&'a str>` parameter that its output keeps, such as inboard's `sidebar::nav_section(None, ..)`, now imports and runs.","issues":[1496],"refs":[1413]}
+        {"text":"Inside a marked `view<'a>`, a crate method called on a native `&'a T` lent to the view, such as `inbox.view()`, returns an element that lives as long as the view's own. A crate fn with an `Option<&'a str>` parameter that its output keeps, such as inboard's `sidebar::nav_section(None, ..)`, now imports and runs.","issues":[1496],"refs":[1413]},
+        {"text":"An or-pattern whose alternatives differ only in the crate values they test, such as `Message::Floor(_, floor::Message::Up) | Message::Floor(_, floor::Message::Down)`, no longer fails with a false RAWR-RESOLVE-MATCH. A name missing from one alternative is rustc's E0408, and a binding of another type is E0308. elevato.rs's browser universe now checks.","issues":[1497],"refs":[435,1384]}
       ]
     },
     "releases": [
@@ -3293,7 +3294,9 @@
     {"issue":1493,"title":"A project that can't share rawr's runtime rebuilds rawr in-project after every install: its marker names the sources","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1494,"title":"A runner that builds rawr in the project recompiled the rawr crate on a second run with nothing changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"open","category":"No glue (D593)"}
+    {"issue":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"open","category":"No glue (D593)"},
+    {"issue":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"open","category":"Divergences from rustc"},
+    {"issue":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4390,7 +4393,11 @@
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
             {"number":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open"},
             {"number":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"closed"},
-            {"number":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open"}
+            {"number":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open"},
+            {"number":1454,"title":"A universe depending on a crate with a build-dependency panics: unit package absent from…","state":"closed"},
+            {"number":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"closed"},
+            {"number":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"open"},
+            {"number":1498,"title":"An or-pattern whose alternatives differ in program structure and test crate values is refused","state":"open"}
           ]
         },
         {
