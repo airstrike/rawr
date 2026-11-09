@@ -87,6 +87,9 @@ pub enum Category {
     /// A tuple struct or tuple variant pattern with more or fewer fields
     /// than its type declares, as rustc's E0023.
     PatternFields,
+    /// A name an or-pattern's alternative binds and another does not, as
+    /// rustc's E0408.
+    UnboundAlternative,
     /// Source combines nominal operations with syntax not lowered in this phase.
     UnsupportedNominalSyntax,
     /// Syntax Rust does not have, as rustc reports it.
@@ -168,6 +171,7 @@ impl fmt::Display for Category {
             Self::NonExhaustive => formatter.write_str("non-exhaustive patterns"),
             Self::Refutable => formatter.write_str("refutable pattern"),
             Self::PatternFields => formatter.write_str("pattern field count"),
+            Self::UnboundAlternative => formatter.write_str("variable not in all patterns"),
             Self::UnsupportedNominalSyntax => formatter.write_str("unsupported nominal syntax"),
             Self::Syntax => formatter.write_str("syntax error"),
             Self::UnlabeledJumpInWhileCondition => {
@@ -819,6 +823,16 @@ pub enum Error {
         /// field is a tuple of that many.
         help: Option<ImmutableString>,
     },
+    /// A name one alternative of an or-pattern binds and another does not,
+    /// which rustc refuses (E0408).
+    UnboundAlternative {
+        /// The name.
+        name: ImmutableString,
+        /// The alternative that does not bind it.
+        pattern: Span,
+        /// Where another alternative binds it.
+        binding: Span,
+    },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
         /// Stable description of the unsupported construct.
@@ -1112,6 +1126,7 @@ impl Error {
             Self::NonExhaustive { .. } => Category::NonExhaustive,
             Self::Refutable { .. } => Category::Refutable,
             Self::PatternFields { .. } => Category::PatternFields,
+            Self::UnboundAlternative { .. } => Category::UnboundAlternative,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
@@ -1152,7 +1167,9 @@ impl Error {
             Self::NotInModule { module, .. } => module.as_str(),
             Self::PrivateItem { name, .. } => name.as_str(),
             Self::OverflowingLiteral { ty, .. } => ty.as_str(),
-            Self::Uninitialized { name, .. } | Self::LocalTypeNeeded { name, .. } => name.as_str(),
+            Self::Uninitialized { name, .. }
+            | Self::LocalTypeNeeded { name, .. }
+            | Self::UnboundAlternative { name, .. } => name.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -1235,7 +1252,9 @@ impl Error {
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::NonExhaustive { scrutinee, .. } => *scrutinee,
-            Self::Refutable { pattern, .. } | Self::PatternFields { pattern, .. } => *pattern,
+            Self::Refutable { pattern, .. }
+            | Self::PatternFields { pattern, .. }
+            | Self::UnboundAlternative { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
@@ -1281,6 +1300,7 @@ impl Error {
                 ..
             } => Some(*previous_declaration),
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
+            Self::UnboundAlternative { binding, .. } => Some(*binding),
             Self::InvalidImport { declaration, .. } | Self::PrivateItem { declaration, .. } => {
                 *declaration
             }
@@ -1557,6 +1577,27 @@ impl fmt::Display for PatternFields {
             Self::fields(self.found),
             self.noun(),
             Self::fields(self.expected)
+        )
+    }
+}
+
+/// rustc's E0408 for `0`, a name some alternatives of an or-pattern bind
+/// and another does not: "variable `x` is not bound in all patterns".
+pub(crate) struct UnboundAlternative<'a>(pub(crate) &'a str);
+
+impl UnboundAlternative<'_> {
+    /// rustc's label on the alternative that does not bind it.
+    pub(crate) fn label(&self) -> String {
+        format!("pattern doesn't bind `{}`", self.0)
+    }
+}
+
+impl fmt::Display for UnboundAlternative<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "variable `{}` is not bound in all patterns",
+            self.0
         )
     }
 }
@@ -2052,6 +2093,9 @@ impl fmt::Display for Written<'_> {
                     found: *found,
                 }
             ),
+            Error::UnboundAlternative { name, pattern, .. } => {
+                write!(formatter, "{} at {pattern} (E0408)", UnboundAlternative(name))
+            }
             Error::UnsupportedNominalSyntax { construct, source } => {
                 write!(formatter, "{} at {source}", Unsupported(construct))
             }

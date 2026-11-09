@@ -1599,3 +1599,45 @@ fn ordering_facade() -> facade::Definition {
 
     builder.finish().unwrap()
 }
+
+#[cfg(feature = "rust-import")]
+#[test]
+fn an_or_pattern_over_crate_variants_below_a_program_variant_binds_no_names() {
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(imported_facade())
+        .expect("symbolic imported facade installs");
+    let lowered = |alternatives: &str| {
+        let source = format!(
+            "use imported::Choice;\nenum Message {{ Picked(usize, Choice), Other }}\n\
+             fn pick(message: Message) -> i64 {{\n    match message {{\n        \
+             {alternatives} => 1,\n        _ => 0,\n    }}\n}}\n0\n"
+        );
+        let program = imported_program(&engine, &source);
+        symbolic_imported(&engine, &program).map_err(|failure| failure.into_error())
+    };
+    // Neither alternative binds a name, as elevato's
+    // `Message::Floor(_, floor::Message::UpButtonPressed) | ...` binds none.
+    for alternatives in [
+        "Message::Picked(_, imported::Choice::Empty) \
+         | Message::Picked(_, imported::Choice::Count(_))",
+        "Message::Picked(n, imported::Choice::Empty) \
+         | Message::Picked(n, imported::Choice::Count(_)) if n > 0",
+    ] {
+        lowered(alternatives).unwrap_or_else(|error| panic!("{alternatives}: {error}"));
+    }
+    // A name the crate part of one alternative binds and another's does not.
+    let error = lowered(
+        "Message::Picked(_, imported::Choice::Count(n)) \
+         | Message::Picked(_, imported::Choice::Empty)",
+    )
+    .expect_err("one alternative binds `n`");
+    assert!(
+        matches!(
+            error.err_type(),
+            ParseErrorType::Resolution(resolve::Error::UnboundAlternative { name, .. })
+                if name.as_str() == "n"
+        ),
+        "{error}"
+    );
+}

@@ -524,6 +524,9 @@ impl fmt::Display for ParseErrorType {
                         found: *found,
                     }
                 ),
+                crate::resolve::Error::UnboundAlternative { name, .. } => {
+                    write!(f, "{}", crate::resolve::UnboundAlternative(name))
+                }
                 crate::resolve::Error::NotYet { path, .. } => {
                     write!(f, "rawr doesn't run `{path}` yet")
                 }

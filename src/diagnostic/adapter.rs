@@ -486,6 +486,7 @@ fn resolution_report_with_sources(
     let secondary_message = error.secondary_span().map(|_| match error {
         resolve::Error::MovedValue { .. } => "value moved here".into(),
         resolve::Error::BorrowConflict { .. } => "borrow made here".into(),
+        resolve::Error::UnboundAlternative { .. } => "variable not in all patterns".into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
@@ -600,6 +601,9 @@ fn primary_label(
             .label()
             .into(),
         ),
+        resolve::Error::UnboundAlternative { name, .. } => {
+            Some(resolve::UnboundAlternative(name).label().into())
+        }
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
@@ -752,6 +756,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::NonExhaustive => code::RESOLVE_NON_EXHAUSTIVE,
         resolve::Category::Refutable => code::RESOLVE_REFUTABLE,
         resolve::Category::PatternFields => code::RESOLVE_PATTERN_FIELDS,
+        resolve::Category::UnboundAlternative => code::RESOLVE_UNBOUND_ALTERNATIVE,
         resolve::Category::UnsupportedNominalSyntax => code::RESOLVE_UNSUPPORTED_SYNTAX,
         resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
@@ -1205,6 +1210,9 @@ fn resolution_message(error: &resolve::Error) -> String {
             found: *found,
         }
         .to_string(),
+        resolve::Error::UnboundAlternative { name, .. } => {
+            resolve::UnboundAlternative(name).to_string()
+        }
         resolve::Error::NotYet { path, .. } => format!("rawr doesn't run `{path}` yet"),
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
             format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")

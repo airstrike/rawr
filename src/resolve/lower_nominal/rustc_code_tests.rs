@@ -1346,3 +1346,40 @@ fn a_write_with_no_write_trait_in_scope_is_e0599() {
             .unwrap_or_else(|error| panic!("{source}: {error}"));
     }
 }
+
+/// An or-pattern's alternatives bind the same names (E0408), each of one
+/// type (E0308), as rustc requires.
+#[test]
+fn an_or_pattern_binding_a_name_in_one_alternative_is_e0408() {
+    for alternatives in ["Some(x) | None", "None | Some(x)"] {
+        let source = format!(
+            "fn main() {{\n    let o: Option<i64> = None;\n    match o {{\n        \
+             {alternatives} => {{}}\n    }}\n}}\n"
+        );
+        assert_eq!(
+            refused(&source),
+            (
+                "E0408".into(),
+                "variable `x` is not bound in all patterns".into(),
+                label("pattern doesn't bind `x`")
+            ),
+            "{source}"
+        );
+        assert!(
+            rendered(&source).contains("variable not in all patterns"),
+            "{}",
+            rendered(&source)
+        );
+    }
+    assert_eq!(
+        refused(
+            "fn main() {\n    let r: Result<i64, bool> = Ok(1);\n    match r {\n        \
+             Ok(x) | Err(x) => {}\n    }\n}\n"
+        ),
+        (
+            "E0308".into(),
+            "mismatched types".into(),
+            label("expected `i64`, found `bool`")
+        )
+    );
+}

@@ -630,9 +630,9 @@ struct Parser<'a> {
     /// are references (`Some(mutable)`), Rust's default binding mode.
     binding_mode: std::cell::Cell<Option<bool>>,
     /// A name an or-pattern binds, with its type in the first alternative
-    /// and in a later one, the subject's name and the later alternative's
-    /// span. The root pattern makes the two one type, as rustc does.
-    or_binding_types: std::cell::RefCell<Vec<(Ty, Ty, String, Span)>>,
+    /// and in a later one, and where the later one binds it. The root
+    /// pattern makes the two one type, as rustc does.
+    or_binding_types: std::cell::RefCell<Vec<(Ty, Ty, Span)>>,
     /// The most elements any slice pattern names: a slice's lengths up to
     /// it are told apart for coverage (`coverage_constructors`).
     slice_arity: std::cell::Cell<usize>,
