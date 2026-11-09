@@ -21,7 +21,8 @@
         {"text":"A crate's `&mut self` method now works on a temporary, as in inboard's `rand::rng().random_range(0..100)`. The call's value is borrowed where it is made and lives to the end of its statement, as rustc does. This replaces a RAWR-RESOLVE-HOST-OPERATION \"not supported yet\" error.","issues":[1514],"refs":[143,870]},
         {"text":"A crate's `&self` or `&mut self` method now reaches an element of a slice that a native method lends where it is. Examples are `entry.is_shared()` in `for entry in registry.entries()`, and on a `Vec<&Entry>` collected from it. It used to panic at run time with \"a value reached an adapter as a type its signature doesn't take\".","issues":[1515]},
         {"text":"A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB.","issues":[1516],"refs":[1360,1384,435]},
-        {"text":"A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as \"a call or assignment run before a call whose value borrows a local\".","issues":[1521]}
+        {"text":"A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as \"a call or assignment run before a call whose value borrows a local\".","issues":[1521]},
+        {"text":"A marked view whose scope frame captures values that aren't `Send` or `Sync` now builds under `rawr run`. Examples are a native view of borrows into a type with `RefCell` or `OnceCell` caches, and an owned iced `Element`, as in inboard's `wizard.view(catalog, ..)` and `sidebar::header_row`. Before, the generated runner failed with E0277. A frame's opener stays on the thread that made it. A native value lent to a marked call by `&` or `&mut` no longer has to be `Send` or `Sync`.","issues":[1523]}
       ]
     },
     "releases": [
@@ -3342,7 +3343,8 @@
     {"issue":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"open","category":"Platforms"},
     {"issue":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open","category":"Platforms"},
     {"issue":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open","category":"No glue (D593)"},
-    {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired","category":"No glue (D593)"}
+    {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired","category":"No glue (D593)"},
+    {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4167,7 +4169,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. A lent marked theme passes back to native fns, and native aliases over it are the marked type (#1484). `&mut self` on temporaries (#1514) and methods on lent slice elements (#1515) work, and a fixture mirrors the rest of home.rs. Next: inboard's run of home.rs",
+          "note": "Three real apps run under rawr run: the inboard app, a workspace of 1016 packages, with theme.rs marked and a body edit swapping in place (after #1461 to #1469, #1146), the elevato game and icedxdy's browser example. inboard's home.rs: a native root holds a marked State and polls its tasks (#44, #1249), native values sit in its Option and Vec fields (#1475), and its views borrow the state (#1473). A save redraws an idle window on macOS (#1479), and the first start after an install reuses the warm runtime (#1480). By-value lifetime parameters (#1225), nested by-value natives (#1224), lent slices (#1292) and crate fns keeping lent arguments (#1413) work. Crate aliases through a used module resolve (#694, #1202). A `&'a T` beside a borrowed receiver (#1499) and partial moves out of crate structs (#834) work. Paths through an imported marked module (#1504) resolve. A lent marked theme passes back to native fns, and native aliases over it are the marked type (#1484). `&mut self` on temporaries (#1514) and methods on lent slice elements (#1515) work, and a fixture mirrors the rest of home.rs. inboard's rawr check passes with home.rs marked (2026-11-09), and its runner builds with non-Send captures (#1523). Next: inboard's run of home.rs and the swap time",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4296,7 +4298,8 @@
             {"number":1514,"title":"A crate's &mut self method on a temporary is refused as not a `let mut` binding","state":"open"},
             {"number":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open"},
             {"number":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open"},
-            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"}
+            {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"},
+            {"number":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open"}
           ]
         }
       ]
