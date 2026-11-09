@@ -781,10 +781,25 @@ fn build(
             )
             .map_err(|source| entry_error(facade.root(), ty.path(), source.into()))?;
     }
+    // Each re-export of a crate's item is the item's body at another path:
+    // its signatures are converted once, for the first of its paths.
+    let mut signatures =
+        std::collections::HashMap::<facade::Body<'_>, Vec<host::signature::Definition>>::new();
     for item in facade.items() {
+        let converted = match signatures.entry(item.body()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                std::iter::once(item.signature())
+                    .chain(item.values())
+                    .map(|form| signature(facade, form))
+                    .collect::<Result<_, _>>()
+                    .map_err(|source| entry_error(facade.root(), item.path(), source))?,
+            ),
+        };
         // The item, and its form that a value fills, when it has one.
-        for signature in std::iter::once(item.signature()).chain(item.values()) {
-            let definition = item_definition(facade, item, signature)
+        let forms = std::iter::once(item.signature()).chain(item.values());
+        for (form, signature) in forms.zip(converted.iter()) {
+            let definition = item_definition(item, form, signature.clone())
                 .map_err(|source| entry_error(facade.root(), item.path(), source))?;
             builder
                 .imported_item(definition)
@@ -1117,11 +1132,10 @@ fn field(field: &facade::Field) -> Result<host::type_def::Field, Error> {
 }
 
 fn item_definition(
-    facade: &facade::Facade,
     item: &facade::Item,
     form: &facade::Signature,
+    signature: host::signature::Definition,
 ) -> Result<host::item::Definition, Error> {
-    let signature = signature(facade, form)?;
     let definition = match item.kind() {
         ItemKind::Function => host::item::Definition::function(item.path(), signature)?,
         ItemKind::AssociatedFunction => {

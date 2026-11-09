@@ -569,23 +569,19 @@ impl Registry {
 
         let parts = definition.into_registry_parts();
         let dependency = facade::Dependency::try_new(&parts.root, parts.fingerprint)?;
-        insert_sorted_unique(&mut self.modules, parts.root);
-        for module in parts.modules {
-            insert_sorted_unique(&mut self.modules, module);
-        }
-        for entry in parts.types {
-            let index = self
-                .types
-                .binary_search_by(|definition| definition.path_ref().cmp(entry.path_ref()))
-                .expect_err("registration preflight rejects occupied type paths");
-            self.types.insert(index, entry);
-        }
-        for item in parts.items {
-            let index = self
-                .items
-                .partition_point(|existing| existing.path_ref() <= item.path_ref());
-            self.items.insert(index, item);
-        }
+        // Appended, then sorted once: a stable sort keeps the items
+        // already registered ahead of the ones that share their path, and
+        // merges the two sorted runs rather than shifting the registry
+        // once for every entry.
+        self.modules.push(parts.root);
+        self.modules.extend(parts.modules);
+        self.modules.sort();
+        self.types.extend(parts.types);
+        self.types
+            .sort_by(|left, right| left.path_ref().cmp(right.path_ref()));
+        self.items.extend(parts.items);
+        self.items
+            .sort_by(|left, right| left.path_ref().cmp(right.path_ref()));
         self.aliases
             .try_reserve(parts.aliases.len())
             .map_err(|_| Error::Allocation)?;
@@ -1424,13 +1420,6 @@ impl Registry {
             }
         }
     }
-}
-
-fn insert_sorted_unique<T: Ord>(entries: &mut Vec<T>, entry: T) {
-    let index = entries
-        .binary_search(&entry)
-        .expect_err("registration preflight rejects occupied registry paths");
-    entries.insert(index, entry);
 }
 
 fn item_group<'a>(

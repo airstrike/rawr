@@ -467,7 +467,7 @@ impl Builder {
             Some("module")
         } else if self.type_index(&path).is_ok() {
             Some("type")
-        } else if self.aliases.iter().any(|(alias, _)| *alias == path) {
+        } else if self.alias_index(&path).is_ok() {
             // A re-export such as iced's `widget::Component` names its
             // type; the trait of that name stays the facade's.
             Some("re-export")
@@ -534,17 +534,7 @@ impl Builder {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(target)?);
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -561,7 +551,7 @@ impl Builder {
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.ensure_vacant(&path, "type alias")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path)
+        if self.alias_index(&path).is_ok()
             || self.type_aliases.iter().any(|alias| alias.path == path)
         {
             return Err(host::Error::DuplicateFacadeEntry {
@@ -642,17 +632,7 @@ impl Builder {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(variant)?);
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -674,17 +654,7 @@ impl Builder {
             });
         }
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -703,17 +673,7 @@ impl Builder {
             });
         }
         self.ensure_vacant(&path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| *alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path, target));
+        self.insert_alias(path, target)?;
         Ok(self)
     }
 
@@ -1568,6 +1528,32 @@ impl Builder {
             .binary_search_by(|definition| definition.path_ref().cmp(path))
     }
 
+    /// Where the re-export at `path` is, or would go: the builder keeps
+    /// its re-exports in path order, so each is a search.
+    fn alias_index(&self, path: &host::path::Path) -> Result<usize, usize> {
+        self.aliases.binary_search_by(|(alias, _)| alias.cmp(path))
+    }
+
+    /// Re-export `target` at `path`, which no other re-export takes.
+    fn insert_alias(
+        &mut self,
+        path: host::path::Path,
+        target: host::path::Path,
+    ) -> Result<(), host::Error> {
+        let Err(index) = self.alias_index(&path) else {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        };
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.insert(index, (path, target));
+        Ok(())
+    }
+
     fn item_index(&self, path: &host::path::Path) -> Result<usize, usize> {
         self.items
             .binary_search_by(|(candidate, _)| candidate.cmp(path))
@@ -1782,24 +1768,15 @@ impl Definition {
     #[cfg(feature = "rust-import")]
     pub(crate) fn registry_usage(&self) -> (Option<usize>, Option<usize>) {
         let item_count = self.items.len();
-        let imported_aliases = self
+        let mut identities = self
             .types
             .iter()
-            .filter(|definition| definition.identity().imported().is_some())
-            .count();
-        let imported_groups = self
-            .types
-            .iter()
-            .enumerate()
-            .filter(|(index, definition)| {
-                let Some(identity) = definition.identity().imported() else {
-                    return false;
-                };
-                !self.types[..*index]
-                    .iter()
-                    .any(|prior| prior.identity().imported() == Some(identity))
-            })
-            .count();
+            .filter_map(|definition| definition.identity().imported())
+            .collect::<Vec<_>>();
+        let imported_aliases = identities.len();
+        identities.sort_unstable();
+        identities.dedup();
+        let imported_groups = identities.len();
         let items = Some(2_usize)
             .and_then(|items| items.checked_add(self.modules.len()))
             .and_then(|items| items.checked_add(self.types.len()))
@@ -2148,20 +2125,38 @@ fn validate_type_parents(
     Ok(())
 }
 
+/// Every type of one identity has one contract: the types of a facade
+/// that share an identity, a type and its re-exports, agree.
+///
+/// The contract is an equality, so a type agrees with all of its identity
+/// once it agrees with the first: each one is compared once, in identity
+/// order, and the conflict named is the first in declaration order.
 fn validate_type_identities(types: &[host::type_def::Definition]) -> Result<(), host::Error> {
-    for (index, definition) in types.iter().enumerate() {
-        for existing in &types[..index] {
-            if existing.identity() == definition.identity()
-                && !existing.same_identity_contract(definition)
-            {
-                return Err(host::Error::ConflictingHostIdentity {
-                    existing: existing.path().into(),
-                    incoming: definition.path().into(),
-                });
-            }
-        }
+    let mut order = Vec::new();
+    order
+        .try_reserve_exact(types.len())
+        .map_err(|_| host::Error::Allocation)?;
+    order.extend(0..types.len());
+    // Stable, so each identity's types stay in declaration order.
+    order.sort_by(|&left, &right| types[left].identity().cmp(types[right].identity()));
+    let conflict = order
+        .chunk_by(|&left, &right| types[left].identity() == types[right].identity())
+        .filter_map(|group| {
+            let (&first, rest) = group.split_first()?;
+            let incoming = rest
+                .iter()
+                .copied()
+                .find(|&index| !types[first].same_identity_contract(&types[index]))?;
+            Some((first, incoming))
+        })
+        .min_by_key(|&(_, incoming)| incoming);
+    match conflict {
+        Some((existing, incoming)) => Err(host::Error::ConflictingHostIdentity {
+            existing: types[existing].path().into(),
+            incoming: types[incoming].path().into(),
+        }),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 fn projection_arguments(

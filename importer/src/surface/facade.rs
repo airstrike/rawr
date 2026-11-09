@@ -11,7 +11,7 @@ pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 55;
+const SCHEMA: u32 = 56;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -139,7 +139,9 @@ pub enum ParameterKind {
 #[derive(Deserialize, Serialize)]
 pub struct Facade {
     root: Box<str>,
+    #[serde(with = "table")]
     types: Box<[TypeDefinition]>,
+    #[serde(with = "table")]
     items: Box<[Item]>,
     /// The traits Rawr code names (`use rand::Rng;`), and the modules it
     /// names in a `use` (`use crate::icon;`), in path order. Each is a
@@ -552,10 +554,17 @@ pub fn std_reexports(
     Ok(reexports)
 }
 
-/// One imported nominal definition and complete admitted shape.
-#[derive(Deserialize, Serialize)]
+/// One imported nominal definition and complete admitted shape at one of
+/// its paths. The paths a crate's type is reached at share its body, as
+/// an [`Item`]'s do.
 pub struct TypeDefinition {
     path: Box<str>,
+    body: std::sync::Arc<TypeBody>,
+}
+
+/// A type definition apart from its path.
+#[derive(Deserialize, Serialize)]
+struct TypeBody {
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
     /// Each parameter's default type, by position.
@@ -689,10 +698,36 @@ fn unsupported(
     })
 }
 
-/// One exact imported item overload.
-#[derive(Deserialize, Serialize)]
+/// One exact imported item overload at one of its paths. The paths a
+/// crate's item is reached at, through each re-export of it, share its
+/// body: the plan holds it once (`table`), and a runner converts it once.
 pub struct Item {
     path: Box<str>,
+    body: std::sync::Arc<ItemBody>,
+}
+
+/// The body the items at each path to one crate item share
+/// ([`Item::body`]): two are equal when they are one body.
+#[derive(Clone, Copy)]
+pub struct Body<'a>(&'a ItemBody);
+
+impl PartialEq for Body<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl Eq for Body<'_> {}
+
+impl std::hash::Hash for Body<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0, state);
+    }
+}
+
+/// An item overload apart from its path.
+#[derive(Deserialize, Serialize)]
+struct ItemBody {
     kind: ItemKind,
     selector: super::identity::Selector,
     signature: Signature,
@@ -712,7 +747,7 @@ pub struct Item {
 fn opaque_sibling(items: &[Item], path: &str, identity: &[u8; 32]) -> usize {
     let mut given = Vec::new();
     for item in items.iter().filter(|item| *item.path == *path) {
-        if let Type::Nominal { identity, .. } = &item.signature.output
+        if let Type::Nominal { identity, .. } = &item.body.signature.output
             && !given.contains(&identity)
         {
             given.push(identity);
@@ -1172,13 +1207,14 @@ impl Plan {
                     let Some(mut item) = item(&path, associated)? else {
                         continue;
                     };
-                    if !matches!(item.kind, ItemKind::OwnedMethod) {
+                    if !matches!(item.body.kind, ItemKind::OwnedMethod) {
                         continue;
                     }
-                    item.kind = ItemKind::Function;
+                    let body = item.made_mut();
+                    body.kind = ItemKind::Function;
                     let mut inputs = Vec::new();
                     inputs
-                        .try_reserve_exact(item.signature.inputs.len() + 1)
+                        .try_reserve_exact(body.signature.inputs.len() + 1)
                         .map_err(|_| super::Error::Allocation)?;
                     // The impl's `&str`, as rustc's `<&str as Trait>::
                     // method(text)` takes it, apart from a `String` (#706).
@@ -1186,8 +1222,8 @@ impl Plan {
                         mutable: false,
                         target: Box::new(Type::String),
                     });
-                    inputs.extend(std::mem::take(&mut item.signature.inputs).into_vec());
-                    item.signature.inputs = inputs.into_boxed_slice();
+                    inputs.extend(std::mem::take(&mut body.signature.inputs).into_vec());
+                    body.signature.inputs = inputs.into_boxed_slice();
                     let mut items = std::mem::take(&mut facade.items).into_vec();
                     items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                     items.push(item);
@@ -1225,7 +1261,7 @@ impl Plan {
                         let Some(mut item) = item(&path, associated)? else {
                             continue;
                         };
-                        item.kind = ItemKind::Function;
+                        item.made_mut().kind = ItemKind::Function;
                         let mut items = std::mem::take(&mut facade.items).into_vec();
                         items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                         items.push(item);
@@ -1296,7 +1332,7 @@ impl Plan {
                     let associated_path = format!("{relative}::{}", associated.name());
                     if let Some(item) = item(&associated_path, associated)?.filter(|item| {
                         matches!(
-                            item.kind,
+                            item.body.kind,
                             ItemKind::AssociatedFunction | ItemKind::AssociatedConstant
                         )
                     }) {
@@ -1513,7 +1549,7 @@ impl Plan {
             for item in facade.items.iter().filter(|item| {
                 super::member::declared(&item.path) && super::opaque::is_parameter(&item.path)
             }) {
-                if let Type::Nominal { identity, .. } = &item.signature.output {
+                if let Type::Nominal { identity, .. } = &item.body.signature.output {
                     opaque.insert(*identity);
                 }
             }
@@ -1539,14 +1575,16 @@ impl Plan {
                 // members beside it, so each path declares the type.
                 for item in self_members.chain(others) {
                     let mut found = Vec::new();
-                    item.signature.output.opaque(&opaque, &mut found);
+                    item.body.signature.output.opaque(&opaque, &mut found);
                     let member = super::member::declared(&item.path);
                     // A type's method gives one declared in the type's
                     // module, as `form::__rawr_opaque_Holder__items_mut`
                     // for `form::Holder::items_mut`: a type is no module.
                     let inherent = match item.path.rsplit_once("::") {
                         Some((parent, name))
-                            if types.iter().any(|ty| !ty.opaque && *ty.path == *parent) =>
+                            if types
+                                .iter()
+                                .any(|ty| !ty.body.opaque && *ty.path == *parent) =>
                         {
                             Some((parent, name))
                         }
@@ -1565,13 +1603,14 @@ impl Plan {
                         if types.iter().any(|ty| {
                             *ty.path == *path
                                 || (!member
-                                    && ty.opaque
-                                    && ty.identity == identity
+                                    && ty.body.opaque
+                                    && ty.body.identity == identity
                                     && super::member::declared(&ty.path))
                         }) {
                             continue;
                         }
                         let associated = item
+                            .body
                             .signature
                             .opaques
                             .iter()
@@ -1585,35 +1624,37 @@ impl Plan {
                                 == *super::identity::Definition::iterator().as_bytes()
                         });
                         types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                        types.push(TypeDefinition {
-                            path: path.into(),
-                            identity,
-                            parameters,
-                            associated,
-                            defaults: Box::default(),
-                            copy: false,
-                            default: false,
-                            debug: false,
-                            clone: false,
-                            partial_eq: false,
-                            eq: false,
-                            hash: false,
-                            partial_ord: false,
-                            ord: false,
-                            lifetimes: 0,
-                            covariant: false,
-                            given: Box::default(),
-                            iterator,
-                            error: false,
-                            opaque: true,
-                            shape: Shape::Struct {
-                                form: Form::Record,
-                                constructor: None,
-                                fields: Box::default(),
-                                constructible: false,
-                                unsupported: None,
+                        types.push(TypeDefinition::new(
+                            path.into(),
+                            TypeBody {
+                                identity,
+                                parameters,
+                                associated,
+                                defaults: Box::default(),
+                                copy: false,
+                                default: false,
+                                debug: false,
+                                clone: false,
+                                partial_eq: false,
+                                eq: false,
+                                hash: false,
+                                partial_ord: false,
+                                ord: false,
+                                lifetimes: 0,
+                                covariant: false,
+                                given: Box::default(),
+                                iterator,
+                                error: false,
+                                opaque: true,
+                                shape: Shape::Struct {
+                                    form: Form::Record,
+                                    constructor: None,
+                                    fields: Box::default(),
+                                    constructible: false,
+                                    unsupported: None,
+                                },
                             },
-                        });
+                        ));
                     }
                 }
                 facade.types = types.into_boxed_slice();
@@ -1627,7 +1668,7 @@ impl Plan {
         let resolution = {
             let declared = facades
                 .iter()
-                .map(|facade| facade.types.iter().map(|ty| ty.identity).collect())
+                .map(|facade| facade.types.iter().map(|ty| ty.body.identity).collect())
                 .collect::<Vec<_>>();
             let named = facades.iter().map(Facade::named).collect::<Vec<_>>();
             Resolution::new(&declared, &named)
@@ -1636,7 +1677,7 @@ impl Plan {
             let declared = facade
                 .types
                 .iter()
-                .map(|ty| ty.identity)
+                .map(|ty| ty.body.identity)
                 .collect::<std::collections::BTreeSet<_>>();
             let resolved = declared
                 .iter()
@@ -1652,7 +1693,7 @@ impl Plan {
                 .types
                 .sort_by(|left, right| left.path.cmp(&right.path));
             let mut items = std::mem::take(&mut facade.items).into_vec();
-            items.retain(|item| item.signature.declared(&resolved));
+            items.retain(|item| item.body.signature.declared(&resolved));
             // A member of an opaque type is declared with its owner, which
             // the function or method that gives it declares: one the
             // facade leaves out, as ratatui's `Line::styled_graphemes`, has
@@ -1682,15 +1723,15 @@ impl Plan {
             let declared = facade
                 .types
                 .iter()
-                .map(|ty| ty.identity)
+                .map(|ty| ty.body.identity)
                 .collect::<std::collections::BTreeSet<_>>();
             // Each opaque type's parameter count, at which an impl by its
             // bounds must write it.
             let opaque = facade
                 .types
                 .iter()
-                .filter(|ty| ty.opaque)
-                .map(|ty| (ty.identity, ty.parameters.len()))
+                .filter(|ty| ty.body.opaque)
+                .map(|ty| (ty.body.identity, ty.body.parameters.len()))
                 .collect::<std::collections::BTreeMap<_, _>>();
             let traits = named_traits
                 .iter()
@@ -1785,7 +1826,7 @@ impl Plan {
             };
             let facade = &mut facades[index];
             // A variant of an enum the facade does not declare is unavailable.
-            let Some(owner) = facade.types.iter().find(|ty| ty.identity == identity) else {
+            let Some(owner) = facade.types.iter().find(|ty| ty.body.identity == identity) else {
                 continue;
             };
             let target = copy(&format!("{}::{variant}", owner.path))?;
@@ -2092,37 +2133,41 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         ("Vector", 1, 0xb3),
     ]
     .into_iter()
-    .map(|(path, parameters, identity)| TypeDefinition {
-        path: path.into(),
-        identity: [identity; 32],
-        parameters: (0..parameters)
-            .map(|parameter| format!("T{parameter}").into_boxed_str())
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-        defaults: Box::default(),
-        copy: false,
-        default: false,
-        debug: false,
-        clone: false,
-        partial_eq: false,
-        eq: false,
-        hash: false,
-        partial_ord: false,
-        ord: false,
-        lifetimes: 0,
-        covariant: false,
-        given: Box::default(),
-        iterator: false,
-        error: false,
-        opaque: false,
-        associated: Box::default(),
-        shape: Shape::Struct {
-            form: Form::Unit,
-            constructor: None,
-            fields: Box::default(),
-            constructible: false,
-            unsupported: None,
-        },
+    .map(|(path, parameters, identity)| {
+        TypeDefinition::new(
+            path.into(),
+            TypeBody {
+                identity: [identity; 32],
+                parameters: (0..parameters)
+                    .map(|parameter| format!("T{parameter}").into_boxed_str())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                defaults: Box::default(),
+                copy: false,
+                default: false,
+                debug: false,
+                clone: false,
+                partial_eq: false,
+                eq: false,
+                hash: false,
+                partial_ord: false,
+                ord: false,
+                lifetimes: 0,
+                covariant: false,
+                given: Box::default(),
+                iterator: false,
+                error: false,
+                opaque: false,
+                associated: Box::default(),
+                shape: Shape::Struct {
+                    form: Form::Unit,
+                    constructor: None,
+                    fields: Box::default(),
+                    constructible: false,
+                    unsupported: None,
+                },
+            },
+        )
     })
     .collect::<Vec<_>>()
     .into_boxed_slice();
@@ -2177,35 +2222,37 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
             .expect_err("the module-collision fixture adds distinct child paths");
         types.insert(
             index,
-            TypeDefinition {
-                path: path.into(),
-                identity,
-                parameters: Box::default(),
-                defaults: Box::default(),
-                copy: false,
-                default: false,
-                debug: false,
-                clone: false,
-                partial_eq: false,
-                eq: false,
-                hash: false,
-                partial_ord: false,
-                ord: false,
-                lifetimes: 0,
-                covariant: false,
-                given: Box::default(),
-                iterator: false,
-                error: false,
-                opaque: false,
-                associated: Box::default(),
-                shape: Shape::Struct {
-                    form: Form::Unit,
-                    constructor: None,
-                    fields: Box::default(),
-                    constructible: false,
-                    unsupported: None,
+            TypeDefinition::new(
+                path.into(),
+                TypeBody {
+                    identity,
+                    parameters: Box::default(),
+                    defaults: Box::default(),
+                    copy: false,
+                    default: false,
+                    debug: false,
+                    clone: false,
+                    partial_eq: false,
+                    eq: false,
+                    hash: false,
+                    partial_ord: false,
+                    ord: false,
+                    lifetimes: 0,
+                    covariant: false,
+                    given: Box::default(),
+                    iterator: false,
+                    error: false,
+                    opaque: false,
+                    associated: Box::default(),
+                    shape: Shape::Struct {
+                        form: Form::Unit,
+                        constructor: None,
+                        fields: Box::default(),
+                        constructible: false,
+                        unsupported: None,
+                    },
                 },
-            },
+            ),
         );
     }
     facade.types = types.into_boxed_slice();
@@ -2227,35 +2274,37 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
-    let dial = TypeDefinition {
-        path: "Dial".into(),
-        identity: [0xd1; 32],
-        parameters: Box::from([Box::<str>::from("Message")]),
-        defaults: Box::default(),
-        copy: false,
-        default: false,
-        debug: false,
-        clone: false,
-        partial_eq: false,
-        eq: false,
-        hash: false,
-        partial_ord: false,
-        ord: false,
-        lifetimes: 0,
-        covariant: false,
-        given: Box::default(),
-        iterator: false,
-        error: false,
-        opaque: false,
-        associated: Box::default(),
-        shape: Shape::Struct {
-            form: Form::Unit,
-            constructor: None,
-            fields: Box::default(),
-            constructible: false,
-            unsupported: None,
+    let dial = TypeDefinition::new(
+        "Dial".into(),
+        TypeBody {
+            identity: [0xd1; 32],
+            parameters: Box::from([Box::<str>::from("Message")]),
+            defaults: Box::default(),
+            copy: false,
+            default: false,
+            debug: false,
+            clone: false,
+            partial_eq: false,
+            eq: false,
+            hash: false,
+            partial_ord: false,
+            ord: false,
+            lifetimes: 0,
+            covariant: false,
+            given: Box::default(),
+            iterator: false,
+            error: false,
+            opaque: false,
+            associated: Box::default(),
+            shape: Shape::Struct {
+                form: Form::Unit,
+                constructor: None,
+                fields: Box::default(),
+                constructible: false,
+                unsupported: None,
+            },
         },
-    };
+    );
     let iced = iced_semantic_fixture();
     let iced = Plan::decode(&iced).expect("the static iced facade fixture decodes");
     let Plan {
@@ -2316,38 +2365,40 @@ pub(crate) fn runner_foreign_fixture() -> Box<[u8]> {
 #[cfg(any(test, feature = "test-fixtures"))]
 fn runner_fixture(foreign: bool) -> Box<[u8]> {
     use super::identity::{Definition, Form as Selected, Selector};
-    let unit = |path: &str,
-                identity: [u8; 32],
-                parameters: &[&str],
-                constructor: Option<Selector>| TypeDefinition {
-        path: path.into(),
-        identity,
-        parameters: parameters.iter().map(|&name| name.into()).collect(),
-        defaults: Box::default(),
-        associated: Box::default(),
-        copy: false,
-        default: false,
-        debug: false,
-        clone: false,
-        partial_eq: false,
-        eq: false,
-        hash: false,
-        partial_ord: false,
-        ord: false,
-        lifetimes: 0,
-        covariant: false,
-        given: Box::default(),
-        iterator: false,
-        error: false,
-        opaque: false,
-        shape: Shape::Struct {
-            form: Form::Unit,
-            constructible: constructor.is_some(),
-            unsupported: None,
-            constructor,
-            fields: Box::default(),
-        },
-    };
+    let unit =
+        |path: &str, identity: [u8; 32], parameters: &[&str], constructor: Option<Selector>| {
+            TypeDefinition::new(
+                path.into(),
+                TypeBody {
+                    identity,
+                    parameters: parameters.iter().map(|&name| name.into()).collect(),
+                    defaults: Box::default(),
+                    associated: Box::default(),
+                    copy: false,
+                    default: false,
+                    debug: false,
+                    clone: false,
+                    partial_eq: false,
+                    eq: false,
+                    hash: false,
+                    partial_ord: false,
+                    ord: false,
+                    lifetimes: 0,
+                    covariant: false,
+                    given: Box::default(),
+                    iterator: false,
+                    error: false,
+                    opaque: false,
+                    shape: Shape::Struct {
+                        form: Form::Unit,
+                        constructible: constructor.is_some(),
+                        unsupported: None,
+                        constructor,
+                        fields: Box::default(),
+                    },
+                },
+            )
+        };
     let facade = |root: &str, types, items| Facade {
         root: root.into(),
         types,
@@ -2365,28 +2416,30 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
     let source = [11; 32];
     let produce = Item {
         path: "produce".into(),
-        kind: ItemKind::Function,
-        selector: Selector::Function {
-            item: Definition::authenticated([21; 32]),
-        },
-        signature: Signature {
-            parameters: Box::default(),
-            bounds: Box::default(),
-            inputs: Box::default(),
-            output: Type::Nominal {
-                identity: source,
-                arguments: Box::default(),
+        body: std::sync::Arc::new(ItemBody {
+            kind: ItemKind::Function,
+            selector: Selector::Function {
+                item: Definition::authenticated([21; 32]),
             },
-            relations: Box::default(),
-            guard: None,
-            scope: None,
-            crossing: false,
-            instance: None,
-            opaques: Box::default(),
-            lengths: Box::default(),
-        },
-        values: None,
-        member: None,
+            signature: Signature {
+                parameters: Box::default(),
+                bounds: Box::default(),
+                inputs: Box::default(),
+                output: Type::Nominal {
+                    identity: source,
+                    arguments: Box::default(),
+                },
+                relations: Box::default(),
+                guard: None,
+                scope: None,
+                crossing: false,
+                instance: None,
+                opaques: Box::default(),
+                lengths: Box::default(),
+            },
+            values: None,
+            member: None,
+        }),
     };
     let plan = Plan {
         schema: SCHEMA,
@@ -2611,7 +2664,7 @@ impl Facade {
     pub fn named(&self) -> std::collections::BTreeSet<[u8; 32]> {
         let mut named = std::collections::BTreeSet::new();
         for item in self.items.iter() {
-            for signature in std::iter::once(&item.signature).chain(&item.values) {
+            for signature in std::iter::once(&item.body.signature).chain(&item.body.values) {
                 signature.named(&mut named);
             }
         }
@@ -3357,95 +3410,101 @@ fn framed_bytes(digest: &mut Sha256, bytes: &[u8]) {
 }
 
 impl TypeDefinition {
+    fn new(path: Box<str>, body: TypeBody) -> Self {
+        Self {
+            path,
+            body: std::sync::Arc::new(body),
+        }
+    }
     /// Return the facade-relative path.
     pub fn path(&self) -> &str {
         &self.path
     }
     /// Return the stable imported identity.
-    pub const fn identity(&self) -> &[u8; 32] {
-        &self.identity
+    pub fn identity(&self) -> &[u8; 32] {
+        &self.body.identity
     }
     /// Return generic parameter names.
     pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.parameters.iter().map(AsRef::as_ref)
+        self.body.parameters.iter().map(AsRef::as_ref)
     }
     /// Return each parameter's default type, by position.
-    pub const fn defaults(&self) -> &[Option<Type>] {
-        &self.defaults
+    pub fn defaults(&self) -> &[Option<Type>] {
+        &self.body.defaults
     }
     /// Return whether the native type is copyable.
-    pub const fn copy(&self) -> bool {
-        self.copy
+    pub fn copy(&self) -> bool {
+        self.body.copy
     }
     /// Return whether the native type implements `Default`.
-    pub const fn default(&self) -> bool {
-        self.default
+    pub fn default(&self) -> bool {
+        self.body.default
     }
     /// Return whether the native type implements `PartialEq`.
-    pub const fn partial_eq(&self) -> bool {
-        self.partial_eq
+    pub fn partial_eq(&self) -> bool {
+        self.body.partial_eq
     }
     /// Return whether the native type implements `Eq`.
-    pub const fn eq(&self) -> bool {
-        self.eq
+    pub fn eq(&self) -> bool {
+        self.body.eq
     }
     /// Return whether the native type implements `Hash`.
-    pub const fn hash(&self) -> bool {
-        self.hash
+    pub fn hash(&self) -> bool {
+        self.body.hash
     }
     /// Return whether the native type implements `PartialOrd`.
-    pub const fn partial_ord(&self) -> bool {
-        self.partial_ord
+    pub fn partial_ord(&self) -> bool {
+        self.body.partial_ord
     }
     /// Return whether the native type implements `Ord`.
-    pub const fn ord(&self) -> bool {
-        self.ord
+    pub fn ord(&self) -> bool {
+        self.body.ord
     }
     /// Return whether the native type implements `Debug`.
-    pub const fn debug(&self) -> bool {
-        self.debug
+    pub fn debug(&self) -> bool {
+        self.body.debug
     }
     /// Return whether the native type implements `Clone`.
-    pub const fn cloneable(&self) -> bool {
-        self.clone
+    pub fn cloneable(&self) -> bool {
+        self.body.clone
     }
     /// Return how many lifetime parameters the native type declares.
-    pub const fn lifetimes(&self) -> u32 {
-        self.lifetimes
+    pub fn lifetimes(&self) -> u32 {
+        self.body.lifetimes
     }
     /// Return whether the native type is covariant in each of its
     /// lifetimes.
-    pub const fn covariant(&self) -> bool {
-        self.covariant
+    pub fn covariant(&self) -> bool {
+        self.body.covariant
     }
     /// Return the positions, among its type parameters, of those a field's
     /// boxed callable gives.
     pub fn given(&self) -> &[u32] {
-        &self.given
+        &self.body.given
     }
     /// Return whether the crate implements `Iterator` for the native type.
-    pub const fn iterator(&self) -> bool {
-        self.iterator
+    pub fn iterator(&self) -> bool {
+        self.body.iterator
     }
     /// Return whether the crate implements `std::error::Error` for the
     /// native type.
-    pub const fn error(&self) -> bool {
-        self.error
+    pub fn error(&self) -> bool {
+        self.body.error
     }
     /// Return whether the type is the opaque `impl Trait` a function gives.
-    pub const fn opaque(&self) -> bool {
-        self.opaque
+    pub fn opaque(&self) -> bool {
+        self.body.opaque
     }
     /// Each associated type an opaque type binds, by its trait's identity
     /// and its name, with the position of the parameter that is its value.
     pub fn associated(&self) -> impl Iterator<Item = ([u8; 32], &str, u32)> {
-        self.associated.iter().map(|(associated, position)| {
+        self.body.associated.iter().map(|(associated, position)| {
             (associated.trait_identity(), associated.name(), *position)
         })
     }
     /// Return the exact nominal shape.
-    pub const fn shape(&self) -> &Shape {
-        &self.shape
+    pub fn shape(&self) -> &Shape {
+        &self.body.shape
     }
 }
 
@@ -3525,26 +3584,145 @@ impl Item {
         &self.path
     }
     /// Return the closed item family.
-    pub const fn kind(&self) -> ItemKind {
-        self.kind
+    pub fn kind(&self) -> ItemKind {
+        self.body.kind
     }
     /// Return the semantic operation selector.
-    pub const fn selector(&self) -> &super::identity::Selector {
-        &self.selector
+    pub fn selector(&self) -> &super::identity::Selector {
+        &self.body.selector
     }
     /// Return the exact item signature.
-    pub const fn signature(&self) -> &Signature {
-        &self.signature
+    pub fn signature(&self) -> &Signature {
+        &self.body.signature
     }
     /// Return the signature of the item's form that a value fills, when it
     /// has one.
-    pub const fn values(&self) -> Option<&Signature> {
-        self.values.as_ref()
+    pub fn values(&self) -> Option<&Signature> {
+        self.body.values.as_ref()
     }
     /// Return the trait's own method the item is an instance of, when the
     /// trait declares it.
-    pub const fn member(&self) -> Option<super::identity::Definition> {
-        self.member
+    pub fn member(&self) -> Option<super::identity::Definition> {
+        self.body.member
+    }
+    /// The item apart from its path: equal for this item at each of its
+    /// paths, so whatever is made of one body serves them all.
+    #[must_use]
+    pub fn body(&self) -> Body<'_> {
+        Body(&self.body)
+    }
+    /// The body of an item being generated, which no other item shares
+    /// until a plan is decoded.
+    fn made_mut(&mut self) -> &mut ItemBody {
+        std::sync::Arc::get_mut(&mut self.body)
+            .expect("an item being generated shares its body with no other")
+    }
+}
+
+/// A facade's items and types as a plan holds them: each distinct body
+/// once, then each path with the index of its body, in path order. A
+/// crate's item reached through many re-exports, as iced's widgets are
+/// through each crate that re-exports iced, is one body at many paths.
+mod table {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use serde::de::Error as _;
+    use serde::ser::Error as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_json::value::RawValue;
+
+    use super::{Item, ItemBody, TypeBody, TypeDefinition};
+
+    /// An entry a facade holds at each of its paths.
+    pub(super) trait Entry: Sized {
+        type Body: Serialize + for<'de> Deserialize<'de>;
+        fn path(&self) -> &str;
+        fn body(&self) -> &Self::Body;
+        fn at(path: Box<str>, body: Arc<Self::Body>) -> Self;
+    }
+
+    impl Entry for Item {
+        type Body = ItemBody;
+        fn path(&self) -> &str {
+            &self.path
+        }
+        fn body(&self) -> &ItemBody {
+            &self.body
+        }
+        fn at(path: Box<str>, body: Arc<ItemBody>) -> Self {
+            Self { path, body }
+        }
+    }
+
+    impl Entry for TypeDefinition {
+        type Body = TypeBody;
+        fn path(&self) -> &str {
+            &self.path
+        }
+        fn body(&self) -> &TypeBody {
+            &self.body
+        }
+        fn at(path: Box<str>, body: Arc<TypeBody>) -> Self {
+            Self { path, body }
+        }
+    }
+
+    #[derive(Serialize)]
+    struct Written<'a> {
+        bodies: Vec<Box<RawValue>>,
+        paths: Vec<(&'a str, u32)>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(bound = "B: Deserialize<'de>")]
+    struct Read<B> {
+        bodies: Vec<B>,
+        paths: Vec<(Box<str>, u32)>,
+    }
+
+    // Serde's `with` hands the field as it is declared.
+    #[allow(clippy::borrowed_box)]
+    pub(super) fn serialize<E: Entry, S: Serializer>(
+        entries: &Box<[E]>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        // Bodies are the same when they are written the same, though the
+        // generator made them apart.
+        let mut index = HashMap::<String, u32>::new();
+        let mut bodies = Vec::new();
+        let mut paths = Vec::with_capacity(entries.len());
+        for entry in entries.iter() {
+            let body = serde_json::to_string(entry.body()).map_err(S::Error::custom)?;
+            let next = u32::try_from(bodies.len()).map_err(S::Error::custom)?;
+            let position = match index.get(&body) {
+                Some(&position) => position,
+                None => {
+                    bodies.push(RawValue::from_string(body.clone()).map_err(S::Error::custom)?);
+                    index.insert(body, next);
+                    next
+                }
+            };
+            paths.push((entry.path(), position));
+        }
+        Written { bodies, paths }.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, E: Entry, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Box<[E]>, D::Error> {
+        let Read { bodies, paths } = Read::<E::Body>::deserialize(deserializer)?;
+        let bodies = bodies.into_iter().map(Arc::new).collect::<Vec<_>>();
+        paths
+            .into_iter()
+            .map(|(path, position)| {
+                let body = usize::try_from(position)
+                    .ok()
+                    .and_then(|position| bodies.get(position))
+                    .ok_or_else(|| D::Error::custom("an entry names a body the plan lacks"))?;
+                Ok(E::at(path, Arc::clone(body)))
+            })
+            .collect()
     }
 }
 
@@ -3734,29 +3912,31 @@ fn written_type_definition(
             | Representability::Excluded(_)
             | Representability::Rejected(_) => return Ok(None),
         };
-    Ok(Some(TypeDefinition {
-        path: copy(path)?,
-        identity: *definition.as_bytes(),
-        parameters,
-        defaults,
-        copy: copyable,
-        default,
-        debug,
-        clone,
-        partial_eq: compare[0],
-        eq: compare[1],
-        hash: compare[2],
-        partial_ord: compare[3],
-        ord: compare[4],
-        lifetimes: borrowing.0,
-        covariant: borrowing.2,
-        given,
-        iterator: borrowing.1,
-        error,
-        opaque: false,
-        associated: Box::default(),
-        shape,
-    }))
+    Ok(Some(TypeDefinition::new(
+        copy(path)?,
+        TypeBody {
+            identity: *definition.as_bytes(),
+            parameters,
+            defaults,
+            copy: copyable,
+            default,
+            debug,
+            clone,
+            partial_eq: compare[0],
+            eq: compare[1],
+            hash: compare[2],
+            partial_ord: compare[3],
+            ord: compare[4],
+            lifetimes: borrowing.0,
+            covariant: borrowing.2,
+            given,
+            iterator: borrowing.1,
+            error,
+            opaque: false,
+            associated: Box::default(),
+            shape,
+        },
+    )))
 }
 
 /// The facade item `outcome` declares at `path`, if any.
@@ -3899,11 +4079,13 @@ fn written_item(
     };
     Ok(Some(Item {
         path: copy(path)?,
-        kind,
-        selector: outcome.identity().selector().try_clone()?,
-        signature,
-        values,
-        member: outcome.member(),
+        body: std::sync::Arc::new(ItemBody {
+            kind,
+            selector: outcome.identity().selector().try_clone()?,
+            signature,
+            values,
+            member: outcome.member(),
+        }),
     }))
 }
 
@@ -4574,5 +4756,80 @@ mod alias_schema_tests {
         let mut missing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         missing.as_object_mut().unwrap().remove("aliases");
         assert!(Plan::decode(&serde_json::to_vec(&missing).unwrap()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use std::sync::Arc;
+
+    use super::Plan;
+
+    /// An item and a type reached at a second path, as a re-export reaches
+    /// them, are written once, and the plan read back shares each body
+    /// between its paths and writes the same bytes again.
+    #[test]
+    fn an_entry_at_two_paths_is_written_once_and_read_back_shared() {
+        let mut plan = Plan::decode(&super::runner_native_fixture()).unwrap();
+        let index = plan
+            .facades
+            .iter()
+            .position(|facade| !facade.items.is_empty() && !facade.types.is_empty())
+            .unwrap();
+        let facade = &mut plan.facades[index];
+        let mut items = std::mem::take(&mut facade.items).into_vec();
+        let mut types = std::mem::take(&mut facade.types).into_vec();
+        let (item_bodies, type_bodies) = (items.len(), types.len());
+        items.push(super::Item {
+            path: format!("{}_again", items[0].path).into(),
+            body: Arc::clone(&items[0].body),
+        });
+        items.sort_by(|left, right| left.path.cmp(&right.path));
+        types.push(super::TypeDefinition {
+            path: format!("{}_again", types[0].path).into(),
+            body: Arc::clone(&types[0].body),
+        });
+        types.sort_by(|left, right| left.path.cmp(&right.path));
+        facade.items = items.into_boxed_slice();
+        facade.types = types.into_boxed_slice();
+
+        let bytes = serde_json::to_vec(&plan).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let count = |table: &str, part: &str| {
+            written["facades"][index][table][part]
+                .as_array()
+                .unwrap()
+                .len()
+        };
+        assert_eq!(count("items", "bodies"), item_bodies);
+        assert_eq!(count("items", "paths"), item_bodies + 1);
+        assert_eq!(count("types", "bodies"), type_bodies);
+        assert_eq!(count("types", "paths"), type_bodies + 1);
+
+        let read = Plan::decode(&bytes).unwrap();
+        let items = &read.facades[index].items;
+        let again = items
+            .iter()
+            .find(|item| item.path.ends_with("_again"))
+            .unwrap();
+        let path = again.path.strip_suffix("_again").unwrap();
+        let original = items.iter().find(|item| &*item.path == path).unwrap();
+        assert!(again.body() == original.body());
+        assert_eq!(serde_json::to_vec(&read).unwrap(), bytes);
+    }
+
+    /// A path that names a body the plan lacks is no plan.
+    #[test]
+    fn a_path_naming_a_missing_body_rejects() {
+        let bytes = super::runner_native_fixture();
+        let mut plan: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let facade = plan["facades"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|facade| !facade["items"]["paths"].as_array().unwrap().is_empty())
+            .unwrap();
+        facade["items"]["paths"][0][1] = serde_json::json!(u32::MAX);
+        assert!(Plan::decode(&serde_json::to_vec(&plan).unwrap()).is_err());
     }
 }

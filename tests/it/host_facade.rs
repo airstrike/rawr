@@ -425,6 +425,29 @@ fn failed_signature_registration_does_not_replace_the_prior_parameter_contract()
 }
 
 #[test]
+fn facade_types_of_one_identity_agree_and_the_first_conflict_is_named() {
+    let mut agreeing = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    agreeing.type_::<ResultMarker>("Result", &[], &[capability::Kind::Debug]).unwrap();
+    agreeing.type_::<ResultMarker>("Outcome", &[], &[capability::Kind::Debug]).unwrap();
+    assert!(agreeing.finish().is_ok());
+
+    // A facade keeps its types in path order: `Result` is the first type
+    // that conflicts with an earlier one, `Answer`, though `Zebra` also
+    // conflicts with `Byte`.
+    let mut conflicting = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    conflicting.type_::<ResultMarker>("Result", &[], &[capability::Kind::Debug]).unwrap();
+    conflicting.type_::<ResultMarker>("Answer", &[], &[capability::Kind::Clone]).unwrap();
+    conflicting.type_::<u8>("Byte", &[], &[capability::Kind::Debug]).unwrap();
+    conflicting.type_::<u8>("Zebra", &[], &[capability::Kind::Clone]).unwrap();
+    let error = conflicting.finish().unwrap_err();
+    assert!(matches!(
+        error,
+        host::Error::ConflictingHostIdentity { existing, incoming }
+            if existing == "api::Answer" && incoming == "api::Result"
+    ));
+}
+
+#[test]
 fn facade_install_is_atomic_across_path_and_identity_conflicts() {
     let original = counter_facade(false, facade::Abi::new(1).unwrap(), receiver::Mode::Shared);
     let original_fingerprint = original.fingerprint().clone();
