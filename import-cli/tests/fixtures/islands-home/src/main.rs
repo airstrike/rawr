@@ -124,6 +124,7 @@ fn main() {
         workspace.thumbs.drawn,
         workspace.home.layout()
     );
+    println!("redrew {}", workspace.home.redraw(&mut workspace.thumbs));
     workspace.inbox.unread = 3;
     // Elements over native inputs alone, two held at once, and what their
     // crate calls make read where it is made.

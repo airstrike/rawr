@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use crate::classify::representability::convert;
 use crate::surface::{adapter, identity};
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// Borrowed compiler facts for one use, without diagnostic source locations.
 /// A selector that names its item is the use's identity: the path, which
@@ -31,6 +31,9 @@ pub struct Use<'a, P = &'a str> {
     pub endpoint: Option<&'a [u8; 32]>,
     /// Ordered concrete substitutions inferred by executable lowering.
     pub types: &'a [convert::Type],
+    /// Its const parameters' values, in declared order, as an array's
+    /// length gives `N` (#1536).
+    pub constants: &'a [convert::Constant],
     /// The script functions that fill its callable parameters (D594): two
     /// uses that differ only in them are two instances, as two Rust
     /// function items are two types.
@@ -143,11 +146,12 @@ where
 impl<P: Serialize> Serialize for Use<'_, P> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
-        let mut fields = serializer.serialize_struct("Use", 5)?;
+        let mut fields = serializer.serialize_struct("Use", 6)?;
         fields.serialize_field("path", &unnamed(self.selector).then_some(&self.path))?;
         fields.serialize_field("selector", self.selector)?;
         fields.serialize_field("endpoint", &self.endpoint)?;
         fields.serialize_field("types", self.types)?;
+        fields.serialize_field("constants", self.constants)?;
         fields.serialize_field("slots", self.slots)?;
         fields.end()
     }
@@ -364,34 +368,43 @@ impl Projection<'_> {
         // `Path::new` take theirs, so they follow from the rest: the
         // adapter calls whichever closure the use passes (#1000). Two
         // instances that differ only in them both match, which covers
-        // neither. Other instance dimensions cannot be guessed.
-        if !identity.constants().is_empty() || !identity.types().iter().all(|ty| concrete(ty, 0)) {
+        // neither. Its const values are the use's own, as an array's length
+        // gives `N` (#1536). Other instance dimensions cannot be guessed.
+        if !identity.types().iter().all(|ty| concrete(ty, 0)) {
             return None;
         }
-        let (types, functions, mappers) = match plan.operation() {
+        let (types, constants, functions, mappers) = match plan.operation() {
             adapter::Operation::Function {
                 substitutions,
+                constants,
                 functions,
                 mappers,
                 ..
-            } => (substitutions.as_ref(), functions.as_ref(), mappers.as_ref()),
+            } => (&**substitutions, &**constants, &**functions, &**mappers),
             // A method takes crate functions by name as a function does, as
             // `.style(theme::text::base)` takes one (#1534).
             adapter::Operation::Method {
                 substitutions,
+                constants,
                 functions,
                 ..
-            } => (substitutions.as_ref(), functions.as_ref(), &[][..]),
+            } => (&**substitutions, &**constants, &**functions, &[][..]),
+            // A builder replay is no use the compiler reports: a chain such as
+            // tooltip's `.gap(..).style(container::rounded_box)` is its
+            // calls' own uses, each covered above (#1029).
             adapter::Operation::Builder { .. } => return None,
             // A generic type's variant or field is bound at the instance its
             // use infers, as `Key<&str>::Named` is: its types are the
             // identity's own.
             adapter::Operation::EnumVariant { .. }
             | adapter::Operation::StructConstructor { .. }
-            | adapter::Operation::StructField { .. } => (identity.types(), &[][..], &[][..]),
-            _ => (&[][..], &[][..], &[][..]),
+            | adapter::Operation::StructField { .. } => {
+                (identity.types(), &[][..], &[][..], &[][..])
+            }
+            _ => (&[][..], &[][..], &[][..], &[][..]),
         };
         if types != identity.types()
+            || constants != identity.constants()
             || functions.len() != identity.function_items().len()
             || mappers.len() != identity.event_mappers().len()
             || functions
@@ -487,6 +500,7 @@ impl Selected<'_> {
                 selector: self.identity.selector(),
                 endpoint: None,
                 types: self.identity.types(),
+                constants: self.identity.constants(),
                 slots: self.identity.slots(),
             },
             functions: Sequence(
@@ -715,6 +729,7 @@ fn endpoint_facts(
             selector: &identity::Selector::Unavailable,
             endpoint: Some(endpoint.site().selector()),
             types: &[],
+            constants: &[],
             slots: &[],
         },
         functions: Sequence(std::iter::empty::<Function<'_>>()),
@@ -963,6 +978,7 @@ mod tests {
             selector: &identity::Selector::Declaration,
             endpoint: None,
             types: &[],
+            constants: &[],
             slots: &[],
         };
         let matched = carrier
@@ -1036,6 +1052,7 @@ mod tests {
             selector: consumer.identity().selector(),
             endpoint: None,
             types: &[],
+            constants: &[],
             slots: &[],
         };
         let moved_functions = moved.entries[0]
@@ -1136,6 +1153,7 @@ mod tests {
             selector: selected.identity().selector(),
             endpoint: None,
             types: &types,
+            constants: &[],
             slots: &[],
         };
         let matched = carrier
@@ -1237,6 +1255,7 @@ mod tests {
             selector: &selector,
             endpoint: None,
             types: &types,
+            constants: &[],
             slots: &[],
         };
         let facts = Facts {
@@ -1313,6 +1332,7 @@ mod tests {
                 selector: &selector,
                 endpoint: None,
                 types: &[],
+                constants: &[],
                 slots: &[],
             },
             functions: Sequence(std::iter::empty::<Function<'_>>()),

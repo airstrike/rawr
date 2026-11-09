@@ -143,6 +143,7 @@ impl Output {
                     selector: &used.selector,
                     endpoint: None,
                     types: &used.types,
+                    constants: &used.constants,
                     slots: &used.slots,
                 },
                 used.functions.iter().map(|function| coverage::Function {

@@ -1505,7 +1505,8 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// (#1500). A crate method that borrows its receiver keeps a `&'a str`
 /// at that lifetime, in an anchored result and read where it is made
 /// (#1503). Screens whose elements were held are moved and dropped
-/// (#1492).
+/// (#1492). A marked fn and a marked `&mut self` method assign fields of
+/// the renderer native code lends them `&mut`, in place (#1535).
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
@@ -1545,8 +1546,8 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
              updates show tiles 1.2 Some(Inbox(Read(0)))\n\
              boxed tiles 1.2\nwizard view at 6\nboxed dark\nboxed dark\nstacked 2\n\
              themed wizard shows dark Some(Wizard(Step(6)))\n\
-             wizard closed at step 11\ncommitted at step 11\nbuilt 3 drew 3\n\
-             wizard closed at step 6\nbuilt 2 drew 5 no wizard over []\n\
+             wizard closed at step 11\ncommitted at step 11\nbuilt 3 drew 6\n\
+             wizard closed at step 6\nbuilt 2 drew 10 no wizard over []\nredrew 16\n\
              banner banner Some(Inbox(Read(3))) top tiles 1.2\n\
              pending 4 top label tiles 1.2\ntitled home label mail\nwizard view at 6\nwizard label dark\n\
              wizard closed at step 6\nscreen 0 shows wizard\nmoved shows wizard\n\
@@ -1676,12 +1677,15 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 
 /// A literal edited in a marked screen's private function swaps into the
 /// running program, its state kept, when the screen passes a native
-/// function by name further down, to a crate function and to a crate
-/// method, as inboard's `home.rs` passes `theme::text::base` to `.style`.
-/// The runner names that function, never where the program writes it, so
-/// the edit that moves it needs no new runner and doesn't restart the
-/// program. The first edit after start and the one after it both compile
-/// in the running program: neither prepares again (#1534).
+/// function by name further down, to a crate function, to a crate method
+/// and to the last step of a builder chain, as inboard's `home.rs` passes
+/// `theme::text::base` to `.style` and tooltip's chain passes
+/// `container::rounded_box`, and calls a crate function generic over a
+/// const length. The runner names that function, never where the program
+/// writes it, so the edit that moves it needs no new runner and doesn't
+/// restart the program. The first edit after start and the one after it
+/// both compile in the running program: neither prepares again (#1534,
+/// #1536, #1029).
 #[test]
 fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
     const LITERAL: &str = concat!(
