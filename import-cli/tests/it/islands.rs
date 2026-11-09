@@ -186,6 +186,35 @@ fn an_idle_native_main_outlives_a_stop_and_takes_a_save_at_its_next_call() {
     assert!(!seen.contains("restarting"), "{seen}");
 }
 
+/// An idle event loop draws a save at once (#1479): a native `main` whose
+/// winit loop waits for its next event makes no call into marked code, so
+/// rawr asks the program's windows to redraw when it queues a generation.
+/// The frame that follows calls into marked code, which admits the save,
+/// and draws with it, without any input.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_idle_event_loop_redraws_with_a_save_without_input() {
+    const REDRAW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-redraw");
+    let root = crate::support::scratch().join("islands-redraw");
+    let events = root.join("events.jsonl");
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(REDRAW), &root);
+    let mut run = start(&root, &[("RAWR_MCP_EVENTS", events.clone())]);
+    run.until(|line| line == "shade 1");
+    let saved = std::time::Instant::now();
+    edit(
+        &root.join("src/scene.rs"),
+        "const SHADE: i64 = 1;",
+        "const SHADE: i64 = 2;",
+    );
+    run.until(|line| line == "shade 2");
+    eprintln!("save to the new frame: {:?}", saved.elapsed());
+    run.told(&events, |text| text.contains("\"swapped\""));
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("restarting"), "{seen}");
+}
+
 /// winit's event loop must run on the process's main thread, so a native
 /// `main` runs there, and so does the marked code it calls (#1119). A
 /// marked function gives back a `Result` of types that cross, and an alias

@@ -165,6 +165,8 @@ pub mod program;
 pub mod project;
 /// Receiver modes proven for inherent methods.
 pub mod receiver;
+/// A redraw of the program's windows once a generation is offered (#1479).
+mod redraw;
 /// Immutable candidates for script-native program replacement.
 pub mod reload;
 /// Rawr item-name and header-type resolution.
