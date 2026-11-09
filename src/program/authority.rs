@@ -101,6 +101,26 @@ impl Authority {
             .validate(value, self.executable.model(), runtime)
     }
 
+    /// Evaluate the program's top level against `runtime`, as its calls
+    /// run: a snippet's statements outside any function call std and the
+    /// crates through the same bindings its functions do (#1460).
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn evaluate_top_level(
+        &self,
+        runtime: Shared<crate::host::runtime::Registry>,
+    ) -> Result<(), Box<crate::EvalAltResult>> {
+        let mut global = self.engine.new_global_runtime_state();
+        global.host_runtime = Some(runtime);
+        self.engine
+            .eval_ast_with_scope_raw(
+                &mut global,
+                &mut Caches::new(),
+                &mut Scope::new(),
+                self.executable.ast(),
+            )
+            .map(drop)
+    }
+
     pub(crate) fn runtime_requirements(&self) -> &[crate::host::runtime::Requirement] {
         self.executable.runtime_requirements()
     }

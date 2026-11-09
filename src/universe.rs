@@ -156,11 +156,10 @@ impl Universe {
 fn compile(
     engine: &Shared<Engine>,
     snapshot: &package::snapshot::Snapshot,
-) -> Result<(crate::reload::Candidate, crate::AST), Error> {
+) -> Result<crate::reload::Candidate, Error> {
     let compiled = engine
         .compile_package_snapshot_covered(snapshot)
         .map_err(Error::compile)?;
-    let (compiled, ast) = compiled.with_top_level();
     let (candidate, _, _) = compiled.into_parts();
-    Ok((candidate, ast))
+    Ok(candidate)
 }
