@@ -272,7 +272,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 /// A banner over the inbox alone, as inboard's `threads::view(threads:
 /// &'a Store)`: its element borrows the program's text and no marked
 /// input, so it is anchored on the native one.
-pub fn banner<'a>(inbox: &'a inbox::State) -> Element<'a, Message> {
+pub fn inbox_banner<'a>(inbox: &'a inbox::State) -> Element<'a, Message> {
     ui::button("banner", inbox::Message::Read(inbox.unread)).map(Message::Inbox)
 }
 

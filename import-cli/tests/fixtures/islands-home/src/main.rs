@@ -127,7 +127,7 @@ fn main() {
     workspace.inbox.unread = 3;
     // Elements over native inputs alone, two held at once, and what their
     // crate calls make read where it is made.
-    let banner = home::banner(&workspace.inbox);
+    let banner = home::inbox_banner(&workspace.inbox);
     let top = home::top_bar(&workspace.inbox, &workspace.updates);
     println!(
         "banner {} {:?} top {}",
