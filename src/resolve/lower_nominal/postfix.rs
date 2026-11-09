@@ -777,6 +777,15 @@ impl<'a> Parser<'a> {
                 value = self.operator_expr(source, param, span(value.span.start(), end));
                 continue;
             }
+            // A blanket impl's function (`impl<T: Bound> Trait for T`) on a
+            // value no impl or inherent function of that name is for, as
+            // `vec.into_content()` of inboard's `IntoContent`.
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && let Some(definition) = self.blanket_receiver(&builtin, &member)
+            {
+                value = self.call_blanket_method(value, &definition, &member, member_span)?;
+                continue;
+            }
             // A crate trait's function on a builtin value (`5.area()`);
             // the builtin's own method of that name comes first, as
             // Rust's inherent methods do.
@@ -1469,6 +1478,74 @@ impl<'a> Parser<'a> {
             declaration: (definition.source() == self.models.context)
                 .then_some(definition.name_span()),
         })
+    }
+
+    /// The blanket impl's function `member` a call on `receiver` reaches:
+    /// one whose where-clauses hold for it, where neither its own type's
+    /// impls nor its inherent or iterator methods have `member`.
+    pub(super) fn blanket_receiver(
+        &mut self,
+        receiver: &Ty,
+        member: &ImmutableString,
+    ) -> Option<method::Definition> {
+        let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
+        if !self
+            .models
+            .trait_methods
+            .contains_key(&(owner, member.clone()))
+        {
+            return None;
+        }
+        let bare = without_references(receiver).clone();
+        let own = owner_id(&bare).is_some_and(|id| {
+            self.models.method(id, member).is_some()
+                || self
+                    .models
+                    .trait_methods
+                    .contains_key(&(id, member.clone()))
+        });
+        let iterator =
+            matches!(bare, Ty::Iter(..)) && std_method::iterator(member, |_| true).is_some();
+        if own || iterator || std_method::inherent(&bare, member).is_some() {
+            return None;
+        }
+        self.blanket_method(receiver, member)
+    }
+
+    /// `value.member(args)` through the blanket impl's function
+    /// `definition`. An impl over an iterator (`resolve::
+    /// erase_iterator_owner`) takes the iterator over `value`.
+    pub(super) fn call_blanket_method(
+        &mut self,
+        mut value: ParsedExpr,
+        definition: &method::Definition,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        if matches!(impl_self_ty(definition, &BTreeMap::new()), Ty::Iter(..))
+            && let Some(iterator) = self.iterator_of(&value)
+        {
+            value = iterator;
+        }
+        let (args, end) = self.parse_call_arguments("method arguments")?;
+        let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
+        let owner_name = value.ty.name(&self.models);
+        match self.call_owner_method(
+            value,
+            owner,
+            owner_name.clone(),
+            member,
+            member_span,
+            args,
+            end,
+        )? {
+            Ok(called) => Ok(called),
+            Err(_) => Err(Error::UnknownMember {
+                owner: owner_name,
+                member: member.clone(),
+                reference: member_span,
+            }),
+        }
     }
 
     /// `value.member(args)` through `owner`'s inherent or trait function

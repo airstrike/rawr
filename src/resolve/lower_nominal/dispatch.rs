@@ -126,6 +126,10 @@ pub(super) fn write_trait_dispatchers(
                 "__rawr_private fn {}({parameters}) {{\nlet __rawr_type = {type_index}(self);\n",
                 trait_dispatcher_name(trait_name, &function.name.text)
             );
+            // A blanket impl (`impl<T: Bound> Trait for T`) runs for a
+            // value no other impl is for, as coherence leaves it the only
+            // impl that can apply.
+            let mut blanket = None;
             for ((owner, _), definitions) in models
                 .trait_methods
                 .iter()
@@ -135,6 +139,10 @@ pub(super) fn write_trait_dispatchers(
                     .iter()
                     .filter(|definition| definition.trait_name() == Some(trait_name))
                 {
+                    if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) {
+                        blanket = Some(definition.id());
+                        continue;
+                    }
                     let _ = writeln!(
                         text,
                         "if __rawr_type == {} {{ return self.{}({parameters}); }}",
@@ -146,6 +154,9 @@ pub(super) fn write_trait_dispatchers(
             // A std trait's dispatcher falls back to what Rawr does for a
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
+                _ if let Some(id) = blanket => {
+                    format!("return self.{}({parameters});", method_name(id))
+                }
                 (true, "Clone") => "return self;".to_string(),
                 // An `Rc` or `Arc` writes what it points to, as std's
                 // `impl<T: Display> Display for Rc<T>` does.
@@ -261,6 +272,7 @@ pub(super) fn write_instance_dispatchers(
             "__rawr_private fn {}({parameters}) {{\nlet __rawr_type = {type_index}(self);\n",
             instance_dispatcher_name(trait_name, &function.name.text, index)
         );
+        let mut blanket = None;
         for (owner, definition) in &definitions {
             let arguments = definition.trait_arguments();
             let matches = match &instance {
@@ -270,14 +282,23 @@ pub(super) fn write_instance_dispatchers(
                 }
                 None => true,
             };
-            if matches {
-                let _ = writeln!(
-                    text,
-                    "if __rawr_type == {} {{ return self.{}({parameters}); }}",
-                    owner_key(*owner),
-                    method_name(definition.id())
-                );
+            if !matches {
+                continue;
             }
+            // A blanket impl runs for a value no other impl is for.
+            if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) {
+                blanket = Some(definition.id());
+                continue;
+            }
+            let _ = writeln!(
+                text,
+                "if __rawr_type == {} {{ return self.{}({parameters}); }}",
+                owner_key(*owner),
+                method_name(definition.id())
+            );
+        }
+        if let Some(id) = blanket {
+            let _ = writeln!(text, "return self.{}({parameters});", method_name(id));
         }
         // Rust's own operator impls on builtins: the runtime's operator.
         if let Some((symbol, ..)) = models

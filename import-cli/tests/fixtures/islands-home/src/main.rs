@@ -199,11 +199,18 @@ fn main() {
         home::Marked::AllRead => println!("marked all"),
     }
     // Lines given a builder and a free function as lines and as text, by
-    // the marked trait's impls: text is prefixed and lines are kept.
+    // the marked trait's impls: text in a `Vec` or an array is prefixed by
+    // the blanket impl, and lines are kept.
     let words = ["b".to_owned(), "c".to_owned()];
     let panel = home::Panel::new("panel").lines(home::lines(vec!["a".to_owned()]));
     let listed = home::Panel::new("listed").lines(words.to_vec());
-    println!("{} / {}", panel.label(), listed.label());
+    let arrayed = home::Panel::new("arrayed").lines(words.clone());
+    println!(
+        "{} / {} / {}",
+        panel.label(),
+        listed.label(),
+        arrayed.label()
+    );
     let doubled = words.iter().map(|word| word.repeat(2)).collect::<Vec<_>>();
     println!(
         "lines {} / {}",

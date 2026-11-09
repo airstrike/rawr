@@ -3688,6 +3688,102 @@ fn language_trait_impls_on_builtin_types() {
     );
 }
 
+/// A blanket impl over a type parameter, as inboard's `sidebar::IntoContent`
+/// has beside its impl for `Content`: a call on the concrete type runs its
+/// own impl, and a call on any type the where-clause holds for (a `Vec`, an
+/// array, an iterator) runs the blanket one, directly and through a bound,
+/// as rustc selects them.
+#[test]
+fn language_a_blanket_impl_serves_each_type_its_bounds_hold_for() {
+    const LINES: &str = r#"
+        pub struct Lines { lines: Vec<String> }
+        pub trait IntoLines { fn into_lines(self) -> Lines; }
+        impl IntoLines for Lines { fn into_lines(self) -> Lines { self } }
+        impl<T> IntoLines for T
+        where
+            T: IntoIterator<Item = String>,
+        {
+            fn into_lines(self) -> Lines {
+                Lines { lines: self.into_iter().map(|line| format!("-{line}")).collect() }
+            }
+        }
+        fn count(lines: impl IntoLines) -> usize { lines.into_lines().lines.len() }
+    "#;
+    let printed = Engine::new()
+        .eval::<String>(&format!(
+            r#"{LINES}
+            pub fn run() -> String {{
+                let own = Lines {{ lines: vec!["a".to_string()] }}.into_lines();
+                let listed = vec!["b".to_string(), "c".to_string()].into_lines();
+                let array = ["d".to_string()].into_lines();
+                let mapped = ["e", "f"].iter().map(|word| word.repeat(2)).into_lines();
+                let counts = format!(
+                    "{{}} {{}} {{}}",
+                    count(vec!["x".to_string()]),
+                    count(Lines {{ lines: Vec::new() }}),
+                    count(["y".to_string(), "z".to_string()])
+                );
+                format!(
+                    "{{:?}} {{:?}} {{:?}} {{:?}} {{counts}}",
+                    own.lines, listed.lines, array.lines, mapped.lines
+                )
+            }}
+            run()"#
+        ))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(printed, r#"["a"] ["-b", "-c"] ["-d"] ["-ee", "-ff"] 1 0 2"#);
+    // Neither impl applies to an integer: rustc's E0277 for the bound.
+    let wrong = rejected(&format!(
+        "{LINES} pub fn run() -> i64 {{ count(5) as i64 }} run()"
+    ));
+    assert!(
+        wrong.contains("the trait bound `{integer}: IntoLines` is not satisfied"),
+        "{wrong}"
+    );
+}
+
+/// A blanket impl of a generic trait, whose argument the items fix, as
+/// inboard's `IntoContent<'a, Message>`'s are, and a blanket impl over any
+/// `Display` type, whose `Self` stays a bounded parameter.
+#[test]
+fn language_a_blanket_impl_of_a_generic_trait_or_over_a_bound() {
+    let printed = Engine::new()
+        .eval::<String>(
+            r#"
+            pub struct Tagged<M> { tags: Vec<M> }
+            pub trait IntoTagged<M> { fn into_tagged(self) -> Tagged<M>; }
+            impl<M> IntoTagged<M> for Tagged<M> { fn into_tagged(self) -> Tagged<M> { self } }
+            impl<T, M> IntoTagged<M> for T
+            where
+                T: IntoIterator<Item = M>,
+            {
+                fn into_tagged(self) -> Tagged<M> { Tagged { tags: self.into_iter().collect() } }
+            }
+            fn tags(tagged: impl IntoTagged<i64>) -> usize { tagged.into_tagged().tags.len() }
+            pub trait Shout { fn shout(&self) -> String; }
+            impl<T: std::fmt::Display> Shout for T {
+                fn shout(&self) -> String { format!("{self}!") }
+            }
+            pub fn run() -> String {
+                let numbers = vec![1, 2, 3].into_tagged();
+                let words = ["a".to_string()].into_tagged();
+                format!(
+                    "{} {} {} {} {} {}",
+                    numbers.tags.len(),
+                    words.tags[0],
+                    tags(vec![4, 5]),
+                    tags(Tagged { tags: vec![6] }),
+                    5.shout(),
+                    "hey".to_string().shout()
+                )
+            }
+            run()
+            "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(printed, "3 a 2 1 5! hey!");
+}
+
 #[test]
 fn language_generic_trait_functions_by_instance() {
     let value = run(r#"

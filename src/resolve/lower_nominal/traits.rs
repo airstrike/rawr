@@ -631,6 +631,151 @@ impl<'a> Parser<'a> {
         Some((trait_name.clone(), function.clone()))
     }
 
+    /// The function `member` of the blanket impl (`impl<T: Bound> Trait
+    /// for T`) whose where-clauses hold for `ty`, as rustc's probe finds it
+    /// for a type no other impl gives `member`.
+    pub(super) fn blanket_method(&mut self, ty: &Ty, member: &str) -> Option<method::Definition> {
+        let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
+        let definitions = self
+            .models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .clone();
+        let mut fitting = definitions
+            .into_iter()
+            .filter(|definition| self.blanket_fits(definition, ty, None));
+        let definition = fitting.next()?;
+        fitting.next().is_none().then_some(definition)
+    }
+
+    /// Whether a blanket impl of `trait_name` at `arguments` holds for
+    /// `ty`: its where-clauses do (rustc's E0277 where none does).
+    pub(super) fn blanket_implements(
+        &mut self,
+        ty: &Ty,
+        trait_name: &str,
+        arguments: &[Ty],
+    ) -> bool {
+        let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
+        if !self.models.implements(trait_name, owner) {
+            return false;
+        }
+        let definitions = self
+            .models
+            .trait_methods
+            .iter()
+            .filter(|((id, _), _)| *id == owner)
+            .flat_map(|(_, definitions)| definitions)
+            .filter(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| name == trait_name)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        definitions
+            .iter()
+            .any(|definition| self.blanket_fits(definition, ty, Some(arguments)))
+    }
+
+    /// Whether the blanket impl of `definition` applies to `ty`, and to the
+    /// trait's `arguments` when given: its owner, a parameter, takes `ty`
+    /// and its bounds hold; an owner bounded by `IntoIterator<Item = X>` is
+    /// the iterator of `X` (`resolve::erase_iterator_owner`), which `ty`
+    /// is when Rust's `IntoIterator` walks it with items of `X`.
+    fn blanket_fits(
+        &mut self,
+        definition: &method::Definition,
+        ty: &Ty,
+        arguments: Option<&[Ty]>,
+    ) -> bool {
+        let checkpoint = self.inference.checkpoint();
+        let substitution = definition
+            .generics()
+            .iter()
+            .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+            .collect::<BTreeMap<_, _>>();
+        let ty = self.inference.resolve(ty);
+        let owner = impl_self_ty(definition, &substitution);
+        let mut fits = match &owner {
+            Ty::Iter(item, _) => self
+                .iterable_item(&ty)
+                .is_some_and(|found| self.unify_type(item, &found)),
+            owner => self.unify_type(owner, &ty),
+        };
+        if let Some(arguments) = arguments {
+            let written = definition
+                .trait_arguments()
+                .iter()
+                .map(|argument| instantiate(&Ty::from_resolved(argument), &substitution))
+                .collect::<Vec<_>>();
+            fits = fits
+                && written.len() == arguments.len()
+                && written
+                    .iter()
+                    .zip(arguments)
+                    .all(|(written, argument)| self.unify_type(written, argument));
+        }
+        let trait_name = definition.trait_name().cloned();
+        for generic in definition.generics() {
+            if !fits {
+                break;
+            }
+            let bounded = self.inference.resolve(&substitution[&generic.name.text]);
+            if matches!(bounded, Ty::Infer(_)) {
+                continue;
+            }
+            fits = bound_kinds(generic.bounds).all(|kind| self.type_provides(&bounded, kind))
+                && generic
+                    .traits
+                    .iter()
+                    .filter(|bound| trait_name.as_ref() != Some(&bound.text))
+                    .all(|bound| {
+                        let lists = generic
+                            .trait_arguments
+                            .iter()
+                            .filter(|(name, _)| *name == bound.text)
+                            .map(|(_, arguments)| {
+                                arguments
+                                    .iter()
+                                    .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>();
+                        if lists.is_empty() {
+                            return self.type_implements_with(&bounded, &bound.text, &[]);
+                        }
+                        lists
+                            .iter()
+                            .all(|list| self.type_implements_with(&bounded, &bound.text, list))
+                    });
+        }
+        self.inference.rollback(checkpoint);
+        fits
+    }
+
+    /// The items Rust's `IntoIterator` gives for `ty`: an iterator's, a
+    /// range's, an array's or a collection's, and a borrowed one's by
+    /// reference.
+    pub(super) fn iterable_item(&self, ty: &Ty) -> Option<Ty> {
+        Some(match self.inference.resolve(ty) {
+            Ty::Iter(item, _) => *item,
+            Ty::InclusiveRange(kind) => Ty::Int(kind),
+            Ty::Range(element) => *element,
+            Ty::Array { element, .. } => *element,
+            Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, None),
+            Ty::Reference { mutable, target } => match self.inference.resolve(&target) {
+                Ty::Array { element, .. } => Ty::Reference {
+                    mutable,
+                    target: element,
+                },
+                Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, Some(mutable)),
+                _ => return None,
+            },
+            _ => return None,
+        })
+    }
+
     /// Whether `ty` implements the crate trait `trait_name`: a script type
     /// with an impl of it, or a generic parameter bounded by it.
     pub(super) fn type_implements(&self, ty: &Ty, trait_name: &str) -> bool {
@@ -746,8 +891,15 @@ impl<'a> Parser<'a> {
         trait_name: &str,
         arguments: &[Ty],
     ) -> bool {
+        if arguments.is_empty() && self.type_implements(ty, trait_name) {
+            return true;
+        }
+        // A blanket impl whose where-clauses hold for `ty`.
+        if self.blanket_implements(ty, trait_name, arguments) {
+            return true;
+        }
         if arguments.is_empty() {
-            return self.type_implements(ty, trait_name);
+            return false;
         }
         // `PartialEq<Self>` and `PartialOrd<Self>`, their `Rhs = Self`
         // filled in: a derive or a builtin's comparison is with its own type.
