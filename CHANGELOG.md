@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.173 (2026-11-09)
+
 - A call that passes a closure to a widget held boxed in a view builds, as when iced's modal styles its `center(..)` container. iced's modal runs. (#955)
 - A marked module's path through a `use` that binds a marked module now reaches that module's native children, as rustc does. inboard's `use crate::theme;` followed by `theme::text::base` is an example. A native signature's `&Theme` of a marked theme is now the marked type itself, not a different one. Each crate function item passed to a generic, as in `.style(theme::text::base)` beside `.style(theme::container::base)`, calls its own function. Before, they could share one adapter. (#1504)
 - iced's `pane_grid` example runs again. A `&self` method on a crate value generic over the program's own type, such as `self.panes.len()` on a `pane_grid::State<Pane>`, can read it while a view still borrows it, as rustc allows. It no longer stops with a false E0502 before the window opens. This had regressed in #1432. (#1505)
