@@ -13,6 +13,8 @@ pub(crate) mod macros;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
 pub(crate) mod package;
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub(crate) mod record;
 pub(crate) mod std_path;
 pub(crate) mod std_trait;
 pub(crate) mod type_ref;
@@ -155,6 +157,11 @@ pub(crate) struct Instances {
     /// where the call is read, and its instance is the one rustc infers.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) calls: BTreeMap<(crate::item::Key, Span), Box<[ImmutableString]>>,
+    /// The instances native code calls templates at, as the generated
+    /// crate's last check recorded them (D869): each is compiled with the
+    /// key its trampoline calls it by.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    pub(crate) natives: Vec<record::Native>,
 }
 
 /// An instance of a script impl of a crate's trait (`Instances::impls`).

@@ -34,6 +34,13 @@ fn pane<'a>(
         .boxed()
 }
 
+/// A native helper generic over the message, as inboard's
+/// `component::sidebar::atoms::small_input`, which calls the marked
+/// `row_group` at whatever message it is called with.
+fn small_row<'a, M: Clone + 'a>(label: &'a str, message: M) -> Element<'a, M> {
+    widget::sidebar::row_group(label, message)
+}
+
 fn main() {
     let theme = Theme::default();
     println!("default {theme:?}");
@@ -124,5 +131,40 @@ fn main() {
         std::ptr::eq(panel.title(), heading.as_str())
     );
     println!("sidebar {}", home::sidebar());
+    // A marked function generic over the message, at two of native code's
+    // message types: directly, through `.into()` and a crate's column, and
+    // from a generic native helper.
+    let row = widget::sidebar::row_group("tiles", grid::Message::Tile(4));
+    println!("sidebar {} {:?}", row.draw(&theme), row.message());
+    let column = ui::Column::<Element<'_, Message>>::with_children([widget::sidebar::row_group(
+        "home",
+        Message::Home(home::Message::Grid(grid::Message::Tile(5))),
+    )
+    .into()]);
+    {
+        use ui::Widget;
+        println!(
+            "sidebar {}",
+            Widget::<Message, Theme>::draw(&column, &theme)
+        );
+    }
+    let row = small_row(
+        "helper",
+        Message::Home(home::Message::Grid(grid::Message::Tile(6))),
+    );
+    println!("sidebar {} {:?}", row.draw(&theme), row.message());
+    let row = small_row("grid", grid::Message::Tile(7));
+    println!("sidebar {} {:?}", row.draw(&theme), row.message());
     println!("clones {}", theme::clones());
+    // Run on, as a running program does, till told to stop: each tick
+    // calls the marked generic through the native helper.
+    if let Some(stop) = std::env::var_os("ISLANDS_STOP") {
+        let mut tick = 0;
+        while !std::path::Path::new(&stop).exists() {
+            tick += 1;
+            let row = small_row("tick", grid::Message::Tile(tick));
+            println!("tick {tick} {}", row.draw(&theme));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }

@@ -65,6 +65,19 @@ pub(in crate::cargo) fn relocate(
                 copy_tree(&source, &destination.with_file_name(dep_info), from, to)?;
             }
         }
+        // A generated crate's record of native instances is part of its
+        // unit's output, beside its metadata (D866).
+        if name.ends_with(".rmeta") {
+            let record = crate::record::Record::beside(Path::new(path));
+            if record.is_file() {
+                copy_tree(
+                    &record,
+                    &crate::record::Record::beside(&destination),
+                    from,
+                    to,
+                )?;
+            }
+        }
         Ok(())
     };
     let mut relocated = Vec::with_capacity(messages.len());

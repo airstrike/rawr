@@ -945,6 +945,16 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         "{printed}"
     );
     assert!(printed.contains("\nsidebar 2\n"), "{printed}");
+    // A marked `row_group` generic over the message, at two native message
+    // types, directly, through `.into()` and a crate's column, and from a
+    // generic native helper (D869).
+    assert!(
+        printed.contains(
+            "sidebar tiles row styled 0 Some(Tile(4))\nsidebar column Shrink by 0 [home row styled 0]\n\
+             sidebar helper row styled 0 Some(Home(Grid(Tile(6))))\nsidebar grid row styled 0 Some(Tile(7))\n"
+        ),
+        "{printed}"
+    );
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -968,6 +978,48 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     }
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
+/// A marked function generic over the message that native code calls
+/// through a generic native helper, as inboard's `small_input` calls
+/// `row_group`, swaps a body edit into the running program: the instance
+/// native code calls is compiled from the record of the native check
+/// (D866, D869), and the edit needs no new native build.
+#[test]
+fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-swap");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    edit(
+        &root.join("src/widget/sidebar.rs"),
+        "\"{label} row\"",
+        "\"{label} item\"",
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
+    let told = run.told(&events, |text| text.contains("\"swapped\""));
+    assert!(!told.contains("\"preparing\""), "{told}");
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
 }
 
 /// A marked module names a native workspace crate's `&'static str`, byte

@@ -143,6 +143,10 @@ struct Resolver<'a> {
     /// the crate's name (`Graph::island_mirrors`, #1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// The instances native code calls marked generic functions at
+    /// (`Graph::native_instances`, D869).
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    natives: Vec<rawr_import::record::Instance>,
 }
 
 /// The variants of `std::cmp::Ordering`, which `use` may import by name.
@@ -171,6 +175,8 @@ impl<'a> Resolver<'a> {
         let mirrors = graph.island_mirrors();
         #[cfg(feature = "rust-import")]
         let statics = graph.native_statics();
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let natives = graph.native_instances();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
         let package: ImmutableString = packages[entry_package.index()].name().into();
         // Each mirror by its package's path, and by its Rust path from the
@@ -275,6 +281,8 @@ impl<'a> Resolver<'a> {
             expanded,
             #[cfg(feature = "rust-import")]
             mirrors,
+            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+            natives,
         };
         resolver.predeclare()?;
         resolver.predeclare_globs();
@@ -687,6 +695,10 @@ impl<'a> Resolver<'a> {
         let mut aliases = BTreeMap::new();
         let mut lexical = BTreeMap::new();
         let units = std::mem::take(&mut self.units);
+        // The crate root's names, which a recorded instance's types are
+        // written in (D869).
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let mut root_types = None;
         for Unit {
             context,
             parsed,
@@ -721,6 +733,10 @@ impl<'a> Resolver<'a> {
             }
 
             let (uses, types, _occupied) = self.resolve_unit_bindings(&context, &parsed_items)?;
+            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+            if context.source == self.entry_source {
+                root_types = Some(types.clone());
+            }
             // The host modules this unit's `use`s bind, by name: an imported
             // trait is one (`use freya::prelude::IntoElement;`).
             let modules = uses
@@ -783,6 +799,8 @@ impl<'a> Resolver<'a> {
             ));
         }
 
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let natives = self.resolve_natives(&shells, root_types.as_ref())?;
         let definitions =
             finish_definitions(self.type_declarations, &shells, self.host, &self.expanded)
                 .map_err(Failure::from_located)?;
@@ -837,7 +855,11 @@ impl<'a> Resolver<'a> {
             features,
             aliases,
             scripts,
-            instances: super::Instances::default(),
+            instances: super::Instances {
+                #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+                natives,
+                ..super::Instances::default()
+            },
             lexical,
             macros,
         };
@@ -846,6 +868,84 @@ impl<'a> Resolver<'a> {
             .reject()
             .map_err(Failure::from_located)?;
         Ok(program)
+    }
+
+    /// Each recorded instance of a function the program declares, its
+    /// types read in the crate root's names (D869). One whose function is
+    /// gone, or whose types rawr can't write, has no instance: its
+    /// function was changed since the record, so native code is built
+    /// again and records it anew.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    fn resolve_natives(
+        &self,
+        shells: &[super::item::Shell],
+        root: Option<&BTreeMap<ImmutableString, type_ref::Target>>,
+    ) -> Result<Vec<super::record::Native>, Failure> {
+        let Some(root) = root else {
+            return Ok(Vec::new());
+        };
+        let source = program::source::Id::from_index(self.entry_source.index());
+        let Some(krate) = self
+            .packages
+            .iter()
+            .find(|package| package.name() == self.package.as_str())
+            .and_then(|package| package.rust_crate())
+        else {
+            return Ok(Vec::new());
+        };
+        let mut natives = Vec::new();
+        for instance in &self.natives {
+            let (modules, name) = instance
+                .path
+                .rsplit_once("::")
+                .map_or(("", instance.path.as_str()), |(modules, name)| {
+                    (modules, name)
+                });
+            let Some(template) = shells
+                .iter()
+                .filter_map(|shell| shell.key.as_ref())
+                .find(|key| {
+                    key.owner().is_none()
+                        && key.package() == self.package.as_str()
+                        && key.name() == name
+                        && key
+                            .modules()
+                            .iter()
+                            .map(ImmutableString::as_str)
+                            .collect::<Vec<_>>()
+                            .join("::")
+                            == modules
+                })
+            else {
+                continue;
+            };
+            let mut types = Vec::new();
+            for written in &instance.types {
+                let Some(parsed) = super::record::written(written, krate) else {
+                    break;
+                };
+                let ty = type_ref::resolve(
+                    parsed,
+                    root,
+                    self.host,
+                    self.native.as_deref().map(|capture| capture.at(source)),
+                )
+                .map_err(|error| Failure {
+                    primary: self.entry_source,
+                    secondary: None,
+                    error,
+                })?;
+                types.push(ty);
+            }
+            if types.len() == instance.types.len() {
+                natives.push(super::record::Native {
+                    template: template.clone(),
+                    types: types.into_boxed_slice(),
+                    key: crate::package::instances::key(&instance.name).into(),
+                });
+            }
+        }
+        Ok(natives)
     }
 
     /// Resolve each type alias's target in the module that declares it.

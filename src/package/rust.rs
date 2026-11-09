@@ -151,6 +151,15 @@ impl Graph {
                 );
             }
         }
+        // Each type of the crate's own an instance native code calls a
+        // marked generic at names, which the resolver reads (D869).
+        if let Some(app) = app {
+            for instance in self.native_instances() {
+                for ty in &instance.types {
+                    paths.extend(crate_paths(ty).map(|path| format!("{app}::{path}")));
+                }
+            }
+        }
         paths.sort_unstable();
         paths.dedup();
         let qualifies = |short: &str, long: &str| {
@@ -183,6 +192,17 @@ impl Graph {
         names.dedup();
         names
     }
+}
+
+/// The paths below `crate::` that `ty`, a type rustc wrote from the
+/// crate's root, names: `grid::Message` of `Option<crate::grid::Message>`.
+fn crate_paths(ty: &str) -> impl Iterator<Item = String> + '_ {
+    ty.split(|character: char| {
+        !(character.is_alphanumeric() || character == '_' || character == ':')
+    })
+    .filter_map(|path| path.strip_prefix("crate::"))
+    .filter(|path| !path.is_empty())
+    .map(str::to_owned)
 }
 
 /// A script path (`crate::model::Thing`, `super::model::Thing`, or
@@ -261,7 +281,17 @@ fn script_project(entry: &super::graph::Package) -> rawr_import::Result<()> {
 /// binary, so the binary reaches the marked modules through the library.
 ///
 /// [`island::BIN`]: super::island::BIN
-fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Vec<Dependency>> {
+/// The generated packages of the program's own crate, as [`app_crate`]
+/// lays them out.
+struct App {
+    /// Each package, as a path dependency of the request.
+    crates: Vec<Dependency>,
+    /// The directories of those whose check records the native instances
+    /// of marked generics (D866): a native root's crate and its binary's.
+    recorded: Vec<std::path::PathBuf>,
+}
+
+fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<App> {
     let entry = graph.entry_package();
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
         if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
@@ -273,7 +303,10 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
                 .into_boxed_str(),
             });
         }
-        return Ok(Vec::new());
+        return Ok(App {
+            crates: Vec::new(),
+            recorded: Vec::new(),
+        });
     };
     let module_root = graph
         .entry_source()
@@ -292,6 +325,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
                 shape: super::island::Shape::default(),
                 refused: Vec::new(),
                 objects: Vec::new(),
+                generic: std::collections::BTreeSet::new(),
             });
         if !shadow.refused.is_empty() {
             return Err(rawr_import::Error::Request {
@@ -309,7 +343,13 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
             ),
             (
                 copies.join(relative),
-                native_root(root, package, !entry.is_library(), &shadow.objects),
+                native_root(
+                    root,
+                    package,
+                    !entry.is_library(),
+                    &shadow.objects,
+                    &graph.instance_entries(&shadow.generic),
+                ),
             ),
         ];
         files.extend(
@@ -359,13 +399,18 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ve
     let mut crates = vec![Dependency::path(alias, &directory)?
         .package(&cargo.package)?
         .features(features(), false)?];
+    let mut recorded = Vec::new();
+    if entry.native_root().is_some() || entry.bin().is_some() {
+        recorded.push(directory.clone());
+    }
     if let Some(bin) = entry.bin() {
         crates.push(
             bin_crate(bin, cargo, &directory, &module_root, entry.features())?
                 .features(features(), false)?,
         );
+        recorded.push(directory.with_file_name("bin"));
     }
-    Ok(crates)
+    Ok(App { crates, recorded })
 }
 
 /// The generated package of a native binary that runs the program from the
@@ -385,7 +430,7 @@ fn bin_crate(
         (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
         (
             copies.join("main.rs"),
-            native_root(bin.root(), package, true, &[]),
+            native_root(bin.root(), package, true, &[], &[]),
         ),
     ];
     // The binary's modules are beside its root, wherever Cargo finds it.
@@ -582,11 +627,15 @@ fn native_root(
     package: &Path,
     main: bool,
     objects: &[(String, String)],
+    instances: &[super::instances::Entry],
 ) -> String {
     let text = super::polyglot::widened(root.text(), false, root.path(), package);
     let public = super::polyglot::root_items_public(&text);
     let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
-    format!("{public}\n{}", super::island::support(main, objects))
+    format!(
+        "{public}\n{}",
+        super::island::support(main, objects, instances)
+    )
 }
 
 pub(super) fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String {
@@ -1187,7 +1236,7 @@ fn request_inventory(
     entry: &super::graph::Package,
     config: &Config,
     environment: Environment,
-    app: Vec<Dependency>,
+    app: App,
     closure: &[Dependency],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
@@ -1205,7 +1254,7 @@ fn request_inventory(
         for dependency in dependencies(config)? {
             builder = builder.dependency(dependency);
         }
-        for app in app {
+        for app in app.crates {
             builder = builder.dependency(app);
         }
     } else {
@@ -1266,7 +1315,7 @@ fn request(
     config: &Config,
     environment: Environment,
     universe: Option<rawr_import::cargo::universe::Catalog>,
-    app: Vec<Dependency>,
+    app: App,
     demand: &[Box<str>],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
@@ -1281,8 +1330,11 @@ fn request(
     for dependency in dependencies(config)? {
         builder = builder.dependency(dependency);
     }
-    for app in app {
+    for app in app.crates {
         builder = builder.dependency(app);
+    }
+    for directory in &app.recorded {
+        builder = builder.record(directory);
     }
     if let Some(universe) = universe {
         builder = builder.resolution_universe(universe);

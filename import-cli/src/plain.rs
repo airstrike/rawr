@@ -57,8 +57,11 @@ const VERSION: u32 = 1;
 /// intrinsic facts (D650) is checked under those facts too: the union's
 /// identity joins the profile's, so a check cached under other facts is
 /// never replayed for it.
-fn adapter(facts: Option<&[u8; 32]>) -> trusted::Adapter<Operations> {
-    let identity = match facts {
+fn adapter(
+    facts: Option<&[u8; 32]>,
+    instances: &rawr_import::record::Record,
+) -> trusted::Adapter<Operations> {
+    let mut identity = match facts {
         Some(facts) => {
             let hex = facts
                 .iter()
@@ -68,6 +71,18 @@ fn adapter(facts: Option<&[u8; 32]>) -> trusted::Adapter<Operations> {
         }
         None => IDENTITY.to_owned(),
     };
+    // A check compiles each instance native code calls a marked generic at
+    // (D869): one cached for other instances is never replayed.
+    if !instances.instances().is_empty() {
+        let key = instances
+            .instances()
+            .iter()
+            .map(|instance| format!("{}\0{}", instance.path, instance.name))
+            .collect::<Vec<_>>()
+            .join("\n");
+        identity.push_str(".instances.");
+        identity.push_str(&rawr::package::instances::digest(&key));
+    }
     trusted::Adapter::trusted(
         Operations,
         profile::Identity::new(&identity),
@@ -467,11 +482,17 @@ fn prepare(
     // on the call's receiver and lexical scope (D650), proved from the
     // dependencies' intrinsic facts, acquired once.
     let mut applications = Vec::new();
+    // Whether the check ran again for a new record of native instances.
+    let mut instances_retried = false;
     // A cache entry that goes stale while this run uses it is `Error::Stale`,
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
+        // The record a retry stored names types of its own (D869).
+        if instances_retried {
+            request_demand.extend(graph.rust_demand_seed());
+        }
         request_demand.sort_unstable();
         request_demand.dedup();
         let environment = Environment::capture().map_err(Error::other)?;
@@ -497,12 +518,29 @@ fn prepare(
             .prepare_cached_in(&limits, scope)
             .map_err(Error::import)?;
         settlement.absorb(prepared.settlement());
+        // The instances native code calls marked generics at, as this check
+        // recorded them (D866): a record the shadow crate's table doesn't
+        // hold yet is written, and the crate checked again with it (D869).
+        let record = prepared.recorded_instances().map_err(Error::other)?;
+        if let Some(record) = &record
+            && rawr::package::instances::store(&project, record).map_err(Error::other)?
+            && !rawr::package::instances::kept(&project)
+                .instances()
+                .is_empty()
+            && !instances_retried
+        {
+            instances_retried = true;
+            continue;
+        }
         // What a crate derive's expansion runs against: this run's own build.
         let basis = prepared.expansion_basis();
         let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
-        let adapter = &*current_adapter.insert(adapter(keyed.as_ref()));
+        let adapter = &*current_adapter.insert(adapter(
+            keyed.as_ref(),
+            &rawr::package::instances::kept(&project),
+        ));
         let snapshot = snapshot
             .take()
             .unwrap_or_else(|| rawr::reload::source::Snapshot::from_graph(&source));
