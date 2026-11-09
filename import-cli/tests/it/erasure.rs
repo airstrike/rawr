@@ -379,7 +379,8 @@ fn main() {
     // The runner's runtime tests, which only a generated runner compiles:
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native
-    // call holds it, returns to its slot (review 6, 7).
+    // call holds it, returns to its slot (review 6, 7), and a lent value
+    // reached at another type is a rawr bug (#1528).
     let test = Command::new("cargo")
         .current_dir(&root)
         .args([
@@ -397,7 +398,7 @@ fn main() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&test.stdout);
     assert!(
-        test.status.success() && stdout.contains("5 passed"),
+        test.status.success() && stdout.contains("6 passed"),
         "stdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&test.stderr)
     );

@@ -64,6 +64,7 @@ fn main() {
     println!("{}", badge.draw());
     let inbox = home::inbox(&theme);
     println!("inbox {} {:?}", inbox.draw(&theme), inbox.message());
+    println!("titled {}", home::titled("mail", &dark).draw(&theme));
     println!(
         "lent in place {}",
         home::place(&theme) == std::ptr::from_ref(&theme).addr()

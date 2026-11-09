@@ -52,9 +52,16 @@ pub enum Message {
 
 /// The inbox's element over the lent theme, its message mapped into the
 /// screen's, as inboard's `home::State::view` gives `inbox::view(..,
-/// theme).map(Message::Inbox)`.
+/// theme).map(Message::Inbox)`, whose title is borrowed for the call
+/// alone (#1509).
 pub fn inbox<'a>(theme: &'a theme::Theme) -> Element<'a, Message> {
-    crate::inbox::view(theme).map(Message::Inbox)
+    crate::inbox::view("inbox", theme).map(Message::Inbox)
+}
+
+/// An element that keeps both its lent title and the lent theme borrowed
+/// (#1509).
+pub fn titled<'a>(title: &'a str, theme: &'a theme::Theme) -> Element<'a, Message> {
+    crate::inbox::titled(title, theme).map(Message::Inbox)
 }
 
 /// Where the theme native code lends is, as native code reads it.

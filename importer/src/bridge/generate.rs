@@ -1511,11 +1511,16 @@ impl std::fmt::Debug for Error {
 
 impl Error {
     /// What only a rawr bug causes: the program's types, argument counts
-    /// and moves are checked before any adapter runs (D664.1).
+    /// and moves are checked before any adapter runs (D664.1). So is the
+    /// type of a lent value or a region's value an adapter reaches, which
+    /// the generator chose (#1528).
     fn bug(&self) -> Option<&'static str> {
         Some(match self {
             Self::MissingArgument => "an adapter ran without one of its arguments",
             Self::TypeMismatch => "a value reached an adapter as a type its signature doesn't take",
+            Self::Lent(_, __rawr_internal::scope::Error::Mismatch) => {
+                "an adapter reached a lent value or a region's value as a type it doesn't hold"
+            }
             Self::StaleHandle => "a crate value's handle was used after its value was released",
             Self::Malformed => "an adapter invocation's payload is malformed",
             Self::Cardinality => "an adapter ran with a number of arguments it doesn't take",
@@ -4733,6 +4738,22 @@ mod native_arena_tests {
         })
         .expect("dropped inside a call");
         assert_eq!(read(&handle).expect("restored"), 5);
+    }
+
+    /// A lent value or a region's value reached as a type it doesn't hold
+    /// is a rawr bug, reported as one; a borrow that ended is the
+    /// program's (#1528).
+    #[test]
+    fn a_lent_value_reached_at_another_type_is_a_rawr_bug() {
+        use __rawr_internal::scope::Error as Lend;
+        let mismatch = Error::Lent("a slot's region", Lend::Mismatch);
+        assert!(mismatch.bug().is_some());
+        let panic = std::panic::catch_unwind(|| mismatch.reported()).err().expect("a panic");
+        let message = panic.downcast_ref::<String>().expect("a message");
+        assert!(message.starts_with("rawr bug: "), "{message}");
+        let expired = Error::Lent("Theme", Lend::Expired);
+        assert!(expired.bug().is_none());
+        assert!(format!("{expired:?}").contains("E0597"));
     }
 }
 "#;
@@ -11212,11 +11233,11 @@ fn render_adapter_body(
             // Or one native code lent a marked function and keeps as long
             // as its anchored result, as inboard's `inbox::view(inbox_state,
             // ..)` takes (#1413), which a plain output's call reaches in
-            // that result's region. An opaque output owns what it borrows
-            // (`lent_cell`), and a future borrows nothing past its call.
+            // that result's region, beside any `&str` it pins there (#1509).
+            // An opaque output owns what it borrows (`lent_cell`), and a
+            // future borrows nothing past its call.
             let _kept = KeptLends::enter(
                 viewed
-                    && !pins
                     && !is_future(&substituted(signature.output(), signature, substitutions)?)
                     && lent_cell(signature, substitutions)?.is_none(),
             );
@@ -12359,6 +12380,11 @@ fn render_anchored_opening(
         }
     }
     let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    // A lend native code keeps as long as the anchored result, taken
+    // above, is reached in the region the strings are pinned in (#1509).
+    // The adapter's own call, if this one falls through, takes it again.
+    pinned.push_str(&kept_reaches("Some(&*region)"));
+    KEPT_REACHES.with_borrow_mut(Vec::clear);
     render_static_opening(
         signature,
         substitutions,
@@ -20313,15 +20339,25 @@ impl Drop for PinnedStrings {
 /// Whether the call's output carries a lifetime and an input lends it a
 /// `&str` through a type parameter the output doesn't name, as iced's
 /// `text(impl IntoFragment<'a>) -> Text<'a>` does: the output may borrow
-/// the string.
+/// the string. A `&str` written so is one only at a lifetime the output
+/// names, which the classifier reads as kept (`Signature::lends`):
+/// `view<'a>(title: &str, theme: &'a Theme)` borrows its title for the
+/// call alone (#1509).
 fn lends_str_to_output(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
 ) -> Result<bool, request::Error> {
+    let kept = |position: usize, input: &convert::Type| {
+        !matches!(input, convert::Type::Builtin(convert::Builtin::Str))
+            || u32::try_from(position).is_ok_and(|position| signature.lends().contains(&position))
+    };
     if !signature
         .inputs()
         .iter()
-        .any(|input| lends_str(input, signature, substitutions))
+        .enumerate()
+        .any(|(position, input)| {
+            lends_str(input, signature, substitutions) && kept(position, input)
+        })
     {
         return Ok(false);
     }
