@@ -67,7 +67,37 @@ const DEPTH: usize = 256;
 
 /// The crate's script types by their path from the crate root, found once
 /// per generation.
-pub(crate) struct Types(BTreeMap<String, type_def::Identity>);
+pub(crate) struct Types {
+    paths: BTreeMap<String, type_def::Identity>,
+    /// What each member of a script type's value that is a crate's type is
+    /// attested as, by the type and its variant: the `themedef::Theme` of
+    /// `Theme::Selected(themedef::Theme)`, which native code gives by value
+    /// (#1466).
+    parts: Parts,
+}
+
+/// [`Types::parts`]: by the type and its variant's name, each member's
+/// witness, `None` for a member of no crate's type.
+type Parts = BTreeMap<
+    (type_def::Identity, Option<ImmutableString>),
+    Box<[Option<crate::host::runtime::Witness>]>,
+>;
+
+impl Types {
+    /// The witness of the `index`th member of `identity`'s value, of its
+    /// `variant` for an enum.
+    fn part(
+        &self,
+        identity: &type_def::Identity,
+        variant: Option<&str>,
+        index: usize,
+    ) -> Option<&crate::host::runtime::Witness> {
+        self.parts
+            .get(&(identity.clone(), variant.map(ImmutableString::from)))?
+            .get(index)?
+            .as_ref()
+    }
+}
 
 /// The native values a reply moves to native code, in the order its
 /// [`NATIVE`] tags name them.
@@ -260,14 +290,53 @@ impl Model {
         }
     }
 
-    /// The model's script types by path.
-    pub(crate) fn island_types(&self) -> Types {
-        Types(
-            self.definitions
+    /// The model's script types by path, with what `witness` gives each
+    /// member of a crate's type.
+    pub(crate) fn island_types(
+        &self,
+        witness: impl Fn(&crate::host::runtime::type_ref::Type) -> crate::host::runtime::Witness,
+    ) -> Types {
+        let members = |members: &[crate::resolve::type_ref::Type]| {
+            members
+                .iter()
+                .map(|ty| {
+                    let crate::resolve::type_ref::Type::Path(path) = ty else {
+                        return None;
+                    };
+                    if !matches!(path.target, crate::resolve::type_ref::Target::Host { .. }) {
+                        return None;
+                    }
+                    crate::host::runtime::type_ref::Type::from_resolved_in(ty, self, &[])
+                        .ok()
+                        .map(|ty| witness(&ty))
+                })
+                .collect::<Box<[_]>>()
+        };
+        let mut parts = Parts::new();
+        for (identity, definition) in &self.definitions {
+            match &definition.shape {
+                Shape::Struct(fields) => {
+                    parts.insert((identity.clone(), None), members(fields));
+                }
+                Shape::Enum(variants) => {
+                    for (variant, payload) in variants {
+                        parts.insert(
+                            (identity.clone(), Some(variant.name().into())),
+                            members(payload),
+                        );
+                    }
+                }
+            }
+        }
+        parts.retain(|_, members| members.iter().any(Option::is_some));
+        Types {
+            paths: self
+                .definitions
                 .keys()
                 .filter_map(|identity| Some((path(identity)?, identity.clone())))
                 .collect(),
-        )
+            parts,
+        }
     }
 
     /// One value from `reader`, built in this model. `lent` holds the
@@ -328,14 +397,15 @@ impl Model {
             STRUCT => {
                 let name = reader.text()?;
                 let identity = types
-                    .0
+                    .paths
                     .get(name)
                     .ok_or_else(|| format!("the running program has no struct `{name}`"))?;
                 let definition = &self.definitions[identity];
                 let length = reader.members()?;
                 let mut fields = Vec::with_capacity(length);
-                for _ in 0..length {
-                    fields.push(self.island_read(types, lent, given, None, reader, depth)?);
+                for index in 0..length {
+                    let witness = types.part(identity, None, index);
+                    fields.push(self.island_read(types, lent, given, witness, reader, depth)?);
                 }
                 let proof = self
                     .prove_struct(identity, &definition.schema, fields.into_boxed_slice())
@@ -347,7 +417,7 @@ impl Model {
             ENUM => {
                 let name = reader.text()?;
                 let identity = types
-                    .0
+                    .paths
                     .get(name)
                     .ok_or_else(|| format!("the running program has no enum `{name}`"))?;
                 let definition = &self.definitions[identity];
@@ -362,8 +432,9 @@ impl Model {
                     .clone();
                 let length = reader.members()?;
                 let mut payload = Vec::with_capacity(length);
-                for _ in 0..length {
-                    payload.push(self.island_read(types, lent, given, None, reader, depth)?);
+                for index in 0..length {
+                    let witness = types.part(identity, Some(variant_name), index);
+                    payload.push(self.island_read(types, lent, given, witness, reader, depth)?);
                 }
                 let proof = self
                     .prove_enum(

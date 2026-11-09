@@ -602,6 +602,65 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// borrows the page, `scrollable_id()` clones a field of the lent state,
 /// which stays whole (#1445). `rawr check` passes as `cargo check` does,
 /// and `rawr run` prints what `cargo run` prints.
+/// A marked `theme.rs`, as inboard's, declares native child modules and
+/// defines the app's `Theme` over one's own `Theme`, as `enum Theme {
+/// Selected(palette::Theme) }`: a value crosses with its native part given
+/// as a clone and taken back as the value the interpreter moves, and
+/// neither `palette::Theme` nor the crate's `ui::Theme` is the marked one
+/// (#1466). Its impls of `Default`, `From` from the native and the crate's
+/// theme, `From<Theme>` for the crate's theme, the crate's `Design` trait
+/// and `From<&Theme>` for the crate's `Settings` are native code's, each
+/// function a trampoline, and a native child module implements the
+/// crate's `Catalog` for it by matching its variant. `rawr check` passes as
+/// `cargo check` does, and `rawr run` prints what `cargo run` prints.
+#[test]
+fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(THEME), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(
+        printed.contains(
+            "hello at 14 with code at 12\nsettings Settings { text_size: 14.0, code_size: 12.0 }\n"
+        ),
+        "{printed}"
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");

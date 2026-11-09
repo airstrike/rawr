@@ -1227,6 +1227,7 @@ impl Calls {
                 .join("::")
         };
         let mut items = HashMap::new();
+        let mut ambiguous = Vec::new();
         for item in authority.items() {
             if !matches!(
                 item.kind(),
@@ -1237,12 +1238,33 @@ impl Calls {
             let key = item.key();
             let entry = match key.owner() {
                 None => (false, join(key.modules(), &[key.name()])),
+                // A trait's impl for a crate's or a builtin type, as `impl
+                // From<&Theme> for markdown::Settings` (#1466), owned by
+                // `std::` and the type's path: by `::` and the type's name,
+                // as rawr's copy of the crate names it, which knows the
+                // type only as the impl writes it.
+                Some(type_def::Identity::Script(owner))
+                    if owner.package() == "std" && owner.modules().is_empty() =>
+                {
+                    let name = owner.name().rsplit("::").next().unwrap_or_default();
+                    let entry = (true, format!("::{name}::{}", key.name()));
+                    if items.contains_key(&entry) {
+                        ambiguous.push(entry);
+                        continue;
+                    }
+                    entry
+                }
                 Some(type_def::Identity::Script(owner)) => {
                     (true, join(owner.modules(), &[owner.name(), key.name()]))
                 }
                 Some(type_def::Identity::Host(_)) => continue,
             };
             items.insert(entry, item.clone());
+        }
+        // Two types of one name with impls of one trait: native code's call
+        // names neither.
+        for entry in ambiguous {
+            items.remove(&entry);
         }
         let inputs = authority
             .model()
@@ -1258,7 +1280,7 @@ impl Calls {
             .collect();
         Self {
             items,
-            types: authority.model().island_types(),
+            types: authority.model().island_types(|ty| runtime.witness_for(ty)),
             inputs,
         }
     }

@@ -869,6 +869,23 @@ impl<'a> Parser<'a> {
                 source: name_span,
             });
         }
+        // `Self::with_text_size(..)` in an impl for a crate's type is the
+        // type's own function, by the path the impl writes (#1466).
+        if name.as_str() == "Self"
+            && matches!(self.peek(), Token::DoubleColon)
+            && let Some(path) = self.self_path.clone()
+        {
+            let at = name_span.start();
+            let mut tokens = Vec::new();
+            for segment in path.split("::") {
+                if !tokens.is_empty() {
+                    tokens.push((Token::DoubleColon, at));
+                }
+                tokens.push((Token::Identifier(Box::new(segment.into())), at));
+            }
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
         }

@@ -302,6 +302,10 @@ struct Parser<'a> {
     copy_out_depth: usize,
     /// In a method: its owner, which `Self` names in `Self::Output`.
     self_ty: Option<Ty>,
+    /// In a method of an impl for a crate's type, as `impl From<&Theme> for
+    /// Settings`: the type's path as the impl writes it, which `Self::f(..)`
+    /// names (#1466).
+    self_path: Option<ImmutableString>,
     /// In a trait impl's method: the trait, whose `Self::Output` it names.
     impl_trait: Option<ImmutableString>,
     root_expression_index: u32,
@@ -832,6 +836,7 @@ impl<'a> Parser<'a> {
             copy_out: Vec::new(),
             copy_out_depth: 0,
             self_ty: None,
+            self_path: None,
             impl_trait: None,
             root_expression_index: 0,
             expression_stack: Vec::new(),
@@ -1099,6 +1104,11 @@ impl<'a> Parser<'a> {
         }
 
         parser.self_ty = Some(impl_self_ty(definition, &BTreeMap::new()));
+        if let Some(type_ref::Type::Path(owner)) = definition.builtin_owner()
+            && matches!(owner.target, type_ref::Target::Host { .. })
+        {
+            parser.self_path = Some(owner.name.clone());
+        }
         if let Some(mode) = definition.receiver() {
             let owner = impl_self_ty(definition, &BTreeMap::new());
             let (ty, mutable) = match mode {
