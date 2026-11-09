@@ -1565,6 +1565,7 @@
     {"t":"T1562","issue":1562,"title":"T1562: A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1563","issue":1563,"title":"T1563: A body static of a non-Sync native type is accepted; rustc says E0277","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1564","issue":1564,"title":"T1564: A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1565","issue":1565,"title":"T1565: A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1565","issue":1565,"title":"T1565: A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T1566","issue":1566,"title":"T1566: A marked fn returning a crate value that borrows its &str argument fails the native build","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
