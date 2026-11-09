@@ -3,6 +3,7 @@
 //! as the crate's widgets do: through its `From` impls in both directions,
 //! the crate's traits it implements, a `From<&Theme>` for the crate's
 //! settings and a pattern on its variant.
+mod grid;
 mod home;
 mod inbox;
 mod style;
@@ -64,6 +65,10 @@ fn main() {
     println!("{}", badge.draw());
     let inbox = home::inbox(&theme);
     println!("inbox {} {:?}", inbox.draw(&theme), inbox.message());
+    let page = home::page(grid::home(&theme), &theme);
+    println!("page {} {:?}", page.draw(&theme), page.message());
+    let page = home::page(None, &dark);
+    println!("page {} {:?}", page.draw(&dark), page.message());
     println!(
         "lent in place {}",
         home::place(&theme) == std::ptr::from_ref(&theme).addr()

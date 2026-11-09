@@ -31,7 +31,8 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     host: &Shared<crate::host::Registry>,
     allocation: &mut A,
 ) -> Result<ImportedOutput, crate::resolve::ImportedFailure> {
-    let runtime = crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
+    let runtime = crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
+        .mirroring(program, host);
     let models = Models::new(program, runtime, Shared::clone(host), engine);
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
@@ -298,7 +299,8 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
             continue;
         }
         let runtime =
-            crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
+                .mirroring(program, host);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
@@ -953,7 +955,8 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
             break;
         }
         let runtime =
-            crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
+                .mirroring(program, host);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
@@ -1110,7 +1113,8 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
         .collect::<BTreeSet<_>>();
     {
         let runtime =
-            crate::program::model::Model::new(crate::program::GenerationId::issue(), program);
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
+                .mirroring(program, host);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
         // Each call, by the body that makes it: the template and its types.
         let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();

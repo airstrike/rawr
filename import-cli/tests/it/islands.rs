@@ -809,7 +809,9 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// the element a native `inbox::view(.., theme)` gives over the lent
 /// theme, whose `Theme` is spelled through the crate root's re-export, as
 /// inboard's `home::State::view` does: both spellings name one type, so
-/// the element is one value to `map`. `rawr
+/// the element is one value to `map`. A marked `page<'a>` maps the grid
+/// element native code builds and gives it by value inside an `Option`,
+/// as inboard's `home::State::view` maps its `home_grid`. `rawr
 /// check` passes as `cargo check` does, and `rawr run` prints what `cargo
 /// run` prints.
 #[test]
@@ -842,7 +844,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         "{printed}"
     );
     assert!(
-        printed.contains("void styled 0 idle\nhome badge on dark\ninbox inbox styled 120 Some(Inbox(Opened(120)))\nlent in place true\n"),
+        printed.contains("void styled 0 idle\nhome badge on dark\ninbox inbox styled 120 Some(Inbox(Opened(120)))\npage grid styled 121 Some(Grid(Tile(120)))\n"),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.

@@ -239,6 +239,12 @@ impl Proof {
         }
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             if let Err(error) = operand.ty.validate(value, model, runtime) {
+                assert!(
+                    !error.is_invariant(),
+                    "internal error: `{}` was given operand {index} as a native value that is not its `{}`: {error}. This is a rawr bug",
+                    self.definition.path(),
+                    operand.ty
+                );
                 return Err(EvalAltResult::ErrorRuntime(
                     format!(
                         "generated structural adapter for `{}` received invalid operand {index}, expected `{}`: {error}",
