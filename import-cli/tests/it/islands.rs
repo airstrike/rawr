@@ -752,10 +752,12 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
          let text = String::from(\"local\");\n    \
          page::named(&text)\n}\n";
     let root = crate::support::scratch().join("islands-blocks-local");
-    // cargo check's positions: `&blocks` at 142:25, `&text` at 142:17.
-    for (badge, local, at) in [
-        (ARRAY, "`blocks`", "badge.rs:142:25-"),
-        (STRING, "`text`", "badge.rs:142:17-"),
+    // cargo check's positions: the borrow `&blocks` at column 25 and
+    // `&text` at column 17 of the line that holds it, which the fixture's
+    // length places.
+    for (badge, local, borrow, column) in [
+        (ARRAY, "`blocks`", "&blocks", 25),
+        (STRING, "`text`", "&text", 17),
     ] {
         let _ = fs::remove_dir_all(root.join("src"));
         copy(Path::new(BLOCKS), &root);
@@ -764,6 +766,13 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
             text.push_str(added);
             fs::write(root.join(file), text).unwrap();
         }
+        let line = fs::read_to_string(root.join("src/component/badge.rs"))
+            .unwrap()
+            .lines()
+            .position(|text| text.contains(borrow))
+            .expect("the added function holds the borrow")
+            + 1;
+        let at = format!("badge.rs:{line}:{column}-");
         let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .arg("check")
             .arg(&root)
@@ -774,12 +783,22 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&check.stderr);
+        // Cargo's lock notice comes first when another build holds the
+        // directory; the report under test follows it.
+        let stderr = stderr
+            .lines()
+            .skip_while(|line| {
+                line.trim_start()
+                    .starts_with("Blocking waiting for file lock")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         // rawr's own span, which runs to the borrow's end, before cargo
         // check's report.
         assert!(
             !check.status.success()
                 && stderr.starts_with(&format!("error[E0597]: {local} does not live long enough"))
-                && stderr.contains(at),
+                && stderr.contains(&at),
             "{stderr}"
         );
     }
