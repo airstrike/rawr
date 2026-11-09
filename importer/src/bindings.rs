@@ -29,7 +29,7 @@ mod rerun;
 pub(crate) use rerun::Stale;
 
 /// The format of an entry's `meta.json`.
-pub(crate) const META_SCHEMA: u32 = 4;
+pub(crate) const META_SCHEMA: u32 = 5;
 const META: &str = "meta.json";
 /// Where the runner's build records its build scripts' results, in the
 /// runner's work directory.
@@ -40,12 +40,18 @@ const IDLE: Duration = format::ENTRY_IDLE;
 /// One build script's complete cfg/environment results and generated files.
 /// Paths to generated files compare relative to `OUT_DIR`, since the two
 /// toolchains build in different directories.
+///
+/// `files` holds each file under `OUT_DIR` by its path there, with a digest
+/// of its bytes. A project's build keeps every file its script left; the
+/// nightly's keeps the files its compile of the package read
+/// ([`Script::read`]), since a file rustc never read, such as a native
+/// build's objects or a CMake cache, cannot change the crate's API.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Script {
     pub(crate) cfgs: Vec<String>,
     pub(crate) env: Vec<(String, String)>,
-    pub(crate) out_dir: String,
+    pub(crate) files: BTreeMap<String, String>,
 }
 
 impl Script {
@@ -64,9 +70,100 @@ impl Script {
         Ok(Self {
             cfgs,
             env,
-            out_dir: tree_digest(out_dir)?,
+            files: tree_files(out_dir)?,
         })
     }
+
+    /// Keep only the generated files `read` names: a path rustc read, or a
+    /// directory it read every file of.
+    pub(crate) fn read(&mut self, read: &BTreeSet<String>) {
+        self.files.retain(|name, _| {
+            read.iter().any(|path| {
+                name == path
+                    || name
+                        .strip_prefix(path.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        });
+    }
+
+    /// What tells this recorded output from the `project` build's: equal
+    /// cfgs and environment, and each file this one keeps with the same
+    /// bytes there. A file only the project's build left is not compared.
+    fn difference(&self, project: &Self) -> Option<Difference> {
+        if self.cfgs != project.cfgs {
+            return Some(Difference::Cfgs);
+        }
+        if self.env != project.env {
+            let name = self
+                .env
+                .iter()
+                .chain(&project.env)
+                .find(|pair| !self.env.contains(pair) || !project.env.contains(pair))
+                .map_or_else(String::new, |(name, _)| name.clone());
+            return Some(Difference::Env(name));
+        }
+        self.files
+            .iter()
+            .find(|(name, digest)| project.files.get(*name) != Some(digest))
+            .map(|(name, _)| Difference::File(name.clone()))
+    }
+
+    /// This project output as `recorded` compares it: only the files the
+    /// recorded output keeps.
+    fn seen_by(&self, recorded: &[Self]) -> Self {
+        let mut seen = self.clone();
+        seen.files.retain(|name, _| {
+            recorded
+                .iter()
+                .any(|script| script.files.contains_key(name))
+        });
+        seen
+    }
+}
+
+/// What tells a build script's recorded outputs from the project build's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Difference {
+    /// The project's build has no output for it.
+    Missing,
+    /// It ran another number of times.
+    Runs,
+    Cfgs,
+    /// The value of one `rustc-env` variable.
+    Env(String),
+    /// One generated file the nightly's compile read, by its path under
+    /// `OUT_DIR`.
+    File(String),
+}
+
+impl std::fmt::Display for Difference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("this project's build did not run it"),
+            Self::Runs => formatter.write_str("it ran another number of times"),
+            Self::Cfgs => formatter.write_str("the cfgs it set differ"),
+            Self::Env(name) => write!(formatter, "the value it gave `{name}` differs"),
+            Self::File(name) => write!(formatter, "the `{name}` it wrote in OUT_DIR differs"),
+        }
+    }
+}
+
+/// What tells `recorded`, one package's outputs, from what the project's
+/// build gave it: each recorded run must match a run of the project's.
+pub(crate) fn difference(recorded: &[Script], project: Option<&[Script]>) -> Option<Difference> {
+    let Some(project) = project else {
+        return Some(Difference::Missing);
+    };
+    if recorded.len() != project.len() {
+        return Some(Difference::Runs);
+    }
+    recorded.iter().find_map(|script| {
+        if project.iter().any(|run| script.difference(run).is_none()) {
+            return None;
+        }
+        project.first().and_then(|run| script.difference(run))
+    })
 }
 
 /// Normalize a complete path beneath the OUT_DIR Cargo actually observed.
@@ -89,8 +186,8 @@ fn out_directory(value: &str, directory: &Path) -> String {
     }
 }
 
-/// A digest of every file under `root`, by its path there and its bytes.
-fn tree_digest(root: &Path) -> std::io::Result<String> {
+/// Every file under `root`, by its path there, with a digest of its bytes.
+fn tree_files(root: &Path) -> std::io::Result<BTreeMap<String, String>> {
     fn walk(
         root: &Path,
         directory: &Path,
@@ -119,16 +216,28 @@ fn tree_digest(root: &Path) -> std::io::Result<String> {
     }
     let mut files = Vec::new();
     walk(root, root, &mut files)?;
-    files.sort_unstable();
-    let mut digest = Sha256::new();
-    for (relative, path) in files {
-        let bytes = fs::read(&path)?;
-        digest.update((relative.len() as u64).to_le_bytes());
-        digest.update(relative.as_bytes());
-        digest.update((bytes.len() as u64).to_le_bytes());
-        digest.update(&bytes);
+    files
+        .into_iter()
+        .map(|(relative, path)| {
+            let mut digest = Sha256::new();
+            std::io::copy(&mut fs::File::open(&path)?, &mut digest)?;
+            Ok((relative, crate::extract::engine::hex(&digest.finalize())))
+        })
+        .collect()
+}
+
+/// What a project's own `cargo check` gave its build scripts, read as soon
+/// as it ends. The files a script wrote stay in its `OUT_DIR` only until the
+/// next build of the same target directory runs it again, which may be a
+/// build on another toolchain while rawr still extracts.
+pub struct Observed(Option<BTreeMap<String, Vec<Script>>>);
+
+impl Observed {
+    /// Read the build scripts' results that cargo's JSON `messages` name.
+    #[must_use]
+    pub fn read(messages: &[u8]) -> Self {
+        Self(scripts_from_messages(messages))
     }
-    Ok(crate::extract::engine::hex(&digest.finalize()))
 }
 
 /// Build-script results by package id, from cargo's JSON messages.
@@ -480,6 +589,9 @@ pub(crate) enum Settled {
         /// None means at least one required output was absent or unreadable.
         nightly: Option<BTreeMap<String, Vec<Script>>>,
         publish: Box<Publish>,
+        /// Why `publish` records no build inputs, when capturing them
+        /// found a reason.
+        unshared: Option<crate::input::bindings::Unshared>,
     },
     /// A table read from the home, with the results its publisher's build
     /// gave.
@@ -641,16 +753,18 @@ impl Settlement {
                 Settled::Read { crate_name, .. } => crate_name,
                 Settled::Inventory { .. } | Settled::InventoryRead { .. } => continue,
             };
-            if let Some((package, _)) = entry
+            if let Some((package, recorded)) = entry
                 .recorded()
                 .into_iter()
                 .find(|(package, _)| verdicts.contains_key(*package))
             {
+                let difference = difference(recorded, stable.get(package).map(Vec::as_slice))
+                    .unwrap_or(Difference::Missing);
                 return Ok(Some(format!(
                     "the build script of `{}` gives the extraction nightly other output than \
-                     this project's build, after running it again too: the API of \
-                     `{crate_name}` differs between the extraction nightly and the project's \
-                     toolchain",
+                     this project's build, after running it again too ({difference}): the API \
+                     of `{crate_name}` differs between the extraction nightly and the \
+                     project's build",
                     package_name(package),
                 )));
             }
@@ -735,16 +849,14 @@ impl Settlement {
     }
 
     /// [`Settlement::settle`] after `rawr check`, whose project build is the
-    /// `cargo check` beside it: `messages` are that build's JSON messages,
-    /// whose `build-script-executed` lines give the project toolchain's
-    /// build-script outputs (D609.4, #661).
+    /// `cargo check` beside it, as [`Observed`] read it when it ended
+    /// (D609.4, #661).
     ///
     /// # Errors
     ///
     /// As [`Settlement::settle`].
-    pub fn settle_checked(self, messages: &[u8]) -> Result<(), Error> {
-        let stable = scripts_from_messages(messages);
-        self.settle_with(stable)
+    pub fn settle_checked(self, observed: &Observed) -> Result<(), Error> {
+        self.settle_with(observed.0.clone())
     }
 
     fn settle_with(self, stable: Option<BTreeMap<String, Vec<Script>>>) -> Result<(), Error> {
@@ -789,7 +901,14 @@ impl Settlement {
         let verdicts = judge(&rawr, self.nightly.as_deref(), &entries, stable.as_ref());
         let rerun = reruns(&verdicts);
         let staged = staged(&rawr);
-        let project = |package: &str| stable.as_ref().and_then(|stable| stable.get(package));
+        let project = |package: &str| {
+            stable
+                .as_ref()
+                .and_then(|stable| stable.get(package))
+                .map(Vec::as_slice)
+        };
+        // Said once the run settles: a run prepared again settles again.
+        let mut notes = Vec::new();
         for entry in entries {
             if entry.reruns(&verdicts) {
                 entry.evict(&staged);
@@ -801,27 +920,46 @@ impl Settlement {
                     packages,
                     nightly,
                     mut publish,
+                    unshared,
                     ..
                 } => {
+                    let crate_name = &publish.meta.crate_name;
+                    let not_sharing = |reason: &dyn std::fmt::Display| {
+                        format!(
+                            "rawr: not sharing the bindings of `{crate_name}` with other \
+                             projects: {reason}"
+                        )
+                    };
                     if publish.meta.inputs.is_none() {
-                        eprintln!("rawr: not sharing the bindings of `{}` with other projects: its build inputs were not recorded", publish.meta.crate_name);
+                        // The project's own crates, and crates that reach
+                        // them, stay with the project (D608.4).
+                        match unshared {
+                            Some(crate::input::bindings::Unshared::Project) => {}
+                            Some(reason) => notes.push(not_sharing(&reason)),
+                            None => notes.push(not_sharing(&"its build inputs were not recorded")),
+                        }
                         continue;
                     }
                     let Some(nightly) = nightly else {
-                        eprintln!("rawr: not sharing the bindings of `{}` with other projects: the nightly build's build-script outputs are missing or unreadable", publish.meta.crate_name);
+                        notes.push(not_sharing(
+                            &"the build-script outputs of rawr's nightly build are missing or \
+                              unreadable",
+                        ));
                         continue;
                     };
-                    let differs = packages.iter().find(|package| {
-                        let recorded = nightly.get(*package);
-                        recorded.is_none() || recorded != project(package)
+                    let differs = packages.iter().find_map(|package| {
+                        let difference = match nightly.get(package) {
+                            Some(recorded) => difference(recorded, project(package))?,
+                            None => Difference::Missing,
+                        };
+                        Some((package, difference))
                     });
-                    if let Some(package) = differs {
+                    if let Some((package, difference)) = differs {
                         let name = package_name(package);
-                        if verdicts.contains_key(package) {
-                            eprintln!("rawr: not sharing the bindings of `{}` with other projects: the build script of `{name}` gives the nightly build other output than this project's build, so the two toolchains differ", publish.meta.crate_name);
-                        } else {
-                            eprintln!("rawr: not sharing the bindings of `{}` with other projects: the output of the build script of `{name}` is missing from the nightly build or this project's build", publish.meta.crate_name);
-                        }
+                        notes.push(not_sharing(&format_args!(
+                            "the build script of `{name}` gives rawr's nightly build other \
+                             output than this project's build: {difference}"
+                        )));
                         continue;
                     }
                     publish.meta.scripts = nightly;
@@ -840,10 +978,10 @@ impl Settlement {
                     if directory == staged {
                         continue;
                     }
-                    let differs = scripts
-                        .iter()
-                        .find(|(package, recorded)| project(package) != Some(*recorded));
-                    let Some((package, _)) = differs else {
+                    let differs = scripts.iter().find_map(|(package, recorded)| {
+                        Some((package, difference(recorded, project(package))?))
+                    });
+                    let Some((package, difference)) = differs else {
                         continue;
                     };
                     home::evict(&directory, &key);
@@ -853,8 +991,9 @@ impl Settlement {
                             format!(
                                 "the shared bindings of `{crate_name}` were extracted where the \
                                  build script of `{name}` gave other output than this project's \
-                                 build gives, as rawr's nightly build does after running it \
-                                 again. rawr removed them: run again to extract them here",
+                                 build gives ({difference}), as rawr's nightly build does after \
+                                 running it again. rawr removed them: run again to extract them \
+                                 here",
                             )
                         } else {
                             format!(
@@ -912,6 +1051,9 @@ impl Settlement {
         if !rerun.is_empty() {
             return Err(Error::Rerun(rerun));
         }
+        for note in notes {
+            eprintln!("{note}");
+        }
         refused.map_or(Ok(()), |refused| Err(Error::Refused(refused)))
     }
 }
@@ -930,17 +1072,21 @@ fn judge(
     let Some(stable) = stable else {
         return BTreeMap::new();
     };
-    let mut differ = BTreeMap::<&str, (&[Script], &[Script])>::new();
+    let mut differ = BTreeMap::<&str, (&[Script], Vec<Script>, Difference)>::new();
     let mut agreed = Vec::new();
     for entry in entries {
         for (package, recorded) in entry.recorded() {
             let Some(project) = stable.get(package) else {
                 continue;
             };
-            if recorded == project.as_slice() {
-                agreed.push(package);
-            } else {
-                differ.entry(package).or_insert((recorded, project));
+            match difference(recorded, Some(project)) {
+                None => agreed.push(package),
+                Some(difference) => {
+                    differ.entry(package).or_insert_with(|| {
+                        let seen = project.iter().map(|run| run.seen_by(recorded)).collect();
+                        (recorded, seen, difference)
+                    });
+                }
             }
         }
     }
@@ -953,15 +1099,16 @@ fn judge(
     let stale = nightly.map(rerun::Stale::of);
     let verdicts = differ
         .into_iter()
-        .map(|(package, (recorded, project))| {
+        .map(|(package, (recorded, project, difference))| {
             let verdict = match &stale {
                 Some(stale) => {
-                    let verdict = record.judge(package, recorded, project);
+                    let verdict = record.judge(package, recorded, &project);
                     if verdict == rerun::Verdict::Rerun {
                         stale.mark(package);
                         eprintln!(
-                            "rawr: the build-script output of `{}` differs from this project's \
-                             build: running it again in rawr's nightly build",
+                            "rawr: the build script of `{}` gave rawr's nightly build other \
+                             output than this project's build ({difference}): running it again \
+                             in rawr's nightly build",
                             package_name(package),
                         );
                     }
@@ -1095,7 +1242,7 @@ mod tests {
         Script {
             cfgs: vec![cfg.to_owned()],
             env: Vec::new(),
-            out_dir: "digest".to_owned(),
+            files: BTreeMap::from([("generated.rs".to_owned(), "digest".to_owned())]),
         }
     }
 
@@ -1119,7 +1266,12 @@ mod tests {
             match change {
                 0 => script.cfgs.push("another_cfg".to_owned()),
                 1 => script.env.push(("UNUSED".to_owned(), "changed".to_owned())),
-                _ => script.out_dir = "other generated bytes".to_owned(),
+                _ => {
+                    script.files.insert(
+                        "generated.rs".to_owned(),
+                        "other generated bytes".to_owned(),
+                    );
+                }
             }
             assert_ne!(identity(&changed), expected);
         }
@@ -1255,7 +1407,7 @@ mod tests {
         assert_ne!(left, changed_env);
         fs::write(stable.join("generated.rs"), "pub const X: u8 = 2;").unwrap();
         let changed = Script::new(["a".to_owned(), "b".to_owned()], [], &stable).unwrap();
-        assert_ne!(left.out_dir, changed.out_dir);
+        assert_ne!(left.files, changed.files);
         assert_eq!(
             super::package_name("registry+https://index#num-traits@0.2.19"),
             "num-traits"
@@ -1345,6 +1497,7 @@ mod tests {
                     table: table.clone(),
                     meta,
                 }),
+                unshared: None,
             }
         };
         Settlement {
@@ -1427,6 +1580,7 @@ mod tests {
                 table,
                 meta: meta(BTreeMap::new()),
             }),
+            unshared: None,
         }
     }
 
@@ -1589,6 +1743,7 @@ mod tests {
                     table: table.clone(),
                     meta,
                 }),
+                unshared: None,
             }
         };
         // Two demands' probes named different external crates: the staged
@@ -1658,7 +1813,10 @@ mod tests {
         let mut env = expected.clone();
         env.env.push(("WIDTH".to_owned(), "longer".to_owned()));
         let mut generated = expected.clone();
-        generated.out_dir = "different-generated-source".to_owned();
+        generated.files.insert(
+            "generated.rs".to_owned(),
+            "different-generated-source".to_owned(),
+        );
         for (index, nightly) in [Some(cfg), Some(env), Some(generated), None]
             .into_iter()
             .enumerate()
@@ -1677,6 +1835,7 @@ mod tests {
                         table: table.clone(),
                         meta: meta(BTreeMap::new()),
                     }),
+                    unshared: None,
                 }],
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
@@ -1709,6 +1868,7 @@ mod tests {
                     table: table.clone(),
                     meta: meta(BTreeMap::new()),
                 }),
+                unshared: None,
             }],
             bindings: Some(bindings.clone()),
             rawr: Some(rawr.clone()),
@@ -1729,6 +1889,7 @@ mod tests {
                     table,
                     meta: meta(BTreeMap::new()),
                 }),
+                unshared: None,
             }],
             bindings: Some(bindings.clone()),
             rawr: Some(rawr),
@@ -1914,6 +2075,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                         table: table.clone(),
                         meta: meta(BTreeMap::new()),
                     }),
+                    unshared: None,
                 }],
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
@@ -1933,6 +2095,135 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A build script that leaves files rustc never reads, holding its
+    /// build's own paths, as a native build's objects and CMake cache do,
+    /// still shares: two projects in their own target directories agree on
+    /// the generated file the compile read. A script whose read file really
+    /// differs shares nothing, and the difference names that file.
+    #[test]
+    fn outputs_with_per_build_paths_share_and_a_different_read_file_does_not() {
+        if !home::alone(
+            "bindings::tests::outputs_with_per_build_paths_share_and_a_different_read_file_does_not",
+        ) {
+            return;
+        }
+        let root = scratch("per-build-paths");
+        let project = root.join("project");
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(
+            project.join("Cargo.toml"),
+            "[workspace]\n[package]\nname = \"per-build-paths\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("src/lib.rs"),
+            "include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\n\
+             pub const GENERATED: &str = env!(\"GENERATED\");\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("build.rs"),
+            r#"fn main() {
+    println!("cargo:rerun-if-env-changed=RAWR_TEST_OUTPUT");
+    let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let width = if std::env::var("RAWR_TEST_OUTPUT").as_deref() == Ok("generated") { 2 } else { 1 };
+    std::fs::write(output.join("generated.rs"), format!("pub type Generated = [u8; {width}];\n")).unwrap();
+    std::fs::create_dir_all(output.join("native")).unwrap();
+    std::fs::write(output.join("native/objects.o"), output.display().to_string()).unwrap();
+    println!("cargo:rustc-env=GENERATED={}", output.join("generated.rs").display());
+}
+"#,
+        )
+        .unwrap();
+        let build = |target: &str, mode: &str| {
+            let output = std::process::Command::new("cargo")
+                .args(["check", "--offline", "--message-format=json"])
+                .current_dir(&project)
+                .env("CARGO_TARGET_DIR", root.join(target))
+                .env("RAWR_TEST_OUTPUT", mode)
+                .env_remove("RUSTFLAGS")
+                .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        };
+        // rawr's nightly build: its compile read only `generated.rs`.
+        let mut nightly = super::scripts_from_messages(&build("nightly", "match")).unwrap();
+        let read = std::collections::BTreeSet::from(["generated.rs".to_owned()]);
+        for outputs in nightly.values_mut() {
+            for output in outputs {
+                assert!(output.files.contains_key("native/objects.o"));
+                output.read(&read);
+            }
+        }
+        let packages = nightly.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(packages.len(), 1);
+        let bindings = root.join("bindings");
+        let rawr = root.join("rawr");
+        let table = root.join("table");
+        fs::write(&table, b"units").unwrap();
+        let settle = |entry: Settled, observed: &super::Observed| {
+            Settlement {
+                entries: vec![entry],
+                bindings: Some(bindings.clone()),
+                rawr: Some(rawr.clone()),
+                nightly: None,
+            }
+            .settle_checked(observed)
+        };
+        let extracted = |key: &str| Settled::Extracted {
+            key: key.to_owned(),
+            packages: packages.clone(),
+            inputs_packages: packages.clone(),
+            nightly: Some(nightly.clone()),
+            publish: Box::new(Publish {
+                bindings: bindings.clone(),
+                table: table.clone(),
+                meta: meta(BTreeMap::new()),
+            }),
+            unshared: None,
+        };
+        // The first project publishes.
+        let first = super::Observed::read(&build("first", "match"));
+        settle(extracted("shared"), &first).unwrap();
+        let recorded = super::read(&bindings, "shared").unwrap().meta.scripts;
+        assert_eq!(recorded, nightly);
+        // The second, in its own target directory, reads them.
+        let second = super::Observed::read(&build("second", "match"));
+        let read_entry = || Settled::Read {
+            directory: bindings.clone(),
+            key: "shared".to_owned(),
+            crate_name: "per-build-paths".to_owned(),
+            scripts: recorded.clone(),
+            inputs: crate::input::bindings::Inputs::fixture(),
+        };
+        settle(read_entry(), &second).unwrap();
+        assert!(super::read(&bindings, "shared").is_some());
+        // A project whose script writes another `generated.rs` shares
+        // nothing: its extraction is not published, and the shared table
+        // is refused, naming the file.
+        let differs = super::Observed::read(&build("differs", "generated"));
+        let package = &packages[0];
+        assert_eq!(
+            super::difference(
+                &nightly[package],
+                differs.0.as_ref().unwrap().get(package).map(Vec::as_slice),
+            ),
+            Some(super::Difference::File("generated.rs".to_owned()))
+        );
+        settle(extracted("differs"), &differs).unwrap();
+        assert!(super::read(&bindings, "differs").is_none());
+        let refused = settle(read_entry(), &differs).unwrap_err().to_string();
+        assert!(refused.contains("`generated.rs`"), "{refused}");
+        assert!(super::read(&bindings, "shared").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// A table whose build script gave the nightly other outputs than the
     /// project's build is a miss once: its staged copy goes, the nightly's
     /// run is marked to clean, and the run prepares again. The same
@@ -1940,6 +2231,12 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
     /// and stays so until an output changes (D742).
     #[test]
     fn a_difference_cleans_the_nightly_run_once_and_then_is_drift() {
+        // Staging leases entries, as the tests that spawn alone do.
+        if !home::alone(
+            "bindings::tests::a_difference_cleans_the_nightly_run_once_and_then_is_drift",
+        ) {
+            return;
+        }
         let root = scratch("rerun");
         let bindings = root.join("bindings");
         let nightly = root.join("nightly");
@@ -1961,6 +2258,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                 table: table.clone(),
                 meta: meta(BTreeMap::new()),
             }),
+            unshared: None,
         };
         let settlement = |entry: Settled| Settlement {
             entries: vec![entry],

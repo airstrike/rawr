@@ -155,10 +155,12 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
     // rustc checks the crate while Rawr works.
     let cargo = rawr_cli::cargo::begin(&graph);
     if check {
+        let cargo = cargo.map(owner::Checking::start);
         let checked = owner::check(&target, Some(graph), &Plain);
-        let cargo = cargo.map(rawr_cli::cargo::Pending::finish);
+        let cargo = cargo.map(owner::Checking::finish);
         let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
         let checked = checked.as_deref().map_err(Option::as_ref);
+        let cargo = cargo.map(|cargo| cargo.status);
         return if rawr_cli::cargo::concluded(checked, cargo) {
             ExitCode::SUCCESS
         } else {

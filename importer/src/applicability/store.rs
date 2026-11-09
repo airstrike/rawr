@@ -128,13 +128,20 @@ impl Scripts {
         self.0.get(package).map(Vec::as_slice)
     }
 
-    /// Whether both gave each of `packages` the same outputs. A package
-    /// either lacks is a disagreement.
-    pub(crate) fn agree(&self, packages: &[Box<str>], other: &Self) -> bool {
+    /// Whether the `project`'s build gave each of `packages` the outputs
+    /// these record (`crate::bindings::difference`). A package either lacks
+    /// is a disagreement.
+    pub(crate) fn agree(&self, packages: &[Box<str>], project: &Self) -> bool {
         packages.iter().all(|package| {
-            self.0
-                .get(package.as_ref())
-                .is_some_and(|outputs| other.0.get(package.as_ref()) == Some(outputs))
+            self.0.get(package.as_ref()).is_some_and(|outputs| {
+                crate::bindings::difference(outputs, project.get(package)).is_none()
+            })
         })
+    }
+
+    /// Keep only the generated files each package's compile read (`reads`).
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn read(&mut self, reads: &crate::input::bindings::Reads) {
+        reads.restrict(&mut self.0);
     }
 }

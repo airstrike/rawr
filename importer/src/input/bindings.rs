@@ -101,6 +101,99 @@ enum Read {
     Package,
 }
 
+/// Why a table's build inputs make no shared proof: its table stays with
+/// the project.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Unshared {
+    /// A source of its closure lies in the project, as the project's own
+    /// crates do (D608.4).
+    Project,
+    /// This package of its closure comes from no registry, git or path
+    /// source the build saw.
+    Source(String),
+    /// Its compile read this environment variable, which comes from no
+    /// source another project can check.
+    Environment(String),
+    /// Its closure names no package.
+    Unrecorded,
+    /// One of its inputs could not be read.
+    Unreadable,
+}
+
+impl std::fmt::Display for Unshared {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Project => formatter.write_str("it reaches a crate of this project"),
+            Self::Source(package) => write!(
+                formatter,
+                "`{package}` comes from no registry, git or path source rawr's build saw"
+            ),
+            Self::Environment(key) => write!(
+                formatter,
+                "its compile read `{key}`, which neither Cargo nor this project's \
+                 configuration sets as rawr's build saw it"
+            ),
+            Self::Unrecorded => formatter.write_str("its build inputs were not recorded"),
+            Self::Unreadable => formatter.write_str("one of its build inputs could not be read"),
+        }
+    }
+}
+
+/// The generated files each package's compile read, by package id and path
+/// under its build script's `OUT_DIR`. A package whose compile left no
+/// dep-info naming that `OUT_DIR` is absent: every file it has counts.
+#[cfg(feature = "rustc-driver")]
+pub(crate) struct Reads(BTreeMap<String, BTreeSet<String>>);
+
+#[cfg(feature = "rustc-driver")]
+impl Reads {
+    /// What `build`'s compiles read, by the recipes of its `baseline`.
+    pub(crate) fn of(baseline: &Baseline, build: &build::Build) -> Self {
+        let mut reads = BTreeMap::<String, BTreeSet<String>>::new();
+        for script in &build.evidence.scripts {
+            let compiled = baseline.recipes.iter().any(|recipe| {
+                matches!(recipe, proof::Recipe::DepInfo {
+                    package_id,
+                    out_directories,
+                    ..
+                } if *package_id == script.package_id
+                    && out_directories.contains(&script.out_dir))
+            });
+            if !compiled {
+                continue;
+            }
+            let read = reads.entry(script.package_id.to_string()).or_default();
+            for recipe in &baseline.recipes {
+                let (proof::Recipe::File { path, .. } | proof::Recipe::Path { path, .. }) = recipe
+                else {
+                    continue;
+                };
+                if let Some(relative) = path
+                    .strip_prefix(&script.out_dir)
+                    .ok()
+                    .and_then(Path::to_str)
+                    .filter(|relative| !relative.is_empty())
+                {
+                    read.insert(relative.to_owned());
+                }
+            }
+        }
+        Self(reads)
+    }
+
+    /// Keep, in each package's outputs, only the files its compile read.
+    pub(crate) fn restrict(&self, scripts: &mut BTreeMap<String, Vec<crate::bindings::Script>>) {
+        for (package, outputs) in scripts {
+            if let Some(read) = self.0.get(package) {
+                for output in outputs.iter_mut() {
+                    output.read(read);
+                }
+                outputs.sort_unstable();
+            }
+        }
+    }
+}
+
 /// A historical witness whose current request and filesystem agree.
 pub(crate) struct Validated<'inputs> {
     inputs: &'inputs Inputs,
@@ -131,7 +224,7 @@ impl Inputs {
         build: &build::Build,
         packages: &[String],
         current: &Current,
-    ) -> Option<Self> {
+    ) -> Result<Self, Unshared> {
         Self::capture_within(baseline, build, packages, current, false)
     }
 
@@ -144,7 +237,7 @@ impl Inputs {
         packages: &[String],
         current: &Current,
     ) -> Option<Self> {
-        Self::capture_within(baseline, build, packages, current, true)
+        Self::capture_within(baseline, build, packages, current, true).ok()
     }
 
     fn capture_within(
@@ -153,17 +246,18 @@ impl Inputs {
         packages: &[String],
         current: &Current,
         project: bool,
-    ) -> Option<Self> {
+    ) -> Result<Self, Unshared> {
         let selected = packages.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        if selected.is_empty()
-            || selected.iter().any(|id| {
-                // A path package's files are checked before its table's
-                // replay; its table stays with the project (#398).
-                !(id.starts_with("registry+") || id.starts_with("git+") || id.starts_with("path+"))
-                    || !build.evidence.packages.contains_key(id)
-            })
-        {
-            return None;
+        if selected.is_empty() {
+            return Err(Unshared::Unrecorded);
+        }
+        if let Some(id) = selected.iter().find(|id| {
+            // A path package's files are checked before its table's
+            // replay; its table stays with the project (#398).
+            !(id.starts_with("registry+") || id.starts_with("git+") || id.starts_with("path+"))
+                || !build.evidence.packages.contains_key(id)
+        }) {
+            return Err(Unshared::Source((*id).to_owned()));
         }
         let mut paths = BTreeSet::new();
         let mut environment = BTreeMap::new();
@@ -188,7 +282,7 @@ impl Inputs {
                         continue;
                     }
                     if !project && path.starts_with(&current.project) {
-                        return None;
+                        return Err(Unshared::Project);
                     }
                     paths.insert(File {
                         package: package.to_string(),
@@ -230,13 +324,13 @@ impl Inputs {
                     {
                         // Unknown Cargo/config injection has no ambient input
                         // proof. Do not guess how another project obtains it.
-                        return None;
+                        return Err(Unshared::Environment(key.to_string()));
                     }
                     let value = value.as_deref().map(ToOwned::to_owned);
                     if let Some(previous) = environment.insert(key.to_string(), value.clone())
                         && previous != value
                     {
-                        return None;
+                        return Err(Unshared::Environment(key.to_string()));
                     }
                 }
                 _ => {}
@@ -266,7 +360,7 @@ impl Inputs {
                 _ => continue,
             };
             if !project && path.starts_with(&current.project) {
-                return None;
+                return Err(Unshared::Project);
             }
             paths.insert(File {
                 package: package.to_string(),
@@ -275,8 +369,8 @@ impl Inputs {
             });
         }
         let paths = paths.into_iter().collect::<Vec<_>>();
-        let fingerprint = fingerprint(&paths, &current.limits)?;
-        Some(Self {
+        let fingerprint = fingerprint(&paths, &current.limits).ok_or(Unshared::Unreadable)?;
+        Ok(Self {
             schema: SCHEMA,
             compiler: current.compiler.clone(),
             config: current.config,
@@ -408,7 +502,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{build, proof, Allocation, Baseline, Current, Inputs};
+    use super::{build, proof, Allocation, Baseline, Current, Inputs, Unshared};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     const PACKAGE: &str = "registry+https://example.invalid/index#demo@1.0.0";
@@ -504,6 +598,45 @@ mod tests {
         (root, baseline, build, current)
     }
 
+    /// A package's outputs keep the generated files its compile read, once
+    /// its dep-info names its `OUT_DIR`; without that, every file counts.
+    #[cfg(feature = "rustc-driver")]
+    #[test]
+    fn outputs_keep_the_generated_files_the_compile_read() {
+        let (root, mut baseline, build, _) = fixture();
+        let out_dir = build.evidence.scripts[0].out_dir.clone();
+        fs::create_dir_all(out_dir.join("native")).unwrap();
+        fs::write(out_dir.join("native/objects.o"), out_dir.to_str().unwrap()).unwrap();
+        let observed = || {
+            BTreeMap::from([(
+                PACKAGE.to_owned(),
+                vec![crate::bindings::Script::new([], [], &out_dir).unwrap()],
+            )])
+        };
+        let files = |scripts: &BTreeMap<String, Vec<crate::bindings::Script>>| {
+            scripts[PACKAGE][0]
+                .files
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut unread = observed();
+        super::Reads::of(&baseline, &build).restrict(&mut unread);
+        assert_eq!(files(&unread), ["generated.rs", "native/objects.o"]);
+        let mut recipes = std::mem::take(&mut baseline.recipes).into_vec();
+        recipes.push(proof::Recipe::DepInfo {
+            package_id: PACKAGE.into(),
+            path: root.join("demo.d"),
+            package_root: root.join("source"),
+            out_directories: Box::from([out_dir.clone()]),
+        });
+        baseline.recipes = recipes.into_boxed_slice();
+        let mut read = observed();
+        super::Reads::of(&baseline, &build).restrict(&mut read);
+        assert_eq!(files(&read), ["generated.rs"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn declared_inputs_are_rechecked_before_api_replay_across_projects() {
         let (root, baseline, build, mut current) = fixture();
@@ -534,7 +667,10 @@ mod tests {
     fn project_sources_and_unknown_compiler_environment_cannot_publish() {
         let (root, mut baseline, build, mut current) = fixture();
         current.project = root.clone();
-        assert!(Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).is_none());
+        assert_eq!(
+            Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap_err(),
+            Unshared::Project
+        );
         // A table only the project replays may name its sources: their
         // contents are checked before each replay.
         let staged =
@@ -545,7 +681,10 @@ mod tests {
             panic!("fixture compiler environment");
         };
         *key = "UNEXPLAINED_OUTPUT".into();
-        assert!(Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).is_none());
+        assert_eq!(
+            Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap_err(),
+            Unshared::Environment("UNEXPLAINED_OUTPUT".to_owned())
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

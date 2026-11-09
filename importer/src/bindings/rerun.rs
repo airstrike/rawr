@@ -179,6 +179,7 @@ impl Record {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
 
@@ -197,7 +198,7 @@ mod tests {
         vec![Script {
             cfgs: Vec::new(),
             env: vec![("VALUE".to_owned(), value.to_owned())],
-            out_dir: "digest".to_owned(),
+            files: BTreeMap::from([("generated.rs".to_owned(), "digest".to_owned())]),
         }]
     }
 
