@@ -760,10 +760,10 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
          let text = String::from(\"local\");\n    \
          page::named(&text)\n}\n";
     let root = crate::support::scratch().join("islands-blocks-local");
-    // cargo check's positions: `&blocks` at 142:25, `&text` at 142:17.
+    // cargo check's positions: `&blocks` at 150:25, `&text` at 150:17.
     for (badge, local, at) in [
-        (ARRAY, "`blocks`", "badge.rs:142:25-"),
-        (STRING, "`text`", "badge.rs:142:17-"),
+        (ARRAY, "`blocks`", "badge.rs:150:25-"),
+        (STRING, "`text`", "badge.rs:150:17-"),
     ] {
         let _ = fs::remove_dir_all(root.join("src"));
         copy(Path::new(BLOCKS), &root);
