@@ -719,7 +719,9 @@ pub fn called_from_native() -> bool {
 /// Offer a committed generation to the thread that owns the program
 /// (D553.3): `admit` runs there at its next outermost entry from native
 /// code, so the whole call tree of each entry runs in one generation. The
-/// latest offer wins.
+/// latest offer wins. The program's windows are asked to redraw, so an
+/// idle event loop runs its next frame, and that frame's first call into
+/// marked code admits it (#1479).
 pub fn offer(admit: impl FnOnce() + Send + 'static) {
     let older = {
         let mut offered = lock(&OFFERED);
@@ -727,6 +729,7 @@ pub fn offer(admit: impl FnOnce() + Send + 'static) {
         offered.replace(Box::new(admit))
     };
     drop(older);
+    crate::redraw::windows();
 }
 
 /// Inside a call from native code into script code until it drops
