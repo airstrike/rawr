@@ -67,20 +67,20 @@ pub fn supervised() -> bool {
     std::env::var_os(EVENTS).is_some_and(|path| !path.is_empty())
 }
 
-/// Append `event` as one line, when supervised, and send it to the
-/// program's [`reload`] stream.
+/// Append `event` as one line, when supervised, and then send it to the
+/// program's [`reload`] stream: a connection that hears a line it wrote
+/// knows the file has it.
 pub fn emit(event: &Value) {
     let mut line = event.to_string();
     line.push('\n');
+    if let Some(file) = file() {
+        let mut file = file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = file.write_all(line.as_bytes());
+    }
     #[cfg(unix)]
     reload::broadcast(&line);
-    let Some(file) = file() else {
-        return;
-    };
-    let mut file = file
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _ = file.write_all(line.as_bytes());
 }
 
 /// A cold start is building: the stage it is in and the percent done.

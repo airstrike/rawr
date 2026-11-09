@@ -5757,16 +5757,32 @@ enum Started {
 /// A generation the owner thread admitted: the owner said `queued` when it
 /// committed (D553.3), and says `swapped` to the program and to a `rawr
 /// mcp` that supervises the run once this writes it to the reload stream.
-/// A browser's run has neither.
+/// The owner sends each line it emits to every connection, this one too,
+/// after its events file has it: the program goes on once its own line
+/// comes back, so `swapped` is there to read before the call that admitted
+/// the generation runs. A browser's run has neither.
 fn admitted() {
     #[cfg(unix)]
     {
-        use std::io::Write as _;
+        use std::io::{BufRead as _, Write as _};
+        const SWAPPED: &str = "{\"event\":\"swapped\"}\n";
         let Some(path) = std::env::var_os("RAWR_RELOAD_EVENTS").filter(|path| !path.is_empty()) else {
             return;
         };
-        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
-            let _ = stream.write_all(b"{\"event\":\"swapped\"}\n");
+        let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) else {
+            return;
+        };
+        if stream.write_all(SWAPPED.as_bytes()).is_err() {
+            return;
+        }
+        // An owner that ended closes the stream.
+        let mut lines = std::io::BufReader::new(stream);
+        let mut line = String::new();
+        while lines.read_line(&mut line).is_ok_and(|read| read > 0) {
+            if line == SWAPPED {
+                return;
+            }
+            line.clear();
         }
     }
 }

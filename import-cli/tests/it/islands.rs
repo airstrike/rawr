@@ -186,6 +186,68 @@ fn an_idle_native_main_outlives_a_stop_and_takes_a_save_at_its_next_call() {
     assert!(!seen.contains("restarting"), "{seen}");
 }
 
+/// `swapped` is in the events file when the program's call that admitted
+/// the save runs, not at some later event: a `rawr mcp` waiting on it
+/// hears it once the swap happens. The program stays idle after its save
+/// is queued, and only its next call into marked code admits it.
+#[test]
+fn swapped_is_told_before_the_call_that_admits_the_save_runs() {
+    const ADMIT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-admit");
+    let root = crate::support::scratch().join("islands-admit");
+    let go = root.join("go");
+    let stop = root.join("stop");
+    let events = root.join("events.jsonl");
+    for file in [&go, &stop, &events] {
+        let _ = fs::remove_file(file);
+    }
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(ADMIT), &root);
+    let mut run = start(
+        &root,
+        &[
+            ("IDLE_GO", go.clone()),
+            ("IDLE_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| line == "value 1");
+    edit(
+        &root.join("src/physics.rs"),
+        "const SCALE: i64 = 1;",
+        "const SCALE: i64 = 100;",
+    );
+    let queued = run.told(&events, |text| text.contains("\"queued\""));
+    assert!(!queued.contains("\"swapped\""), "{queued}");
+
+    fs::write(&go, "").unwrap();
+    run.until(|line| line == "value 100");
+    let told = fs::read_to_string(&events).unwrap();
+    let names: Vec<&str> = told
+        .lines()
+        .filter_map(|line| {
+            let event = line.split_once("\"event\":\"")?.1;
+            event.split_once('"').map(|(name, _)| name)
+        })
+        .collect();
+    let queued = names.iter().position(|name| *name == "queued");
+    let swapped = names.iter().position(|name| *name == "swapped");
+    assert!(
+        queued.is_some() && swapped > queued,
+        "{told}\n{}",
+        run.seen.join("\n")
+    );
+
+    // A supervised run waits for the next save once its program ends.
+    fs::write(&stop, "").unwrap();
+    let ended = run.told(&events, |text| text.contains("\"ended\""));
+    assert!(
+        ended.contains("{\"event\":\"ended\",\"status\":0}"),
+        "{ended}"
+    );
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("restarting"), "{seen}");
+}
+
 /// An idle event loop draws a save at once (#1479): a native `main` whose
 /// winit loop waits for its next event makes no call into marked code, so
 /// rawr asks the program's windows to redraw when it queues a generation.
