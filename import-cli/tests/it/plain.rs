@@ -2482,6 +2482,53 @@ fn a_crate_types_from_of_itself_gives_the_value_back() {
     assert_runs_and_checks(&root, &home);
 }
 
+/// A literal of a crate's struct, `events::Color { r, g, b }`, builds the
+/// crate's value in a plain runner: with shorthand and named fields, nested
+/// in another crate struct's literal, passed to a crate function and read
+/// back field by field (#325).
+#[test]
+fn a_literal_of_a_crates_struct_builds_its_value() {
+    let root = crate::support::scratch().join("crate-struct-literal");
+    project(
+        &root,
+        &[
+            (
+                "Cargo.toml",
+                "[workspace]\n[package]\nname='crate-struct-literal'\nversion='0.1.0'\nedition='2024'\n\
+                 [dependencies]\nevents={path='events'}\n",
+            ),
+            (
+                "events/Cargo.toml",
+                "[package]\nname='events'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            (
+                "events/src/lib.rs",
+                "#[derive(Debug, Clone, Copy, PartialEq)]\n\
+                 pub struct Color { pub r: u8, pub g: u8, pub b: u8 }\n\
+                 #[derive(Debug)]\n\
+                 pub struct Swatch { pub name: String, pub color: Color }\n\
+                 pub fn sum(color: Color) -> u32 { color.r as u32 + color.g as u32 + color.b as u32 }\n",
+            ),
+            (
+                "src/main.rs",
+                "// rawr\nfn main() {\n    let (r, g, b) = (1, 2, 3);\n    \
+                 let color = events::Color { r, g, b };\n    \
+                 let named = events::Color { r: 10, g: color.g * 10, b: 30 };\n    \
+                 let swatch = events::Swatch { name: \"sea\".to_string(), color: named };\n    \
+                 println!(\"{} {} {} sum {}\", color.r, color.g, color.b, events::sum(color));\n    \
+                 println!(\"{swatch:?} {}\", swatch.color == named);\n}\n",
+            ),
+        ],
+    );
+    let home = crate::support::scratch().join("rawr-home");
+    assert_eq!(
+        run_ok(&root, &home),
+        "1 2 3 sum 6\nSwatch { name: \"sea\", color: Color { r: 10, g: 20, b: 30 } } true\n"
+    );
+    let checked = rawr_import_with_home(&root, &["check"], &home);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+}
+
 /// A workspace member resolves with the workspace root's `[patch]`, as
 /// Cargo resolves every member (#664).
 #[test]
