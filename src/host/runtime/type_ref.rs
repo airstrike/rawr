@@ -515,6 +515,11 @@ impl Type {
         model: &program::model::Model,
         registry: &host::runtime::Registry,
     ) -> Result<(), Error> {
+        // A sibling static not written yet (D862) is only an address, which
+        // a `&'static` parameter takes; the trampoline checks its exact type.
+        if value.is::<crate::place::statics::Slot>() {
+            return Ok(());
+        }
         if let Some(place) = crate::place::get(value) {
             return if place.witness().matches_native(registry.witness, self) {
                 Ok(())

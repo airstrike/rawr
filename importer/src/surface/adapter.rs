@@ -1204,7 +1204,8 @@ fn clone_signature_at(
     // held as (`Opaque::principal`), and which inputs it borrows.
     .with_opaques(source.opaques().into())
     .with_lends(source.lends().into())
-    .with_statics(source.statics().into()))
+    .with_statics(source.statics().into())
+    .with_lasting_receiver(source.lasting_receiver()))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {

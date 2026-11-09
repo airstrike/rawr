@@ -20,7 +20,7 @@ impl<'a> Parser<'a> {
             let result = match self.peek() {
                 Token::Let => self.parse_binding(true),
                 Token::Const => self.parse_binding(false),
-                _ if self.static_ahead() => self.skip_nested_static(),
+                _ if self.static_ahead() => self.parse_block_statics(),
                 _ if self.macro_definition_ahead() => self.parse_local_macro(),
                 _ if self.macro_statement_ahead() => self.parse_macro_statement(),
                 _ => self.parse_statement(),
@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
                     self.skip_nested_fn()?;
                 }
                 Token::Const => self.parse_binding(false)?,
-                _ if self.static_ahead() => self.skip_nested_static()?,
+                _ if self.static_ahead() => self.parse_block_statics()?,
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,
@@ -639,7 +639,7 @@ impl<'a> Parser<'a> {
                     self.skip_nested_fn()?;
                 }
                 Token::Const => self.parse_binding(false)?,
-                _ if self.static_ahead() => self.skip_nested_static()?,
+                _ if self.static_ahead() => self.parse_block_statics()?,
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,

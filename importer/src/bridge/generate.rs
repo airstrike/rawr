@@ -2583,6 +2583,33 @@ fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     )
 }
 
+/// The native value `value` holds and its type's witness, moved out of
+/// this thread's arena for a static declared in a body, which keeps it for
+/// the program's life (D862).
+fn settled(value: &Dynamic) -> Option<Result<__rawr_internal::island::Settled, String>> {
+    let handle = value.read_lock::<NativeHandle>()?;
+    Some(
+        arena_access(|arena| {
+            let witness = arena.witness(handle.clone()).cloned();
+            arena
+                .take_any(&*handle)
+                .map(|value| (value, witness))
+                .map_err(|error| format!("{:?}", error.reported()))
+        })
+        .unwrap_or_else(|| Err("a native value can't move from another thread's arena".to_owned())),
+    )
+}
+
+/// The `&'static T` marked code passes for a `&'static T` parameter or
+/// receiver: a static's, which lives as long as the program, or a sibling
+/// static's place not written yet (D862).
+#[allow(dead_code)]
+fn lasting_argument<T: 'static>(arguments: &Arguments<'_, '_, '_>, index: usize) -> Result<&'static T, Error> {
+    let value = arguments.values.get(index).ok_or(Error::MissingArgument)?;
+    __rawr_internal::place::statics::lasting::<T>(value)
+        .ok_or_else(|| Error::Value("borrowed value does not live long enough (E0597)".to_owned()))
+}
+
 /// Where the native value `value` holds is, lent to native code that
 /// called a marked function for as long as `pins` hold it (#1442). Without
 /// pins the call asked for a `&'static`, which a value of the arena can't
@@ -2635,6 +2662,7 @@ fn lodge(
 
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::moves(moved);
+    __rawr_internal::island::settles(settled);
     __rawr_internal::island::lends(lent_in_place);
     __rawr_internal::island::lodges(lodge);
     __rawr_internal::island::arenas(|| Box::new(CallArena::enter()));
@@ -10191,6 +10219,10 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
         if !matches!(ty, convert::Type::Nominal { .. }) || carries_lifetime(&ty) || is_value(&ty) {
             continue;
         }
+        // A `&'static T` is a static's own place, never a lend (D862).
+        if !*mutable && lasting_input(signature, index - offset) {
+            continue;
+        }
         if let Some(rust) = concrete_type(&ty) {
             lent.push((index, *mutable, format!("reach_lent::<{rust}>")));
         }
@@ -13853,6 +13885,16 @@ fn render_borrowed_receiver(
     } else {
         format!("({taken},)")
     };
+    // `&'static self`, as tracing's `DefaultCallsite::interest` takes: a
+    // static's own place, which lives as long as the program (D862).
+    if signature.lasting_receiver() && !mutable && container != "_" {
+        return writeln!(
+            output,
+            "    let receiver: &'static {container} = lasting_argument::<{container}>(arguments, 0)?;
+    let output = lend(arguments.arena, || {call});"
+        )
+        .map_err(encoding);
+    }
     // An output that borrows what a lent receiver carries can't leave the
     // accessor's visitor: such a receiver is reached only in the arena, at
     // `'static`, or in a scope frame's region (D558 tier 1).
@@ -16384,6 +16426,23 @@ fn render_take_input(
             )
         };
         return writeln!(output, "    let {name} = {take};{borrow}").map_err(request::unwritable);
+    }
+    // A `&'static T` of a crate value, as tracing's `Metadata::new` takes
+    // its callsite: a static's own place, of a body or of native code, or
+    // the memory of a sibling static not written yet (D862).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: target,
+    } = &lent
+        && matches!(**target, convert::Type::Nominal { .. })
+        && u32::try_from(local).is_ok_and(|local| signature.statics().contains(&local))
+    {
+        let rust = concrete_type(target).ok_or_else(|| request::drift("a static's type"))?;
+        return writeln!(
+            output,
+            "    let argument_{local}: &'static {rust} = lasting_argument::<{rust}>(arguments, {index})?;"
+        )
+        .map_err(request::unwritable);
     }
     // A borrow of a script value where native generic code takes a Rust
     // type, as `&Square` fills `name_of(shape: &impl Shape)`: a borrow of

@@ -1376,6 +1376,13 @@ impl<'a> Parser<'a> {
                 self.peek(),
                 Token::DoubleColon | Token::LeftParen | Token::Unit
             );
+        // A static its block declares shadows an item of the same name.
+        if !local
+            && !matches!(self.peek(), Token::DoubleColon)
+            && let Some(read) = self.block_static(&name, name_span)
+        {
+            return read;
+        }
 
         #[cfg(feature = "rust-import")]
         if let Some(binding) = self.models.import(&name).cloned().filter(|_| !local)

@@ -14,6 +14,7 @@ mod panes;
 mod plain;
 mod scope;
 mod shapes;
+mod statics;
 mod std_types;
 mod support;
 mod swap;

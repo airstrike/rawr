@@ -127,6 +127,9 @@ pub struct Signature {
     /// a value that lives as long as the runner fills it.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     statics: Box<[u32]>,
+    /// A method's receiver is `&'static self`: only a static fills it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lasting_receiver: bool,
 }
 
 /// The associated types an opaque `impl Trait` type binds, each at the
@@ -588,6 +591,7 @@ impl Signature {
             opaques: Box::new([]),
             lends: Box::new([]),
             statics: Box::new([]),
+            lasting_receiver: false,
         }
     }
 
@@ -682,6 +686,18 @@ impl Signature {
     #[must_use]
     pub fn statics(&self) -> &[u32] {
         &self.statics
+    }
+
+    pub(crate) fn with_lasting_receiver(mut self, lasting: bool) -> Self {
+        self.lasting_receiver = lasting;
+        self
+    }
+
+    /// Whether the method takes `&'static self`, as tracing's
+    /// `DefaultCallsite::interest` does: only a static fills it.
+    #[must_use]
+    pub const fn lasting_receiver(&self) -> bool {
+        self.lasting_receiver
     }
 
     pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {

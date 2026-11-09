@@ -79,6 +79,27 @@ pub(crate) fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     MOVE.get()?(value)
 }
 
+/// A native value moved out of the runner's arena, with its type's witness.
+pub type Settled = (Box<dyn Any>, Option<crate::host::runtime::Witness>);
+
+/// The native value a script value holds, moved out of the runner's arena
+/// with its type's witness; `None` when it holds none.
+pub type Settle = fn(&Dynamic) -> Option<Result<Settled, String>>;
+
+static SETTLE: OnceLock<Settle> = OnceLock::new();
+
+/// Name how the runner moves a native value out of its arena for a static
+/// declared in a body to keep for the program's life (D862). Set once.
+pub fn settles(settle: Settle) {
+    let _ = SETTLE.set(settle);
+}
+
+/// The native value `value` holds and its witness, moved out for a static
+/// declared in a body.
+pub(crate) fn settled(value: &Dynamic) -> Option<Result<Settled, String>> {
+    SETTLE.get()?(value)
+}
+
 /// Drop what a call left of an argument given for it alone: the native
 /// value it is, as a by-value `View<'a>` of borrows (#1225), or each one
 /// inside its `Option`s, arrays and tuples, as an `Option<Element<'a,

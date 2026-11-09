@@ -12,6 +12,7 @@ mod projection;
 pub mod reading;
 pub mod sequence;
 pub mod slice;
+pub mod statics;
 #[cfg(test)]
 mod tests;
 pub mod text;

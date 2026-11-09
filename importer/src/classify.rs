@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 150;
+const CLASSIFIER_VERSION: u32 = 151;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8750,6 +8750,14 @@ impl<P: api::Phase> Context<'_, P> {
         .with_scope(scope)
         .with_lends(lends.into_boxed_slice())
         .with_statics(static_inputs(signature))
+        .with_lasting_receiver(matches!(
+            signature.receiver(),
+            model::Receiver::Reference {
+                lifetime: model::Lifetime::Static,
+                mutability: model::Mutability::Shared,
+                ..
+            }
+        ))
         .with_opaques(opaques.into_boxed_slice());
         // A receiver of an impl that fixes its type's arguments, as
         // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.
