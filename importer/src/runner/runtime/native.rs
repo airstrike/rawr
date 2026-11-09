@@ -5,10 +5,13 @@
 //! project's and the runtime's. A package both name compiles twice, and its
 //! Rust symbols are mangled apart. A static library carries unmangled
 //! symbols, so when both graphs link one, the linker binds every caller to
-//! one copy. That is sound when both copies come from one package at
-//! versions Cargo treats as compatible, as one Cargo graph would have
-//! resolved them to a single version. Any other pair of copies may disagree
-//! on what a symbol does, and the runner compiles rawr in the project.
+//! one copy. rawr shares that copy when both come from one package at
+//! versions Cargo treats as compatible (D831). Cargo would build one version
+//! for both, but here one side's Rust code may call the other version's native
+//! code: that rests on the crate keeping its native interface stable within a
+//! compatible range, not on a guarantee from Cargo. Any other pair of copies
+//! may disagree on what a symbol does, and the runner compiles rawr in the
+//! project.
 
 use std::collections::BTreeSet;
 
