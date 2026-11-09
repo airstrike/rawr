@@ -11519,6 +11519,20 @@ fn render_adapter_body(
                 .map_err(request::unwritable)?;
                 return Ok(());
             }
+            // A `const` or `static` of `&'static str` (#1146): Rawr's string,
+            // made at the first read and given again at each, so a call
+            // taking `&'static str` pins the one string (`static_pins`).
+            if matches!(ty, convert::Type::Borrowed { mutable: false, ty }
+                if **ty == convert::Type::Builtin(convert::Builtin::StaticStr))
+            {
+                writeln!(
+                    output,
+                    "    static TEXT: std::sync::OnceLock<ImmutableString> = std::sync::OnceLock::new();
+    Ok(Dynamic::from(TEXT.get_or_init(|| ImmutableString::from({constant})).clone()))"
+                )
+                .map_err(request::unwritable)?;
+                return Ok(());
+            }
             writeln!(output, "    let output = {constant};").map_err(request::unwritable)?;
             render_give(ty, "output", output)?;
         }

@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 144;
+const CLASSIFIER_VERSION: u32 = 145;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7761,6 +7761,12 @@ impl<P: api::Phase> Context<'_, P> {
         let model::Default::Present(value) = value else {
             return Err(representability::reject::Kind::MissingConstantValue.into());
         };
+        if let Some(text) = static_text(ty) {
+            return Ok(representability::constant::Plan::new(text, None));
+        }
+        if let Some(scalars) = self.static_scalars(ty) {
+            return Ok(representability::constant::Plan::new(scalars, None));
+        }
         let ty = self.convert_value(ty)?;
         // A constant of another type, as Freya's `Color::WHITE: Color =
         // Color::new(..)`, is read by its path where the bridge runs, as a
@@ -7793,6 +7799,12 @@ impl<P: api::Phase> Context<'_, P> {
     /// META: Meta`, which a `&'static Meta` result gives itself (#1442).
     fn statik(&self, ty: &model::Type) -> Result<representability::constant::Plan, Failure> {
         use representability::convert::Type;
+        if let Some(text) = static_text(ty) {
+            return Ok(representability::constant::Plan::new(text, None));
+        }
+        if let Some(scalars) = self.static_scalars(ty) {
+            return Ok(representability::constant::Plan::new(scalars, None));
+        }
         if !names_early_lifetime(ty)
             && !names_late_lifetime(ty)
             && let Ok(value) = self.convert(ty)
@@ -7837,6 +7849,34 @@ impl<P: api::Phase> Context<'_, P> {
             return Err(representability::reject::Kind::Static.into());
         }
         Ok(representability::constant::Plan::new(ty, None))
+    }
+
+    /// The type of a `const` or `static` of a slice of numbers, `bool`s or
+    /// `char`s, as `pub const BYTES: &[u8]`: `&'static [T]` in either, a
+    /// borrow of Rawr's array of them, so a `for` over it gives `&T` and
+    /// `.len()` reads it as rustc's do (#1146).
+    fn static_scalars(&self, ty: &model::Type) -> Option<representability::convert::Type> {
+        use representability::convert::Type;
+        let model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty: target,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        let model::Type::Slice(element) = &**target else {
+            return None;
+        };
+        let element = self.convert(element).ok()?;
+        matches!(element, Type::Builtin(_)).then(|| Type::Borrowed {
+            mutable: false,
+            ty: Box::new(Type::Sequence {
+                element: Box::new(element),
+                owned: false,
+                length: None,
+            }),
+        })
     }
 
     /// A value the bridge gives Rawr: as `convert`, and a `Vec<T>`, a
@@ -11179,6 +11219,18 @@ fn is_number(ty: &model::Type) -> bool {
 fn is_str_reference(ty: &model::Type) -> bool {
     matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
         if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
+}
+
+/// The type of a `const` or `static` of `&str`, as inboard's `pub const
+/// UI_FAMILY: &str`, which is `&'static str` in either: a borrow of Rawr's
+/// string, read once where the bridge runs and kept for the runner's life,
+/// which a call taking `&'static str` takes pinned as it is (#1146).
+fn static_text(ty: &model::Type) -> Option<representability::convert::Type> {
+    use representability::convert::{Builtin, Type};
+    is_str_reference(ty).then(|| Type::Borrowed {
+        mutable: false,
+        ty: Box::new(Type::Builtin(Builtin::StaticStr)),
+    })
 }
 
 /// Whether `ty` is a shared borrow of a type parameter, as `&'f F`.
@@ -14630,6 +14682,91 @@ mod tests {
             }
         );
         assert!(plan.value().is_none());
+
+        // A `const` or `static` of `&str` is `&'static str` in either, as
+        // inboard's `fonts::UI_FAMILY` is: a borrow of Rawr's string read
+        // where the bridge runs, kept for the runner's life (#1146).
+        let text = || model::Type::Reference {
+            lifetime: model::Lifetime::Static,
+            mutability: model::Mutability::Shared,
+            ty: Box::new(model::Type::Primitive("str".into())),
+        };
+        let static_text = super::representability::convert::Type::Borrowed {
+            mutable: false,
+            ty: Box::new(super::representability::convert::Type::Builtin(
+                super::representability::convert::Builtin::StaticStr,
+            )),
+        };
+        let texts = [
+            model::Kind::Const {
+                ty: text(),
+                value: model::Default::Present(model::Const::Unevaluated {
+                    definition: id.clone(),
+                    arguments: Box::default(),
+                }),
+            },
+            model::Kind::Static {
+                ty: text(),
+                mutable: false,
+                thread_local: false,
+            },
+        ];
+        for kind in texts {
+            let definition = model::Definition::new(
+                id.clone(),
+                Box::from([Box::<str>::from("fixture"), Box::<str>::from("UI_FAMILY")]),
+                model::Owner::Free,
+                model::Visibility::Public,
+                kind,
+                rejection_span(),
+                model::Origin::Source,
+            );
+            let Ok(Representability::Constant(plan)) = context.classify_definition(0, &definition)
+            else {
+                panic!("a constant of `&'static str` is admitted");
+            };
+            assert_eq!(plan.ty(), &static_text);
+            assert!(plan.value().is_none());
+        }
+        // A `const` of a slice of numbers, as `BYTES: &[u8]`, is a borrow
+        // of Rawr's array of them, as rustc's `&'static [u8]` is.
+        let bytes = model::Definition::new(
+            id.clone(),
+            Box::from([Box::<str>::from("fixture"), Box::<str>::from("BYTES")]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Const {
+                ty: model::Type::Reference {
+                    lifetime: model::Lifetime::Static,
+                    mutability: model::Mutability::Shared,
+                    ty: Box::new(model::Type::Slice(Box::new(model::Type::Primitive(
+                        "u8".into(),
+                    )))),
+                },
+                value: model::Default::Present(model::Const::Unevaluated {
+                    definition: id.clone(),
+                    arguments: Box::default(),
+                }),
+            },
+            rejection_span(),
+            model::Origin::Source,
+        );
+        let Ok(Representability::Constant(plan)) = context.classify_definition(0, &bytes) else {
+            panic!("a constant of `&'static [u8]` is admitted");
+        };
+        assert_eq!(
+            plan.ty(),
+            &super::representability::convert::Type::Borrowed {
+                mutable: false,
+                ty: Box::new(super::representability::convert::Type::Sequence {
+                    element: Box::new(super::representability::convert::Type::Builtin(
+                        super::representability::convert::Builtin::U8,
+                    )),
+                    owned: false,
+                    length: None,
+                }),
+            }
+        );
 
         let safe = |async_function, variadic, abi: &str, binders, receiver| {
             model::Signature::new(

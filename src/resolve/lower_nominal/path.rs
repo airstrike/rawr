@@ -604,10 +604,22 @@ impl<'a> Parser<'a> {
                         || self
                             .native_site()
                             .is_some_and(|site| site.missing_binding(&self.models.host, &path)));
-                let error = Error::UnknownMember {
-                    owner: binding.qualified,
-                    member,
-                    reference: member_span,
+                // A module a `use` names lacks only the item, as `fonts::
+                // UI_FAMILY` after `use common::fonts;`: rustc's E0425 for
+                // the module, not a type's E0599 (#1146). A crate's trait,
+                // which Rawr names as a module, is a type.
+                let error = if matches!(binding.target, item::Import::Module) && !crate_trait {
+                    Error::NotInModule {
+                        module: binding.qualified,
+                        item: member,
+                        reference: member_span,
+                    }
+                } else {
+                    Error::UnknownMember {
+                        owner: binding.qualified,
+                        member,
+                        reference: member_span,
+                    }
                 };
                 #[cfg(feature = "rust-import")]
                 let error = self.native_miss(native, error);

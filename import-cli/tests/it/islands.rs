@@ -756,6 +756,86 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A marked module names a native workspace crate's `&'static str`, byte
+/// string and slice constants and `&'static str` static through the crate's
+/// module, as inboard's `theme.rs` names `fonts::UI_FAMILY`, and gives the
+/// text to the crate's `Font::new(name: &'static str)`, and the constant of
+/// a crate that has no other public item (#1146). `rawr
+/// check` passes as `cargo check` does, and `rawr run` prints what `cargo
+/// run` prints.
+#[test]
+fn a_marked_module_reads_a_native_crate_s_static_text_and_slice_constants() {
+    const CONSTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-consts");
+    let root = crate::support::scratch().join("islands-consts");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(CONSTS), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert!(
+        printed.contains("family Inter Tight has 11 letters\nversion 1.2.3\n"),
+        "{printed}"
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mut run = start(&root, &[]);
+    for expected in printed.lines() {
+        let line = run.until(|_| true);
+        assert_eq!(line, expected, "{}", run.seen.join("\n"));
+    }
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+
+    // An item of the module that can't be used yet is rustc's E0425 for
+    // the module, with the reason under it, never a type's E0599.
+    let fonts = root.join("common/src/fonts.rs");
+    let mut text = fs::read_to_string(&fonts).unwrap();
+    text.push_str("\npub const PAIR: &(u8, u8) = &(1, 2);\n");
+    fs::write(&fonts, text).unwrap();
+    let theme = root.join("src/theme.rs");
+    let mut text = fs::read_to_string(&theme).unwrap();
+    text.push_str("\npub fn pair() -> u8 {\n    fonts::PAIR.0\n}\n");
+    fs::write(&theme, text).unwrap();
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("error[E0425]: cannot find value `PAIR` in module `fonts`")
+            && stderr.contains("= note: `PAIR` can't be used yet:"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
