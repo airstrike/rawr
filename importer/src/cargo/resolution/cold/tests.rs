@@ -277,6 +277,9 @@ fn expected_reply(
                 "--filter-platform".into(),
                 request.target.as_ref().into(),
             ];
+            if request.target.as_ref() != toolchain::HOST {
+                tail.extend(["--filter-platform".into(), toolchain::HOST.into()]);
+            }
             if locked {
                 tail.push("--locked".into());
             }

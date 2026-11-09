@@ -1,0 +1,13 @@
+[package]
+name = "wasm-build-dependency"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+facts = { path = "facts" }
+
+# Its own workspace: it is not a member of Rawr's. `hostonly` is no member
+# of it, so only the resolve brings it into Cargo's metadata.
+[workspace]
+exclude = ["hostonly"]

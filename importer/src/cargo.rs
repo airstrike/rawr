@@ -3645,6 +3645,10 @@ fn run_cargo(
     native.run(command, limits.process)?.checked(Program::Cargo)
 }
 
+/// `cargo metadata` for the packages a build for `target` builds. A build
+/// script and its dependencies build for the host, and Cargo's filter for
+/// `target` alone drops a build dependency's host-only dependencies, so the
+/// metadata filters for the host too when it is another platform (#1454).
 fn cargo_metadata_arguments(
     schema: u32,
     manifest: &Path,
@@ -3659,6 +3663,9 @@ fn cargo_metadata_arguments(
         "--filter-platform".into(),
         target.into(),
     ]);
+    if target != toolchain::HOST {
+        arguments.extend(["--filter-platform".into(), toolchain::HOST.into()]);
+    }
     if locked {
         arguments.push("--locked".into());
     }

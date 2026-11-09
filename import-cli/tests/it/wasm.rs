@@ -10,6 +10,7 @@ use std::process::{Command, Output};
 use crate::support::Fixture;
 
 static WASM: Fixture = Fixture::new("wasm-target");
+static BUILD_DEPENDENCY: Fixture = Fixture::new("wasm-build-dependency");
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -53,5 +54,21 @@ fn a_package_built_for_wasm32_is_read_for_wasm32() {
     assert!(
         stderr.contains("cannot find function `native` in crate `facts`"),
         "{stderr}"
+    );
+}
+
+/// A crate whose build script runs on the host, with a build dependency
+/// that has a dependency only the host builds (#1454): Cargo builds it for
+/// the host, and rawr reads it with the rest of the build.
+#[test]
+fn a_build_dependency_with_host_only_dependencies_is_read_for_wasm32() {
+    let home = crate::support::scratch().join("rawr-home");
+    let root = BUILD_DEPENDENCY.lease(&[]);
+    let checked = check(&root, &home);
+    assert!(
+        checked.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&checked.stdout),
+        text(&checked.stderr)
     );
 }
