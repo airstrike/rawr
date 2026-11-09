@@ -91,6 +91,22 @@ pub fn button<'a, M>(label: &'a str, on_press: M) -> Element<'a, M> {
     }
 }
 
+/// A section of `children` under `heading`, as inboard's
+/// `sidebar::nav_section`: its element borrows the heading, or the first
+/// child's label when it has none.
+pub fn section<'a, M: 'a>(
+    heading: Option<&'a str>,
+    children: impl IntoIterator<Item = Element<'a, M>>,
+) -> Element<'a, M> {
+    let first = children.into_iter().next();
+    Element {
+        label: heading
+            .or(first.as_ref().map(|child| child.label))
+            .unwrap_or(""),
+        on_press: first.and_then(|child| child.on_press),
+    }
+}
+
 impl<'a, M> Element<'a, M> {
     /// The element over `N`, `f` called at once on its message, as
     /// iced's `Element::map` wraps each message its widgets give.

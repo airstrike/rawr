@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 145;
+const CLASSIFIER_VERSION: u32 = 146;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10416,9 +10416,12 @@ impl<P: api::Phase> Context<'_, P> {
                 .map(|definition| (definition, arguments)),
             _ => None,
         };
+        // So is a borrow at the signature's own lifetime, as inboard's
+        // `nav_section<'a, ..>(heading: Option<&'a str>, ..) -> Element<'a,
+        // ..>` takes (#1413).
         if let Some((definition, arguments)) = definition
             && let Some(element) = option_element(definition, arguments)
-            && names_late_lifetime(element)
+            && (names_late_lifetime(element) || matches!(element, model::Type::Reference { .. }))
         {
             return leased(representability::convert::Type::Option(Box::new(
                 self.convert_input(element)?,

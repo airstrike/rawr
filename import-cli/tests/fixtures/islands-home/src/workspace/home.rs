@@ -143,10 +143,11 @@ impl State {
     /// The screen, as inboard's `view<'a>(&'a self, ..)`: an element that
     /// borrows its own text for `'a`, the element of the native inbox it is
     /// lent, which borrows the inbox, or a child's, each mapped into its
-    /// messages.
+    /// messages. A section with no heading, as inboard's `nav_section(None,
+    /// ..)`, shows its child's text.
     pub fn view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a, Message> {
         if self.count > 3 {
-            ui::button(&self.title, Message::Count)
+            ui::section(None, [ui::button(&self.title, Message::Count)])
         } else if inbox.unread > 3 {
             inbox.view().map(Message::Inbox)
         } else {
@@ -183,9 +184,10 @@ pub fn update(state: &mut State, message: Message, inbox: &mut inbox::State) -> 
     }
 }
 
+/// The screen's button: a section headed by its text past a count of 3.
 pub fn view(state: &State) -> Element<'_, Message> {
     if state.count > 3 {
-        ui::button("count", Message::Count)
+        ui::section(Some("count"), [ui::button(&state.title, Message::Count)])
     } else if state.count > 1 {
         ui::button(&state.greeting, wizard::Message::Step(state.count)).map(Message::Wizard)
     } else {

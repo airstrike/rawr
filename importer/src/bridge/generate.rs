@@ -16066,7 +16066,12 @@ fn render_take_input(
     if let lending
     @ (convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)) =
         substituted(ty, signature, substitutions)?
-        && let Some(lease) = Lease::of(&lending, future, 1)
+        && let Some(lease) = Lease::of(
+            &lending,
+            future,
+            carries_lifetime(&substituted(signature.output(), signature, substitutions)?),
+            1,
+        )
     {
         writeln!(
             output,
@@ -16178,7 +16183,8 @@ enum LeaseKind {
     Owned,
     /// A `Result` of leases: its variant's.
     Result(Box<Lease>, Box<Lease>),
-    /// Rawr's string: pinned for a future, or held for a call.
+    /// Rawr's string: pinned for a future or an output that keeps it, or
+    /// held for a call.
     Str { pinned: bool },
     /// An `Option` of a lease: `None` lends nothing.
     Option(Box<Lease>),
@@ -16187,7 +16193,10 @@ enum LeaseKind {
 }
 
 impl Lease {
-    fn of(ty: &convert::Type, future: bool, depth: usize) -> Option<Self> {
+    /// `kept` when the call's output may keep what it borrows, as
+    /// `nav_section(heading: Option<&'a str>, ..) -> Element<'a, ..>` does
+    /// (#1413): a string in it is pinned as a `&str` the output keeps is.
+    fn of(ty: &convert::Type, future: bool, kept: bool, depth: usize) -> Option<Self> {
         if depth == 1 && !holds_borrow(ty) {
             return None;
         }
@@ -16256,6 +16265,23 @@ impl Lease {
                 ),
                 kind: LeaseKind::Str { pinned: true },
             }),
+            // In a slot's region, in its pins, which outlive what the region
+            // makes; and else for as long as the runner lives, as the arena
+            // keeps the output at `'static`.
+            convert::Type::Builtin(convert::Builtin::Str) if kept => {
+                let pinned = if REGION_ARGUMENTS.get() {
+                    "match region.pins() { Some(pins) => pins.pin(text), None => static_pins().pin(text) }"
+                } else {
+                    "static_pins().pin(text)"
+                };
+                Some(Self {
+                    held: "&str".to_owned(),
+                    take: format!(
+                        "{{ let text = value_{depth}.try_cast_result::<ImmutableString>().map_err(|_| Error::TypeMismatch)?; {pinned} }}"
+                    ),
+                    kind: LeaseKind::Str { pinned: true },
+                })
+            }
             convert::Type::Builtin(convert::Builtin::Str) => Some(Self {
                 held: "ImmutableString".to_owned(),
                 take: format!(
@@ -16264,7 +16290,7 @@ impl Lease {
                 kind: LeaseKind::Str { pinned: false },
             }),
             convert::Type::Option(element) => {
-                let inner = Self::of(element, future, depth + 1)?;
+                let inner = Self::of(element, future, kept, depth + 1)?;
                 let next = depth + 1;
                 Some(Self {
                     held: format!("Option<{}>", inner.held),
@@ -16277,8 +16303,8 @@ impl Lease {
             }
             convert::Type::Result(ok, err) => {
                 let next = depth + 1;
-                let ok = Self::of(ok, future, next)?;
-                let err = Self::of(err, future, next)?;
+                let ok = Self::of(ok, future, kept, next)?;
+                let err = Self::of(err, future, kept, next)?;
                 Some(Self {
                     held: format!("Result<{}, {}>", ok.held, err.held),
                     take: format!(
@@ -16292,7 +16318,7 @@ impl Lease {
                 let next = depth + 1;
                 let members = members
                     .iter()
-                    .map(|member| Self::of(member, future, next))
+                    .map(|member| Self::of(member, future, kept, next))
                     .collect::<Option<Box<[_]>>>()?;
                 let held = members
                     .iter()
@@ -16349,7 +16375,7 @@ impl Lease {
                     err.borrow(&format!("(*held_{next})"), next)
                 )
             }
-            LeaseKind::Str { pinned: true } => place.to_owned(),
+            LeaseKind::Str { pinned: true } => format!("&*{place}"),
             LeaseKind::Str { pinned: false } => format!("{place}.as_str()"),
             LeaseKind::Tuple(members) => {
                 let borrows = members
@@ -16398,7 +16424,7 @@ fn future_borrows(
         if matches!(
             substituted,
             convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)
-        ) && let Some(lease) = Lease::of(&substituted, true, 1)
+        ) && let Some(lease) = Lease::of(&substituted, true, false, 1)
         {
             let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
             rebound.push_str(&format!(
