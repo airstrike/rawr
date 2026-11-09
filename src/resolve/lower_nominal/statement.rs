@@ -573,6 +573,22 @@ impl<'a> Parser<'a> {
         self.calls_noted += 1;
     }
 
+    /// What `take` gives, with the calls among the tokens it reads left
+    /// out of `frame_effects`: tokens taken to be parsed later are noted
+    /// as they are parsed, where they run.
+    pub(super) fn unnoted<T>(&mut self, take: impl FnOnce(&mut Self) -> T) -> T {
+        let noted = self
+            .frame_effects
+            .iter()
+            .map(|(_, effects)| effects.len())
+            .collect::<Vec<_>>();
+        let taken = take(self);
+        for ((_, effects), noted) in self.frame_effects.iter_mut().zip(noted) {
+            effects.truncate(noted);
+        }
+        taken
+    }
+
     /// Starts collecting the scope frames of a statement.
     pub(super) fn open_frames(&mut self) {
         self.frames.push(Vec::new());

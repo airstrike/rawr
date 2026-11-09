@@ -107,6 +107,78 @@ pub fn section<'a, M: 'a>(
     }
 }
 
+/// A widget, as `iced::Widget`: it boxes into an element, which is one
+/// too.
+pub trait Widget<M> {
+    /// The widget as an element, as iced's `Widget::_boxed`, which its
+    /// `stack!` calls on each child.
+    fn _boxed<'b>(self) -> Element<'b, M>
+    where
+        Self: Sized + 'b;
+
+    /// The widget as an element, as iced's `Widget::boxed`.
+    fn boxed<'b>(self) -> Element<'b, M>
+    where
+        Self: Sized + 'b,
+    {
+        self._boxed()
+    }
+}
+
+/// An element boxes as itself, and says so, so the order its boxes run
+/// in shows.
+impl<'a, M> Widget<M> for Element<'a, M> {
+    fn _boxed<'b>(self) -> Element<'b, M>
+    where
+        Self: Sized + 'b,
+    {
+        println!("boxed {}", self.label);
+        self
+    }
+}
+
+/// Elements layered over each other, as `iced::widget::Stack`: the last
+/// is on top.
+pub struct Stack<'a, M> {
+    children: Vec<Element<'a, M>>,
+}
+
+impl<'a, M> Stack<'a, M> {
+    pub fn with_children(children: impl IntoIterator<Item = Element<'a, M>>) -> Self {
+        Self {
+            children: children.into_iter().collect(),
+        }
+    }
+}
+
+/// The stack shows its top child, and says how many it layers.
+impl<'a, M> Widget<M> for Stack<'a, M> {
+    fn _boxed<'b>(self) -> Element<'b, M>
+    where
+        Self: Sized + 'b,
+    {
+        println!("stacked {}", self.children.len());
+        self.children.into_iter().last().unwrap_or(Element {
+            label: "",
+            on_press: None,
+        })
+    }
+}
+
+/// `content`, taking every event over it, as `iced::widget::opaque`.
+pub fn opaque<'a, M: 'a>(content: impl Widget<M> + 'a) -> impl Widget<M> + 'a {
+    content._boxed()
+}
+
+/// Elements layered over each other, as the `stack!` of inboard's iced,
+/// which boxes each child with `Widget::_boxed`.
+#[macro_export]
+macro_rules! stack {
+    ($($x:expr),+ $(,)?) => (
+        $crate::Stack::with_children([$($crate::Widget::_boxed($x)),+])
+    );
+}
+
 impl<'a, M> Element<'a, M> {
     /// The element over `N`, `f` called at once on its message, as
     /// iced's `Element::map` wraps each message its widgets give.

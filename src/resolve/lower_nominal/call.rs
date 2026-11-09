@@ -24,16 +24,7 @@ impl<'a> Parser<'a> {
                 source: point_span(position),
             });
         }
-        let noted = self
-            .frame_effects
-            .iter()
-            .map(|(_, effects)| effects.len())
-            .collect::<Vec<_>>();
-        let taken = self.take_until_close();
-        for ((_, effects), noted) in self.frame_effects.iter_mut().zip(noted) {
-            effects.truncate(noted);
-        }
-        taken
+        self.unnoted(Self::take_until_close)
     }
 
     /// The tokens up to the `)` that closes an open `(` (consumed), for

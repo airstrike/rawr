@@ -80,8 +80,20 @@ impl Parser<'_> {
     }
 
     /// The tokens after `open` through its matching close, which is not
-    /// among them, and the close's position.
+    /// among them, and the close's position. The calls among them are not
+    /// noted for `frame_effects` as they are taken: they run where the
+    /// expansion parses them (`stack![page, opaque(wizard.view(..))]`).
     fn group_rest(
+        &mut self,
+        open: &Token,
+        position: Position,
+        name: &str,
+    ) -> Result<(Vec<(Token, Position)>, Position), Error> {
+        self.unnoted(|parser| parser.take_group(open, position, name))
+    }
+
+    /// The tokens of `group_rest`, as they are read.
+    fn take_group(
         &mut self,
         open: &Token,
         position: Position,

@@ -69,6 +69,7 @@ impl State {
         catalog: View<'a>,
         theme: &'a crate::Theme,
     ) -> ui::Element<'a, Message> {
+        println!("wizard view at {}", self.step);
         let label = if self.step > 5 {
             theme.name()
         } else {
