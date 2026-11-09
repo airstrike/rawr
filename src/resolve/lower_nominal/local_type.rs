@@ -1148,6 +1148,12 @@ impl<'a> Parser<'a> {
                     && definition.parameters().is_empty()
                     && let Some(selector) = definition.imported_declaration()
                 {
+                    // A mirror is its marked type, as a closure's `|theme:
+                    // &Theme|` names it through the crate root's re-export
+                    // (#1484).
+                    if let Some(marked) = ty::mirrored(&definition) {
+                        return Ok(Ty::Script(marked, Box::default()));
+                    }
                     self.push_imported_op(&binding.qualified, &selector, None, span)?;
                     return Ok(Ty::Host {
                         proof: HostTyProof::new(definition.clone(), Some(definition), owner),

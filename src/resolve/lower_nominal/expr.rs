@@ -214,6 +214,37 @@ impl<'a> Parser<'a> {
         Ok(expression)
     }
 
+    /// `&mut place` of a `Box<dyn Iterator>` place given whole as an
+    /// argument, as `column(&mut self.content)` or `.chain(&mut
+    /// self.actions)`: the iterator by `&mut`, which the callee runs to
+    /// its end, so its items move out and the place is left empty. Any
+    /// other `&mut` outside a function's `&mut` argument is refused.
+    fn drained_iterator(&mut self, start: Position) -> Result<ParsedExpr, Error> {
+        self.next();
+        let operand = self.parse_operand()?;
+        let whole_argument = matches!(self.peek(), Token::Comma | Token::RightParen);
+        let place = operand.lvalue.is_some();
+        let iterator = match self.inference.resolve(&operand.ty) {
+            Ty::Boxed(boxed) => self.inference.resolve(&boxed),
+            ty => ty,
+        };
+        let (Ty::Iter(item, kind), true, true) = (iterator, whole_argument, place) else {
+            return Err(self
+                .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
+        };
+        self.mutable_use(&operand, operand.span);
+        let drained = self.mutation_call(
+            &operand,
+            "drain",
+            vec!["0".into(), crate::INT::MAX.to_string().into()],
+        )?;
+        Ok(self.operator_expr(
+            drained,
+            Ty::Iter(item, kind),
+            span(start, operand.span.end()),
+        ))
+    }
+
     pub(super) fn parse_operand(&mut self) -> Result<ParsedExpr, Error> {
         // `&&x`, which the lexer reads as one `&&`: `& &x`.
         if matches!(self.peek(), Token::And) {
@@ -233,9 +264,7 @@ impl<'a> Parser<'a> {
                 let index_mut = self.place_output
                     || matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
                 if !index_mut && self.mutable_borrow != Some(self.expression_stack.len()) {
-                    return Err(self.unsupported(
-                        "`&mut` borrow expressions other than a function's `&mut` argument",
-                    ));
+                    return self.drained_iterator(start);
                 }
                 self.next();
                 let operand_start = self.position();

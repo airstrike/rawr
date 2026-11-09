@@ -1215,6 +1215,21 @@ impl<'a> Parser<'a> {
             copied_parameters(&function.parameters, None, function.formatter.as_ref())
         };
         let places = self.mutable_arguments(&arguments, copied)?;
+        // An impl of the method compiled per instantiation, as a blanket
+        // `IntoContent` impl's `into_content` (D629), is reached only at
+        // the receiver's own type: this body is compiled per instantiation
+        // too, so the call names it.
+        #[cfg(feature = "rust-import")]
+        {
+            // A trait impl's function keeps its trait in its name
+            // (`IntoContent<Message>::into_content`).
+            let member = function.name.text.as_str();
+            self.reaches_host |= self.models.instances.templates.keys().any(|key| {
+                key.name()
+                    .rsplit_once("::")
+                    .is_some_and(|(_, name)| name == member)
+            });
+        }
         let dispatcher = if trait_arguments.is_empty() {
             trait_dispatcher_name(trait_name, &function.name.text)
         } else {
@@ -1317,6 +1332,15 @@ impl<'a> Parser<'a> {
     /// method of a trait in scope.
     #[cfg(feature = "rust-import")]
     pub(super) fn scoped_trait_member(&self, member: &str) -> Option<String> {
+        self.scoped_trait_members(member).into_iter().next()
+    }
+
+    /// The paths of the method `member` over its `Self` of each crate's
+    /// trait this source imports by name that has one, as
+    /// `common::function::*` brings `Function::with` and `Ternary::with`:
+    /// rustc selects the one whose impl holds for the receiver.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn scoped_trait_members(&self, member: &str) -> Vec<String> {
         let context = self.models.context;
         self.models
             .imports
@@ -1325,7 +1349,8 @@ impl<'a> Parser<'a> {
                 *source == context && matches!(binding.target, item::Import::Module)
             })
             .map(|(_, binding)| rawr_import::surface::member::path(&binding.qualified, member))
-            .find(|path| self.models.host_items(path).is_some())
+            .filter(|path| self.models.host_items(path).is_some())
+            .collect()
     }
 
     /// `Trait::f::<T>(..)`'s turbofish, given to `f`'s own parameters

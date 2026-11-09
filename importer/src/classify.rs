@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 154;
+const CLASSIFIER_VERSION: u32 = 155;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1431,8 +1431,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// The inputs and output of an opaque type's `Fn(A..) -> B` bound, as
-    /// `impl Fn(B) -> O` binds them: `None` without one, or when one of
-    /// them doesn't convert.
+    /// `impl Fn(B) -> O` binds them, and as `impl Fn(&Theme, Status) ->
+    /// Style` does over the lifetime its `&Theme` elides: an input native
+    /// code gives a closure, as `convert_closure_input` reads it. `None`
+    /// without one, or when one of them doesn't convert.
     fn opaque_call(
         &self,
         bounds: &[model::Predicate],
@@ -1447,15 +1449,13 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         trait_id,
                         arguments,
                         polarity: model::Polarity::Positive,
-                        binders,
+                        ..
                     },
                 ..
-            } if binders.is_empty() && self.is_core_trait(trait_id, "Fn") => {
-                match arguments.first() {
-                    Some(model::Argument::Type(model::Type::Tuple(inputs))) => Some(inputs),
-                    _ => None,
-                }
-            }
+            } if self.is_core_trait(trait_id, "Fn") => match arguments.first() {
+                Some(model::Argument::Type(model::Type::Tuple(inputs))) => Some(inputs),
+                _ => None,
+            },
             _ => None,
         })?;
         let output = bounds.iter().find_map(|predicate| match predicate {
@@ -1467,7 +1467,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         })?;
         let inputs = inputs
             .iter()
-            .map(|input| self.convert(input).ok())
+            .map(|input| {
+                self.convert(input)
+                    .ok()
+                    .or_else(|| self.convert_closure_input(input))
+            })
             .collect::<Option<Vec<_>>>()?;
         Some((inputs, self.convert(output).ok()?))
     }

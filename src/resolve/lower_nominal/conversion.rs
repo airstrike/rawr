@@ -930,6 +930,30 @@ impl<'a> Parser<'a> {
         Ok(helper)
     }
 
+    /// The helper of a pending `.into()` of a value a std `From` may also
+    /// take into the library type `target`, as `padding: [4, 0].into()` is
+    /// a `Padding` through its `From<[u16; 2]>` while `Vec` takes any
+    /// array: the target's one `from` that takes it. An imported target
+    /// with no `from` yet, which the program never named, is demanded, as
+    /// `finish_conversions` demands it.
+    fn host_from_helper(
+        &mut self,
+        target: &Ty,
+        conversion: &PendingConversion,
+    ) -> Result<Option<String>, Error> {
+        let host = HostInto {
+            forms: Vec::new(),
+            owner: None,
+            receiver: conversion.span,
+        };
+        let source = self.inference.resolve(&conversion.source);
+        let helper = self.host_into_helper(&host, &source, target, conversion.span)?;
+        if helper.is_none() && self.target_from(target).is_none() {
+            self.demand_from(target, conversion.span)?;
+        }
+        Ok(helper)
+    }
+
     /// The `from` of the imported type `target` the program never named,
     /// demanded at `at` (`UnknownMember`), which the importer brings for
     /// the next pass. `Ok` when one of its paths has one.
@@ -1194,6 +1218,10 @@ impl<'a> Parser<'a> {
                 None => None,
             } {
                 method_name(definition.id())
+            } else if matches!(target, Ty::Host { .. })
+                && let Some(helper) = self.host_from_helper(&target, &conversion)?
+            {
+                helper
             } else if let Some(op) = self.std_conversion(&target, &conversion.source) {
                 op.map(|op| self.push_op(Op::Prelude(op)))
                     .unwrap_or_default()

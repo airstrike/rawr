@@ -2,9 +2,12 @@
 //! The app's theme, marked, as inboard's `theme.rs`: it declares native
 //! child modules, wraps one's theme in its own enum, converts to and from
 //! that native theme and the crate's, and implements the crate's traits.
+pub mod button;
 pub mod catalog;
 pub mod container;
+pub mod mouse_area;
 mod palette;
+pub mod rule;
 pub mod text;
 
 pub use palette::{clones, Hue};
