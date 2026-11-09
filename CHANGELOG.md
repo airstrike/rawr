@@ -169,6 +169,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked file can define a type over a native one, as inboard's `theme.rs` does with `enum Theme { Selected(themedef::Theme) }`. Its values cross with their native parts, and every impl native code relies on stays: `From` in both directions with native and crate types, a crate trait's impl, and `impl From<&Theme> for markdown::Settings`. (#1466)
 - In ?play, a snippet's statements outside `fn main` can call std's path, io, time and fs items again, as the std page's `PathBuf` example does. (#1460)
 - rawr checks a project built for another target, such as wasm32, when a dependency's build script uses a build-dependency with host-only dependencies. Before, it stopped with an internal error that a Cargo unit's package was absent from metadata. (#1454)
+- Any file in a native crate's module tree can be marked with `// rawr`, not only one declared by the crate root or a marked module. Marked code there reaches its parent's private items, its siblings and its native children as rustc allows, and native code calls into it. (#1467, #1150)
 
 ## 0.3.171 (2026-11-07)
 
