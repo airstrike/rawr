@@ -86,6 +86,21 @@ impl<M, T> Element<'_, M, T> {
         let pressable = if self.message.is_some() { "" } else { " idle" };
         format!("{}{pressable}", self.label.draw(theme))
     }
+
+    pub fn message(&self) -> Option<&M> {
+        self.message.as_ref()
+    }
+}
+
+impl<'a, M, T> Element<'a, M, T> {
+    /// The element with the message it gives mapped by `f`, as
+    /// `iced::Element::map`.
+    pub fn map<B>(self, f: impl Fn(M) -> B + 'a) -> Element<'a, B, T> {
+        Element {
+            label: self.label,
+            message: self.message.map(f),
+        }
+    }
 }
 
 /// A widget that keeps the app's theme borrowed, as an iced `Element<'a>`
@@ -136,6 +151,13 @@ impl<'a, T> Label<'a, T> {
         Element {
             label: self,
             message: None,
+        }
+    }
+
+    pub fn on_press<M>(self, message: M) -> Element<'a, M, T> {
+        Element {
+            label: self,
+            message: Some(message),
         }
     }
 }

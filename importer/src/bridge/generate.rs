@@ -20935,6 +20935,17 @@ fn is_proxied(ty: &convert::Type) -> bool {
     )
 }
 
+/// How the facade names the mirror of the script type at `path` in rawr's
+/// copy of its crate (#1249), as every native signature that names the
+/// type spells it. A marked type written either way is spelled this one
+/// way, so its values have one scope family: inboard's `Element<'a,
+/// inbox::Message, Theme>` that `inbox::view(.., theme)` gives is the
+/// `Element` whose `map` it calls. None when no native item names it.
+fn mirror_path(path: &str) -> Option<String> {
+    let identity = PATH_IDENTITIES.with_borrow(|identities| identities.get(path).copied())?;
+    TYPE_PATHS.with_borrow(|paths| paths.get(&identity).cloned())
+}
+
 /// The proxies of the script types the adapters named (D594), each at its
 /// script path from the crate root, so `type_name` and `TypeId` are its
 /// own. A proxy holds the script value by a shared handle; its `Clone`,
@@ -22440,6 +22451,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                     }
                 })
                 .collect::<Option<Vec<_>>>()?;
+            let mirror = (!holder.is_proxy()).then(|| mirror_path(path)).flatten();
             let (krate, path) = path.split_once("::")?;
             PROXIES.with_borrow_mut(|proxies| {
                 proxies
@@ -22449,10 +22461,11 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             PROXY_CRATE.with_borrow_mut(|named| {
                 named.get_or_insert_with(|| krate.to_owned());
             });
+            let named = mirror.unwrap_or_else(|| format!("crate::{path}"));
             if arguments.is_empty() {
-                format!("crate::{path}")
+                named
             } else {
-                format!("crate::{path}<{}>", arguments.join(", "))
+                format!("{named}<{}>", arguments.join(", "))
             }
         }
         convert::Type::ConstArray { .. } => return None,

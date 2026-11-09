@@ -4,11 +4,12 @@
 //! the crate's traits it implements, a `From<&Theme>` for the crate's
 //! settings and a pattern on its variant.
 mod home;
+mod inbox;
 mod style;
 mod theme;
 mod widget;
 
-use theme::Theme;
+pub use theme::Theme;
 pub use widget::Element;
 
 fn main() {
@@ -61,6 +62,8 @@ fn main() {
     println!("{}", home::empty().draw(&theme));
     let badge = home::badge(&dark);
     println!("{}", badge.draw());
+    let inbox = home::inbox(&theme);
+    println!("inbox {} {:?}", inbox.draw(&theme), inbox.message());
     println!(
         "lent in place {}",
         home::place(&theme) == std::ptr::from_ref(&theme).addr()
