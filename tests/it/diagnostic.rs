@@ -86,6 +86,35 @@ fn unknown_type_adapter_reads_as_rustcs_e0425() {
     assert_eq!(report.help(), None);
 }
 
+/// `self` where no method's receiver is reads as rustc's: a free function's
+/// `self` parameter without a code, a `self` value as E0424.
+#[test]
+fn self_outside_a_method_reads_as_rustcs() {
+    for (text, code, message, label, notes) in [
+        (
+            "fn view(&self) -> i64 { 0 }\nfn main() {}\n",
+            "",
+            "`self` parameter is only allowed in associated functions",
+            "not semantically valid as function parameter",
+            vec!["associated functions are those in `impl` or `trait` definitions"],
+        ),
+        (
+            "fn view() -> i64 { self }\nfn main() {}\n",
+            "E0424",
+            "expected value, found module `self`",
+            "`self` value is a keyword only available in methods with a `self` parameter",
+            vec![],
+        ),
+    ] {
+        let error = Engine::new().compile(text).unwrap_err();
+        let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
+        assert_eq!(report.code().as_str(), code, "{text}");
+        assert_eq!(report.message(), message, "{text}");
+        assert_eq!(report.labels()[0].message(), Some(label), "{text}");
+        assert_eq!(report.notes().collect::<Vec<_>>(), notes, "{text}");
+    }
+}
+
 /// rustc's code, message, primary label (its text and its columns) and help
 /// for each unresolved path: a crate the program doesn't depend on, an item
 /// or a module a present module lacks.

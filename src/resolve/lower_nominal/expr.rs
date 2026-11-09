@@ -695,6 +695,7 @@ impl<'a> Parser<'a> {
                 else {
                     return Err(Error::SelfOutsideImpl {
                         reference: token_span,
+                        parameter: false,
                     });
                 };
                 let ty = binding.ty.clone();
