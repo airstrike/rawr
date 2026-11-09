@@ -244,6 +244,17 @@ pub fn update(
     }
 }
 
+/// A banner over the screen's title, headed by a literal of this file: native
+/// code keeps it and draws it across a save, as iced keeps a view's
+/// elements until the next message. The literal is longer than the
+/// strings rawr interns, so only the generation that read it holds it.
+pub fn banner(state: &State) -> Element<'_, Message> {
+    ui::section(
+        Some("banner one, a heading longer than an interned string"),
+        [ui::button(&state.title, Message::Count)],
+    )
+}
+
 /// The screen's button: a section headed by its text past a count of 3,
 /// under a header row of no actions, whose elements it takes by value as
 /// inboard's `sidebar::header_row("Home", std::iter::empty())` does.

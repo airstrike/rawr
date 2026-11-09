@@ -129,10 +129,23 @@ fn main() {
         return;
     };
     workspace.home.push_tab("kept");
+    // A banner built once and kept, as iced keeps a view's elements, beside
+    // one built each tick: a save that edits its literal shows in the fresh
+    // one, and the kept one still reads the text it borrowed.
+    let banner = home::State::new();
+    let kept = home::banner(&banner);
     for tick in 1..3000 {
         if std::path::Path::new(&stop).exists() {
             break;
         }
+        let fresh = home::banner(&banner);
+        // Text of every small size, made and dropped, so memory the swap
+        // let go is written over before the kept banner is read.
+        let noise = (1..256)
+            .flat_map(|size| (0..8).map(move |_| "#".repeat(size)))
+            .collect::<Vec<_>>();
+        drop(noise);
+        println!("banner {} kept {}", fresh.label, kept.label);
         let before = workspace.home.count();
         workspace.update(home::Message::Count);
         let after = workspace.home.count();

@@ -1493,6 +1493,10 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// in a `RefCell` and each element owns a `dyn` widget, so neither is
 /// `Send` or `Sync`, as inboard's `Document` and iced's `Element` aren't:
 /// the wizard's view and a header row of elements still open their frames.
+/// A banner native code built once and keeps, as iced keeps a view's
+/// elements until the next message, still reads the literal it borrowed
+/// after a save that edits that literal swaps in, while a fresh one reads
+/// the new text: the swap lets go of nothing a held result borrows.
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
@@ -1615,6 +1619,38 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
         "ui::button(&self.greeting, Message::Count)",
     );
     run.until(|line| tick(line).is_some_and(|(.., shows)| shows == "hello"));
+    // A literal edit swaps in while native code keeps a banner the old
+    // generation built: a fresh banner reads the new text, and the kept one
+    // still reads what it borrowed, never memory the swap let go.
+    let banner = |line: &str| -> Option<(String, String)> {
+        let (fresh, kept) = line.strip_prefix("banner ")?.split_once(" kept ")?;
+        Some((fresh.to_owned(), kept.to_owned()))
+    };
+    edit(
+        &root.join("src/workspace/home.rs"),
+        "\"banner one, a heading",
+        "\"banner two, a heading",
+    );
+    const ONE: &str = "banner one, a heading longer than an interned string";
+    const TWO: &str = "banner two, a heading longer than an interned string";
+    run.until(|line| banner(line).is_some_and(|(fresh, _)| fresh == TWO));
+    for _ in 0..5 {
+        let line = run.until(|line| banner(line).is_some());
+        assert_eq!(
+            banner(&line),
+            Some((TWO.to_owned(), ONE.to_owned())),
+            "{}",
+            run.seen.join("\n")
+        );
+    }
+    assert!(
+        run.seen
+            .iter()
+            .filter_map(|line| banner(line))
+            .all(|(_, kept)| kept == ONE),
+        "{}",
+        run.seen.join("\n")
+    );
     assert!(
         !run.seen.iter().any(|line| line.contains("restarting")),
         "{}",
