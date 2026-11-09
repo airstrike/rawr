@@ -96,6 +96,15 @@ impl State {
         self.wizard = None;
     }
 
+    /// Draw the screen's thumbnails on the renderer it is lent `&mut`, as
+    /// inboard's `source_landed(&mut self, .., thumbs)` is lent it: each of
+    /// its fields is written in place (#1535).
+    pub fn redraw(&mut self, thumbs: &mut thumbs::Renderer) -> usize {
+        thumbs.drawn += 1;
+        thumbs.drawn = thumbs.drawn + self.count as usize;
+        thumbs.drawn
+    }
+
     /// Whether a wizard is open to advance.
     pub fn advance_wizard(&mut self) -> bool {
         match self.wizard.as_mut() {
@@ -223,6 +232,9 @@ pub fn update(
             let Some(wizard) = state.wizard.as_mut() else {
                 return common::Action::none();
             };
+            // The screen's own thumbnail, a field of the renderer it is
+            // lent `&mut`, written in place (#1535).
+            thumbs.drawn += 1;
             let action = wizard.update(message, catalog, thumbs);
             let task = action.task.map(Message::Built);
             match action.instruction {
