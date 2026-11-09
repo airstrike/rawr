@@ -228,6 +228,19 @@ impl<'a> Call<'a> {
         Ok(Witness::issue(self.authority, output.clone()))
     }
 
+    /// The witness of this call's declared output when its receiver is a
+    /// value native code lent (D558.3), as a marked type's native part is
+    /// (#1469): the lent value has no witness, and each access of it checks
+    /// its exact type through its trampoline's accessor, so what the call
+    /// gives is of its declared type, as a borrowing method's output is.
+    pub fn lent_output_witness(&self) -> Result<Witness, Error> {
+        let output = match &self.operation {
+            Operation::Item { output, .. } | Operation::Structural { output, .. } => *output,
+            Operation::Projection { .. } => return Err(Error::OutputRequiresConstructor),
+        };
+        Ok(Witness::issue(self.authority, output.clone()))
+    }
+
     /// Transform a carried receiver witness into this exact item's output witness.
     ///
     /// The authority exists only for the current launch-bound invocation. The

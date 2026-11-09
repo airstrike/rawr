@@ -11,9 +11,13 @@
 //! the small wire format of [`crate::island`], which both sides speak:
 //! numbers, `bool`, `char`, strings, `Vec`, `Option`, `Result`, tuples and
 //! the marked crate's own structs and enums made of them or of native
-//! values, each native part given as a clone and taken back as the value
-//! the interpreter moves (#1466). A value of a native type, as the app's
-//! own `Message` or the `iced::Error` of an `iced::Result`, moves itself:
+//! values (#1466). A borrow of such a value lends the interpreter each
+//! native part where it is, `&mut` too, a value moves its parts, and a
+//! `&self` method's reference into a part comes back where the part is
+//! (#1469, #1468); inside a `Vec` or an `Option` a part goes as a clone.
+//! Each part comes back as the value the interpreter moves. A value of a
+//! native type, as the app's own `Message` or the `iced::Error` of an
+//! `iced::Result`, moves itself:
 //! back from the interpreter, bare or as a part of any of those, and in by
 //! value, which the interpreter keeps. A borrow of one is lent for the
 //! call. Every impl native code may rely on is there too: a marked type's,
@@ -223,6 +227,14 @@ enum Pass {
     /// A value of a type the marked crate doesn't declare, as an app's own
     /// `Message`: moved to the interpreter, which keeps it (#1139).
     Give,
+    /// A borrow of a marked value that holds native parts ([`Generator::
+    /// holding`]): each part lent where it is for the call, mutably for a
+    /// `&mut`, and the other fields copied, a `&mut` one's copy taken back
+    /// after the call (#1469).
+    LendParts { mutable: bool },
+    /// A marked value that holds native parts, by value: each part moved to
+    /// the interpreter, as Rust moves the value (#1469).
+    GiveParts,
     /// The receiver of a native trait object's stand-in: the handle of the
     /// program value it holds, which the call takes as its receiver (#1264).
     Object,
@@ -367,6 +379,11 @@ struct Generator<'a> {
     /// The std traits each marked type implements, derived or written, by
     /// the type's name: what its stand-in implements too (#1301).
     implemented: BTreeMap<&'a str, BTreeSet<Std>>,
+    /// Those of `crossing` that hold a native part, directly or in a field
+    /// of such a type, as `enum Theme { Selected(themedef::Theme) }`: a
+    /// borrow of one lends the interpreter its parts where they are, and a
+    /// value moves them (#1469).
+    holding: BTreeSet<String>,
 }
 
 /// A std trait a stand-in implements for the marked type it holds, as a
@@ -516,6 +533,7 @@ impl<'a> Generator<'a> {
             crossing: BTreeSet::new(),
             traits,
             implemented,
+            holding: BTreeSet::new(),
         };
         generator.crossing = generator
             .types
@@ -544,7 +562,51 @@ impl<'a> Generator<'a> {
                 generator.crossing.remove(&path);
             }
         }
+        // A type holds a native part when a field is one or is a type that
+        // holds one; add those till none is added.
+        loop {
+            let added = generator
+                .crossing
+                .iter()
+                .filter(|path| !generator.holding.contains(*path))
+                .filter(|path| {
+                    let mirrored = &generator.types[path.as_str()];
+                    let owner = Owner::Marked(path);
+                    mirrored.fields.iter().any(|field| {
+                        generator.crosses(mirrored.source, field, owner).is_err()
+                            || generator.holds(mirrored.source, field, owner)
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if added.is_empty() {
+                break;
+            }
+            generator.holding.extend(added);
+        }
         generator
+    }
+
+    /// Whether `ty`, written in `file`, is a marked type that holds a
+    /// native part ([`Generator::holding`]), by its path or as `Self`.
+    fn holds(&self, file: &Source<'_>, ty: &type_ref::Type, owner: Owner<'_>) -> bool {
+        let type_ref::Type::Path(path) = ty else {
+            return false;
+        };
+        let Some(last) = path.segments.last() else {
+            return false;
+        };
+        if !last.arguments.is_empty() {
+            return false;
+        }
+        match (last.name.text.as_str(), owner) {
+            ("Self", Owner::Marked(owner)) if path.segments.len() == 1 => {
+                self.holding.contains(owner)
+            }
+            _ => self
+                .marked(file, path)
+                .is_some_and(|marked| self.holding.contains(marked)),
+        }
     }
 
     /// The path from the crate root of the marked type `path` names, written
@@ -709,6 +771,7 @@ impl<'a> Generator<'a> {
         } = ty
         else {
             return match self.crosses(file, ty, owner) {
+                Ok(()) if self.holds(file, ty, owner) => Ok(Pass::GiveParts),
                 Ok(()) => Ok(Pass::Value),
                 // The interpreter keeps it in its arena as long as it
                 // likes, so it can't borrow anything.
@@ -739,6 +802,7 @@ impl<'a> Generator<'a> {
             return Ok(Pass::Borrow);
         }
         match self.crosses(file, target, owner) {
+            Ok(()) if self.holds(file, target, owner) => Ok(Pass::LendParts { mutable: *mutable }),
             Ok(()) if *mutable => Ok(Pass::Mutable),
             Ok(()) => Ok(Pass::Borrow),
             // A type the marked crate doesn't declare, as ratatui's `Frame`,
@@ -1415,7 +1479,19 @@ impl<'a> Generator<'a> {
         // back part by part, its native parts moved.
         let mut back = None;
         let lasting = self.lasting_result(file, function, owner);
-        let kept = match self.kept_result(file, function).filter(|_| object) {
+        // A `&self` method of a marked type that holds native parts lends
+        // them where they are, so a reference its result gives into them
+        // is one into the receiver, as `&self.0.colors` is (#1468).
+        let holding = matches!(owner, Owner::Marked(owner) if self.holding.contains(owner));
+        let lent = holding && matches!(function.receiver, Some(item::Receiver::Shared(_)));
+        let kept = match self.kept_result(file, function).filter(|_| object || lent) {
+            Some(Ok(Borrowed::Kept(_))) if !object => {
+                reasons.push(
+                    "its result: a reference to a value the interpreter copies can't come back yet"
+                        .to_owned(),
+                );
+                None
+            }
             Some(Ok(owned)) => Some(owned),
             Some(Err(reason)) => {
                 reasons.push(format!("its result: {reason}"));
@@ -1437,6 +1513,11 @@ impl<'a> Generator<'a> {
             None => None,
             Some(item::Receiver::Shared(_) | item::Receiver::Mutable(_)) if object => {
                 Some(Pass::Object)
+            }
+            Some(item::Receiver::Shared(_)) if holding => Some(Pass::LendParts { mutable: false }),
+            Some(item::Receiver::Mutable(_)) if holding => Some(Pass::LendParts { mutable: true }),
+            Some(item::Receiver::Owned(_) | item::Receiver::OwnedMutable(_)) if holding => {
+                Some(Pass::GiveParts)
             }
             Some(item::Receiver::Shared(_)) => Some(Pass::Borrow),
             Some(item::Receiver::Mutable(_)) => Some(Pass::Mutable),
@@ -1517,13 +1598,23 @@ impl<'a> Generator<'a> {
             }
             Pass::Mutable => {
                 let _ = writeln!(text, "    __call.mutable(&*{name});");
-                changed.push((name.to_owned(), None));
+                changed.push((name.to_owned(), Changed::Copied));
             }
             Pass::Lend { mutable, referent } => {
                 lend(name, mutable, &referent, &island, text);
                 if mutable {
-                    changed.push((name.to_owned(), Some(referent)));
+                    changed.push((name.to_owned(), Changed::Lent(referent)));
                 }
+            }
+            Pass::LendParts { mutable: false } => {
+                let _ = writeln!(text, "    __call.lent({name});");
+            }
+            Pass::LendParts { mutable: true } => {
+                let _ = writeln!(text, "    __call.lent_mut(&mut *{name});");
+                changed.push((name.to_owned(), Changed::Parts));
+            }
+            Pass::GiveParts => {
+                let _ = writeln!(text, "    __call.given({name});");
             }
             Pass::Give => {
                 let _ = writeln!(text, "    {island}::give!(__call, {name});");
@@ -1555,18 +1646,40 @@ impl<'a> Generator<'a> {
                 text,
                 "    let __value: {output} = __reply.read(|input| input.{read}());"
             );
-        } else if let Some(Borrowed::InPlace) = kept {
+        } else if let Some(Borrowed::InPlace) = kept
+            && object
+        {
             // The receiver's own native value, kept where it is for as
             // long as `&self` is borrowed.
             let _ = writeln!(
                 text,
                 "    let __value: {output} = self.0.lent(&mut __reply);"
             );
-        } else if let Some(Borrowed::Pinned) = kept {
+        } else if let Some(Borrowed::InPlace) = kept {
+            // A place in a part the call lent of the receiver (#1468).
+            let _ = writeln!(
+                text,
+                "    // SAFETY: the runner gave a place the call reached through `self`'s\n    \
+                 // lent parts.\n    \
+                 #[allow(unsafe_code)]\n    \
+                 let __value: {output} = unsafe {{ __reply.lent(self) }};"
+            );
+        } else if let Some(Borrowed::Pinned) = kept
+            && object
+        {
             // The result is the program's own text, pinned with the value.
             let _ = writeln!(
                 text,
                 "    let __value: {output} = self.0.pinned(&mut __reply);"
+            );
+        } else if let Some(Borrowed::Pinned) = kept {
+            // The text the receiver's lent parts hold (#1468).
+            let _ = writeln!(
+                text,
+                "    // SAFETY: the text is in a part of `self`, which stays borrowed for as\n    \
+                 // long as the result is, or pinned for as long as the runner lives.\n    \
+                 #[allow(unsafe_code)]\n    \
+                 let __value: {output} = unsafe {{ __reply.pinned() }};"
             );
         } else if let Some(Borrowed::Kept(kept)) = kept {
             // The result borrows the receiver: the stand-in keeps the
@@ -1589,20 +1702,28 @@ impl<'a> Generator<'a> {
         // A lent `&mut` the function gave a whole new value, `*place =
         // value`, takes it (#1139), and one of a type that crosses by the
         // wire format, as an alias of `usize`, takes its copy (`Hand`,
-        // #1297). One whose type names a lifetime can't take a new value.
-        for (name, referent) in changed {
-            match referent {
-                None => {
+        // #1297). One whose type names a lifetime can't take a new value. A
+        // marked value whose parts were lent takes its copied fields and
+        // each part given a whole new value (#1469).
+        for (name, changed) in changed {
+            match changed {
+                Changed::Copied => {
                     let _ = writeln!(text, "    *{name} = __reply.take();");
                 }
-                Some(referent) if static_lifetimes(&referent) == referent => {
+                Changed::Parts => {
+                    let _ = writeln!(
+                        text,
+                        "    __reply.read(|input| {island}::Parts::take_into(&mut *{name}, input));"
+                    );
+                }
+                Changed::Lent(referent) if static_lifetimes(&referent) == referent => {
                     let _ = writeln!(
                         text,
                         "    {{ use {island}::{{ByCopy as _, ByLoan as _}}; \
                          (&{island}::hand(&*{name})).back(&mut __reply, {name}) }}"
                     );
                 }
-                Some(referent) => {
+                Changed::Lent(referent) => {
                     let _ = writeln!(
                         text,
                         "    __reply.read(|input| input.unreplaced(\"{referent}\"));"
@@ -1640,6 +1761,174 @@ impl<'a> Generator<'a> {
         )
     }
 
+    /// One statement of a field's `use` in its type's `Parts` impl
+    /// ([`Generator::parts`]), the field reached by `binding`: a native part
+    /// lent or moved where it is, a field of a marked type that holds
+    /// parts by that type's own impl, and any other field by the wire
+    /// format (#1469).
+    fn part_use(
+        &self,
+        file: &Source<'_>,
+        path: &str,
+        ty: &type_ref::Type,
+        binding: &str,
+        purpose: Use,
+    ) -> String {
+        let island = format!("crate::{MODULE}");
+        let owner = Owner::Marked(path);
+        if self.crosses(file, ty, owner).is_err() {
+            let written = slice(file.text, ty.span());
+            return match purpose {
+                Use::Lend => format!("{island}::lend_part!(call, {binding}, {written});"),
+                Use::LendMut => format!("{island}::lend_part_mut!(call, {binding}, {written});"),
+                Use::Give => format!("{island}::give_part!(out, {binding});"),
+                Use::TakeInto => {
+                    format!("(&{island}::Back::<{written}>::new()).take_into(input, {binding});")
+                }
+            };
+        }
+        if self.holds(file, ty, owner) {
+            return match purpose {
+                Use::Lend => format!("{island}::Parts::lend({binding}, call);"),
+                Use::LendMut => format!("{island}::Parts::lend_mut({binding}, call);"),
+                Use::Give => format!("{island}::Parts::give({binding}, out);"),
+                Use::TakeInto => format!("{island}::Parts::take_into({binding}, input);"),
+            };
+        }
+        match purpose {
+            Use::Lend | Use::LendMut => format!("call.part(&*{binding});"),
+            Use::Give => format!("{island}::Put::put(&{binding}, out);"),
+            Use::TakeInto => format!("*{binding} = {island}::Take::take(input);"),
+        }
+    }
+
+    /// The `Parts` impl of the marked type `name` at `path`, which holds
+    /// native parts (#1469), from each `Use`'s body: how a borrow of it
+    /// lends its parts, a `&mut` one too, a value moves them, and a `&mut`
+    /// one takes back what the call made of it.
+    fn parts(name: &str, bodies: [String; 4]) -> String {
+        let island = format!("crate::{MODULE}");
+        let [lend, lend_mut, give, take_into] = bodies;
+        format!(
+            "impl {island}::Parts for {name} {{\n    \
+             fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n{lend}    }}\n    \
+             fn lend_mut<'c>(&'c mut self, call: &mut {island}::Call<'c>) {{\n{lend_mut}    }}\n    \
+             fn give(self, out: &mut {island}::Out) {{\n{give}    }}\n    \
+             fn take_into(&mut self, input: &mut {island}::In<'_>) {{\n        \
+             #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n\
+             {take_into}    }}\n}}\n"
+        )
+    }
+
+    /// [`Generator::parts`] of the struct `declared` at `path`.
+    fn struct_parts(&self, file: &Source<'_>, declared: &item::Struct, path: &str) -> String {
+        let count = declared.fields.len();
+        let header = |out: &str| format!("        {out}.structure({path:?}, {count});\n");
+        let mut bodies = [
+            header("call.out()"),
+            header("call.out()"),
+            header("out"),
+            format!("        input.structure({path:?}, {count});\n"),
+        ];
+        let bindings = (0..count)
+            .map(|index| format!("__f{index}"))
+            .collect::<Vec<_>>();
+        let _ = writeln!(
+            bodies[2],
+            "        let Self {{ {} }} = self;",
+            declared
+                .fields
+                .iter()
+                .zip(&bindings)
+                .map(|(field, binding)| format!("{}: {binding}", field.name.text))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for (field, binding) in declared.fields.iter().zip(&bindings) {
+            let name = &field.name.text;
+            for (body, (binding, purpose)) in bodies.iter_mut().zip([
+                (format!("&self.{name}"), Use::Lend),
+                (format!("&mut self.{name}"), Use::LendMut),
+                (binding.clone(), Use::Give),
+                (format!("&mut self.{name}"), Use::TakeInto),
+            ]) {
+                let _ = writeln!(
+                    body,
+                    "        {}",
+                    self.part_use(file, path, &field.ty, &binding, purpose)
+                );
+            }
+        }
+        Self::parts(&declared.name.text, bodies)
+    }
+
+    /// [`Generator::parts`] of the enum `declared` at `path`; `take` reads
+    /// a variant's value whole, by its name and count, as its `Take` does.
+    fn enum_parts(
+        &self,
+        file: &Source<'_>,
+        declared: &item::Enum,
+        path: &str,
+        take: &str,
+    ) -> String {
+        let mut bodies = [
+            "        match self {\n".to_owned(),
+            "        match self {\n".to_owned(),
+            "        match self {\n".to_owned(),
+            format!(
+                "        let (variant, count) = input.variant({path:?});\n        \
+                 match (self, variant, count) {{\n"
+            ),
+        ];
+        for variant in &declared.variants {
+            let name = variant.name.text.as_str();
+            let count = variant.payload.len();
+            let bindings = (0..count)
+                .map(|index| format!("__f{index}"))
+                .collect::<Vec<_>>();
+            let pattern = variant_pattern(variant, &bindings);
+            for (index, (body, purpose)) in bodies
+                .iter_mut()
+                .zip([Use::Lend, Use::LendMut, Use::Give, Use::TakeInto])
+                .enumerate()
+            {
+                let _ = match purpose {
+                    Use::TakeInto => {
+                        writeln!(body, "            ({pattern}, {name:?}, {count}) => {{")
+                    }
+                    _ => {
+                        let out = if index == 2 { "out" } else { "call.out()" };
+                        writeln!(
+                            body,
+                            "            {pattern} => {{\n                \
+                             {out}.variant({path:?}, {name:?}, {count});"
+                        )
+                    }
+                };
+                for (binding, ty) in bindings.iter().zip(&variant.payload) {
+                    let _ = writeln!(
+                        body,
+                        "                {}",
+                        self.part_use(file, path, ty, binding, purpose)
+                    );
+                }
+                body.push_str("            }\n");
+            }
+        }
+        for body in &mut bodies[..3] {
+            body.push_str("        }\n");
+        }
+        // Another variant than the receiver's is a new value, read whole.
+        let _ = writeln!(
+            bodies[3],
+            "            (this, variant, count) => {{\n                \
+             *this = match (variant, count) {{\n{take}                    \
+             (variant, count) => input.unknown({path:?}, variant, count),\n                \
+             }};\n            }}\n        }}"
+        );
+        Self::parts(&declared.name.text, bodies)
+    }
+
     fn cross_struct(&self, file: &Source<'_>, declared: &item::Struct) -> String {
         let name = declared.name.text.as_str();
         let path = path_of(file.modules, name);
@@ -1671,13 +1960,17 @@ impl<'a> Generator<'a> {
             }
             item::StructForm::Unit => take.push_str(name),
         }
-        format!(
+        let mut text = format!(
             "impl {island}::Put for {name} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              out.structure({path:?}, {count});\n{put}    }}\n}}\n\
              impl {island}::Take for {name} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              input.structure({path:?}, {count});\n        {take}\n    }}\n}}\n"
-        )
+        );
+        if self.holding.contains(&path) {
+            text.push_str(&self.struct_parts(file, declared, &path));
+        }
+        text
     }
 
     fn cross_enum(&self, file: &Source<'_>, declared: &item::Enum) -> String {
@@ -1692,19 +1985,7 @@ impl<'a> Generator<'a> {
             let bindings = (0..count)
                 .map(|index| format!("__f{index}"))
                 .collect::<Vec<_>>();
-            let pattern = match &variant.fields {
-                Some(fields) => format!(
-                    "Self::{variant_name} {{ {} }}",
-                    fields
-                        .iter()
-                        .zip(&bindings)
-                        .map(|(field, binding)| format!("{}: {binding}", field.text))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None if count == 0 => format!("Self::{variant_name}"),
-                None => format!("Self::{variant_name}({})", bindings.join(", ")),
-            };
+            let pattern = variant_pattern(variant, &bindings);
             let _ = writeln!(
                 put,
                 "            {pattern} => {{\n                out.variant({path:?}, {variant_name:?}, {count});"
@@ -1716,28 +1997,39 @@ impl<'a> Generator<'a> {
                 taken.push(back);
             }
             put.push_str("            }\n");
-            let built = match &variant.fields {
-                Some(fields) => format!(
-                    "Self::{variant_name} {{ {} }}",
-                    fields
-                        .iter()
-                        .zip(&taken)
-                        .map(|(field, back)| format!("{}: {back}", field.text))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None if count == 0 => format!("Self::{variant_name}"),
-                None => format!("Self::{variant_name}({})", taken.join(", ")),
-            };
+            let built = variant_pattern(variant, &taken);
             let _ = writeln!(take, "            ({variant_name:?}, {count}) => {built},");
         }
-        format!(
+        let mut text = format!(
             "impl {island}::Put for {name} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              match self {{\n{put}        }}\n    }}\n}}\n\
              impl {island}::Take for {name} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              match input.variant({path:?}) {{\n{take}            (variant, count) => input.unknown({path:?}, variant, count),\n        }}\n    }}\n}}\n"
-        )
+        );
+        if self.holding.contains(&path) {
+            text.push_str(&self.enum_parts(file, declared, &path, &take));
+        }
+        text
+    }
+}
+
+/// The pattern of `variant` of `Self` whose payload `parts` bind, or the
+/// value they build: `Self::Selected(__f0)`, `Self::Named { colors: __f0 }`.
+fn variant_pattern(variant: &item::Variant, parts: &[String]) -> String {
+    let name = variant.name.text.as_str();
+    match &variant.fields {
+        Some(fields) => format!(
+            "Self::{name} {{ {} }}",
+            fields
+                .iter()
+                .zip(parts)
+                .map(|(field, part)| format!("{}: {part}", field.text))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None if parts.is_empty() => format!("Self::{name}"),
+        None => format!("Self::{name}({})", parts.join(", ")),
     }
 }
 
@@ -1805,6 +2097,34 @@ enum Borrowed {
     /// A `&T` of a native value the receiver holds: the value where it is,
     /// kept there for as long as `&self` is borrowed (#1442).
     InPlace,
+}
+
+/// How a `&mut` argument's change comes back after a call
+/// (`Generator::stub`).
+enum Changed {
+    /// Its copy, by the wire format.
+    Copied,
+    /// What the lent place of this type was given as a whole, if anything.
+    Lent(String),
+    /// A marked value whose parts were lent: its copied fields, and each
+    /// part given a whole new value (#1469).
+    Parts,
+}
+
+/// What one field of a marked type that holds native parts does in its
+/// [`Generator::parts`] impl, the field reached by a binding of the use's
+/// kind.
+#[derive(Clone, Copy)]
+enum Use {
+    /// Lend it to the call `call`, by a `&` binding.
+    Lend,
+    /// Lend it mutably to the call `call`, by a `&mut` binding.
+    LendMut,
+    /// Move it to the interpreter by `out`, by an owned binding.
+    Give,
+    /// Take back from `input` what the call made of it, by a `&mut`
+    /// binding.
+    TakeInto,
 }
 
 /// How a `&'static` result of a native value comes back
@@ -2537,6 +2857,180 @@ pub mod __rawr_island {
         }
     }
 
+    /// A marked value that holds native parts (#1469), as `enum Theme {
+    /// Selected(themedef::Theme) }`, crossing as Rust passes it: a borrow
+    /// lends each part where it is ([`lend_part!`]), a value moves each
+    /// part, and a `&mut` takes back what the call made of it. Its other
+    /// fields cross by the wire format.
+    pub trait Parts: Sized {
+        fn lend<'c>(&'c self, call: &mut Call<'c>);
+        fn lend_mut<'c>(&'c mut self, call: &mut Call<'c>);
+        fn give(self, out: &mut Out);
+        fn take_into(&mut self, input: &mut In<'_>);
+    }
+
+    /// Lend `$value`, a `&$ty` of a native part of a marked value, to the
+    /// call `$call` where it is (#1469): by a key of its own, whose
+    /// accessor reads its place as `$ty`, or copied by the wire format when
+    /// `$ty` crosses by it, as an alias of `usize` does.
+    macro_rules! lend_part {
+        ($call:expr, $value:expr, $ty:ty) => {{
+            struct Key;
+            fn shared(
+                nonce: u64,
+                visit: &mut dyn FnMut(&$ty),
+            ) -> ::std::result::Result<(), u8> {
+                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<Key>(), true, |place| {
+                    // SAFETY: `Key`'s lend is this part, a `$ty`, claimed shared.
+                    visit(unsafe { &*place.cast_const().cast::<$ty>() })
+                })
+            }
+            static SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
+            let lend = crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED);
+            let value: &$ty = $value;
+            // SAFETY: the lend's accessor reads its key's place as `$ty`.
+            #[allow(unsafe_code)]
+            unsafe {
+                (&crate::__rawr_island::hand(value)).lend_part($call, value, lend, ::std::any::type_name::<$ty>())
+            };
+        }};
+    }
+    pub(crate) use lend_part;
+
+    /// [`lend_part!`] of a `&mut $ty`, lent mutably.
+    macro_rules! lend_part_mut {
+        ($call:expr, $value:expr, $ty:ty) => {{
+            struct Key;
+            fn mutable(
+                nonce: u64,
+                visit: &mut dyn FnMut(&mut $ty),
+            ) -> ::std::result::Result<(), u8> {
+                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<Key>(), false, |place| {
+                    // SAFETY: `Key`'s lend is this part, a `&mut $ty`, claimed exclusively.
+                    visit(unsafe { &mut *place.cast::<$ty>() })
+                })
+            }
+            fn shared(
+                nonce: u64,
+                visit: &mut dyn FnMut(&$ty),
+            ) -> ::std::result::Result<(), u8> {
+                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<Key>(), true, |place| {
+                    // SAFETY: `Key`'s lend is this part, a `$ty`, claimed shared.
+                    visit(unsafe { &*place.cast_const().cast::<$ty>() })
+                })
+            }
+            static MUTABLE: fn(u64, &mut dyn FnMut(&mut $ty)) -> ::std::result::Result<(), u8> = mutable;
+            static SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
+            let lend = crate::__rawr_island::Lend::new(
+                ::std::any::TypeId::of::<Key>(),
+                ::std::option::Option::Some(&MUTABLE),
+                &SHARED,
+            );
+            let value: &mut $ty = $value;
+            // SAFETY: the lend's accessors read its key's place as `$ty`.
+            #[allow(unsafe_code)]
+            unsafe {
+                (&crate::__rawr_island::hand(&*value)).lend_part_mut($call, value, lend, ::std::any::type_name::<$ty>())
+            };
+        }};
+    }
+    pub(crate) use lend_part_mut;
+
+    /// Move `$value`, a native part of a marked value, to the interpreter
+    /// by `$out` (#1469): by the wire format when its type crosses by it,
+    /// and else as the native value the interpreter keeps, with what its
+    /// type has of [`Traits`].
+    macro_rules! give_part {
+        ($out:expr, $value:expr) => {{
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{
+                GiveByMove as _, GiveByWire as _, HasClone as _, HasDebug as _, HasDisplay as _,
+                HasEqual as _, HasHash as _, HasOrder as _, LacksClone as _, LacksDebug as _,
+                LacksDisplay as _, LacksEqual as _, LacksHash as _, LacksOrder as _,
+            };
+            let value = $value;
+            let probe = &crate::__rawr_island::probe(&value);
+            let traits = (
+                probe.debug_of(),
+                probe.display_of(),
+                probe.clone_of(),
+                probe.equal_of(),
+                probe.hash_of(),
+                probe.order_of(),
+            );
+            (&crate::__rawr_island::hand(&value)).give_part($out, value, traits);
+        }};
+    }
+    pub(crate) use give_part;
+
+    /// How [`lend_part!`] lends a part: copied by the wire format when its
+    /// type crosses by it ([`LendByWire`], found first), and else where it
+    /// is ([`LendByLoan`]).
+    pub trait LendByWire<T> {
+        /// # Safety
+        ///
+        /// None needed: the part is copied.
+        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+        /// # Safety
+        ///
+        /// None needed: the part is copied, and its copy comes back.
+        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+    }
+    impl<T: Put> LendByWire<T> for Hand<T> {
+        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
+            call.part(value);
+        }
+        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, _: Lend, _: &'static str) {
+            call.part(&*value);
+        }
+    }
+    pub trait LendByLoan<T> {
+        /// # Safety
+        ///
+        /// As for [`Call::lend_part`].
+        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+        /// # Safety
+        ///
+        /// As for [`Call::lend_part`].
+        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+    }
+    impl<T> LendByLoan<T> for &Hand<T> {
+        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
+            debug_assert!(lend.mutable.is_none());
+            // SAFETY: as the caller's.
+            unsafe { call.lend_part(::std::ptr::from_ref(value).cast_mut().cast(), lend, name) }
+        }
+        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str) {
+            debug_assert!(lend.mutable.is_some());
+            // SAFETY: as the caller's.
+            unsafe { call.lend_part(::std::ptr::from_mut(value).cast(), lend, name) }
+        }
+    }
+
+    /// How [`give_part!`] moves a part: by the wire format when its type
+    /// crosses by it ([`GiveByWire`], found first), and else as the native
+    /// value the interpreter keeps ([`GiveByMove`]).
+    pub trait GiveByWire<T> {
+        fn give_part(&self, out: &mut Out, value: T, traits: Traits);
+    }
+    impl<T: Put> GiveByWire<T> for Hand<T> {
+        fn give_part(&self, out: &mut Out, value: T, _: Traits) {
+            value.put(out);
+        }
+    }
+    pub trait GiveByMove<T> {
+        fn give_part(&self, out: &mut Out, value: T, traits: Traits);
+    }
+    impl<T: 'static> GiveByMove<T> for &Hand<T> {
+        fn give_part(&self, out: &mut Out, value: T, traits: Traits) {
+            out.give(value, traits);
+        }
+    }
+
     /// Start the program: the runner calls the native `main` once this
     /// returns, on a thread of its own.
     pub fn main() {
@@ -2816,20 +3310,32 @@ pub mod __rawr_island {
             Self(::std::marker::PhantomData)
         }
     }
+    /// A part lent `&mut` takes back its copy, or the whole new value the
+    /// call gave its place, if it gave one (#1469).
     pub trait ByWire<T> {
         fn take(&self, input: &mut In<'_>) -> T;
+        fn take_into(&self, input: &mut In<'_>, place: &mut T);
     }
     impl<T: Take> ByWire<T> for Back<T> {
         fn take(&self, input: &mut In<'_>) -> T {
             T::take(input)
         }
+        fn take_into(&self, input: &mut In<'_>, place: &mut T) {
+            *place = T::take(input);
+        }
     }
     pub trait ByMove<T> {
         fn take(&self, input: &mut In<'_>) -> T;
+        fn take_into(&self, input: &mut In<'_>, place: &mut T);
     }
     impl<T: 'static> ByMove<T> for &Back<T> {
         fn take(&self, input: &mut In<'_>) -> T {
             input.native()
+        }
+        fn take_into(&self, input: &mut In<'_>, place: &mut T) {
+            if let Some(new) = input.replaced::<T>() {
+                *place = new;
+            }
         }
     }
 
@@ -3262,9 +3768,50 @@ pub mod __rawr_island {
             self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
         }
         fn lent_value(&mut self, place: *mut (), lend: Lend, name: &'static str) {
+            // SAFETY: as the callers'.
+            unsafe { self.lend_part(place, lend, name) };
+            self.count += 1;
+        }
+        /// A part of an argument lent for the call where it is, as a
+        /// native part of a marked value is (#1469). The call runs on this
+        /// thread, so the part needn't be `Send` or `Sync`.
+        ///
+        /// # Safety
+        ///
+        /// `place` is borrowed for `'c`, mutably when `lend` has a mutable
+        /// accessor. `lend`'s accessors read its key's place as the type it
+        /// is, and no other lend uses its key. `name` is the type's name.
+        pub unsafe fn lend_part(&mut self, place: *mut (), lend: Lend, name: &'static str) {
             self.values.byte(LENT);
             self.values.count(self.lent.len());
             self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
+        }
+        /// A part of an argument copied by the wire format (#1469).
+        pub fn part<T: Put + ?Sized>(&mut self, value: &T) {
+            value.put(&mut self.values);
+        }
+        /// Where an argument's value is written, part by part.
+        pub fn out(&mut self) -> &mut Out {
+            &mut self.values
+        }
+        /// A borrow of a marked value that holds native parts, each lent
+        /// where it is for the call (#1469).
+        pub fn lent<T: Parts>(&mut self, value: &'c T) {
+            value.lend(self);
+            self.count += 1;
+        }
+        /// A `&mut` of a marked value that holds native parts, each lent
+        /// mutably for the call, which comes back after it
+        /// ([`Parts::take_into`]).
+        pub fn lent_mut<T: Parts>(&mut self, value: &'c mut T) {
+            self.mutable |= 1 << self.count;
+            value.lend_mut(self);
+            self.count += 1;
+        }
+        /// A marked value that holds native parts, moved to the
+        /// interpreter with them (#1469).
+        pub fn given<T: Parts>(&mut self, value: T) {
+            value.give(&mut self.values);
             self.count += 1;
         }
         /// An argument moved to the interpreter, which keeps it: a value of
@@ -3346,6 +3893,64 @@ pub mod __rawr_island {
     impl Reply {
         pub fn take<T: Take>(&mut self) -> T {
             self.read(T::take)
+        }
+        /// A `&T` into `receiver`, whose parts the call lent where they
+        /// are, as `fn colors(&self) -> &Colors` gives `&self.0.colors`
+        /// (#1468): the place the runner reached, and the accessor of the
+        /// lend it reached it by, which proves the place a `T`. A place
+        /// outside the receiver, as in a `Box` it owns, can't come back
+        /// yet.
+        ///
+        /// # Safety
+        ///
+        /// The runner gave the place of a value the call reached through
+        /// what it lent.
+        pub unsafe fn lent<'r, T: 'static, R: ?Sized>(&mut self, receiver: &'r R) -> &'r T {
+            type Shared<T> = fn(u64, &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8>;
+            let (place, accessor) = self.read(|input| input.native::<(*const (), Accessor)>());
+            let accessor: &dyn ::std::any::Any = accessor;
+            let start = ::std::ptr::from_ref(receiver).cast::<u8>().addr();
+            let end = start + ::std::mem::size_of_val(receiver);
+            let at = place.addr();
+            if !accessor.is::<Shared<T>>() {
+                ::std::panic!(
+                    "rawr: `{}` gave back a reference that is no `&{}`",
+                    self.path,
+                    ::std::any::type_name::<T>()
+                );
+            }
+            if at < start || at + ::std::mem::size_of::<T>() > end {
+                ::std::panic!(
+                    "rawr: `{}` gave back a reference to a `{}` the receiver holds outside \
+                     itself, which can't come back yet",
+                    self.path,
+                    ::std::any::type_name::<T>()
+                );
+            }
+            // SAFETY: the accessor reads its lend's place as a `T`, and the
+            // place is in `receiver`, which is borrowed for `'r`.
+            unsafe { &*place.cast::<T>() }
+        }
+        /// A `&str` the call's receiver holds (#1468): the text where it
+        /// is in a part the call lent, or the program's own text, pinned
+        /// for as long as the runner lives.
+        ///
+        /// # Safety
+        ///
+        /// The receiver stays borrowed for `'r`.
+        pub unsafe fn pinned<'r>(&mut self) -> &'r str {
+            let (address, length) = self.read(|input| {
+                input.expect(PINNED, "a `&str`");
+                (input.count(), input.count())
+            });
+            // SAFETY: the runner gave valid UTF-8 that lives at least as
+            // long as the receiver is borrowed, which is `'r`.
+            unsafe {
+                ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
+                    ::std::ptr::with_exposed_provenance::<u8>(address),
+                    length,
+                ))
+            }
         }
         /// The next value, as `read` reads it.
         pub fn read<T>(&mut self, read: impl FnOnce(&mut In<'_>) -> T) -> T {
@@ -3541,6 +4146,51 @@ mod tests {
             before.shape.change(&signature.shape).as_deref(),
             Some("`physics::fall` changed its signature")
         );
+    }
+
+    /// A marked type over a native one, as inboard's `enum Theme {
+    /// Selected(themedef::Theme) }`, lends the interpreter its part where
+    /// it is for a borrow, mutably for a `&mut`, which takes back what the
+    /// call made of it, and moves it for a value (#1469). A `&self`
+    /// method's reference into the part comes back where it is, and its
+    /// `&str` as text (#1468).
+    #[test]
+    fn a_marked_type_over_a_native_one_lends_its_parts_and_moves_them() {
+        let shadow = generate(
+            "// rawr\nuse crate::palette;\n\
+             pub enum Theme {\n    Selected(palette::Theme),\n}\n\
+             pub struct Pair {\n    pub theme: Theme,\n    pub scale: u32,\n}\n\
+             impl Theme {\n    \
+             pub fn colors(&self) -> &palette::Colors { match self { Theme::Selected(t) => &t.colors } }\n    \
+             pub fn name(&self) -> &str { \"\" }\n    \
+             pub fn rename(&mut self, name: &str) {}\n    \
+             pub fn into_native(self) -> palette::Theme { match self { Theme::Selected(t) => t } }\n}\n\
+             pub fn scale(pair: &Pair) -> u32 { pair.scale }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "impl crate::__rawr_island::Parts for Theme {",
+            "crate::__rawr_island::lend_part!(call, __f0, palette::Theme);",
+            "crate::__rawr_island::lend_part_mut!(call, __f0, palette::Theme);",
+            "crate::__rawr_island::give_part!(out, __f0);",
+            "(&crate::__rawr_island::Back::<palette::Theme>::new()).take_into(input, __f0);",
+            "impl crate::__rawr_island::Parts for Pair {",
+            "crate::__rawr_island::Parts::lend(&self.theme, call);",
+            "call.part(&*&self.scale);",
+            "    __call.lent(self);\n",
+            "let __value: &palette::Colors = unsafe { __reply.lent(self) };",
+            "let __value: &str = unsafe { __reply.pinned() };",
+            "    __call.lent_mut(&mut *self);\n",
+            "__reply.read(|input| crate::__rawr_island::Parts::take_into(&mut *self, input));",
+            "    __call.given(self);\n",
+            "    __call.lent(__a0);\n",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("panic!"), "{text}");
     }
 
     /// A `Result` of types that cross crosses as one (#1118). A result that

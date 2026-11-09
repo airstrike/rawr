@@ -5,7 +5,7 @@
 pub mod catalog;
 mod palette;
 
-pub use palette::Hue;
+pub use palette::{clones, Hue};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Theme {
@@ -17,6 +17,50 @@ impl Theme {
         match self {
             Theme::Selected(theme) => theme.colors.accent,
         }
+    }
+
+    pub fn colors(&self) -> &palette::Colors {
+        match self {
+            Theme::Selected(theme) => &theme.colors,
+        }
+    }
+
+    pub fn rename(&mut self, name: &str) {
+        match self {
+            Theme::Selected(theme) => theme.name = name.to_owned(),
+        }
+    }
+}
+
+impl ui::Base for Theme {
+    fn name(&self) -> &str {
+        match self {
+            Theme::Selected(theme) => &theme.name,
+        }
+    }
+}
+
+/// A theme's type, whose native part can't be cloned.
+#[derive(Debug)]
+pub struct Typeface {
+    pub fonts: palette::Fonts,
+    pub scale: u32,
+}
+
+impl Typeface {
+    pub fn size(&self) -> u32 {
+        self.fonts.size * self.scale
+    }
+
+    pub fn family(&self) -> &str {
+        &self.fonts.family
+    }
+}
+
+pub fn typeface() -> Typeface {
+    Typeface {
+        fonts: palette::Fonts::new("Inter", 12),
+        scale: 2,
     }
 }
 
@@ -50,7 +94,7 @@ impl From<ui::Theme> for Theme {
 
 impl ui::Design for Theme {
     fn background(&self) -> u32 {
-        self.accent() + 1
+        self.colors().accent + 1
     }
 
     fn name(&self) -> String {

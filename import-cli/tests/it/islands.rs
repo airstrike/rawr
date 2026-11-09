@@ -691,15 +691,21 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// and `rawr run` prints what `cargo run` prints.
 /// A marked `theme.rs`, as inboard's, declares native child modules and
 /// defines the app's `Theme` over one's own `Theme`, as `enum Theme {
-/// Selected(palette::Theme) }`: a value crosses with its native part given
-/// as a clone and taken back as the value the interpreter moves, and
-/// neither `palette::Theme` nor the crate's `ui::Theme` is the marked one
-/// (#1466). Its impls of `Default`, `From` from the native and the crate's
-/// theme, `From<Theme>` for the crate's theme, the crate's `Design` trait
-/// and `From<&Theme>` for the crate's `Settings` are native code's, each
-/// function a trampoline, and a native child module implements the
-/// crate's `Catalog` for it by matching its variant. `rawr check` passes as
-/// `cargo check` does, and `rawr run` prints what `cargo run` prints.
+/// Selected(palette::Theme) }`: neither `palette::Theme` nor the crate's
+/// `ui::Theme` is the marked one (#1466). Its impls of `Default`, `From`
+/// from the native and the crate's theme, `From<Theme>` for the crate's
+/// theme, the crate's `Design` and `Base` traits and `From<&Theme>` for the
+/// crate's `Settings` are native code's, each function a trampoline, and a
+/// native child module implements the crate's `Catalog` for it by matching
+/// its variant. A borrow of a theme lends the interpreter its native part
+/// where it is, `&mut self` too, and a value moves it, so a run clones a
+/// theme only where `cargo run` does, which counts its clones, and a part
+/// that isn't `Clone` crosses (#1469). `Theme::colors(&self) ->
+/// &palette::Colors`, which native style functions call in a loop, gives
+/// `&self.0.colors` where it is, to native code and to the theme's own
+/// `Design` impl, and `name(&self) -> &str` its text (#1468). `rawr check`
+/// passes as `cargo check` does, and `rawr run` prints what `cargo run`
+/// prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -725,6 +731,8 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
+    // The one clone is `theme.clone()` in `main`.
+    assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)

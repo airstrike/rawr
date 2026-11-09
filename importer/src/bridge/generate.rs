@@ -4044,6 +4044,9 @@ fn invoke_in_arena(
             .first()
             .and_then(|value| value.read_lock::<NativeHandle>().map(|value| value.clone()))
             .and_then(|handle| arena.witness(handle).cloned());
+        let lent = values
+            .first()
+            .is_some_and(|value| value.is::<__rawr_internal::scope::Lent>());
         let mut arguments = Arguments { values, arena };
         let output = (adapter.invoke)(&mut arguments)?;
         // The witness of the call's declared output: a function's, a
@@ -4068,9 +4071,12 @@ fn invoke_in_arena(
         if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| value.clone()) {
             let witness = match adapter.witness & !CHECK_VALUES {
                 1 => call.output_witness().ok(),
+                // A receiver native code lent has no witness: the output's
+                // is its declared type's (#1469).
                 2 => receiver
                     .as_ref()
-                    .and_then(|witness| call.transform_native_witness(witness).ok()),
+                    .and_then(|witness| call.transform_native_witness(witness).ok())
+                    .or_else(|| lent.then(|| call.lent_output_witness().ok()).flatten()),
                 // A method that borrows its receiver gives an output of its
                 // declared type, a receiver native code lent (D558.3) too.
                 _ => call.borrowed_output_witness().ok(),
@@ -9049,7 +9055,20 @@ fn render_projection(
         .and_then(|field| concrete_type(field.ty()))
         .ok_or_else(|| request::drift("a lent field's concrete type"))?;
     let pattern = field_pattern(&path, name, form, fields, index);
-    render_field_family(index, &rust, false, output)?;
+    render_projection_of(index, &ty, &rust, &pattern, output)
+}
+
+/// The projection `PROJECTION_{index}` of the field `field_0` that
+/// `pattern` binds of a value of the type `ty`, a `rust`: a variant's field
+/// (`render_projection`), or a struct's (`render_field_lender`).
+fn render_projection_of(
+    index: usize,
+    ty: &str,
+    rust: &str,
+    pattern: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    render_field_family(index, rust, false, output)?;
     writeln!(
         output,
         "    fn open_{index}(
@@ -9278,7 +9297,21 @@ fn render_field_lender(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request:
         "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
     )
     .map_err(request::unwritable)?;
-    render_field_family(0, &rust, false, output)?;
+    let pattern = format!("{path} {{ {}: field_0, .. }}", field.name());
+    render_projection_of(0, &path, &rust, &pattern, output)?;
+    // A field of a value native code lent, or of a field borrowed of one,
+    // is borrowed for as long as that value is, past the scope that
+    // borrows it, as Rust's `&theme.colors` of a `theme: &Theme` is: a
+    // projection that reaches it through the value at each use, so a
+    // `fn colors(&self) -> &Colors` may return it (#1468).
+    writeln!(
+        output,
+        "    let parent = (**arguments.values.first().ok_or(Error::MissingArgument)?).clone();
+    if parent.is::<__rawr_internal::scope::Lent>() || parent.is::<__rawr_internal::scope::Projected>() {{
+        return Ok(Dynamic::from(__rawr_internal::scope::Projected::new(parent, &PROJECTION_0, output_witness())));
+    }}"
+    )
+    .map_err(request::unwritable)?;
     writeln!(
         output,
         "    let lender = match lent_value(arguments, 0) {{
@@ -10725,7 +10758,24 @@ fn render_adapter_body(
                 // code borrows, as `self.state` is while `fn state(&self)
                 // -> &State` lends it, stays whole: a `Clone` field is
                 // copied where the struct is, as `self.state.id.clone()`
-                // reads it (#1445).
+                // reads it (#1445). One a value native code lent holds, as
+                // a marked type's native part is lent (#1469), is copied
+                // where it is, as only a `Clone` field can be read out of a
+                // borrow.
+                if !carries_lifetimes(&path) {
+                    writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut copied = None;
+        access(lent.nonce().bits(), &mut |receiver| copied = Some(field_copy!(&receiver.{name})))
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        let output = copied
+            .ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?
+            .ok_or_else(|| Error::Value(format!(\"cannot move out of `{name}`, which is behind a shared reference to a `{{}}` (E0507)\", lent.name())))?;
+        return {{", name = field.name()).map_err(request::unwritable)?;
+                    render_give(field.ty(), "output", output)?;
+                    writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
+                }
                 writeln!(
                     output,
                     "    let handle = native_handle(arguments, 0, true)?;

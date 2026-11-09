@@ -3,6 +3,7 @@
 //! as the crate's widgets do: through its `From` impls in both directions,
 //! the crate's traits it implements, a `From<&Theme>` for the crate's
 //! settings and a pattern on its variant.
+mod style;
 mod theme;
 
 use theme::Theme;
@@ -27,4 +28,27 @@ fn main() {
     println!("dark {dark:?}");
     println!("{}", ui::chart(&dark));
     println!("hue {:?} {:?}", theme::Hue::Warm, theme::Hue::Cool);
+    // Every style function reads the theme's colors where they are.
+    let mut total = 0;
+    for _ in 0..100 {
+        total += style::button(&theme) + style::text(&dark);
+    }
+    let colors = theme.colors();
+    println!(
+        "styled {total} with {colors:?} at {}",
+        theme.colors().accent
+    );
+    let Theme::Selected(palette) = &theme;
+    println!("in place {}", std::ptr::eq(colors, &palette.colors));
+    println!("{}", ui::base(&theme));
+    let mut renamed = theme::dark();
+    renamed.rename("dusk");
+    println!("renamed {renamed:?} {}", ui::base(&renamed));
+    let typeface = theme::typeface();
+    println!(
+        "typeface {} {} {typeface:?}",
+        typeface.size(),
+        typeface.family()
+    );
+    println!("clones {}", theme::clones());
 }

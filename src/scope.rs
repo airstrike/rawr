@@ -347,6 +347,14 @@ impl Lent {
         self.mutable.is_some()
     }
 
+    /// The accessor that reaches the value shared, untyped: a `fn(u64,
+    /// &mut dyn FnMut(&T)) -> Result<(), u8>` for a `T`, which proves the
+    /// lent place a `T` to the code that knows `T`.
+    #[must_use]
+    pub const fn shared(&self) -> Option<Accessor> {
+        self.shared
+    }
+
     /// The accessor of type `A` that reaches the value mutably or not:
     /// `fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8>` for `&mut T`,
     /// and `fn(u64, &mut dyn FnMut(&T)) -> Result<(), u8>` for `&T`.
@@ -397,6 +405,13 @@ fn frame_of<R>(nonce: Nonce, visit: impl FnOnce(Option<&mut Frame>) -> R) -> R {
         }
         KEPT.with_borrow_mut(|kept| visit(kept.iter_mut().find(|frame| frame.nonce == nonce)))
     })
+}
+
+/// Where the value the running lend `nonce` lends is; `None` once it has
+/// ended.
+#[must_use]
+pub fn place(nonce: Nonce) -> Option<*mut ()> {
+    frame_of(nonce, |frame| frame.map(|frame| frame.place))
 }
 
 /// Pops a frame, and every frame above it, when its lend ends, however it
