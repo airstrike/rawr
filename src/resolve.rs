@@ -4877,7 +4877,9 @@ fn resolve_bounds_with_arguments(
                 traits.push(segment.name.clone());
                 continue;
             }
-            // `Convert<i64>`: a generic user trait and its arguments.
+            // `Convert<i64>`: a generic user trait and its arguments. Its
+            // lifetimes ask nothing of the type, as `IntoContent<'a,
+            // Message>`'s or a dependency's `IntoFragment<'a>`'s.
             if let [segment] = &bound.segments[..]
                 && !matches!(
                     segment.name.text.as_str(),
@@ -4886,23 +4888,19 @@ fn resolve_bounds_with_arguments(
                         | crate::item::type_ref::FN_TYPE
                         | crate::item::type_ref::FN_MUT_TYPE
                 )
-                && segment
-                    .arguments
-                    .iter()
-                    .all(|argument| matches!(argument, crate::item::type_ref::Argument::Type(_)))
             {
                 traits.push(segment.name.clone());
-                trait_arguments.push((
-                    segment.name.clone(),
-                    segment
-                        .arguments
-                        .iter()
-                        .filter_map(|argument| match argument {
-                            crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
-                            crate::item::type_ref::Argument::Lifetime(_) => None,
-                        })
-                        .collect(),
-                ));
+                let arguments = segment
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
+                        crate::item::type_ref::Argument::Lifetime(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                if !arguments.is_empty() {
+                    trait_arguments.push((segment.name.clone(), arguments));
+                }
                 continue;
             }
             if let Some(name) = std_path::trait_path(&bound.segments)
