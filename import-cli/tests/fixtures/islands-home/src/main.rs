@@ -24,7 +24,9 @@ fn main() {
     );
     let taken = workspace.update(home::Message::Inbox(inbox::Message::Read(2)));
     println!("inbox {} after {taken}", workspace.inbox.unread);
-    let opened = workspace.home.open();
+    let opened = workspace
+        .home
+        .open(home::wizard::View::new(&workspace.inbox));
     println!("opened {} task", opened.len());
     for message in opened.poll() {
         println!("message {message:?}");

@@ -74,6 +74,14 @@ pub(crate) const ANCHORED: u8 = 32;
 /// whose keys follow the header and the anchor's (#1473). What native code
 /// borrowed of each is let go of first.
 pub(crate) const RELEASES: u8 = 64;
+/// The first byte of a call's header: two masks follow the releases' keys.
+/// The first names the arguments given for the call alone, as a by-value
+/// `View<'a>` of borrows (#1225): what is left of each once the call
+/// returns drops then. The second names the lends kept with the call's
+/// anchor, as `&'a inbox::State` of `view<'a>(&'a self, inbox: &'a
+/// inbox::State) -> Element<'a, Message>` (#1413): what the result
+/// borrows of each lives in the anchored region.
+pub(crate) const SCOPES: u8 = 128;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;

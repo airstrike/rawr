@@ -1421,6 +1421,28 @@ impl Calls {
         lent: &[crate::scope::Lent],
         natives: &mut Natives,
     ) -> Result<Vec<u8>, String> {
+        let mut scoped = Vec::new();
+        let reply = self.call_with(call, given, lent, natives, &mut scoped);
+        for value in &scoped {
+            // One the call moved on, as into a native function that took
+            // it, has nothing left to drop.
+            if let Some(Ok(left)) = moved(value) {
+                drop(left);
+            }
+        }
+        reply
+    }
+
+    /// [`Calls::call`], each argument given for the call alone added to
+    /// `scoped` as it is read.
+    fn call_with(
+        &self,
+        call: &Call<'_>,
+        given: &mut [Option<Given>],
+        lent: &[crate::scope::Lent],
+        natives: &mut Natives,
+        scoped: &mut Vec<Dynamic>,
+    ) -> Result<Vec<u8>, String> {
         let path = call.path;
         let malformed = |error: String| format!("rawr: the call of `{path}` is malformed: {error}");
         let mut reader = Reader {
@@ -1458,6 +1480,28 @@ impl Calls {
                 .collect::<Result<Vec<_>, _>>()?;
             release_anchors(&released);
         }
+        let (given_for_call, kept) = if flags & program::model::island::SCOPES != 0 {
+            (
+                u64::from_le_bytes(reader.array().map_err(malformed)?),
+                u64::from_le_bytes(reader.array().map_err(malformed)?),
+            )
+        } else {
+            (0, 0)
+        };
+        // A lend native code keeps for as long as the result, which only an
+        // anchored call's result can, is reached in its region (#1413).
+        let lent = lent
+            .iter()
+            .enumerate()
+            .map(|(index, lent)| {
+                if anchored.is_some() && index < 64 && kept & (1 << index) != 0 {
+                    lent.kept()
+                } else {
+                    *lent
+                }
+            })
+            .collect::<Vec<_>>();
+        let lent = lent.as_slice();
         let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;
@@ -1495,6 +1539,16 @@ impl Calls {
                 }
             }
         }
+        // An argument given for the call alone, as a by-value `View<'a>` of
+        // borrows (#1225), drops once the call returns: its handle is kept
+        // to reach what the call left of it.
+        scoped.extend(
+            values
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index < 64 && given_for_call & (1 << index) != 0)
+                .map(|(_, value)| value.clone()),
+        );
         // A function changes its first `&mut` parameter in place and copies
         // the others back out after its value, as `[value, ..copied]`; a
         // method or an associated function copies all but its receiver

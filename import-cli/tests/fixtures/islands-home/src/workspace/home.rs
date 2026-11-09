@@ -132,20 +132,23 @@ impl State {
         self.content.text()
     }
 
-    /// Open the wizard at the current count, as inboard's `edit_tile`.
-    pub fn open(&mut self) -> Task<Message> {
+    /// Open the wizard at the current count, as inboard's `edit_tile`, over
+    /// `catalog`, a native view of borrows it takes by value.
+    pub fn open(&mut self, catalog: wizard::View<'_>) -> Task<Message> {
         self.count += STEP;
-        wizard::start(self.count).map(Message::Wizard)
+        println!("catalog of {} unread", catalog.unread());
+        wizard::start(self.count, catalog).map(Message::Wizard)
     }
 
     /// The screen, as inboard's `view<'a>(&'a self, ..)`: an element that
-    /// borrows its own text for `'a`, with the native inbox it is lent
-    /// read, and a child's element mapped into its messages.
+    /// borrows its own text for `'a`, the element of the native inbox it is
+    /// lent, which borrows the inbox, or a child's, each mapped into its
+    /// messages.
     pub fn view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a, Message> {
         if self.count > 3 {
             ui::button(&self.title, Message::Count)
         } else if inbox.unread > 3 {
-            ui::button(&self.greeting, inbox::Message::Read(inbox.unread)).map(Message::Inbox)
+            inbox.view().map(Message::Inbox)
         } else {
             wizard::view(&self.title, self.count).map(Message::Wizard)
         }

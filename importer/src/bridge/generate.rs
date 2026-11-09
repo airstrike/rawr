@@ -12416,14 +12416,19 @@ fn render_method_opening(
         } else {
             ""
         };
+        let lent = lent_opening(receiver, signature, &container, &call, &converted, &frame)?;
         return writeln!(
             output,
             "    let scoped = scoped_value(arguments, 0);
-    let handle = match scoped {{
-        Some(_) => None,
-        None => Some(native_handle(arguments, 0, false)?),
+    let lent = lent_value(arguments, 0);
+    let handle = match (scoped, lent) {{
+        (None, None) => Some(native_handle(arguments, 0, false)?),
+        _ => None,
     }};
     {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
+        if let Some(lent) = lent {{
+{lent}
+        }}
         match scoped {{
             {scoped}
             None => {{
@@ -12466,6 +12471,72 @@ fn render_method_opening(
     Ok(Dynamic::from(output))"
     )
     .map_err(encoding)
+}
+
+/// The body of a scope frame's call whose output borrows a receiver native
+/// code lent the program (D558.3), as `inbox.view()` of a lent `&'a
+/// inbox::State` gives an `Element<'a, Message>` (#1413), within an `if
+/// let Some(lent)`. A lend native code keeps as long as an anchored call's
+/// result is borrowed in that call's region, where the output stays, so the
+/// result may keep it. Any other is reached through its accessor while the
+/// rest of the scope runs, as a frame holds a receiver of the arena.
+fn lent_opening(
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    container: &str,
+    call: &str,
+    converted: &str,
+    frame: &str,
+) -> Result<String, request::Error> {
+    let mutable = matches!(receiver, Receiver::Mutable);
+    let borrow = if mutable { "&mut " } else { "&" };
+    let mut taken = Vec::new();
+    argument_list(signature.inputs().len(), 1, &mut taken)?;
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    let taken = if taken.is_empty() {
+        String::from("()")
+    } else {
+        format!("({taken},)")
+    };
+    let kept = if mutable {
+        String::new()
+    } else {
+        format!(
+            "            if let Some(anchor) = __rawr_internal::scope::anchor().filter(|_| lent.is_kept()) {{
+                let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+                    let receiver = region.lent::<{container}>(lent).map_err(|error| Error::Lent(lent.name(), error))?;
+                    let made = {call};
+                    with_arena(|arena| {{
+                        let mut values: [&mut Dynamic; 0] = [];
+                        #[allow(unused_variables)]
+                        let arguments = &mut Arguments {{ values: &mut values, arena }};
+                        {converted}
+                    }})
+                }})
+                .map_err(|error| runtime_error(Error::Lent(lent.name(), error)))?
+                .map_err(runtime_error)?;
+                return rest(value);
+            }}
+"
+        )
+    };
+    Ok(format!(
+        "{kept}            let failed = |error| runtime_error(Error::Lent(lent.name(), error));
+            let access: fn(u64, &mut dyn FnMut({borrow}{container})) -> Result<(), u8> = lent.accessor({mutable}).map_err(failed)?;
+            let mut taken = Some({taken});
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |receiver| {{
+                #[allow(irrefutable_let_patterns, unused_parens)]
+                if let Some({taken}) = taken.take() {{
+                    result = Some((|| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+                        let made = {call};
+                        {frame}
+                    }})());
+                }}
+            }})
+            .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            return result.ok_or_else(|| failed(__rawr_internal::scope::Error::Busy))?;"
+    ))
 }
 
 /// The call of a method whose receiver is a value in a scope frame's

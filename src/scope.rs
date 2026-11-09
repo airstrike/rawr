@@ -199,6 +199,9 @@ pub struct Lent {
     mutable: Option<Accessor>,
     shared: Option<Accessor>,
     reads: Option<&'static Reads>,
+    /// Native code keeps the borrow for as long as the region of the call
+    /// it lent the value to is anchored ([`Lent::kept`]).
+    kept: bool,
 }
 
 /// How script code reads a lent value through its type's traits, as the
@@ -272,7 +275,25 @@ impl Lent {
             mutable,
             shared,
             reads: None,
+            kept: false,
         }
+    }
+
+    /// The lent value, shared, which native code keeps borrowed for as
+    /// long as what the call it was lent to gives back lives, as `&'a
+    /// inbox::State` of `view<'a>(&'a self, inbox: &'a inbox::State) ->
+    /// Element<'a, Message>` (#1413): a call in the call's anchored region
+    /// may borrow it there ([`Region::lent`]).
+    #[must_use]
+    pub const fn kept(self) -> Self {
+        Self { kept: true, ..self }
+    }
+
+    /// Whether native code keeps the borrow as long as the result of the
+    /// call it lent the value to ([`Lent::kept`]).
+    #[must_use]
+    pub const fn is_kept(&self) -> bool {
+        self.kept
     }
 
     /// The lent value, read through its type's traits by `reads`.
@@ -890,6 +911,30 @@ impl<'r> Region<'r> {
         regions.push(kept);
         drop(regions);
         drop(ended);
+    }
+
+    /// The value `lent` lends, a `T`, borrowed at the region's `'r`, as
+    /// `inbox.view()` of a lent `&'a inbox::State` borrows it for the
+    /// element it gives (#1413). Only a region [`Region::anchored`], as the
+    /// call it was lent to runs in, reaches one, and only a shared lend
+    /// native code keeps ([`Lent::kept`]): [`Error::Mismatch`] for any
+    /// other, or when the value is not a `T`, and [`Error::Expired`] once
+    /// the lend has ended.
+    pub fn lent<T: 'static>(&self, lent: Lent) -> Result<&'r T, Error> {
+        if !lent.kept || lent.writable() || self.pins.is_none() {
+            return Err(Error::Mismatch);
+        }
+        // The trampoline made this accessor for a `T`'s place.
+        lent.accessor::<fn(u64, &mut dyn FnMut(&T)) -> Result<(), u8>>(false)?;
+        let place = place(lent.nonce).ok_or(Error::Expired)?;
+        // SAFETY: the accessor proves the place a `T`'s, and the lend is
+        // shared, so nothing writes through it. Native code lent it as a
+        // borrow its call's result keeps (`Lent::kept`), so it lives as
+        // long as that result, which this region, anchored on the pins of
+        // that call, makes: what the region holds of it past the result's
+        // life is only dropped, never reached, as rustc ends every borrow
+        // of it before native code takes the anchor `&mut` again.
+        Ok(unsafe { &*place.cast_const().cast::<T>() })
     }
 
     /// Store `value` and give the handle script code holds for it.
@@ -2405,6 +2450,46 @@ mod tests {
         let expired = ACCESS(1, &mut |_| reached = true);
         assert_eq!(expired.map_err(Error::from_code), Err(Error::Expired));
         assert!(!reached);
+    }
+
+    /// A shared lend native code keeps as long as its call's result is
+    /// reached at an anchored region's lifetime, so a value the region
+    /// keeps may borrow it (#1413); one it doesn't keep, or a region of no
+    /// pins, reaches nothing.
+    #[test]
+    fn a_kept_lend_is_borrowed_at_an_anchored_regions_lifetime() {
+        struct Inbox(&'static str);
+        struct Key;
+        type Shared = fn(u64, &mut dyn FnMut(&Inbox)) -> Result<(), u8>;
+        fn shared(nonce: u64, visit: &mut dyn FnMut(&Inbox)) -> Result<(), u8> {
+            let claim = super::claim(super::nonce(nonce), TypeId::of::<Key>(), true)
+                .map_err(Error::code)?;
+            // SAFETY: only this test's lend uses `Key`, and it lends an
+            // `Inbox` shared.
+            visit(unsafe { &*claim.place().cast_const().cast::<Inbox>() });
+            Ok(())
+        }
+        static SHARED: Shared = shared;
+        let inbox = Inbox("hello");
+        let place = std::ptr::from_ref(&inbox).cast_mut().cast::<()>();
+        let pins = super::Pins::new();
+        // SAFETY: `place` is `inbox`, borrowed shared for the lend, and
+        // `shared` reads `Key`'s place as an `Inbox`.
+        unsafe {
+            super::lend_raw(TypeId::of::<Key>(), place, false, |n| {
+                let lent = Lent::new(n, "Inbox", None, Some(&SHARED));
+                let anchored = super::Region::anchored(&pins);
+                assert_eq!(anchored.lent::<Inbox>(lent).err(), Some(Error::Mismatch));
+                let kept = lent.kept();
+                assert_eq!(
+                    anchored.lent::<Inbox>(kept).map(|inbox| inbox.0),
+                    Ok("hello")
+                );
+                assert_eq!(anchored.lent::<String>(kept).err(), Some(Error::Mismatch));
+                let plain = super::Region::new();
+                assert_eq!(plain.lent::<Inbox>(kept).err(), Some(Error::Mismatch));
+            });
+        }
     }
 
     /// A native value a view borrows is held by its `Rc` once however
