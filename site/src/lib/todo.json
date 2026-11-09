@@ -23,7 +23,8 @@
         {"text":"A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB.","issues":[1516],"refs":[1360,1384,435]},
         {"text":"A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as \"a call or assignment run before a call whose value borrows a local\".","issues":[1521]},
         {"text":"A marked view whose scope frame captures values that aren't `Send` or `Sync` now builds under `rawr run`. Examples are a native view of borrows into a type with `RefCell` or `OnceCell` caches, and an owned iced `Element`, as in inboard's `wizard.view(catalog, ..)` and `sidebar::header_row`. Before, the generated runner failed with E0277. A frame's opener stays on the thread that made it. A native value lent to a marked call by `&` or `&mut` no longer has to be `Send` or `Sync`.","issues":[1523]},
-        {"text":"Projects now share generated bindings for crates whose build scripts leave native build files, such as openpnp_capture_sys's CMake tree and aws-lc-sys's stray objects. rawr compares only the OUT_DIR files a compile read. `rawr check` reads the project's build-script outputs when its cargo check ends, before another toolchain's build can rerun them. Not sharing names its real reason, and each note prints once. In a fixture, a second project's check went from 10.5 s, not shared, to 4.0 s, shared.","issues":[1524]}
+        {"text":"Projects now share generated bindings for crates whose build scripts leave native build files, such as openpnp_capture_sys's CMake tree and aws-lc-sys's stray objects. rawr compares only the OUT_DIR files a compile read. `rawr check` reads the project's build-script outputs when its cargo check ends, before another toolchain's build can rerun them. Not sharing names its real reason, and each note prints once. In a fixture, a second project's check went from 10.5 s, not shared, to 4.0 s, shared.","issues":[1524]},
+        {"text":"A runner's bindings now load in about a millisecond. Each binding is built the first time a program looks it up, from a binary image the generator writes. elevato's page prepares in under 30 ms in Chrome instead of about 0.7 s, and native runners start the same way.","issues":[1518,1519]}
       ]
     },
     "releases": [
@@ -3340,14 +3341,15 @@
     {"issue":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open","category":"No glue (D593)"},
     {"issue":1516,"title":"A runner installs each re-export path of a crate's subtree as its own entries","state":"open","category":"Platforms"},
     {"issue":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open","category":"Platforms"},
-    {"issue":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open","category":"Platforms"},
-    {"issue":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"open","category":"Platforms"},
+    {"issue":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"closed","category":"Platforms"},
+    {"issue":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"closed","category":"Platforms"},
     {"issue":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open","category":"Platforms"},
     {"issue":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open","category":"No glue (D593)"},
     {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired","category":"No glue (D593)"},
     {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open","category":"Divergences from rustc"},
     {"issue":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -4459,7 +4461,7 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs is live on rawr's universe (2026-11-09). It ships a 5.5 MB brotli wasm, takes 1 to 1.4 s from load to game, and swaps a good edit in 30 ms. Next: a registry built on first lookup to take prepare off the main thread (#1519), then in-place reload (#1455)",
+          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs is live on rawr's universe (2026-11-09). A runner builds each binding on first lookup (#1518), so Chrome's prepare went from about 0.65 s to 27 ms. Next: the std facade per engine (#1526), then in-place reload (#1455)",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
@@ -4476,9 +4478,10 @@
             {"number":1513,"title":"A runner installs each re-export path of a crate's item as its own registry entry, so prepare stays above a second","state":"open"},
             {"number":1516,"title":"A runner installs each re-export path of a crate's subtree as its own entries","state":"open"},
             {"number":1517,"title":"A facade whose crate depends on another holds that crate's surface again under its hidden segment","state":"open"},
-            {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"open"},
-            {"number":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"open"},
-            {"number":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open"}
+            {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"closed"},
+            {"number":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"closed"},
+            {"number":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open"},
+            {"number":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"open"}
           ]
         },
         {
