@@ -258,7 +258,19 @@ enum Pass {
     /// The receiver of a native trait object's stand-in: the handle of the
     /// program value it holds, which the call takes as its receiver (#1264).
     Object,
+    /// An argument-position `impl Trait` of a marked trait, at `path` as
+    /// the signature writes it, as inboard's `impl IntoContent<'a,
+    /// Message>`: the impl that applies to the argument's type gives it,
+    /// by its [`GIVE`] function, as a value of a type it crosses as.
+    Trait { path: String },
 }
+
+/// The function each marked trait native code sees has beside its own, by
+/// which each of its impls gives a value of its type to a call: a value of
+/// the impl's type, or of an owned type that implements the trait as the
+/// impl's bound does. A trait native code implements itself keeps the
+/// trait's own, which panics.
+const GIVE: &str = "__rawr_give";
 
 /// What a trampoline makes of an argument-position `impl Trait`, as
 /// inboard's `ids: impl IntoIterator<Item = Id>`, whose value may be of
@@ -291,6 +303,10 @@ enum Owner<'o> {
     /// A native type, as the crate's `Settings` of a marked `impl From<&Theme>
     /// for Settings` (#1466): its values move as native ones do.
     Native,
+    /// A type parameter of the impl, as `T` of a marked trait's `impl<T>
+    /// IntoContent for T where T: IntoIterator<..>`: no value of it
+    /// crosses but by the trait's [`GIVE`].
+    Generic,
 }
 
 /// Each marked `pub static` whose type names none of the marked crate's
@@ -433,8 +449,13 @@ struct Generator<'a> {
     /// Those of `types` whose every field crosses, by the wire format or as
     /// a native value, alone or in a container ([`Generator::held`]).
     crossing: BTreeSet<String>,
-    /// Traits declared in marked code: their impls are not mirrored.
+    /// Traits declared in marked code: their impls are not mirrored
+    /// unless the trait is one of `shown`.
     traits: BTreeSet<&'a str>,
+    /// Those of `traits` that are visible, which native code sees as
+    /// declared, with their impls, so a marked function may take an `impl`
+    /// of one ([`Pass::Trait`]).
+    shown: BTreeSet<&'a str>,
     /// The std traits each marked type implements, derived or written, by
     /// the type's name: what its stand-in implements too (#1301).
     implemented: BTreeMap<&'a str, BTreeSet<Std>>,
@@ -533,6 +554,7 @@ impl<'a> Generator<'a> {
         let mut types = BTreeMap::new();
         let mut named = BTreeSet::new();
         let mut traits = BTreeSet::new();
+        let mut shown = BTreeSet::new();
         let mut implemented = BTreeMap::<&str, BTreeSet<Std>>::new();
         for source in sources {
             for item in source.items {
@@ -566,6 +588,9 @@ impl<'a> Generator<'a> {
                     ),
                     item::Parsed::Trait(declared) => {
                         traits.insert(declared.name.text.as_str());
+                        if declared.header.visibility.is_some() {
+                            shown.insert(declared.name.text.as_str());
+                        }
                         continue;
                     }
                     _ => continue,
@@ -591,6 +616,7 @@ impl<'a> Generator<'a> {
             declared: named,
             crossing: BTreeSet::new(),
             traits,
+            shown,
             implemented,
             holding: BTreeSet::new(),
         };
@@ -952,7 +978,7 @@ impl<'a> Generator<'a> {
         function: &item::Function,
         parameter: &item::Parameter,
         owner: Owner<'_>,
-    ) -> Option<Result<(Stand, Pass), String>> {
+    ) -> Option<Result<(Option<Stand>, Pass), String>> {
         let written = slice(file.text, parameter.ty.span()).trim();
         if !written.starts_with("impl") {
             return None;
@@ -968,19 +994,7 @@ impl<'a> Generator<'a> {
             let [type_ref::Argument::Type(item)] = &segment.arguments[..] else {
                 return None;
             };
-            let item_written = slice(file.text, item.span());
-            Ok(Stand {
-                ty: std_path(
-                    "Vec",
-                    vec![type_ref::Argument::Type(item.clone())],
-                    path.span,
-                ),
-                written: format!("::std::vec::Vec<{item_written}>"),
-                make: format!(
-                    "::std::iter::Iterator::collect::<::std::vec::Vec<{item_written}>>(\
-                     ::std::iter::IntoIterator::into_iter(__value))"
-                ),
-            })
+            Ok(collected(file, item, path.span))
         } else if name == type_ref::ITER_TYPE || type_ref::is_fn_type(name) {
             Err(format!("`{written}` can't cross yet"))
         } else {
@@ -988,12 +1002,33 @@ impl<'a> Generator<'a> {
                 .generics
                 .iter()
                 .find(|generic| generic.name.text == segment.name.text)?;
+            // The argument's own impl of a marked trait says how it crosses.
+            if let Some(bound) = self.shown_bound(generic) {
+                return Some(Ok((
+                    None,
+                    Pass::Trait {
+                        path: trait_path(bound),
+                    },
+                )));
+            }
             stand_for(file, generic, written)
         };
         Some(stand.and_then(|stand| {
             let pass = self.pass(file, &stand.ty, &stand.written, owner)?;
-            Ok((stand, pass))
+            Ok((Some(stand), pass))
         }))
+    }
+
+    /// The one bound of `generic`, besides auto traits, when it is a
+    /// marked trait native code sees.
+    fn shown_bound<'g>(&self, generic: &'g item::GenericParam) -> Option<&'g type_ref::Path> {
+        let [bound] = bounds(generic)[..] else {
+            return None;
+        };
+        let last = bound.segments.last()?;
+        self.shown
+            .contains(last.name.text.as_str())
+            .then_some(bound)
     }
 
     /// How a by-value parameter of `ty` moves the native parts it holds
@@ -1459,6 +1494,17 @@ impl<'a> Generator<'a> {
                         Err(reason) => refused.push(reason),
                     }
                 }
+                item::Parsed::Trait(declared) if declared.header.visibility.is_some() => {
+                    let text = self.declaration(file, declared);
+                    items.push_str(&text);
+                    shape.insert(
+                        path_of(file.modules, &declared.name.text),
+                        Entry {
+                            kind: Kind::Other,
+                            text,
+                        },
+                    );
+                }
                 item::Parsed::Impl(declared) => {
                     self.implementation(file, declared, &mut items, shape, refused);
                     let stand_in = Place {
@@ -1541,6 +1587,55 @@ impl<'a> Generator<'a> {
         );
     }
 
+    /// The marked trait `declared` as native code sees it: as declared,
+    /// each provided function's body a panic, as native code can't call
+    /// one yet, and [`GIVE`] beside its own functions, so a marked
+    /// function can take an `impl` of it.
+    fn declaration(&self, file: &Source<'_>, declared: &item::Trait) -> String {
+        let name = &declared.name.text;
+        let path = path_of(file.modules, name);
+        let mut text = String::new();
+        let mut cursor = declared.span.start();
+        for (function, provided) in declared.functions.iter().zip(&declared.provided) {
+            if !provided {
+                continue;
+            }
+            text.push_str(slice(
+                file.text,
+                Span::new(cursor, function.body_span.start()),
+            ));
+            let _ = write!(
+                text,
+                "{{\n        ::core::panic!({:?})\n    }}",
+                format!(
+                    "rawr: native code can't call `{path}::{}` yet: a trait's provided \
+                     function can't cross yet",
+                    function.name.text
+                )
+            );
+            cursor = function.body_span.end();
+        }
+        text.push_str(slice(file.text, Span::new(cursor, declared.span.end())));
+        let Some(end) = text.rfind('}') else {
+            return format!("{}\n", without_rawr_attributes(&text));
+        };
+        let island = format!("crate::{MODULE}");
+        let message = format!(
+            "rawr: native code can't give a value to a marked function as an `impl {name}` \
+             when native code implements `{name}`"
+        );
+        text.insert_str(
+            end,
+            &format!(
+                "    #[doc(hidden)]\n    \
+                 fn {GIVE}(self, __call: &mut {island}::Call<'_>)\n    \
+                 where\n        Self: ::std::marker::Sized,\n    \
+                 {{\n        ::core::panic!({message:?})\n    }}\n"
+            ),
+        );
+        format!("{}\n", without_rawr_attributes(&text))
+    }
+
     /// The marked impl `declared` as native code sees it: an impl of a
     /// visible marked type, or a trait's impl for a native type, as `impl
     /// From<&Theme> for Settings` (#1466), with a trampoline for each of its
@@ -1559,14 +1654,25 @@ impl<'a> Generator<'a> {
             return;
         };
         let trait_ = declared.trait_.as_ref();
-        if trait_
+        let marked_trait = trait_
             .and_then(|path| path.segments.last())
-            .is_some_and(|last| self.traits.contains(last.name.text.as_str()))
-        {
+            .map(|last| last.name.text.as_str())
+            .filter(|name| self.traits.contains(name));
+        if marked_trait.is_some_and(|name| !self.shown.contains(name)) {
             return;
         }
+        let generic = match &written.segments[..] {
+            [segment] if segment.arguments.is_empty() => declared
+                .generics
+                .iter()
+                .find(|generic| generic.name.text == segment.name.text),
+            _ => None,
+        };
         let (owner, path) = match self.marked(file, written) {
             Some(path) => (Owner::Marked(path), path.to_owned()),
+            None if generic.is_some() && marked_trait.is_some() => {
+                (Owner::Generic, native_owner(written))
+            }
             None if self.declares(file, written) || trait_.is_none() => return,
             None => (Owner::Native, native_owner(written)),
         };
@@ -1629,8 +1735,79 @@ impl<'a> Generator<'a> {
                 Err(reason) => refused.push(reason),
             }
         }
+        if marked_trait.is_some()
+            && let Some(given) = self.given_self(file, declared, generic, owner)
+        {
+            for line in given.lines() {
+                let _ = writeln!(text, "    {line}");
+            }
+            shape.insert(
+                format!("{prefix}::{GIVE}"),
+                Entry {
+                    kind: Kind::Function,
+                    text: format!("{header}\n{given}"),
+                },
+            );
+        }
         text.push_str("}\n");
         items.push_str(&text);
+    }
+
+    /// The [`GIVE`] of `declared`, an impl of a marked trait, for its own
+    /// type, which is `generic` when it is one of the impl's type
+    /// parameters: the value given as itself, or as the owned value that
+    /// stands in for it by its bound, made first, as an `impl IntoIterator<Item =
+    /// T>` drains into a `Vec<T>`. `None` when no value of the type can
+    /// cross, so the trait's own panics.
+    fn given_self(
+        &self,
+        file: &Source<'_>,
+        declared: &item::Impl,
+        generic: Option<&item::GenericParam>,
+        owner: Owner<'_>,
+    ) -> Option<String> {
+        // A value whose type names another of the impl's type parameters
+        // crosses no more than a generic function's.
+        let others = declared
+            .generics
+            .iter()
+            .any(|other| generic.is_none_or(|generic| other.name.text != generic.name.text));
+        if others {
+            return None;
+        }
+        let owner_written = slice(file.text, declared.owner.span()).trim();
+        let (stand, pass) = match generic {
+            Some(generic) => {
+                let stand = stand_for(file, generic, owner_written).ok()?;
+                let pass = self
+                    .pass(file, &stand.ty, &stand.written, Owner::None)
+                    .ok()?;
+                (Some(stand), pass)
+            }
+            None => (
+                None,
+                self.pass(file, &declared.owner, owner_written, owner)
+                    .ok()?,
+            ),
+        };
+        let island = format!("crate::{MODULE}");
+        let mut text = format!("fn {GIVE}(self, __call: &mut {island}::Call<'_>) {{\n");
+        match stand {
+            Some(Stand { written, make, .. }) => {
+                let _ = writeln!(
+                    text,
+                    "    let __value: {written} = {{ let __value = self; {make} }};"
+                );
+            }
+            None => text.push_str("    let __value = self;\n"),
+        }
+        // A marked value moved in ends every borrow of it (#1492).
+        if matches!(pass, Pass::Value) && matches!(owner, Owner::Marked(_)) {
+            text.push_str("    __call.release(&__value);\n");
+        }
+        give(&pass, "__value", "*__call", &island, &mut text);
+        text.push_str("}\n");
+        Some(text)
     }
 
     /// For the marked impl `declared` of one of the crate's own native
@@ -1792,13 +1969,17 @@ impl<'a> Generator<'a> {
         if !function.generics.iter().all(lifted) {
             reasons.push("generic functions can't cross yet".to_owned());
         }
+        if matches!(owner, Owner::Generic) {
+            reasons
+                .push("a function of an impl for every type of a bound can't cross yet".to_owned());
+        }
         for (index, parameter) in function.parameters.iter().enumerate() {
             signature.push_str(slice(file.text, Span::new(cursor, parameter.span.start())));
             let written = slice(file.text, parameter.ty.span());
             let _ = write!(signature, "__a{index}: {written}");
             cursor = parameter.span.end();
             let pass = match self.owned(file, function, parameter, owner) {
-                Some(owned) => owned.map(|(stand, pass)| (Some(stand), pass)),
+                Some(owned) => owned,
                 None => self
                     .pass(file, &parameter.ty, written, owner)
                     .map(|pass| (None, pass)),
@@ -1961,8 +2142,13 @@ impl<'a> Generator<'a> {
         // a copy, or what a lent place was given.
         let mut changed = Vec::new();
         let mut argument = |name: &str, pass: Pass, text: &mut String| match pass {
-            Pass::Value => {
-                let _ = writeln!(text, "    __call.argument(&{name});");
+            Pass::Value
+            | Pass::GiveParts
+            | Pass::Give
+            | Pass::GiveForCall { .. }
+            | Pass::GiveHeld { .. } => give(&pass, name, "__call", &island, text),
+            Pass::Trait { path } => {
+                let _ = writeln!(text, "    {path}::{GIVE}({name}, &mut __call);");
             }
             Pass::Borrow => {
                 let _ = writeln!(text, "    __call.argument({name});");
@@ -1988,46 +2174,6 @@ impl<'a> Generator<'a> {
             Pass::LendParts { mutable: true } => {
                 let _ = writeln!(text, "    __call.lent_mut(&mut *{name});");
                 changed.push((name.to_owned(), Changed::Parts));
-            }
-            Pass::GiveParts => {
-                // A move ends every borrow of the value (#1492).
-                let _ = writeln!(text, "    __call.release(&{name});");
-                let _ = writeln!(text, "    __call.given({name});");
-            }
-            Pass::Give => {
-                let _ = writeln!(text, "    {island}::give!(__call, {name});");
-            }
-            Pass::GiveForCall { ty } => {
-                let _ = writeln!(
-                    text,
-                    "    // SAFETY: only its lifetimes change, which have no layout. The\n    \
-                     // runner drops what is left of it once the call returns, and the\n    \
-                     // function, which rustc checked, keeps nothing of it past the call\n    \
-                     // but what its result borrows, which this signature types.\n    \
-                     #[allow(unsafe_code)]\n    \
-                     let {name} = unsafe {{ ::std::mem::transmute::<{}, {}>({name}) }};\n    \
-                     __call.for_call();\n    \
-                     {island}::give!(__call, {name});",
-                    unnamed_lifetimes(&ty),
-                    static_lifetimes(&ty)
-                );
-            }
-            Pass::GiveHeld { give, ty } => {
-                if let Some(ty) = ty {
-                    let _ = writeln!(
-                        text,
-                        "    // SAFETY: as for a value given for the call alone.\n    \
-                         #[allow(unsafe_code)]\n    \
-                         let {name} = unsafe {{ ::std::mem::transmute::<{}, {}>({name}) }};\n    \
-                         __call.for_call();",
-                        unnamed_lifetimes(&ty),
-                        static_lifetimes(&ty)
-                    );
-                }
-                let _ = writeln!(
-                    text,
-                    "    __call.give_parts(|out| {{ let __value = {name}; {give} }});"
-                );
             }
             Pass::LendSlice { element } => lend_slice(name, &element, &island, text),
             Pass::Object => {
@@ -3078,6 +3224,109 @@ fn without_rawr_attributes(text: &str) -> String {
     kept
 }
 
+/// The statements that give the parameter `name` to the call by value,
+/// as `pass`, a by-value pass, says: `call` is the call as `give!` takes
+/// it, `__call` or, through a `&mut`, `*__call`.
+fn give(pass: &Pass, name: &str, call: &str, island: &str, text: &mut String) {
+    match pass {
+        Pass::Value => {
+            let _ = writeln!(text, "    __call.argument(&{name});");
+        }
+        Pass::GiveParts => {
+            // A move ends every borrow of the value (#1492).
+            let _ = writeln!(text, "    __call.release(&{name});");
+            let _ = writeln!(text, "    __call.given({name});");
+        }
+        Pass::Give => {
+            let _ = writeln!(text, "    {island}::give!({call}, {name});");
+        }
+        Pass::GiveForCall { ty } => {
+            let _ = writeln!(
+                text,
+                "    // SAFETY: only its lifetimes change, which have no layout. The\n    \
+                 // runner drops what is left of it once the call returns, and the\n    \
+                 // function, which rustc checked, keeps nothing of it past the call\n    \
+                 // but what its result borrows, which this signature types.\n    \
+                 #[allow(unsafe_code)]\n    \
+                 let {name} = unsafe {{ ::std::mem::transmute::<{}, {}>({name}) }};\n    \
+                 __call.for_call();\n    \
+                 {island}::give!({call}, {name});",
+                unnamed_lifetimes(ty),
+                static_lifetimes(ty)
+            );
+        }
+        Pass::GiveHeld { give, ty } => {
+            if let Some(ty) = ty {
+                let _ = writeln!(
+                    text,
+                    "    // SAFETY: as for a value given for the call alone.\n    \
+                     #[allow(unsafe_code)]\n    \
+                     let {name} = unsafe {{ ::std::mem::transmute::<{}, {}>({name}) }};\n    \
+                     __call.for_call();",
+                    unnamed_lifetimes(ty),
+                    static_lifetimes(ty)
+                );
+            }
+            let _ = writeln!(
+                text,
+                "    __call.give_parts(|out| {{ let __value = {name}; {give} }});"
+            );
+        }
+        Pass::Borrow
+        | Pass::Mutable
+        | Pass::Lend { .. }
+        | Pass::LendSlice { .. }
+        | Pass::LendParts { .. }
+        | Pass::Object
+        | Pass::Trait { .. } => {
+            unreachable!("only a by-value pass gives its value")
+        }
+    }
+}
+
+/// The `Vec` of `item`, written in `file`, that stands in for an `impl
+/// IntoIterator<Item = item>` at `span`: its items drained into it.
+fn collected(file: &Source<'_>, item: &type_ref::Type, span: Span) -> Stand {
+    let item_written = slice(file.text, item.span());
+    Stand {
+        ty: std_path("Vec", vec![type_ref::Argument::Type(item.clone())], span),
+        written: format!("::std::vec::Vec<{item_written}>"),
+        make: format!(
+            "::std::iter::Iterator::collect::<::std::vec::Vec<{item_written}>>(\
+             ::std::iter::IntoIterator::into_iter(__value))"
+        ),
+    }
+}
+
+/// `generic`'s bounds but auto traits.
+fn bounds(generic: &item::GenericParam) -> Vec<&type_ref::Path> {
+    generic
+        .bounds
+        .iter()
+        .filter(|bound| {
+            bound.segments.last().is_none_or(|last| {
+                !matches!(last.name.text.as_str(), "Send" | "Sync" | "Unpin" | "Sized")
+            })
+        })
+        .collect()
+}
+
+/// The trait `bound` names, as a path without its arguments, which rustc
+/// infers: `IntoContent` of `IntoContent<'a, Message>`.
+fn trait_path(bound: &type_ref::Path) -> String {
+    let names = bound
+        .segments
+        .iter()
+        .map(|segment| segment.name.text.as_str())
+        .collect::<Vec<_>>()
+        .join("::");
+    if bound.global {
+        format!("::{names}")
+    } else {
+        names
+    }
+}
+
 /// The statements that lend the parameter `name`, a `&mut referent` or a
 /// `&referent`, for the call (D558.3). The lend's key is a type of its own,
 /// and its accessors, which the generated runner reaches the value through,
@@ -3171,12 +3420,7 @@ fn stand_for(
     written: &str,
 ) -> Result<Stand, String> {
     let refused = || format!("`{written}` can't cross yet");
-    let mut bounds = generic.bounds.iter().filter(|bound| {
-        bound.segments.last().is_none_or(|last| {
-            !matches!(last.name.text.as_str(), "Send" | "Sync" | "Unpin" | "Sized")
-        })
-    });
-    let (Some(bound), None) = (bounds.next(), bounds.next()) else {
+    let [bound] = bounds(generic)[..] else {
         return Err(refused());
     };
     let Some(last) = bound.segments.last() else {
@@ -3184,6 +3428,13 @@ fn stand_for(
     };
     let string = || std_path("String", Vec::new(), bound.span);
     match (last.name.text.as_str(), &last.arguments[..]) {
+        // `T: IntoIterator<Item = X>`, as a blanket impl's bound writes it.
+        ("IntoIterator", []) => generic
+            .projections
+            .iter()
+            .find(|(trait_, name, _)| trait_.text == last.name.text && name.text.as_str() == "Item")
+            .map(|(_, _, item)| collected(file, item, bound.span))
+            .ok_or_else(refused),
         ("Into", [type_ref::Argument::Type(target)]) => {
             let target_written = slice(file.text, target.span()).to_owned();
             Ok(Stand {
@@ -5569,6 +5820,50 @@ mod tests {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
         assert!(!text.contains("give!(__call, __a0)"), "{text}");
+    }
+
+    /// A marked trait is declared for native code with its impls, as
+    /// inboard's `sidebar::IntoContent`, and a marked function taking an
+    /// `impl` of it is given the argument by the impl that applies: the
+    /// marked type's as itself, the blanket one's over `IntoIterator` as a
+    /// `Vec` of its items.
+    #[test]
+    fn an_impl_of_a_marked_trait_crosses_by_the_impl_that_applies() {
+        let shadow = generate(
+            "// rawr\n#[derive(Debug, Default)]\npub struct Lines { lines: Vec<String> }\n\
+             pub trait IntoLines {\n    fn into_lines(self) -> Lines;\n    \
+             fn count(&self) -> usize { 0 }\n}\n\
+             impl IntoLines for Lines {\n    fn into_lines(self) -> Lines { self }\n}\n\
+             impl<T> IntoLines for T\nwhere\n    T: IntoIterator<Item = String>,\n{\n    \
+             fn into_lines(self) -> Lines { Lines { lines: self.into_iter().collect() } }\n}\n\
+             pub fn lines(lines: impl IntoLines) -> Lines { lines.into_lines() }\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "pub trait IntoLines {\n    fn into_lines(self) -> Lines;\n    \
+             fn count(&self) -> usize {\n        ::core::panic!(\"rawr: native code can't call \
+             `physics::IntoLines::count` yet: a trait's provided function can't cross yet\")\n    }\n    \
+             #[doc(hidden)]\n    fn __rawr_give(self, __call: &mut crate::__rawr_island::Call<'_>)\n",
+            "impl IntoLines for Lines {\n",
+            "    fn __rawr_give(self, __call: &mut crate::__rawr_island::Call<'_>) {\n        \
+             let __value = self;\n        __call.release(&__value);\n        \
+             __call.argument(&__value);\n    }\n",
+            "impl<T> IntoLines for T\nwhere\n    T: IntoIterator<Item = String>, {\n",
+            "can't call `::T::IntoLines::into_lines` yet: a function of an impl for every \
+             type of a bound can't cross yet",
+            "        let __value: ::std::vec::Vec<String> = { let __value = self; \
+             ::std::iter::Iterator::collect::<::std::vec::Vec<String>>(\
+             ::std::iter::IntoIterator::into_iter(__value)) };\n        \
+             __call.argument(&__value);\n",
+            "pub fn lines(__a0: impl IntoLines) -> Lines {\n    \
+             let mut __call = crate::__rawr_island::Call::new(\"physics::lines\", false);\n    \
+             IntoLines::__rawr_give(__a0, &mut __call);\n",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
     }
 
     #[test]

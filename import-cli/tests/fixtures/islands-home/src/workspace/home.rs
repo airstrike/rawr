@@ -404,3 +404,68 @@ impl Read {
         ids.join(" ")
     }
 }
+
+/// A panel's lines, as inboard's `sidebar::Content`, which native code
+/// gives a builder and a free function as itself or as text, through a
+/// trait declared here.
+#[derive(Debug, Default)]
+pub struct Lines {
+    lines: Vec<String>,
+}
+
+impl Lines {
+    pub fn label(&self) -> String {
+        self.lines.join(" ")
+    }
+}
+
+/// What becomes a panel's lines, as inboard's `sidebar::IntoContent`: the
+/// lines themselves, and text native code holds.
+pub trait IntoLines {
+    fn into_lines(self) -> Lines;
+}
+
+impl IntoLines for Lines {
+    fn into_lines(self) -> Lines {
+        self
+    }
+}
+
+impl IntoLines for Vec<String> {
+    fn into_lines(self) -> Lines {
+        Lines {
+            lines: self.into_iter().map(|line| format!("-{line}")).collect(),
+        }
+    }
+}
+
+/// A panel built from lines, as inboard's `Sidebar::content`.
+#[derive(Debug, Default)]
+pub struct Panel {
+    title: String,
+    lines: Lines,
+}
+
+impl Panel {
+    pub fn new(title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            lines: Lines::default(),
+        }
+    }
+
+    pub fn lines(mut self, lines: impl IntoLines) -> Self {
+        self.lines = lines.into_lines();
+        self
+    }
+
+    pub fn label(&self) -> String {
+        format!("{}: {}", self.title, self.lines.label())
+    }
+}
+
+/// The lines of anything that becomes lines, as inboard's
+/// `sidebar::content`.
+pub fn lines(lines: impl IntoLines) -> Lines {
+    lines.into_lines()
+}
