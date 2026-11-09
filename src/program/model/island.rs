@@ -61,15 +61,19 @@ pub(crate) const IN_PLACE: u8 = 4;
 /// With [`IN_PLACE`]: the reference is a `&'static`, which only a value
 /// that lives as long as the program fills.
 pub(crate) const LASTING: u8 = 8;
+/// The first byte of a call's header: the function returns `()`, which
+/// comes back whatever value its body's last statement left, as the part
+/// `self.tabs.remove(index);` removes (#1475).
+pub(crate) const UNIT_RESULT: u8 = 16;
 /// The first byte of a call's header: the result borrows a marked input,
 /// whose key follows the header (#1473). The call runs in a region kept
 /// in that input's pins, so the result lives as long as the input is
 /// borrowed.
-pub(crate) const ANCHORED: u8 = 16;
+pub(crate) const ANCHORED: u8 = 32;
 /// The first byte of a call's header: the call takes marked inputs `&mut`,
 /// whose keys follow the header and the anchor's (#1473). What native code
 /// borrowed of each is let go of first.
-pub(crate) const RELEASES: u8 = 32;
+pub(crate) const RELEASES: u8 = 64;
 
 /// Nesting deeper than this does not cross.
 const DEPTH: usize = 256;
@@ -77,7 +81,7 @@ const DEPTH: usize = 256;
 /// How a value is written for native code ([`Model::island_write_in`]):
 /// the region a call's result was made in, whose values move to native
 /// code, and the call's own lends, a part still lent by one of which goes
-/// back as `()` ([`Model::island_write_back`]).
+/// back as its index among them ([`Model::island_write_back`]).
 #[derive(Clone, Copy)]
 struct Writing<'a> {
     region: Option<crate::scope::Nonce>,
@@ -88,29 +92,94 @@ struct Writing<'a> {
 /// per generation.
 pub(crate) struct Types {
     paths: BTreeMap<String, type_def::Identity>,
-    /// What each member of a script type's value that is a crate's type is
-    /// attested as, by the type and its variant: the `themedef::Theme` of
-    /// `Theme::Selected(themedef::Theme)`, which native code gives by value
-    /// (#1466).
+    /// What the native values each member of a script type's value holds
+    /// are attested as, by the type and its variant: the `themedef::Theme`
+    /// of `Theme::Selected(themedef::Theme)`, which native code gives by
+    /// value (#1466), or the `wizard::State` of a field of
+    /// `Option<wizard::State>` (#1475).
     parts: Parts,
 }
 
 /// [`Types::parts`]: by the type and its variant's name, each member's
-/// witness, `None` for a member of no crate's type.
-type Parts = BTreeMap<
-    (type_def::Identity, Option<ImmutableString>),
-    Box<[Option<crate::host::runtime::Witness>]>,
->;
+/// [`Part`], `None` for a member that holds no crate's type.
+type Parts = BTreeMap<(type_def::Identity, Option<ImmutableString>), Box<[Option<Part>]>>;
+
+/// What a native value a value holds is attested as (#1475): its own
+/// type's witness, its element's through an `Option` or a `Vec`, and each
+/// member's through a tuple. A `Box` is the value it holds.
+pub(crate) enum Part {
+    /// A native value of the type the witness proves.
+    Native(crate::host::runtime::Witness),
+    /// An `Option` or a `Vec`, each of whose elements is this part.
+    Each(Box<Part>),
+    /// A tuple, by its members, `None` for one that holds no crate's type.
+    Members(Box<[Option<Part>]>),
+}
+
+impl Part {
+    /// The part of a value of `ty`, whose native values `witness` attests;
+    /// `None` when it holds no crate's type.
+    fn of(
+        ty: &crate::resolve::type_ref::Type,
+        model: &Model,
+        witness: &impl Fn(&crate::host::runtime::type_ref::Type) -> crate::host::runtime::Witness,
+    ) -> Option<Self> {
+        if let Some(inner) = ty.box_element() {
+            return Self::of(inner, model, witness);
+        }
+        if let Some(inner) = ty.option_element().or_else(|| ty.vec_element()) {
+            return Self::of(inner, model, witness).map(|inner| Self::Each(Box::new(inner)));
+        }
+        match ty {
+            crate::resolve::type_ref::Type::Tuple { members, .. } => {
+                let members = members
+                    .iter()
+                    .map(|member| Self::of(member, model, witness))
+                    .collect::<Box<[_]>>();
+                members
+                    .iter()
+                    .any(Option::is_some)
+                    .then_some(Self::Members(members))
+            }
+            crate::resolve::type_ref::Type::Path(path)
+                if matches!(path.target, crate::resolve::type_ref::Target::Host { .. }) =>
+            {
+                crate::host::runtime::type_ref::Type::from_resolved_in(ty, model, &[])
+                    .ok()
+                    .map(|ty| Self::Native(witness(&ty)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The witness of the native value `part` is.
+    fn witness(part: Option<&Self>) -> Option<&crate::host::runtime::Witness> {
+        match part? {
+            Self::Native(witness) => Some(witness),
+            Self::Each(_) | Self::Members(_) => None,
+        }
+    }
+
+    /// The part of the `index`th member of a value `part` is: an
+    /// element's, or a tuple member's.
+    fn member(part: Option<&Self>, index: usize) -> Option<&Self> {
+        match part? {
+            Self::Each(inner) => Some(inner),
+            Self::Members(members) => members.get(index)?.as_ref(),
+            Self::Native(_) => None,
+        }
+    }
+}
 
 impl Types {
-    /// The witness of the `index`th member of `identity`'s value, of its
+    /// The part of the `index`th member of `identity`'s value, of its
     /// `variant` for an enum.
     fn part(
         &self,
         identity: &type_def::Identity,
         variant: Option<&str>,
         index: usize,
-    ) -> Option<&crate::host::runtime::Witness> {
+    ) -> Option<&Part> {
         self.parts
             .get(&(identity.clone(), variant.map(ImmutableString::from)))?
             .get(index)?
@@ -318,17 +387,7 @@ impl Model {
         let members = |members: &[crate::resolve::type_ref::Type]| {
             members
                 .iter()
-                .map(|ty| {
-                    let crate::resolve::type_ref::Type::Path(path) = ty else {
-                        return None;
-                    };
-                    if !matches!(path.target, crate::resolve::type_ref::Target::Host { .. }) {
-                        return None;
-                    }
-                    crate::host::runtime::type_ref::Type::from_resolved_in(ty, self, &[])
-                        .ok()
-                        .map(|ty| witness(&ty))
-                })
+                .map(|ty| Part::of(ty, self, &witness))
                 .collect::<Box<[_]>>()
         };
         let mut parts = Parts::new();
@@ -360,14 +419,14 @@ impl Model {
 
     /// One value from `reader`, built in this model. `lent` holds the
     /// script values of what the call's trampoline lends, and `given` the
-    /// native values it gives, each taken once; `witness` proves the type a
-    /// given value is, which an argument is.
+    /// native values it gives, each taken once; `part` proves the type of
+    /// each given value the value holds, as an argument's does.
     pub(crate) fn island_read(
         &self,
         types: &Types,
         lent: &[crate::scope::Lent],
         given: &mut [Option<crate::island::Given>],
-        witness: Option<&crate::host::runtime::Witness>,
+        part: Option<&Part>,
         reader: &mut Reader<'_>,
         depth: usize,
     ) -> Result<Dynamic, String> {
@@ -388,8 +447,9 @@ impl Model {
             ARRAY => {
                 let length = reader.members()?;
                 let mut items = crate::Array::with_capacity(length);
-                for _ in 0..length {
-                    items.push(self.island_read(types, lent, given, None, reader, depth)?);
+                for index in 0..length {
+                    let part = Part::member(part, index);
+                    items.push(self.island_read(types, lent, given, part, reader, depth)?);
                 }
                 Dynamic::from_array(items)
             }
@@ -407,10 +467,13 @@ impl Model {
                     .get_mut(index)
                     .and_then(Option::take)
                     .ok_or("a native value the call has no place for")?;
-                crate::island::lodged(value, witness)?
+                crate::island::lodged(value, Part::witness(part))?
             }
             NONE => crate::option::none(),
-            SOME => crate::option::some(self.island_read(types, lent, given, None, reader, depth)?),
+            SOME => {
+                let part = Part::member(part, 0);
+                crate::option::some(self.island_read(types, lent, given, part, reader, depth)?)
+            }
             OK => crate::result::ok(self.island_read(types, lent, given, None, reader, depth)?),
             ERR => crate::result::err(self.island_read(types, lent, given, None, reader, depth)?),
             STRUCT => {
@@ -423,8 +486,8 @@ impl Model {
                 let length = reader.members()?;
                 let mut fields = Vec::with_capacity(length);
                 for index in 0..length {
-                    let witness = types.part(identity, None, index);
-                    fields.push(self.island_read(types, lent, given, witness, reader, depth)?);
+                    let part = types.part(identity, None, index);
+                    fields.push(self.island_read(types, lent, given, part, reader, depth)?);
                 }
                 let proof = self
                     .prove_struct(identity, &definition.schema, fields.into_boxed_slice())
@@ -452,8 +515,8 @@ impl Model {
                 let length = reader.members()?;
                 let mut payload = Vec::with_capacity(length);
                 for index in 0..length {
-                    let witness = types.part(identity, Some(variant_name), index);
-                    payload.push(self.island_read(types, lent, given, witness, reader, depth)?);
+                    let part = types.part(identity, Some(variant_name), index);
+                    payload.push(self.island_read(types, lent, given, part, reader, depth)?);
                 }
                 let proof = self
                     .prove_enum(
@@ -492,9 +555,9 @@ impl Model {
 
     /// [`Model::island_write_in`] of a `&mut` argument native code takes back
     /// after the call, whose parts it lent the call where they are (#1469):
-    /// a part still lent by one of `own`, the call's own lends, is still
-    /// where it was, and goes back as `()`, as an unchanged lent `&mut`
-    /// does.
+    /// a part still lent by one of `own`, the call's own lends, goes back
+    /// as its index among them, by which native code finds its place, where
+    /// the call left it (#1475).
     pub(crate) fn island_write_back(
         &self,
         value: &Dynamic,
@@ -575,8 +638,11 @@ impl Model {
                 // A lent value can't leave the call it was lent for, in its
                 // result or in an argument native code takes back.
                 if let Some(lent) = value.read_lock::<crate::scope::Lent>() {
-                    if writing.own.contains(&lent.nonce()) {
-                        out.push(UNIT);
+                    // Native code finds the part's place by its index among
+                    // the call's lends, where it moved to (#1475).
+                    if let Some(index) = writing.own.iter().position(|own| *own == lent.nonce()) {
+                        out.push(LENT);
+                        count(index, out);
                         return Ok(());
                     }
                     return Err(format!(

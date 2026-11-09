@@ -1,5 +1,6 @@
 //! Native: a child of the marked `home`, whose tasks and elements `home`
-//! maps into its own messages.
+//! maps into its own messages, and whose state, which can't be cloned,
+//! `home` keeps in an `Option` while it is open.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
@@ -13,4 +14,30 @@ pub fn start(count: u32) -> ui::Task<Message> {
 /// The wizard's element, which shows `label` and borrows it.
 pub fn view(label: &str, count: u32) -> ui::Element<'_, Message> {
     ui::button(label, Message::Step(count))
+}
+
+/// The open wizard: it can't be cloned, and says when it closes.
+#[derive(Debug)]
+pub struct State {
+    step: u32,
+}
+
+impl State {
+    pub fn new(step: u32) -> Self {
+        Self { step }
+    }
+
+    pub fn step(&self) -> u32 {
+        self.step
+    }
+
+    pub fn advance(&mut self) {
+        self.step += 1;
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        println!("wizard closed at step {}", self.step);
+    }
 }

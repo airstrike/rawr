@@ -1347,9 +1347,14 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 /// and native code holds two of their elements at once and shows one each
 /// frame (#1473). A `match`
 /// on `Message::Wizard(wizard::Message::Step(..))` is exhaustive where
-/// rustc's is. `rawr check` passes, `rawr run` prints what `cargo run`
-/// prints, and body edits of `update` and `view` swap with the state
-/// native code keeps.
+/// rustc's is. The state's open wizard, an `Option` of a native state,
+/// and its tabs, a `Vec` of a native type, can't be cloned: native code
+/// lends them where they are, `&mut` too, so marked methods open, advance
+/// and close the wizard and push, rename and close tabs, and each closes
+/// once (#1475). Its panes, a `Vec` of a marked type over a native tab,
+/// cross the same way. `rawr check` passes, `rawr run` prints what `cargo
+/// run` prints, and body edits of `update` and `view` swap with the state
+/// native code keeps, tabs included.
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
@@ -1374,7 +1379,15 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     assert!(
         printed.contains("shown hello Some(Inbox(Read(5))) and wizard\n")
             && printed.contains("shown home Some(Wizard(Step(2)))\nview hello\n")
-            && printed.ends_with("view count\npressed 2: hi! after 3 edits, count 5\n"),
+            && printed.ends_with(
+                "view count\npressed 2: hi! after 3 edits, count 5\nno wizard over []\n\
+             advanced true\nwizard at 6 over []\nwizard at 6 over [inbox, ideas, drafts]\n\
+             tab inbox closed\nwizard at 6 over [ideas, drafts]\nwizard closed at step 6\n\
+             wizard at 5 over [ideas, drafts]\nwizard closed at step 5\nadvanced false\n\
+             no wizard over [ideas, drafts]\ntab drafts closed\ntab ideas closed\n\
+             no wizard over []\npanes [left | middle | right*]\ntab middle closed\n\
+             panes [left | right*]\ntab left closed\ntab right closed\npanes []\n"
+            ),
         "{printed}"
     );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -1423,12 +1436,13 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
         let line = run.until(|_| true);
         assert_eq!(line, expected, "{}", run.seen.join("\n"));
     }
-    // Each tick adds `STEP` to the count the workspace keeps, and shows
-    // the screen's element.
+    // Each tick adds `STEP` to the count the workspace keeps, its kept tab
+    // stays, and it shows the screen's element.
     let tick = |line: &str| -> Option<(u32, u32, u32, String)> {
         let (tick, rest) = line.strip_prefix("tick ")?.split_once(" from ")?;
         let (from, rest) = rest.split_once(" by ")?;
         let (by, shows) = rest.split_once(" shows ")?;
+        let by = by.strip_suffix(" over [kept]")?;
         Some((
             tick.parse().ok()?,
             from.parse().ok()?,

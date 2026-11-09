@@ -829,7 +829,7 @@ struct Calls {
     items: HashMap<(bool, String), item::Value>,
     types: program::model::island::Types,
     /// What each native value a function takes by value is attested as.
-    inputs: HashMap<(bool, String), Box<[Option<crate::host::runtime::Witness>]>>,
+    inputs: HashMap<(bool, String), Box<[Option<program::model::island::Part>]>>,
 }
 
 /// One call from native code: the function's path and the arguments its
@@ -1386,7 +1386,10 @@ impl Calls {
             .map(|(key, types)| {
                 let witnesses = types
                     .iter()
-                    .map(|ty| ty.as_ref().map(|ty| runtime.witness_for(ty)))
+                    .map(|ty| {
+                        ty.as_ref()
+                            .map(|ty| program::model::island::Part::Native(runtime.witness_for(ty)))
+                    })
                     .collect();
                 (key.clone(), witnesses)
             })
@@ -1431,6 +1434,8 @@ impl Calls {
             Gives::InPlace {
                 lasting: flags & program::model::island::LASTING != 0,
             }
+        } else if flags & program::model::island::UNIT_RESULT != 0 {
+            Gives::Unit
         } else {
             Gives::Value
         };
@@ -1481,8 +1486,8 @@ impl Calls {
                 values.push(value);
                 continue;
             }
-            let witness = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
-            match model.island_read(&self.types, lent, given, witness, &mut reader, 0) {
+            let part = inputs.and_then(|inputs| inputs.get(index)?.as_ref());
+            match model.island_read(&self.types, lent, given, part, &mut reader, 0) {
                 Ok(value) => values.push(value),
                 Err(error) => {
                     restore(&held, &mut values);
@@ -1658,6 +1663,7 @@ impl Calls {
                 reply.extend_from_slice(&(natives.len() as u64).to_le_bytes());
                 natives.push(lent);
             }
+            (Gives::Unit, _) => reply.push(program::model::island::UNIT),
             (Gives::Value, _) => model
                 .island_write_in(
                     &result,
@@ -1862,6 +1868,8 @@ enum Gives {
     /// a static's place, which `lasting` asks for, or else one the receiver
     /// holds, lent for as long as it is borrowed.
     InPlace { lasting: bool },
+    /// `()`, whatever value the body's last statement left.
+    Unit,
 }
 
 /// What a stand-in's std trait gets back (`Calls::ask`).
