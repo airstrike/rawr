@@ -22,7 +22,8 @@
         {"text":"A crate's `&self` or `&mut self` method now reaches an element of a slice that a native method lends where it is. Examples are `entry.is_shared()` in `for entry in registry.entries()`, and on a `Vec<&Entry>` collected from it. It used to panic at run time with \"a value reached an adapter as a type its signature doesn't take\".","issues":[1515]},
         {"text":"A browser universe prepares about four times faster: elevato's `prepare()` goes from 1.25 s to about 0.29 s, measured natively. A whole-crate or whole-module re-export is now one alias that the runner's registry follows, not a copy of its entries. The facade plan also writes identities as hex. elevato's plan drops from 25.8 MB to 14.8 MB, and its wasm from 51.9 MB to 41.0 MB.","issues":[1516],"refs":[1360,1384,435]},
         {"text":"A call inside a crate macro's arguments now runs in Rust's order around a call whose value borrows a local, as in inboard's `stack![page, opaque(wizard.view(catalog, theme).map(..))]`. It used to be refused as \"a call or assignment run before a call whose value borrows a local\".","issues":[1521]},
-        {"text":"A marked view whose scope frame captures values that aren't `Send` or `Sync` now builds under `rawr run`. Examples are a native view of borrows into a type with `RefCell` or `OnceCell` caches, and an owned iced `Element`, as in inboard's `wizard.view(catalog, ..)` and `sidebar::header_row`. Before, the generated runner failed with E0277. A frame's opener stays on the thread that made it. A native value lent to a marked call by `&` or `&mut` no longer has to be `Send` or `Sync`.","issues":[1523]}
+        {"text":"A marked view whose scope frame captures values that aren't `Send` or `Sync` now builds under `rawr run`. Examples are a native view of borrows into a type with `RefCell` or `OnceCell` caches, and an owned iced `Element`, as in inboard's `wizard.view(catalog, ..)` and `sidebar::header_row`. Before, the generated runner failed with E0277. A frame's opener stays on the thread that made it. A native value lent to a marked call by `&` or `&mut` no longer has to be `Send` or `Sync`.","issues":[1523]},
+        {"text":"Projects now share generated bindings for crates whose build scripts leave native build files, such as openpnp_capture_sys's CMake tree and aws-lc-sys's stray objects. rawr compares only the OUT_DIR files a compile read. `rawr check` reads the project's build-script outputs when its cargo check ends, before another toolchain's build can rerun them. Not sharing names its real reason, and each note prints once. In a fixture, a second project's check went from 10.5 s, not shared, to 4.0 s, shared.","issues":[1524]}
       ]
     },
     "releases": [
@@ -3032,7 +3033,7 @@
     {"issue":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"open","category":"Health"},
     {"issue":1210,"title":"Decide the fate of input/membership, the unwired contained cargo-package listing","state":"open","category":"Health"},
-    {"issue":1211,"title":"bindings::tests::a_difference_cleans_the_nightly_run_once_and_then_is_drift fails under the full lib suite","state":"open","category":"Health"},
+    {"issue":1211,"title":"bindings::tests::a_difference_cleans_the_nightly_run_once_and_then_is_drift fails under the full lib suite","state":"closed","category":"Health"},
     {"issue":1212,"title":"An opaque iterator's next declared without its owner through a re-export; core's Iterator at an unstable path","state":"open","category":"Health"},
     {"issue":1213,"title":"After the projection work for #1099, gallery has 50 x E0271 <Renderer as…","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1214,"title":"With #1074 fixed, rawr check on iced's tour stops at open::that_in_background(..): E0433 cannot…","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3344,7 +3345,9 @@
     {"issue":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open","category":"Platforms"},
     {"issue":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open","category":"No glue (D593)"},
     {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired","category":"No glue (D593)"},
-    {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open","category":"Divergences from rustc"}
+    {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4299,7 +4302,9 @@
             {"number":1515,"title":"A method on an element of a slice a native method returns panics as a rawr bug","state":"open"},
             {"number":1521,"title":"A call in a crate macro's arguments ahead of a call that borrows a local was refused as run before it","state":"open"},
             {"number":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired"},
-            {"number":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open"}
+            {"number":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"open"},
+            {"number":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"open"},
+            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"}
           ]
         }
       ]
@@ -4454,7 +4459,7 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs's universe checks and runs in Chrome (0.3.172). Its prepare went from 11 s to about 0.3 s (#1512, #1516), and its wasm is 41 MB raw and 5.5 MB as brotli. Next: a registry built on first lookup (#1519), with prepare at about 0.63 s in Chrome (#1518), duplicated facades (#1517), then in-place reload (#1455)",
+          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs is live on rawr's universe (2026-11-09). It ships a 5.5 MB brotli wasm, takes 1 to 1.4 s from load to game, and swaps a good edit in 30 ms. Next: a registry built on first lookup to take prepare off the main thread (#1519), then in-place reload (#1455)",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
