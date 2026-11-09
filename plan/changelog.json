@@ -179,7 +179,8 @@
       {"text":"A marked type can hold a native value that isn't `Clone` inside an `Option`, a `Vec`, a `Box` or a tuple, as inboard's `home::State` holds `wizard: Option<wizard::State>`. Native code lends the value to marked methods where it is, so `self.wizard = Some(..)`, `self.wizard = None`, `self.tabs.push(..)` and `self.tabs.remove(i)` work as in Rust.","issues":[1475,1482]},
       {"text":"A marked function that returns `()` gives native code `()` even when its last statement leaves a value, such as the native part `self.tabs.remove(index);` removes. That case used to fail with E0515.","issues":[1486]},
       {"text":"A save to a program with a native `main` and an idle window loop now shows at once on macOS. rawr asks the program's windows to redraw when it queues a save, so the next frame takes it with no input. Before, the save waited for the next pointer or key event.","issues":[1479]},
-      {"text":"Native code can hold the `Element<'a, Message>` that a marked `view<'a>(&'a self, ..)` or `view(&State) -> Element<'_, Message>` returns while it borrows the state. The element's borrowed text lives as long as Rust says it does, and `.map(Message::Wizard)` on such an element works inside the view.","issues":[1473]}
+      {"text":"Native code can hold the `Element<'a, Message>` that a marked `view<'a>(&'a self, ..)` or `view(&State) -> Element<'_, Message>` returns while it borrows the state. The element's borrowed text lives as long as Rust says it does, and `.map(Message::Wizard)` on such an element works inside the view.","issues":[1473]},
+      {"text":"A project that links a native library rawr's runtime also links, such as psm through stacker, now reuses the runtime rawr warmed when both take it from one package at Cargo-compatible versions. Its first run after an install no longer compiles rawr in the project: inboard's 11-minute first start goes away.","issues":[1480]}
     ]
   },
   "releases": [
