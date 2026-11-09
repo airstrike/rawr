@@ -504,11 +504,7 @@ impl Model {
                     .clone()
                     .into_immutable_string()
                     .map_err(|actual| format!("a kept `&str` is a `{actual}`"))?;
-                let native = std::ptr::slice_from_raw_parts(
-                    std::ptr::with_exposed_provenance::<u8>(address),
-                    length,
-                ) as *const str;
-                crate::scope::keep_native_text(text, native);
+                crate::scope::keep_native_text(text, address, length);
                 // It outlives what the call makes of it, as rustc says, so a
                 // crate call that borrows it makes a value of its own, never
                 // one of a region that ends with the call.
@@ -695,6 +691,14 @@ impl Model {
                 out.extend_from_slice(&u32::from(*value).to_le_bytes());
             }
             Union::Str(value, ..) => {
+                // The program's copy of a `&str` native code gave the call
+                // goes back with where native code's text is, which a
+                // `&'a str` native code takes back is.
+                if let Some((address, length)) = crate::scope::native_text(value) {
+                    out.push(KEPT_TEXT);
+                    count(address, out);
+                    count(length, out);
+                }
                 out.push(STR);
                 text(value, out);
             }

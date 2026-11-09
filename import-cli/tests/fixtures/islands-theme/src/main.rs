@@ -113,5 +113,15 @@ fn main() {
         caption.draw(&crate_theme),
         std::ptr::eq(caption.content(), label.as_str())
     );
+    let heading = String::from("panel");
+    let mut panel = home::Panel::new(&heading)
+        .item(home::inbox(&theme))
+        .item(home::titled("mail", &dark));
+    panel.push(home::page(None, &dark));
+    println!("{}", panel.draw(&theme));
+    println!(
+        "panel on native text {}",
+        std::ptr::eq(panel.title(), heading.as_str())
+    );
     println!("clones {}", theme::clones());
 }

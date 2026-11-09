@@ -26,7 +26,9 @@
         {"text":"std's macros now work by their paths and through a crate's re-export, as log's `__private_api::module_path!()` and tracing's `__macro_support::concat!` do. `format_args!` is supported.","issues":[1548]},
         {"text":"Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`.","issues":[1558]},
         {"text":"A `static` declared in a marked body, or by a crate macro at each call, is named only in its block. One of a native type is a native value with a fixed `'static` address for the program's life, made the first time its block runs. A save that leaves its declaration alone keeps it, and a save that changes it makes a new one without a restart. Statics that refer to each other, as tracing's `META` and `__CALLSITE` do, are refused at `rawr check` for now.","issues":[1547]},
-        {"text":"A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597.","issues":[1562],"refs":[1440]}
+        {"text":"A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597.","issues":[1562],"refs":[1440]},
+        {"text":"A marked function that native code calls with its own `&str`, and that returns a crate value borrowing it, now builds and keeps native code's own text. inboard's `subtitle<'a>(label: &'a str) -> Text<'a>` is one. It used to fail the native build with \"lifetime may not live long enough\", because iced's `Text` is invariant in its lifetime. Each `&str` also stops leaking one pinned copy per call.","issues":[1566]},
+        {"text":"A marked struct or enum with a lifetime parameter, such as a `Panel<'a>` of `&'a str` and `Element<'a, Message>`s, now crosses to native code. Native code builds one through a chain of marked builder methods, by value and by `&mut`, and keeps it between calls. Its borrows are native code's own.","issues":[1557]}
       ]
     },
     "releases": [
@@ -3417,7 +3419,7 @@
     {"issue":1554,"title":"Native code can't pass its own type that implements a marked trait to a marked fn's impl Trait","state":"open","category":"No glue (D593)"},
     {"issue":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open","category":"Divergences from rustc"},
     {"issue":1556,"title":"rawr check doesn't know the types native code instantiates a marked generic fn or type at","state":"open","category":"No glue (D593)"},
-    {"issue":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"open","category":"No glue (D593)"},
+    {"issue":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"closed","category":"No glue (D593)"},
     {"issue":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"open","category":"No glue (D593)"},
     {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open","category":"No glue (D593)"},
     {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)"},
@@ -3425,7 +3427,9 @@
     {"issue":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"open","category":"No glue (D593)"},
     {"issue":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open","category":"Divergences from rustc"},
     {"issue":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":1565,"title":"A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)"}
+    {"issue":1565,"title":"A native body static can't be formatted with {:?}, have its fields read, or be read before the block's first static","state":"open","category":"No glue (D593)"},
+    {"issue":1566,"title":"A marked fn returning a crate value that borrows its &str argument fails the native build","state":"open","category":"No glue (D593)"},
+    {"issue":1567,"title":"A marked fn's &'a str result borrowed from a native &'a str argument is refused","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

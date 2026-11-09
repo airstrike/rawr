@@ -20,6 +20,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Native code can now format a marked value it is lent as `&dyn Debug`, `&dyn Display` or another std formatting trait. It also takes `format_args!` as `fmt::Arguments`. (#1558)
 - A `static` declared in a marked body, or by a crate macro at each call, is named only in its block. One of a native type is a native value with a fixed `'static` address for the program's life, made the first time its block runs. A save that leaves its declaration alone keeps it, and a save that changes it makes a new one without a restart. Statics that refer to each other, as tracing's `META` and `__CALLSITE` do, are refused at `rawr check` for now. (#1547)
 - A crate function that takes a `&'static T` of a native type, or a method that takes `&'static self`, now takes a static's own place. It used to fail the runner build with E0597. (#1562; part of #1440)
+- A marked function that native code calls with its own `&str`, and that returns a crate value borrowing it, now builds and keeps native code's own text. inboard's `subtitle<'a>(label: &'a str) -> Text<'a>` is one. It used to fail the native build with "lifetime may not live long enough", because iced's `Text` is invariant in its lifetime. Each `&str` also stops leaking one pinned copy per call. (#1566)
+- A marked struct or enum with a lifetime parameter, such as a `Panel<'a>` of `&'a str` and `Element<'a, Message>`s, now crosses to native code. Native code builds one through a chain of marked builder methods, by value and by `&mut`, and keeps it between calls. Its borrows are native code's own. (#1557)
 
 ## 0.3.174 (2026-11-09)
 
