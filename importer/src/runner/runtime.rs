@@ -22,7 +22,8 @@
 //! - a crate both the project and rawr name whose types cross between them,
 //!   such as `futures_core::Stream`, which rustc reports as two versions of
 //!   one crate (D613.3);
-//! - a native static library that both link.
+//! - a native static library that both link from different packages, or
+//!   from one package at versions Cargo keeps apart (`native`).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
@@ -37,6 +38,7 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::cargo::config::INTERNAL_ALIAS;
 use crate::node;
 
+mod native;
 pub(crate) mod users;
 
 const DOMAIN: &[u8] = b"rawr.runtime/v1";
@@ -64,7 +66,7 @@ pub(crate) struct Runtime {
     lib: PathBuf,
     stamp: PathBuf,
     key: String,
-    native: BTreeSet<String>,
+    native: BTreeSet<native::Link>,
     /// The project's cargo, which settles the runner's lockfile.
     cargo: PathBuf,
     /// A shared lock on the entry: cleanup never removes it while held.
@@ -454,15 +456,15 @@ impl Runtime {
     }
 
     /// Why a successful runner build still can't keep the shared runtime:
-    /// a static library that a build script of the project's links too.
+    /// a static library that a build script of the project's links too,
+    /// from a copy that may disagree with the runtime's (`native`).
     /// `messages` is the runner build's cargo JSON.
     pub(crate) fn native_clash(&self, messages: &[u8]) -> Option<String> {
-        let linked = static_libraries(messages);
-        let both = linked.intersection(&self.native).next()?;
-        Some(format!(
-            "the native library `{both}` is linked both by this project and by rawr's shared \
-             runtime"
-        ))
+        native::Link::all_in(messages).iter().find_map(|project| {
+            self.native
+                .iter()
+                .find_map(|runtime| project.conflict(runtime))
+        })
     }
 }
 
@@ -882,8 +884,7 @@ fn ensure(
     let native = fs::read_to_string(entry.join("native"))
         .map_err(io("read the native libraries of rawr's runtime", entry))?
         .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
+        .filter_map(native::Link::from_record)
         .collect();
     lock.unlock().map_err(io("unlock rawr's runtime", &lease))?;
     lock.lock_shared()
@@ -1108,9 +1109,9 @@ fn publish(entry: &Path, key: &str, messages: &[u8]) -> Result<(), node::Error> 
     }
     fs::rename(&staging, &lib).map_err(io("publish rawr's runtime", lib.clone()))?;
     let _ = fs::remove_dir_all(&retired);
-    let native = static_libraries(messages)
-        .into_iter()
-        .map(|name| name + "\n")
+    let native = native::Link::all_in(messages)
+        .iter()
+        .map(native::Link::record)
         .collect::<String>();
     fs::write(entry.join("native"), native).map_err(io(
         "record the native libraries of rawr's runtime",
@@ -1120,35 +1121,6 @@ fn publish(entry: &Path, key: &str, messages: &[u8]) -> Result<(), node::Error> 
     fs::write(&partial, format!("{key}\n")).map_err(io("stamp rawr's runtime", partial.clone()))?;
     fs::rename(&partial, entry.join("built"))
         .map_err(io("stamp rawr's runtime", entry.join("built")))
-}
-
-/// The static libraries the build scripts in cargo's JSON `messages` link.
-fn static_libraries(messages: &[u8]) -> BTreeSet<String> {
-    let mut libraries = BTreeSet::new();
-    for line in messages.split(|byte| *byte == b'\n') {
-        let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
-            continue;
-        };
-        if message.get("reason").and_then(serde_json::Value::as_str)
-            != Some("build-script-executed")
-        {
-            continue;
-        }
-        for library in message
-            .get("linked_libs")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-        {
-            if let Some((kind, name)) = library.split_once('=')
-                && kind.starts_with("static")
-            {
-                libraries.insert(name.split(':').next().unwrap_or(name).to_owned());
-            }
-        }
-    }
-    libraries
 }
 
 fn write_changed(path: &Path, bytes: &[u8]) -> Result<(), node::Error> {
@@ -1270,7 +1242,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             lib: PathBuf::from("/home/rawr/runtime/0123/lib"),
             stamp: PathBuf::from("/home/rawr/runtime/0123/built"),
             key: "0123456789abcdef0123".into(),
-            native: ["sha2-asm".to_owned()].into(),
+            native: super::native::Link::from_record(
+                "sha2-asm\tregistry+https://github.com/rust-lang/crates.io-index#sha2-asm@0.6.4",
+            )
+            .into_iter()
+            .collect(),
             cargo: PathBuf::from("cargo"),
             _lease: fs::File::create(root.join("lock")).unwrap(),
         }
@@ -1431,7 +1407,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         let reason = super::link_failure(stderr).unwrap();
         assert!(reason.contains("`futures_core`"), "{reason}");
         assert_eq!(super::link_failure("error[E0308]: mismatched types"), None);
-        let messages = br#"{"reason":"build-script-executed","package_id":"x","linked_libs":["static=sha2-asm","dylib=System"],"linked_paths":[],"cfgs":[],"env":[],"out_dir":"/o"}
+        let messages = br#"{"reason":"build-script-executed","package_id":"path+file:///work/asm#sha2-asm@0.6.4","linked_libs":["static=sha2-asm","dylib=System"],"linked_paths":[],"cfgs":[],"env":[],"out_dir":"/o"}
 "#;
         let clash = runtime().native_clash(messages).unwrap();
         assert!(clash.contains("`sha2-asm`"), "{clash}");
