@@ -944,6 +944,16 @@ pub fn main_failure(error: &program::Error) -> String {
     }
 }
 
+/// A future's failure from its function's `error`: a run-time failure as
+/// it is, so a panic keeps its message and position; rawr's own refusal to
+/// run the function by its text.
+fn runtime_error(error: program::Error) -> Box<crate::EvalAltResult> {
+    match error {
+        program::Error::Evaluation { error, .. } => error,
+        error => crate::future::error(error.to_string()),
+    }
+}
+
 /// The panic of `main`'s run-time failure `error`, with Rust's note on
 /// backtraces.
 fn main_panic(error: &crate::EvalAltResult) -> String {
@@ -1244,7 +1254,7 @@ impl crate::future::Host for Current {
         self.bootstrap
             .catalog()
             .invoke_item(function, arguments)
-            .map_err(|error| crate::future::error(error.to_string()))
+            .map_err(runtime_error)
     }
 
     #[cfg(feature = "sync")]
@@ -1581,7 +1591,7 @@ impl crate::future::Remote for Shared {
     ) -> crate::RawrResultOf<Dynamic> {
         self.authority
             .invoke_bound(function, arguments, self.runtime.clone())
-            .map_err(|error| crate::future::error(error.to_string()))
+            .map_err(runtime_error)
     }
 
     fn validate(
