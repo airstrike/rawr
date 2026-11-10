@@ -221,7 +221,8 @@ use op::{
     move_into_call, moved_input, ordering_discriminant, owner_arguments, owner_id, owner_key,
     probe_rank, receiver_rank, script_type, ExecutableOp, InstantiatedHostSignature,
     IntrinsicOperation, Keys, Op, PreludeOp, ProjectionOperation, WitnessedOp,
-    FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS, SHAPED_HASHED, SHAPED_TOTAL,
+    FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS, SHAPED_HASHED, SHAPED_OPTION, SHAPED_RESULT,
+    SHAPED_TOTAL,
 };
 use operator::{cast_value, compound_operator, kind_code, unsigned_negation, unsigned_order};
 use pattern::{PatternBinding, Prelude};

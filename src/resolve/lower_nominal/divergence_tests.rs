@@ -668,6 +668,29 @@ main();
         output,
         "Some(\"ab\") Err(\"bad 3\") 4 None {1, 3} Some(5)\n"
     );
+    // A `Result` or an `Option` of a map or a set collects the payloads
+    // into one, as its `FromIterator` does (#937).
+    let output = printed(
+        r#"
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+fn main() {
+    let words: Result<HashMap<String, usize>, String> =
+        ["a", "bb", "a"].iter().map(|w| Ok((w.to_string(), w.len()))).collect();
+    let words = words.unwrap();
+    let failed: Result<BTreeMap<i32, i32>, String> =
+        vec![Ok((2, 1)), Err("x".to_string()), Ok((1, 1))].into_iter().collect();
+    let set: Option<BTreeSet<i32>> = vec![Some(3), Some(1), Some(3)].into_iter().collect();
+    let none: Option<HashSet<i32>> = vec![Some(1), None].into_iter().collect();
+    let sorted: Result<BTreeMap<i32, char>, ()> = vec![Ok((2, 'b')), Ok((1, 'a'))].into_iter().collect();
+    println!("{} {:?} {failed:?} {set:?} {none:?} {sorted:?}", words.len(), words.get("bb"));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "2 Some(2) Err(\"x\") Some({1, 3}) None Ok({1: 'a', 2: 'b'})\n"
+    );
     for (source, expected) in [
         (
             "fn f() -> Vec<String> { vec![1, 2].into_iter().collect() }",
