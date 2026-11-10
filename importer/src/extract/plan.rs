@@ -1049,6 +1049,7 @@ impl Probe {
             .into_iter()
             .collect();
         let command = process::Command::probe(arguments, command_directory, environment)?;
+        crate::progress::probed();
         let _ = native
             .run(&command, limits.process_limits())?
             .checked(Program::Driver)?;

@@ -373,6 +373,9 @@ struct Evaluation {
     settled: Mutex<Vec<crate::bindings::Settled>>,
     /// What shared bindings gave in place of a cold extraction.
     shared: Mutex<Option<Shared>>,
+    /// The record of a cold build whose check recorded other instances
+    /// than the request kept, which stopped before its probe.
+    recorded: Mutex<Option<crate::record::Record>>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
 }
@@ -462,14 +465,22 @@ pub(in crate::cargo) fn prepare_cached_in(
 }
 
 /// A resolution ready for its API: a complete owner, or shared bindings
-/// that every selected crate replayed (`crate::bindings`).
+/// that every selected crate replayed (`crate::bindings`). Or the record
+/// of a build that stopped before its probe, as its check recorded other
+/// instances than the request kept (D869): its crates are written again
+/// with them first, so nothing is probed, completed or kept for this one.
 pub(crate) enum Resolved {
     Owner(Box<Ready>),
     Shared(Box<SharedReady>),
+    Recorded(crate::record::Record),
 }
 
 /// The marker a cold attempt stops with when shared bindings answer it.
 const SHARED: &str = "every selected crate replayed shared bindings";
+
+/// The marker a cold attempt stops with when its check recorded new
+/// instances.
+const NEW_INSTANCES: &str = "the generated crates recorded new instances";
 
 #[cfg(test)]
 pub(in crate::cargo) fn evaluate_scripted(
@@ -489,6 +500,7 @@ pub(in crate::cargo) fn evaluate_scripted(
     match evaluate(preflight, cached.attestation, limits, sink, Some(script))? {
         Resolved::Owner(ready) => Ok(*ready),
         Resolved::Shared(_) => Err(node::Error::State(SHARED)),
+        Resolved::Recorded(_) => Err(node::Error::State(NEW_INSTANCES)),
     }
 }
 
@@ -539,6 +551,7 @@ fn evaluate(
         }),
         settled: Mutex::new(Vec::new()),
         shared: Mutex::new(None),
+        recorded: Mutex::new(None),
     });
     // A shared resolution whose request, toolchain, files and entries are
     // as they were: no Cargo and no tables (`memo`).
@@ -570,6 +583,14 @@ fn evaluate(
     ) {
         Ok(node) => node,
         Err(error) => {
+            if let Some(record) = state
+                .recorded
+                .lock()
+                .ok()
+                .and_then(|mut recorded| recorded.take())
+            {
+                return Ok(Resolved::Recorded(record));
+            }
             let shared = state
                 .shared
                 .lock()
@@ -973,6 +994,17 @@ impl Evaluation {
             &self.limits,
             &self.limits,
         )?;
+        // A check that recorded new instances is checked again with them,
+        // whose build this probe would not be (D869).
+        if let Some(record) = self.request.kept.as_ref().and_then(|kept| {
+            built
+                .recorded_instances(&self.limits)
+                .filter(|record| record != kept && !record.instances().is_empty())
+        }) && let Ok(mut recorded) = self.recorded.lock()
+        {
+            *recorded = Some(record);
+            return Err(node::Error::State(NEW_INSTANCES));
+        }
         let mut completed = self.request.complete_parts_in(
             &self.cached,
             &layout,

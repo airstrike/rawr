@@ -201,6 +201,79 @@ pub(crate) fn say(line: &str) {
     say_above(&mut lock(), line);
 }
 
+/// How many times this process ran Cargo's resolution of the program's
+/// dependencies, built them with the nightly, and ran the probe that
+/// extracts their API ([`work`]).
+static RESOLVED: AtomicUsize = AtomicUsize::new(0);
+static BUILT: AtomicUsize = AtomicUsize::new(0);
+static PROBED: AtomicUsize = AtomicUsize::new(0);
+
+/// Count one run of Cargo's resolution.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn resolved() {
+    RESOLVED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one nightly build of the dependencies.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn built() {
+    BUILT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one run of the probe.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn probed() {
+    PROBED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// What this process has done to read its dependencies' API so far.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Work {
+    resolved: usize,
+    built: usize,
+    probed: usize,
+}
+
+impl Work {
+    /// How many times Cargo resolved the dependencies.
+    #[must_use]
+    pub const fn resolved(self) -> usize {
+        self.resolved
+    }
+
+    /// How many times the nightly built them.
+    #[must_use]
+    pub const fn built(self) -> usize {
+        self.built
+    }
+
+    /// How many times the probe extracted their API.
+    #[must_use]
+    pub const fn probed(self) -> usize {
+        self.probed
+    }
+}
+
+impl std::fmt::Display for Work {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Cargo resolutions {}, nightly builds {}, probes {}",
+            self.resolved, self.built, self.probed
+        )
+    }
+}
+
+/// What this process has done to read its dependencies' API so far.
+#[must_use]
+pub fn work() -> Work {
+    Work {
+        resolved: RESOLVED.load(Ordering::Relaxed),
+        built: BUILT.load(Ordering::Relaxed),
+        probed: PROBED.load(Ordering::Relaxed),
+    }
+}
+
 /// How many lines this process has printed above the status line: a
 /// command that did nothing printed none.
 pub fn said() -> usize {

@@ -161,6 +161,13 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         rawr_import::progress::phase("checking");
         let cargo = cargo.map(owner::Checking::finish);
         rawr_import::progress::finish(checked.is_ok());
+        if rawr_cli::cells::verbose() {
+            eprintln!(
+                "rawr-import: check rounds {}, {}",
+                crate::plain::rounds(),
+                rawr_import::progress::work()
+            );
+        }
         let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
         let checked = checked.as_deref().map_err(Option::as_ref);
         let cargo = cargo.map(|cargo| cargo.status);

@@ -1226,9 +1226,15 @@ fn terminal_replay_failure(error: &Error) -> bool {
             | crate::Error::NonSendFuture { .. }
             | crate::Error::ErasedBound { .. }
             | crate::Error::InputAccountRefused => true,
+            // The installed toolchain or driver is not the one this rawr
+            // supports: a rebuild meets the same mismatch, so it is
+            // reported at once instead of after every round it reaches.
+            // A Cargo document's schema may be an older entry's.
+            crate::Error::Toolchain { field, .. } => {
+                !matches!(*field, "graph schema" | "unit schema")
+            }
             crate::Error::Request { .. }
             | crate::Error::Path { .. }
-            | crate::Error::Toolchain { .. }
             | crate::Error::Schema { .. }
             | crate::Error::ResolutionDrift { .. }
             | crate::Error::Input { .. }
