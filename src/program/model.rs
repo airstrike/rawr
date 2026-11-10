@@ -1334,11 +1334,32 @@ fn inputs(program: &Program) -> BTreeMap<(bool, String), Box<[Option<type_ref::T
             .collect();
         keep((false, join(key.modules(), key.name())), types);
     }
-    for method in program.methods() {
-        let Some(type_def::Identity::Script(owner)) = method.key().owner() else {
+    // Each method by the path native code's call names it by, a trait's
+    // impl for a crate's type's too, as `::Element::From<Group>::from`.
+    for method in program.methods().iter().chain(program.builtin_methods()) {
+        let Some(key) = method.key().island_path() else {
             continue;
         };
-        let receiver = method.receiver().map(|_| None);
+        // A by-value receiver of a generic owner at the arguments its
+        // instance gives, whose native parts are attested as those (D869).
+        let receiver = method.receiver().map(|_| {
+            (!method.owner_arguments().is_empty()).then(|| {
+                type_ref::Type::Path(type_ref::Path {
+                    name: method.owner_name().into(),
+                    target: type_ref::Target::Script {
+                        definition: method.owner(),
+                        identity: method.owner_identity().clone(),
+                    },
+                    arguments: method
+                        .owner_arguments()
+                        .iter()
+                        .cloned()
+                        .map(type_ref::Argument::Type)
+                        .collect(),
+                    span: crate::Span::NONE,
+                })
+            })
+        });
         let types = receiver
             .into_iter()
             .chain(
@@ -1348,32 +1369,32 @@ fn inputs(program: &Program) -> BTreeMap<(bool, String), Box<[Option<type_ref::T
                     .map(|parameter| native(&parameter.ty)),
             )
             .collect();
-        keep(
-            (
-                true,
-                join(
-                    owner.modules(),
-                    &format!("{}::{}", owner.name(), method.key().name()),
-                ),
-            ),
-            types,
-        );
+        keep(key, types);
     }
     inputs
 }
 /// Whether `ty` is a native type, or holds one in an `Option`, a `Vec`, a
-/// `Box` or a tuple, as `island::Part::of` reads it.
+/// `Box` or a tuple, as `island::Part::of` reads it, or is a script type
+/// at type arguments, whose members' parts are found at them (D869).
 fn holds_native(ty: &type_ref::Type) -> bool {
     if let Some(inner) = ty
         .box_element()
         .or_else(|| ty.option_element())
         .or_else(|| ty.vec_element())
+        .or_else(|| ty.iterated_element())
     {
         return holds_native(inner);
     }
     match ty {
         type_ref::Type::Tuple { members, .. } => members.iter().any(holds_native),
-        type_ref::Type::Path(path) => matches!(path.target, type_ref::Target::Host { .. }),
+        type_ref::Type::Path(path) => match path.target {
+            type_ref::Target::Host { .. } => true,
+            type_ref::Target::Script { .. } => path
+                .arguments
+                .iter()
+                .any(|argument| matches!(argument, type_ref::Argument::Type(_))),
+            _ => false,
+        },
         _ => false,
     }
 }

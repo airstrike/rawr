@@ -161,6 +161,36 @@ fn main() {
     println!("sidebar {} {:?}", row.draw(&theme), row.message());
     let row = small_row("grid", grid::Message::Tile(7));
     println!("sidebar {} {:?}", row.draw(&theme), row.message());
+    // A marked sidebar generic over the message, at two of native code's
+    // message types: a marked generic fn with an `impl IntoIterator`
+    // argument makes it, its generic methods build it by value and by `&mut
+    // self`, native code keeps it, reads its title by `&self` and draws the
+    // element it turns into, and a marked `From` of a generic marked type
+    // gives an element by `.into()`.
+    let title = String::from("tiles");
+    let mut tiles = widget::sidebar::header(&title, [small_row("add", grid::Message::Tile(8))])
+        .content([widget::sidebar::row_group("first", grid::Message::Tile(9))])
+        .spacing(3.0);
+    println!(
+        "sidebar {} on native text {}",
+        tiles.title(),
+        std::ptr::eq(tiles.title(), title.as_str())
+    );
+    tiles.push(small_row("pushed", grid::Message::Tile(12)));
+    let element = tiles.into_element();
+    println!("sidebar {} {:?}", element.draw(&theme), element.message());
+    let screen = widget::sidebar::header("home", std::iter::empty()).content(vec![small_row(
+        "inbox",
+        Message::Home(home::Message::Grid(grid::Message::Tile(10))),
+    )]);
+    let element = screen.into_element();
+    println!("sidebar {} {:?}", element.draw(&theme), element.message());
+    let group: Element<'_, grid::Message> = widget::sidebar::Group {
+        label: "rows",
+        rows: vec![small_row("row", grid::Message::Tile(11))],
+    }
+    .into();
+    println!("sidebar {} {:?}", group.draw(&theme), group.message());
     println!("clones {}", theme::clones());
     // Run on, as a running program does, till told to stop: each tick
     // calls the marked generic through the native helper.
@@ -170,6 +200,8 @@ fn main() {
             tick += 1;
             let row = small_row("tick", grid::Message::Tile(tick));
             println!("tick {tick} {}", row.draw(&theme));
+            let bar = widget::sidebar::header::<grid::Message>("bar", []).spacing(1.0);
+            println!("tock {tick} {}", bar.into_element().draw(&theme));
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }

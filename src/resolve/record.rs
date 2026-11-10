@@ -7,12 +7,13 @@ use crate::item::type_ref::{Argument, Lifetime, Path, Segment, Type};
 use crate::item::Name;
 use crate::{ImmutableString, Span};
 
-/// One recorded instance of a template: the types its generic parameters
-/// take, as the crate's root names them, and the key its instance is named
-/// by, which native code's trampoline calls it by.
+/// One recorded instance of a template: the path native code's call names
+/// it by, the types its named generic parameters take, as the crate's root
+/// names them, and the key its instance is named by, which native code's
+/// trampoline calls it by.
 #[derive(Clone, Debug)]
 pub(crate) struct Native {
-    pub(crate) template: crate::item::Key,
+    pub(crate) path: ImmutableString,
     pub(crate) types: Box<[super::type_ref::Type]>,
     pub(crate) key: ImmutableString,
 }

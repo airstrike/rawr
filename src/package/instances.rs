@@ -13,11 +13,13 @@ use rawr_import::record::{Instance, Record};
 
 use super::graph::Graph;
 
-/// One instance the support table holds: the generic function's path from
-/// the crate root and its type arguments, written from the crate root.
+/// One instance the support table holds: the path the generic function's
+/// call names, its instance entry's path from the crate root, and its type
+/// arguments, written from the crate root.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Entry {
     pub(crate) path: String,
+    pub(crate) function: String,
     pub(crate) types: Vec<String>,
 }
 
@@ -82,17 +84,20 @@ impl Graph {
     }
 
     /// The support table's entries: each recorded instance of a function
-    /// the shadow crate has an instance entry for, among `generic`.
+    /// the shadow crate has an instance entry for, among `generic`, each
+    /// entry's path by its call's.
     pub(crate) fn instance_entries(
         &self,
-        generic: &std::collections::BTreeSet<String>,
+        generic: &std::collections::BTreeMap<String, String>,
     ) -> Vec<Entry> {
         self.native_instances()
             .into_iter()
-            .filter(|instance| generic.contains(&instance.path))
-            .map(|instance| Entry {
-                path: instance.path,
-                types: instance.types,
+            .filter_map(|instance| {
+                Some(Entry {
+                    function: generic.get(&instance.path)?.clone(),
+                    path: instance.path,
+                    types: instance.types,
+                })
             })
             .collect()
     }

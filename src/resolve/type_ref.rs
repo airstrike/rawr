@@ -1608,6 +1608,12 @@ impl Type {
         self.builtin_element("Vec")
     }
 
+    /// `T` of an argument-position `impl IntoIterator<Item = T>`, which a
+    /// trampoline gives as the `Vec<T>` its items are drained into.
+    pub(crate) fn iterated_element(&self) -> Option<&Type> {
+        self.builtin_element(item::type_ref::INTO_ITER_TYPE)
+    }
+
     /// `T` of a slice `[T]`.
     pub(crate) fn slice_element(&self) -> Option<&Type> {
         self.builtin_element(item::type_ref::SLICE_TYPE)
@@ -1916,5 +1922,48 @@ impl Type {
             Argument::Lifetime(_) => None,
         });
         Some((types.next()?, types.next()?))
+    }
+}
+
+/// `ty` with each generic parameter `types` names replaced by its type.
+#[cfg(feature = "rust-import")]
+pub(crate) fn substitute_parameters(ty: &Type, types: &[(ImmutableString, Type)]) -> Type {
+    match ty {
+        Type::Path(path) if matches!(path.target, Target::Parameter) => {
+            if let Some((_, replaced)) = types.iter().find(|(name, _)| *name == path.name) {
+                return replaced.clone();
+            }
+            ty.clone()
+        }
+        Type::Path(path) => Type::Path(Path {
+            arguments: path
+                .arguments
+                .iter()
+                .map(|argument| match argument {
+                    Argument::Type(ty) => Argument::Type(substitute_parameters(ty, types)),
+                    lifetime @ Argument::Lifetime(_) => lifetime.clone(),
+                })
+                .collect(),
+            ..path.clone()
+        }),
+        Type::Reference {
+            mutable,
+            lifetime,
+            target,
+            span,
+        } => Type::Reference {
+            mutable: *mutable,
+            lifetime: *lifetime,
+            target: Box::new(substitute_parameters(target, types)),
+            span: *span,
+        },
+        Type::Tuple { members, span } => Type::Tuple {
+            members: members
+                .iter()
+                .map(|member| substitute_parameters(member, types))
+                .collect(),
+            span: *span,
+        },
+        Type::Unit(span) => Type::Unit(*span),
     }
 }
