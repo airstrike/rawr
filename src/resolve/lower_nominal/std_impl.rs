@@ -1271,10 +1271,15 @@ impl Parser<'_> {
         let Some(owner) = self.host_member_owner(ty, name) else {
             // The type may implement `Deref` all the same, as a member miss
             // finds (#762): a pass that fails demands its `deref` with what
-            // else it missed, so a coercion through it is checked again.
-            if let Some(definition) = ty
-                .host_alias()
-                .filter(|definition| definition.identity().imported().is_some())
+            // else it missed, so a coercion through it is checked again. A
+            // type no path of the program names, as the `Bytes` of iced's
+            // `Screenshot::rgba`, is demanded by its own definition.
+            let definition = match ty {
+                Ty::Host { proof, .. } if proof.alias.is_none() => Some(&proof.definition),
+                ty => ty.host_alias(),
+            };
+            if let Some(definition) =
+                definition.filter(|definition| definition.identity().imported().is_some())
             {
                 self.recovered.push(Error::UnknownMember {
                     owner: definition.path().into(),
