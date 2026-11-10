@@ -4747,6 +4747,7 @@ fn generic_scope(
             default: None,
             host: false,
             crate_bounds: Box::default(),
+            lifted: parameter.lifted,
         });
     }
     // `trait Add<Rhs = Self>`: a default may name `Self` and the earlier

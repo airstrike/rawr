@@ -9,7 +9,7 @@ use super::ty::{Float, Int};
 #[cfg(feature = "rust-import")]
 use super::{
     body_source, contains_open_literal, holds_value, impl_surface_type, lifetime_text,
-    mentions_parameter, sequence, source_span, ImportedContext, ImportedUse, Parser,
+    mentions_parameter, reaches_param, sequence, source_span, ImportedContext, ImportedUse, Parser,
 };
 use crate::resolve::type_ref;
 #[cfg(feature = "rust-import")]
@@ -1036,7 +1036,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                     let _ = parser
                         .expect_output(definition.output.as_ref())
                         .and_then(|()| parser.parse_function_body(definition));
-                    parser.reaches_host
+                    reaches_host(&mut parser)
                 }
                 Added::Method(index) => {
                     let definition = method_at(program, index);
@@ -1061,7 +1061,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                             let _ = parser
                                 .expect_output(Some(definition.output()))
                                 .and_then(|()| parser.parse_method_body(definition));
-                            parser.reaches_host
+                            reaches_host(&mut parser)
                         }
                         Err(_) => false,
                     }
@@ -1080,6 +1080,20 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
         candidates.retain(|(key, _)| !promoted.contains(key));
     }
     Ok(!program.instances.templates.is_empty())
+}
+
+/// Whether a body read with its parameters erased touches a crate's types
+/// (`Parser::reaches_host`): where it is read, or at a call of a template
+/// whose types only the rest of the body fixes to its own parameters, as
+/// the tail `Sidebar::default()` of a fn returning `Sidebar<'a, Message>`
+/// takes `Message` from the fn's return type, as rustc's expected type
+/// gives it. A `let` annotation, an argument and a field fix one alike.
+#[cfg(feature = "rust-import")]
+fn reaches_host(parser: &mut Parser<'_>) -> bool {
+    parser.reaches_host
+        || take_instance_calls(parser)
+            .iter()
+            .any(|(_, types, _)| types.iter().any(reaches_param))
 }
 
 /// The method numbered `index` among `program`'s methods, those of impls

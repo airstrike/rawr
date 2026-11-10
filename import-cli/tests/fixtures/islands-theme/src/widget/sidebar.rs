@@ -34,7 +34,37 @@ pub struct Content<'a, Message: 'a> {
     pub spacing: ui::Pixels,
 }
 
+impl<'a, Message: 'a> Default for Sidebar<'a, Message> {
+    fn default() -> Self {
+        Self {
+            header: None,
+            content: Content::default(),
+        }
+    }
+}
+
+impl<'a, Message: 'a> Default for Content<'a, Message> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            spacing: ui::Pixels(0.0),
+        }
+    }
+}
+
 impl<'a, Message: 'a> Sidebar<'a, Message> {
+    pub fn header(
+        mut self,
+        title: &'a str,
+        actions: impl IntoIterator<Item = Element<'a, Message>> + 'a,
+    ) -> Self {
+        self.header = Some(Header {
+            title,
+            actions: actions.into_iter().collect(),
+        });
+        self
+    }
+
     pub fn content(mut self, content: impl IntoSections<'a, Message>) -> Self {
         self.content = content.into_sections();
         self
@@ -98,21 +128,20 @@ where
 }
 
 /// A sidebar with a header over `title` and `actions`, as inboard's
-/// `sidebar::header`.
+/// `sidebar::header`: `Sidebar::default()` takes `Message` from the
+/// chain's later use.
 pub fn header<'a, Message: 'a>(
     title: &'a str,
     actions: impl IntoIterator<Item = Element<'a, Message>> + 'a,
 ) -> Sidebar<'a, Message> {
-    Sidebar {
-        header: Some(Header {
-            title,
-            actions: actions.into_iter().collect(),
-        }),
-        content: Content {
-            items: Vec::new(),
-            spacing: ui::Pixels(0.0),
-        },
-    }
+    Sidebar::default().header(title, actions)
+}
+
+/// An empty sidebar, as inboard's `sidebar::default`, which nothing calls:
+/// the tail's `Sidebar::default()` takes `Message` from the return type.
+#[allow(dead_code)]
+pub fn default<'a, Message: 'a>() -> Sidebar<'a, Message> {
+    Sidebar::default()
 }
 
 /// A labeled group of rows, which native code turns into an element by

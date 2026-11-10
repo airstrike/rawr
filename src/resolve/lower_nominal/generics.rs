@@ -110,9 +110,9 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
             .collect();
         if let Some(arguments) = self.pending_turbofish.clone()
-            && arguments.len() == definition.generics.len()
+            && arguments.len() == written(&definition.generics).count()
         {
-            for (generic, argument) in definition.generics.iter().zip(arguments) {
+            for (generic, argument) in written(&definition.generics).zip(arguments) {
                 let fresh = substitution[&generic.name.text].clone();
                 let checkpoint = self.inference.checkpoint();
                 if self.unify_type(&fresh, &argument) {
@@ -137,15 +137,16 @@ impl<'a> Parser<'a> {
     ) -> Result<BTreeMap<ImmutableString, Ty>, Error> {
         let substitution = self.fresh_generics(generics, span);
         if let Some(arguments) = self.pending_turbofish.take() {
-            if arguments.len() != generics.len() {
+            let expected = written(generics).count();
+            if arguments.len() != expected {
                 return Err(Error::InvalidTypeArguments {
                     ty: "function".into(),
-                    expected: generics.len(),
+                    expected,
                     actual: arguments.len(),
                     reference: span,
                 });
             }
-            for (generic, argument) in generics.iter().zip(arguments) {
+            for (generic, argument) in written(generics).zip(arguments) {
                 let fresh = substitution[&generic.name.text].clone();
                 self.require_type(&fresh, &argument, span)?;
             }
@@ -657,17 +658,17 @@ impl<'a> Parser<'a> {
             return Ok(function);
         }
         instance.ok_or_else(|| {
-            let generics = function
-                .definition
-                .generics
-                .iter()
-                .map(|generic| generic.name.text.as_str())
-                .collect::<Vec<_>>();
             let name = &function.definition.name.text;
             Error::InvalidMethodCall {
                 owner: ImmutableString::new(),
                 method: name.clone(),
-                reason: uninstantiated_call(name, &generics, &resolved, &self.models).into(),
+                reason: uninstantiated_call(
+                    name,
+                    &function.definition.generics,
+                    &resolved,
+                    &self.models,
+                )
+                .into(),
                 call,
             }
         })
@@ -805,19 +806,17 @@ impl<'a> Parser<'a> {
         if instance.is_none() && self.collecting_instances {
             return Ok(definition);
         }
-        instance.ok_or_else(|| {
-            let generics = definition
-                .generics()
-                .iter()
-                .map(|generic| generic.name.text.as_str())
-                .collect::<Vec<_>>();
-            Error::InvalidMethodCall {
-                owner: definition.owner_name().into(),
-                method: definition.name().into(),
-                reason: uninstantiated_call(definition.name(), &generics, &resolved, &self.models)
-                    .into(),
-                call,
-            }
+        instance.ok_or_else(|| Error::InvalidMethodCall {
+            owner: definition.owner_name().into(),
+            method: definition.name().into(),
+            reason: uninstantiated_call(
+                definition.name(),
+                definition.generics(),
+                &resolved,
+                &self.models,
+            )
+            .into(),
+            call,
         })
     }
 
@@ -845,22 +844,28 @@ impl<'a> Parser<'a> {
         // `v.by_name::<String>(..)`: the method's own parameters take its
         // turbofish, as rustc's E0107 counts them.
         if let Some(arguments) = self.pending_turbofish.take() {
-            let own = definition.own_generics();
-            if arguments.len() != own.len() {
+            let expected = written(definition.own_generics()).count();
+            if arguments.len() != expected {
                 return Err(Error::InvalidTypeArguments {
                     ty: "method".into(),
-                    expected: own.len(),
+                    expected,
                     actual: arguments.len(),
                     reference: call,
                 });
             }
-            for (generic, argument) in own.iter().zip(arguments) {
+            for (generic, argument) in written(definition.own_generics()).zip(arguments) {
                 let fresh = substitution[&generic.name.text].clone();
                 self.require_type(&fresh, &argument, call)?;
             }
         }
         Ok(substitution)
     }
+}
+
+/// The generic parameters a turbofish names, in order: each but an
+/// argument-position `impl Trait`, as rustc fills only the written ones.
+pub(super) fn written(generics: &[item::Generic]) -> impl Iterator<Item = &item::Generic> {
+    generics.iter().filter(|generic| !generic.lifted)
 }
 
 /// The generic parameter `ty` is, or refers to.

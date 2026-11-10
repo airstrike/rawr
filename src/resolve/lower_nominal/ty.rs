@@ -1358,21 +1358,27 @@ pub(super) fn fn_type_name(inputs: &[Ty], output: &Ty, models: &Models) -> Strin
 }
 
 /// Why a call of a generic function compiled per instantiation (D629) has
-/// no instance: a type parameter its arguments leave open, which rustc
-/// infers from a later use of the value, or types no instance takes.
+/// no instance: a written type parameter its arguments and the rest of the
+/// body leave open, or types no instance takes. The turbofish it suggests
+/// names only the written parameters, as an argument-position `impl Trait`
+/// takes none.
 #[cfg(feature = "rust-import")]
 pub(super) fn uninstantiated_call(
     name: &str,
-    generics: &[&str],
+    generics: &[crate::resolve::item::Generic],
     types: &[Ty],
     models: &Models,
 ) -> String {
     let open = generics
         .iter()
         .zip(types)
-        .filter(|(_, ty)| contains_inference(ty))
-        .map(|(generic, _)| format!("`{generic}`"))
+        .filter(|(generic, ty)| !generic.lifted && contains_inference(ty))
+        .map(|(generic, _)| format!("`{}`", generic.name.text))
         .collect::<Vec<_>>();
+    let written = super::generics::written(generics)
+        .map(|generic| generic.name.text.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     match open.as_slice() {
         [] => format!(
             "calling `{name}` with the type arguments `<{}>` isn't supported yet",
@@ -1383,17 +1389,13 @@ pub(super) fn uninstantiated_call(
                 .join(", ")
         ),
         [one] => format!(
-            "the type parameter {one} of `{name}` must be known from this call's arguments; \
-             inferring it from a later use of the value isn't supported yet; write it at the \
-             call, as in `{name}::<{}>(..)`",
-            generics.join(", ")
+            "the type parameter {one} of `{name}` must be known from this call's arguments or \
+             its expected type; write it at the call, as in `{name}::<{written}>(..)`"
         ),
         several => format!(
-            "the type parameters {} of `{name}` must be known from this call's arguments; \
-             inferring them from a later use of the value isn't supported yet; write them at \
-             the call, as in `{name}::<{}>(..)`",
-            several.join(", "),
-            generics.join(", ")
+            "the type parameters {} of `{name}` must be known from this call's arguments or \
+             its expected type; write them at the call, as in `{name}::<{written}>(..)`",
+            several.join(", ")
         ),
     }
 }

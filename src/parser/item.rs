@@ -2801,6 +2801,7 @@ fn parse_generics(
                 bounds: bounds.into_boxed_slice(),
                 projections: projections.into_boxed_slice(),
                 default,
+                lifted: false,
             });
         }
         if split.is_some() {
@@ -4137,6 +4138,7 @@ fn lift_impl_parameters(
                     bounds,
                     projections: projections.into_boxed_slice(),
                     default: None,
+                    lifted: true,
                 });
                 *ty = type_ref::Type::Path(type_ref::Path {
                     span: path.span,
