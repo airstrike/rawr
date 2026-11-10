@@ -55,7 +55,7 @@ pub(super) fn instances(tcx: TyCtxt<'_>) -> Result<Vec<record::Instance>, String
             && !trampolines.contains_key(&owner)
             && !tcx.generics_of(def_id).requires_monomorphization(tcx)
         {
-            walk.queue.push((owner, ty::List::empty()));
+            walk.queue.push((owner, ty::GenericArgs::empty()));
         }
     }
     walk.run();
@@ -284,8 +284,8 @@ impl<'tcx> Walk<'tcx, '_> {
                     ty::GenericArgs::for_item(
                         self.tcx,
                         function.to_def_id(),
-                        |param, _| match args.get(param.index as usize) {
-                            Some(arg) => *arg,
+                        |param, _| match args.iter().nth(param.index as usize) {
+                            Some(arg) => arg,
                             None => self.tcx.lifetimes.re_erased.into(),
                         },
                     );
