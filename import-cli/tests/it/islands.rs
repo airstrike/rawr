@@ -1090,8 +1090,9 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     // A check from no kept state: its first build records the instances
     // the shadow crate's table lacks and stops before its probe, and two
-    // demand rounds follow. Cargo resolves once, and each round's demand
-    // is probed once (#446).
+    // demand rounds follow. Cargo resolves once, the nightly builds for the
+    // first two rounds alone, and each round's demand is probed once
+    // (#446, #1618).
     let _ = fs::remove_dir_all(root.join("target/rawr"));
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
@@ -1106,7 +1107,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(check.status.success(), "{said}");
     assert!(
         said.contains(
-            "rawr-import: check rounds 4, Cargo resolutions 1, nightly builds 4, probes 3\n"
+            "rawr-import: check rounds 4, Cargo resolutions 1, nightly builds 2, probes 3\n"
         ),
         "{said}"
     );
@@ -1114,7 +1115,9 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     // each demand round probes once and reads, classifies and generates
     // the whole API it grew to. No round parses the program again: the
     // check reads its sources' parses from their cells once and remembers
-    // them (#1618).
+    // them. A demand round after the build's first probe binds no harness,
+    // copies no build output and seals no bundle: it probes the demand
+    // over that build and replays its grown tables (#1618).
     let round = |number: usize| {
         said.lines()
             .find_map(|line| line.strip_prefix(&format!("rawr-import: round {number}: ")))
@@ -1130,6 +1133,12 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         assert!(stages.contains(", probes 1, read "), "{said}");
         assert!(!stages.contains("read 0,"), "{said}");
         assert!(stages.ends_with(", parsed 0"), "{said}");
+        if number > 2 {
+            assert!(
+                stages.starts_with("harnesses 0, compiled 0, copied 0, sealed 0, probes 1,"),
+                "{said}"
+            );
+        }
     }
     let mut run = start(&root, &[]);
     for expected in printed.lines() {
