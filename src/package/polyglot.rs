@@ -456,6 +456,89 @@ pub(crate) fn root_items_public(text: &str) -> String {
     inserted(text, &inserts, "pub ")
 }
 
+/// The top-level `use` declarations of `text`, a native crate root, alone,
+/// each with its visibility: what a marked module's path through `crate`
+/// may stand for, as the root's `pub use theme::Theme;` makes
+/// `crate::Theme` the marked `theme::Theme`.
+pub(crate) fn uses_text(text: &str) -> String {
+    let tokens = tokens(text);
+    let mut uses = String::new();
+    let mut depth = 0_usize;
+    let mut start = true;
+    let mut index = 0;
+    while index < tokens.len() {
+        if depth == 0 && start {
+            if tokens[index] == Token::Punct(b'#') {
+                index = attribute_end(&tokens, index);
+                continue;
+            }
+            start = false;
+            if let Some(end) = use_end(&tokens, index) {
+                for token in &tokens[index..=end] {
+                    match *token {
+                        Token::Ident(word, _) => {
+                            uses.push(' ');
+                            uses.push_str(word);
+                        }
+                        Token::Punct(byte) => uses.push(char::from(byte)),
+                        Token::Str(_) => {}
+                    }
+                }
+                uses.push('\n');
+                index = end + 1;
+                start = true;
+                continue;
+            }
+        }
+        match tokens[index] {
+            Token::Punct(b'{' | b'(' | b'[') => depth += 1,
+            Token::Punct(close @ (b'}' | b')' | b']')) => {
+                depth = depth.saturating_sub(1);
+                start = depth == 0 && close == b'}';
+            }
+            Token::Punct(b';') if depth == 0 => start = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    uses
+}
+
+/// The index of the `;` that ends the `use` declaration whose first token,
+/// past its attributes, is at `index`: `pub use ..;`, `pub(crate) use ..;`
+/// or `use ..;`. `None` for another item.
+fn use_end(tokens: &[Token<'_>], index: usize) -> Option<usize> {
+    let mut at = index;
+    if matches!(tokens.get(at), Some(Token::Ident("pub", _))) {
+        at += 1;
+        if tokens.get(at) == Some(&Token::Punct(b'(')) {
+            at += tokens[at..]
+                .iter()
+                .position(|token| *token == Token::Punct(b')'))?
+                + 1;
+        }
+    }
+    if !matches!(tokens.get(at), Some(Token::Ident("use", _))) {
+        return None;
+    }
+    let mut depth = 0_usize;
+    tokens[at..]
+        .iter()
+        .position(|token| match token {
+            Token::Punct(b'{') => {
+                depth += 1;
+                false
+            }
+            Token::Punct(b'}') => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            Token::Punct(b';') => depth == 0,
+            _ => false,
+        })
+        .map(|offset| at + offset)
+}
+
 /// `text`, a module of the crate, with `pub ` before each of its own items
 /// named in `names` that has no visibility: a module on the way to a type
 /// native code calls a marked generic at, or the type itself, which the
@@ -1069,6 +1152,18 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
                 "{line} in\n{public}"
             );
         }
+    }
+
+    #[test]
+    fn a_crate_roots_uses_are_kept_alone() {
+        let text = "//! use hidden;\nmod theme;\n#[cfg(test)]\npub use theme::Theme;\n\
+                    pub(crate) use theme::{palette::{self, Colors}, Kind as K};\n\
+                    fn main() { use std::fmt; let s = \"use x;\"; }\nuse ui::Widget;\n";
+        assert_eq!(
+            super::uses_text(text),
+            " pub use theme:: Theme;\n pub( crate) use theme::{ palette::{ self, Colors}, \
+             Kind as K};\n use ui:: Widget;\n"
+        );
     }
 
     #[test]

@@ -231,6 +231,36 @@ fn main() {
         first.map(|item| item.draw(&theme)),
         tools.header.map_or("none", |header| header.title)
     );
+    // ... and turns it into the element it draws, as inboard's views do:
+    // the marked `to_element` boxes crate widgets in the instance at
+    // native code's message (#1584).
+    let mut tools =
+        sidebar::header::<grid::Message>("tools", [small_row("add", grid::Message::Tile(19))])
+            .content([small_row("first", grid::Message::Tile(20))])
+            .spacing(4);
+    let element = tools.to_element();
+    println!("sidebar {} {:?}", element.draw(&theme), element.message());
+    // A marked `&mut self` method moves the parts native code keeps out
+    // of the sidebar into the element it gives (#1587).
+    let mut moved = widget::sidebar::header::<grid::Message>(
+        "moved",
+        [small_row("left", grid::Message::Tile(21))],
+    )
+    .content([widget::sidebar::row_group("right", grid::Message::Tile(22))])
+    .spacing(3);
+    let element = moved.to_element();
+    println!(
+        "sidebar {} {:?} leaves {}",
+        element.draw(&theme),
+        element.message(),
+        moved.content.items.len()
+    );
+    // The marked panel builds the same sidebar in a non-generic marked fn,
+    // at its own message (#1584).
+    let panel = sidebar::panel(&theme);
+    println!("panel {} {:?}", panel.draw(&theme), sidebar::typed());
+    let mixed = sidebar::mixed(ui::Widget::boxed(ui::label("given")));
+    println!("mixed {}", mixed.draw(&theme));
     println!("clones {}", theme::clones());
     // Run on, as a running program does, till told to stop: each tick
     // calls the marked generic through the native helper.

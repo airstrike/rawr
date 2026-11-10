@@ -883,6 +883,25 @@ macro_rules! guard_copy {
     }};
 }
 
+/// A copy of the `$ty` native code lent the call at argument `$index`
+/// (D558.3), where the call takes it by value: rustc copies a `Copy` place
+/// a call reads, as `.spacing(self.spacing)` copies a lent `Pixels`.
+/// `None` when the argument is no lent value.
+#[allow(unused_macros)]
+macro_rules! lent_copy {
+    ($arguments:expr, $index:expr, $ty:ty) => {
+        $crate::__rawr_runner::lent_value(&*$arguments, $index).map(|lent| -> Result<$ty, Error> {
+            let failed = |error| Error::Lent(lent.name(), error);
+            let access: fn(u64, &mut dyn FnMut(&$ty)) -> Result<(), u8> =
+                lent.accessor(false).map_err(failed)?;
+            let mut copy = Err(Error::TypeMismatch);
+            access(lent.nonce().bits(), &mut |value| copy = guard_copy!(value))
+                .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            copy
+        })
+    };
+}
+
 /// `target` copied by `clone`, the `Clone` of its type when it has one.
 #[allow(dead_code)]
 fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error> {
@@ -17137,13 +17156,23 @@ fn render_take_input(
     let Some(annotation) = annotation else {
         return output.write_all(&taken).map_err(request::unwritable);
     };
-    let taken = String::from_utf8(taken)
-        .map_err(request::unwritable)?
-        .replacen(
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    // A value native code lent the call where it takes one by value, as a
+    // marked `&mut self` method's `.spacing(self.spacing)` reads its lent
+    // `Pixels`, is a copy of it, as rustc copies a `Copy` place it reads.
+    // A type with lifetimes is never in the arena, nor lent as one.
+    let moved = format!("    let argument_{local} = take_native(arguments, {index})?;\n");
+    let taken = if taken == moved && !annotation.contains('\'') {
+        format!(
+            "    let argument_{local}: {annotation} = match lent_copy!(arguments, {index}, {annotation}) {{ Some(copy) => copy?, None => take_native(arguments, {index})? }};\n"
+        )
+    } else {
+        taken.replacen(
             &format!("let argument_{local} = "),
             &format!("let argument_{local}: {annotation} = "),
             1,
-        );
+        )
+    };
     output
         .write_all(taken.as_bytes())
         .map_err(request::unwritable)

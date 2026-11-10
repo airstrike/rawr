@@ -421,25 +421,23 @@ impl Type {
                     && owner == other_owner
                     && all(arguments, other_arguments)
             }
+            // One crate's type is one type whichever facade reaches it: inboard's
+            // `space!()` makes `ui::Element` through `common::core`, which
+            // re-exports it, and `text(..).boxed()` through the program's own
+            // path to `ui`. The identity names the definition, not the path.
             #[cfg(feature = "rust-import")]
             (
                 Self::Imported {
                     identity,
                     arguments,
-                    owner,
                     ..
                 },
                 Self::Imported {
                     identity: other_identity,
                     arguments: other_arguments,
-                    owner: other_owner,
                     ..
                 },
-            ) => {
-                identity == other_identity
-                    && owner == other_owner
-                    && all(arguments, other_arguments)
-            }
+            ) => identity == other_identity && all(arguments, other_arguments),
             (own, other) => own == other,
         }
     }

@@ -405,6 +405,7 @@ enum Owner<'o> {
 #[cfg(feature = "rust-import")]
 pub(crate) fn native_statics<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
+    root: &'a [item::Parsed],
 ) -> Vec<Vec<ImmutableString>> {
     let sources = sources
         .into_iter()
@@ -415,7 +416,7 @@ pub(crate) fn native_statics<'a>(
             items,
         })
         .collect::<Vec<_>>();
-    let generator = Generator::new(&sources);
+    let generator = Generator::new(&sources, root);
     let mut statics = Vec::new();
     for source in &sources {
         for item in source.items {
@@ -455,6 +456,7 @@ pub(crate) fn native_statics<'a>(
 #[cfg(feature = "rust-import")]
 pub(crate) fn mirrors<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
+    root: &'a [item::Parsed],
 ) -> Vec<Vec<ImmutableString>> {
     let sources = sources
         .into_iter()
@@ -465,7 +467,7 @@ pub(crate) fn mirrors<'a>(
             items,
         })
         .collect::<Vec<_>>();
-    Generator::new(&sources)
+    Generator::new(&sources, root)
         .crossing
         .iter()
         .map(|path| path.split("::").map(ImmutableString::from).collect())
@@ -478,6 +480,7 @@ pub(crate) fn mirrors<'a>(
 pub(crate) fn shadow<'a>(
     module_root: &Path,
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a Path, &'a str, &'a [item::Parsed])>,
+    root: &'a [item::Parsed],
 ) -> Shadow {
     let sources = sources
         .into_iter()
@@ -488,7 +491,7 @@ pub(crate) fn shadow<'a>(
             items,
         })
         .collect::<Vec<_>>();
-    let generator = Generator::new(&sources);
+    let generator = Generator::new(&sources, root);
     let mut files = Vec::new();
     let mut shape = BTreeMap::new();
     let mut refused = Vec::new();
@@ -567,6 +570,11 @@ struct Generator<'a> {
     /// which shadow a marked type of their name, as `Message` of `fn
     /// tab<Message>` beside the module's `enum Message`.
     parameters: std::cell::RefCell<BTreeSet<String>>,
+    /// What each name a `use` brings into a module stands for, by paths
+    /// from the crate root, the native root's among them: inboard's root
+    /// `pub use theme::Theme;` makes `crate::Theme` the marked
+    /// `theme::Theme`.
+    uses: BTreeMap<String, Vec<String>>,
 }
 
 /// A std trait a stand-in implements for the marked type it holds, as a
@@ -653,7 +661,14 @@ impl Std {
 }
 
 impl<'a> Generator<'a> {
-    fn new(sources: &'a [Source<'a>]) -> Self {
+    fn new(sources: &'a [Source<'a>], root: &'a [item::Parsed]) -> Self {
+        let root = Source {
+            modules: &[],
+            path: Path::new(""),
+            text: "",
+            items: root,
+        };
+        let uses = uses(sources.iter().chain([&root]));
         let mut types = BTreeMap::new();
         let mut named = BTreeSet::new();
         let mut traits = BTreeSet::new();
@@ -735,6 +750,7 @@ impl<'a> Generator<'a> {
             generic: std::cell::RefCell::default(),
             entries: std::cell::RefCell::default(),
             parameters: std::cell::RefCell::default(),
+            uses,
         };
         // A generic one crosses too: each part of a type its parameters
         // name is a native one, which only an instance entry moves (D869).
@@ -835,9 +851,12 @@ impl<'a> Generator<'a> {
             .map(|segment| segment.name.text.as_str())
             .collect::<Vec<_>>();
         let found = |absolute: Vec<String>| {
-            self.types
-                .get_key_value(absolute.join("::").as_str())
-                .map(|(path, _)| path.as_str())
+            let key = |path: &[String]| {
+                self.types
+                    .get_key_value(path.join("::").as_str())
+                    .map(|(path, _)| path.as_str())
+            };
+            key(&absolute).or_else(|| key(&self.used(absolute)))
         };
         if let Some(found) = absolute(file, &names, 0).and_then(found) {
             return Some(found);
@@ -862,6 +881,26 @@ impl<'a> Generator<'a> {
             }
             _ => None,
         })
+    }
+
+    /// The path from the crate root `path` stands for once each `use` on
+    /// the way is followed, as `Theme` of the native root's `pub use
+    /// theme::Theme;` stands for `theme::Theme`.
+    fn used(&self, mut path: Vec<String>) -> Vec<String> {
+        // As `absolute` does, a few `use`s deep, never round a cycle.
+        for _ in 0..8 {
+            let Some((at, target)) = (1..=path.len()).rev().find_map(|at| {
+                self.uses
+                    .get(path[..at].join("::").as_str())
+                    .map(|target| (at, target))
+            }) else {
+                break;
+            };
+            let mut used = target.clone();
+            used.extend(path.drain(at..));
+            path = used;
+        }
+        path
     }
 
     /// The trait `trait_` an impl in `file` names, as the interpreter keys
@@ -3582,6 +3621,14 @@ impl Held<'_> {
                 held.code_in(&inner, purpose, depth + 1, generic),
                 held.take(),
             ),
+            // A `Vec` lent `&mut` moves its elements to the call, which may
+            // move them on, as `children.append(&mut header.actions)` does
+            // (#1587), and takes back each the call leaves in it.
+            Self::Vec(held) if matches!(purpose, Use::LendMut) => format!(
+                "{{ let out = call.out(); let {inner} = ::std::mem::take({binding}); \
+                 out.array({inner}.len()); for __e{depth} in {inner} {{ {} }} }}",
+                held.code_in(&format!("__e{depth}"), Use::Give, depth + 1, generic)
+            ),
             Self::Vec(held) => format!(
                 "{{ let {inner} = {binding}; {out}.array({inner}.len()); \
                  for __e{depth} in {inner} {{ {} }} }}",
@@ -3849,6 +3896,29 @@ fn absolute(file: &Source<'_>, names: &[&str], depth: usize) -> Option<Vec<Strin
         }
     }
     Some(at)
+}
+
+/// What each name a `use` of `sources` brings into its module stands for,
+/// both by paths from the crate root ([`Generator::uses`]).
+fn uses<'s>(sources: impl IntoIterator<Item = &'s Source<'s>>) -> BTreeMap<String, Vec<String>> {
+    let mut uses = BTreeMap::new();
+    for source in sources {
+        for item in source.items {
+            let item::Parsed::Use(used) = item else {
+                continue;
+            };
+            if used.scope.is_some() || used.global() {
+                continue;
+            }
+            for (name, path) in used.bindings() {
+                let path = path.iter().map(ImmutableString::as_str).collect::<Vec<_>>();
+                if let Some(target) = absolute(source, &path, 0) {
+                    uses.insert(path_of(source.modules, &name.text), target);
+                }
+            }
+        }
+    }
+    uses
 }
 
 /// The trait `trait_` an impl names, as the interpreter keys its
@@ -7103,6 +7173,7 @@ mod tests {
                 text,
                 unit.items(),
             )],
+            &[],
         )
     }
 
@@ -8110,7 +8181,9 @@ mod tests {
         for expected in [
             "impl<Message: 'static> crate::__rawr_island::Parts for Sidebar<'_, Message> {",
             "crate::__rawr_island::lend_whole_of!(call, self, Sidebar<'static, Message>);",
-            "crate::__rawr_island::lend_part_mut_of!(call, __e0, Element<'static, Message>);",
+            // A `Vec` lent `&mut` moves its elements to the call (#1587).
+            "{ let out = call.out(); let __p0 = ::std::mem::take(&mut self.items); \
+             out.array(__p0.len()); for __e0 in __p0 {",
             // A boxed trait object is one native part.
             "crate::__rawr_island::lend_part_of!(call, &self.actions, \
              Box<dyn Iterator<Item = Element<'static, Message>> + 'static>);",
