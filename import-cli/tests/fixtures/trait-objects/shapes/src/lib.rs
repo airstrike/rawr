@@ -50,6 +50,11 @@ impl Held {
     }
 }
 
+/// A shape kept for the program's life, given to a function.
+pub fn keep(shape: &'static dyn Shape) -> Held {
+    Held(shape)
+}
+
 pub fn area_of(shape: &dyn Shape) -> i64 {
     shape.area()
 }
