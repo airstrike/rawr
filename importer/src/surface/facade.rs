@@ -855,6 +855,10 @@ pub struct Relation {
     /// (`representability::signature::Associated`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     associated: Option<representability::signature::Associated>,
+    /// The bound's trait by its std path, when std declares it, whose
+    /// impls are its cases (`representability::signature::Relation`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    std_trait: Option<Box<str>>,
 }
 
 /// One implementation of a [`Relation`]'s trait, its impl parameters
@@ -892,6 +896,10 @@ impl Relation {
         self.associated
             .as_ref()
             .map(|associated| (associated.trait_identity(), associated.name()))
+    }
+    /// The bound's trait by its std path, when std declares it.
+    pub fn std_trait(&self) -> Option<&str> {
+        self.std_trait.as_deref()
     }
 }
 
@@ -4464,6 +4472,7 @@ fn relations(
             cases: cases.into_boxed_slice(),
             trait_identity: relation.trait_identity(),
             associated: relation.associated().cloned(),
+            std_trait: relation.std_trait().map(copy).transpose()?,
         });
     }
     Ok(output.into_boxed_slice())

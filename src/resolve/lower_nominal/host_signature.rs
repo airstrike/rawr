@@ -1162,7 +1162,40 @@ impl<'a> Parser<'a> {
                     matched = Some((case, bindings));
                 }
             }
+            #[cfg(feature = "rust-import")]
+            let unmatched = matched.is_none();
             let (Some((case, mut bindings)), false) = (matched, ambiguous) else {
+                // A std trait's own impls, which no crate's graph lists, as
+                // `impl<T> AsRef<[T]> for Vec<T>`, which gives `L` of `rich(
+                // impl AsRef<[Span<'a, L>]>)` from a `Vec<Span<'static,
+                // ()>>`, as rustc selects one. A bound whose argument is
+                // still open would fit many, and fixes nothing.
+                #[cfg(feature = "rust-import")]
+                if unmatched
+                    && let Some(std_trait) = relation.std_trait()
+                    && !matches!(actual, Ty::Infer(_))
+                {
+                    let mut declared = Vec::with_capacity(relation.arguments().len());
+                    for argument in relation.arguments() {
+                        declared.push(self.pattern_type(
+                            argument,
+                            &mut BTreeMap::new(),
+                            parameters,
+                            (&item_path, span),
+                            owner,
+                        )?);
+                    }
+                    if !declared
+                        .iter()
+                        .any(|argument| matches!(self.inference.resolve(argument), Ty::Infer(_)))
+                    {
+                        let checkpoint = self.inference.checkpoint();
+                        match std_impl::select(self, std_trait, &actual, &declared, false, 0) {
+                            Ok(_) => self.inference.commit(checkpoint),
+                            Err(_) => self.inference.rollback(checkpoint),
+                        }
+                    }
+                }
                 // An opaque type that fills the parameter gives the
                 // associated type from its own bound, as `application(..)`'s
                 // `impl Program<State = S>` gives `P::State`, so a closure

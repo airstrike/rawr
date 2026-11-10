@@ -45,6 +45,9 @@ pub struct Relation {
     /// `Application<P>::subscription`: an opaque type that fills `P` gives
     /// it from its own bound.
     associated: Option<([u8; 32], ImmutableString)>,
+    /// The bound's trait by its std path, as `core::convert::AsRef`, when
+    /// std declares it: std's impls, from the std table, are its cases.
+    std_trait: Option<ImmutableString>,
 }
 
 /// One implementation of a [`Relation`]'s trait.
@@ -118,7 +121,20 @@ impl Relation {
             cases,
             trait_identity: None,
             associated: None,
+            std_trait: None,
         }
+    }
+
+    /// The relation of the std trait whose path is `path`.
+    #[must_use]
+    pub fn of_std(mut self, path: Option<ImmutableString>) -> Self {
+        self.std_trait = path;
+        self
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn std_trait(&self) -> Option<&str> {
+        self.std_trait.as_deref()
     }
 
     /// The relation of a projection's parameter, which stands for the
