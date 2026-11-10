@@ -14,7 +14,10 @@
       "entries": [
         {"text":"A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once.","issues":[446,470],"refs":[1604]},
         {"text":"An operator on a type without an impl of its trait is rustc's error in rustc's words, at the operator: E0369 for `+`, `|`, `<=` and `==`, E0368 for `+=`, E0600 for unary `-`, and E0308 for a right operand the one impl doesn't take. A `.into()` that nothing fixes is E0283 in every build.","issues":[1615,1617]},
-        {"text":"A project's record of native instances is keyed by the rawr build that kept it, and the runner a check builds reads the same key, so a record from an older rawr is never reused. A borrow of a local given where a crate keeps a `&'static dyn Trait` is rustc's E0597 before the program runs.","issues":[1606,1594]}
+        {"text":"A project's record of native instances is keyed by the rawr build that kept it, and the runner a check builds reads the same key, so a record from an older rawr is never reused.","issues":[1606]},
+        {"text":"Marked code calls a crate trait's `&self` methods on a trait object, as `held.0.area()` on a `&'static dyn Shape` or a `Box<dyn Shape>` a crate gave. A marked value is lent to native code as a native trait's `&dyn`, written `&page as &dyn Page` or `&page`, and `Rc<dyn Trait>` and `Arc<dyn Trait>` cross for marked types, numbers and crate values.","issues":[1593,1304]},
+        {"text":"`&format_args!(..)` needs no `as &dyn Value` where a crate call takes `&dyn Value`. A slice of objects lent to a call whose result keeps none of them is accepted.","issues":[1621],"refs":[1592]},
+        {"text":"inboard's marked files that name a std trait beside tracing's macros pass `rawr check` again. The extraction error now names the item it misread, not a bare hash.","issues":[1622]}
       ]
     },
     "releases": [
@@ -3210,7 +3213,7 @@
     {"issue":1301,"title":"A stand-in implements the native trait's supertraits (Debug, Clone, ..) that the marked type implements","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open","category":"Divergences from rustc"},
-    {"issue":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open","category":"Divergences from rustc"},
+    {"issue":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"closed","category":"Divergences from rustc"},
     {"issue":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1306,"title":"Coverage witnesses split integer literals below the top level","state":"open","category":"Divergences from rustc"},
     {"issue":1307,"title":"Struct patterns in fn parameters","state":"open","category":"Divergences from rustc"},
@@ -3499,7 +3502,7 @@
     {"issue":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"closed","category":"No glue (D593)"},
     {"issue":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open","category":"No glue (D593)"},
-    {"issue":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open","category":"No glue (D593)"},
+    {"issue":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"closed","category":"No glue (D593)"},
     {"issue":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"closed","category":"No glue (D593)"},
     {"issue":1595,"title":"Two modules each declaring a trait of one name are refused as a duplicate item","state":"closed","category":"Divergences from rustc","release":"0.3.175"},
     {"issue":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
@@ -3525,7 +3528,11 @@
     {"issue":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed","category":"Divergences from rustc"},
     {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open","category":"No glue (D593)"},
-    {"issue":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open","category":"Divergences from rustc"}
+    {"issue":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open","category":"Divergences from rustc"},
+    {"issue":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"open","category":"Divergences from rustc"},
+    {"issue":1621,"title":"&format_args!(..) needed as &dyn Value where a crate call takes &dyn Value","state":"open","category":"No glue (D593)"},
+    {"issue":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"open","category":"No glue (D593)"},
+    {"issue":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4425,7 +4432,7 @@
             {"number":1301,"title":"A stand-in implements the native trait's supertraits (Debug, Clone, ..) that the marked type implements","state":"closed"},
             {"number":1302,"title":"A native trait object's &self method may be re-entered while a call on it runs","state":"closed"},
             {"number":1303,"title":"Dropping a native trait object of a marked type runs the type's impl Drop","state":"open"},
-            {"number":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"open"},
+            {"number":1304,"title":"`&dyn Trait` and `Rc`/`Arc<dyn Trait>` of a native trait from a marked type","state":"closed"},
             {"number":1305,"title":"A stand-in's `view(&self) -> Element<'_, Message>` keeps the receiver pinned while the element lives (D783)","state":"closed"},
             {"number":1309,"title":"rawr check spins in Fingerprint::retained_bytes / Type::dynamic_bytes for an hour on a recursive native type","state":"closed"},
             {"number":1310,"title":"rawr check shows the failed build of rawr's crate copy before cargo's error when native code in it fails to compile","state":"closed"},
@@ -4536,7 +4543,7 @@
             {"number":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"closed"},
             {"number":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
-            {"number":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open"},
+            {"number":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"closed"},
             {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"closed"},
             {"number":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"closed"},
             {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed"},
@@ -4554,7 +4561,9 @@
             {"number":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"closed"},
             {"number":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed"},
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"},
-            {"number":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open"}
+            {"number":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open"},
+            {"number":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"open"},
+            {"number":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open"}
           ]
         }
       ]
