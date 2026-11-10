@@ -36,6 +36,8 @@ mod host_signature;
 mod imported;
 mod inference;
 mod iterator;
+#[cfg(feature = "rust-import")]
+mod kept;
 mod keyed;
 mod literal;
 mod local_type;
@@ -181,6 +183,8 @@ use imported::{ImplArguments, ImplUse};
 use inference::{inference_metrics, reset_inference_metrics};
 use inference::{Checkpoint, Inference, Patch};
 use iterator::{collect_try, COLLECT_OPTION, COLLECT_RESULT};
+#[cfg(feature = "rust-import")]
+pub(crate) use kept::Lowerings;
 use keyed::keyed_query;
 use location::retain_locations;
 pub(crate) use location::Location;
@@ -286,6 +290,11 @@ struct Parser<'a> {
     patterns: Vec<NominalPattern>,
     op_offset: usize,
     pattern_offset: usize,
+    /// What each op's and pattern's name says before its number: its
+    /// source's part, so a source's lowering names them alike whatever the
+    /// other sources lower (#1646). Empty where one numbering spans the
+    /// program.
+    numbering: ImmutableString,
     last_type: Ty,
     last_expression: Option<(usize, Span)>,
     inference: Inference,
@@ -836,6 +845,7 @@ impl<'a> Parser<'a> {
             patterns: Vec::new(),
             op_offset,
             pattern_offset,
+            numbering: ImmutableString::new(),
             last_type: Ty::Unit,
             last_expression: None,
             inference: Inference {
