@@ -133,6 +133,7 @@ pub(crate) const BINDING: [(&[&str], Std); 25] = [
     (&["alloc", "string", "String"], Std::String),
     (&["alloc", "sync", "Arc"], Std::Counted { arc: true }),
     (&["alloc", "vec", "Vec"], Std::Vec),
+    (&["core", "fmt", "Arguments"], Std::Arguments),
     (
         &["core", "io", "error", "Error"],
         Std::Held {
@@ -147,7 +148,6 @@ pub(crate) const BINDING: [(&[&str], Std); 25] = [
             clone: true,
         },
     ),
-    (&["core", "fmt", "Arguments"], Std::Arguments),
     (&["core", "marker", "PhantomData"], Std::PhantomData),
     (&["core", "ops", "range", "Range"], Std::Range),
     (
