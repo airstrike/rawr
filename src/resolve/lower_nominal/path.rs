@@ -318,6 +318,24 @@ impl<'a> Parser<'a> {
             self.coerce_expr(&expected, &mut value)?;
             return Ok(value);
         }
+        // `span::<()>("e")`: a crate function a `use` names, called at its
+        // turbofish's types, as the call without one is.
+        if segments.is_empty()
+            && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && !self.bindings.contains_key(member.as_str())
+            && let Some(binding) = self.models.import(&member).cloned()
+            && let item::Import::Item {
+                definitions: items,
+                owner,
+            }
+            | item::Import::ModuleItem {
+                definitions: items,
+                owner,
+            } = binding.target
+        {
+            let items = value_or_call(macro_or_value(items.into_vec(), false), true);
+            return self.parse_host_function(items.into_boxed_slice(), owner, member_span);
+        }
         // `Nope::<i32>`: a turbofish on a name that is no value.
         if segments.is_empty() {
             if let Some(error) = self.module_value(&member, member_span) {
