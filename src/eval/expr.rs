@@ -422,9 +422,11 @@ impl Engine {
 
         // Other expressions
         match expr {
-            Expr::FnCall(x, pos) => {
+            // A call's arguments nest without limit, so it evaluates on a
+            // stack grown when it runs low (#962).
+            Expr::FnCall(x, pos) => crate::eval::stack::with_room(|| {
                 self.eval_fn_call_expr(global, caches, scope, this_ptr, x, *pos)
-            }
+            }),
 
             Expr::ThisPtr(var_pos) => this_ptr
                 .ok_or_else(|| ERR::ErrorUnboundThis(*var_pos).into())

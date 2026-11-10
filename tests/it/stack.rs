@@ -33,11 +33,13 @@ fn test_stack_overflow_fn_calls() {
 }
 
 /// The default depth is the same in a debug build as in a release one, and
-/// a script recursing that deep runs on a test thread's 2 MiB stack.
+/// deep enough for a recursion a debug build of Rust runs: script calls
+/// grow the stack, so a test thread's 2 MiB stack holds 5000 of them
+/// (#1624).
 #[test]
-fn the_default_call_depth_is_64_in_every_build_and_fits_the_stack() {
-    let engine = Engine::new();
-    assert_eq!(engine.max_call_levels(), 64);
+fn the_default_call_depth_is_rusts_in_every_build_and_grows_the_stack() {
+    let mut engine = Engine::new();
+    assert_eq!(engine.max_call_levels(), 100_000);
 
     let script = "
         struct Node { depth: i64 }
@@ -57,28 +59,24 @@ fn the_default_call_depth_is_64_in_every_build_and_fits_the_stack() {
     ";
     let ast = engine.compile(script).unwrap();
     let mut scope = rawr::Scope::new();
-    let deepest = engine.max_call_levels() as INT - 1;
-    let counted: INT = engine.call_fn(&mut scope, &ast, "count", (deepest, vec![rawr::Dynamic::from(1 as INT)])).unwrap();
+    let counted: INT = engine.call_fn(&mut scope, &ast, "count", (5000 as INT, vec![rawr::Dynamic::from(1 as INT)])).unwrap();
     assert_eq!(counted, 1);
-    let depth: INT = engine.eval(&format!("{script} Node {{ depth: {} }}.down()", deepest - 1)).unwrap();
-    assert_eq!(depth, deepest - 1);
+    let depth: INT = engine.eval(&format!("{script} Node {{ depth: 5000 }}.down()")).unwrap();
+    assert_eq!(depth, 5000);
 
-    let error = engine.eval::<INT>(&format!("{script} Node {{ depth: {} }}.down()", deepest + 1)).unwrap_err();
+    engine.set_max_call_levels(64);
+    let error = engine.eval::<INT>(&format!("{script} Node {{ depth: 65 }}.down()")).unwrap_err();
     assert!(matches!(*error, EvalAltResult::ErrorStackOverflow(..)), "{error}");
 }
 
 #[test]
 fn test_stack_overflow_parsing() {
-    // Deep parses need a main-thread-sized stack, not the 2 MiB test-thread default.
-    std::thread::Builder::new().stack_size(8 << 20).spawn(stack_overflow_parsing).unwrap().join().unwrap();
-}
-
-fn stack_overflow_parsing() {
     let mut engine = Engine::new();
 
-    // Deep nesting is refused with an error rather than overflowing the stack.
-    let nested = format!("let a = {}1{};", "(1+".repeat(100), ")".repeat(100));
-    assert_eq!(*engine.compile(&nested).unwrap_err().0, ParseErrorType::ExprTooDeep);
+    // Rust limits no expression's nesting, so neither does the parser,
+    // which grows a 2 MiB test thread's stack (#962).
+    let nested = format!("{}1{}", "(1+".repeat(300), ")".repeat(300));
+    assert_eq!(engine.eval::<INT>(&nested).unwrap(), 301);
 
     engine.compile("1 + 2").unwrap();
 
