@@ -2,7 +2,10 @@
 
 mod candidate;
 pub(crate) mod namespace;
+mod reprobe;
 mod search;
+
+pub(crate) use reprobe::Reprobe;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -81,6 +84,9 @@ pub(crate) struct Sharing {
     /// bound to this graph's units: a table's later demand may name any of
     /// them, and replays only with each bound.
     pub(crate) loaded: Vec<crate::bindings::External>,
+    /// The bound plan of the probe that grew these tables, which a later
+    /// demand of the same build runs again (#1618).
+    pub(crate) reprobe: Option<Reprobe>,
 }
 
 impl Sharing {
@@ -828,9 +834,57 @@ impl Plan {
         if let Some(reuse) = &self.reuse {
             seed(reuse, &mut self.sharing, &build.binding_scripts());
         }
-        self.bind(build, graph, limits)?
-            .run(native, limits)?
-            .validate_outputs(build, graph, metadata, limits, native.evidence_session())
+        let mut probe = self.bind(build, graph, limits)?;
+        if let Some(reuse) = &probe.reuse
+            && !probe.sharing.keys.is_empty()
+        {
+            probe.sharing.reprobe = Some(Reprobe::of(&probe.plan_bytes, reuse));
+        }
+        probe.run(native, limits)?.validate_outputs(
+            build,
+            graph,
+            metadata,
+            limits,
+            native.evidence_session(),
+        )
+    }
+
+    /// This plan's selected crates and their sharing, as a demand of the
+    /// same build replays them (#1618): its demand, the tables `seed`
+    /// named and the crates the probe loaded are left out.
+    pub(crate) fn carry(&self, limits: &cargo::Limits) -> Self {
+        Self {
+            inventory: self.inventory,
+            protocol_directory: self.protocol_directory.clone(),
+            target_directory: self.target_directory.clone(),
+            artifact_directory: self.artifact_directory.clone(),
+            plan_file: self.plan_file.clone(),
+            probe_source: self.probe_source.clone(),
+            compiler_commit: self.compiler_commit.clone(),
+            host: self.host.clone(),
+            selected_target: self.selected_target.clone(),
+            entries: self.entries.clone(),
+            demand: Box::default(),
+            reuse: self.reuse.clone(),
+            sharing: Sharing {
+                keys: self.sharing.keys.clone(),
+                bindings: self.sharing.bindings.clone(),
+                local: self.sharing.local.clone(),
+                staged: self.sharing.staged.clone(),
+                ..Sharing::default()
+            },
+            allocation: Allocation::new(limits),
+            graph_budget: None,
+        }
+    }
+
+    /// The staged keys of this plan's shared crates.
+    pub(crate) fn shared_keys(&self) -> Vec<&str> {
+        self.sharing
+            .keys
+            .values()
+            .map(|shared| shared.key.as_ref())
+            .collect()
     }
 
     fn bind(
@@ -1843,6 +1897,12 @@ impl Capture {
             });
         }
         settled
+    }
+
+    /// The probe that grew this capture's tables, to run again for a later
+    /// demand of the same build (#1618).
+    pub(crate) fn take_reprobe(&mut self) -> Option<Reprobe> {
+        self.sharing.reprobe.take()
     }
 
     /// Where this project's unsettled tables wait (`Sharing::staged`).

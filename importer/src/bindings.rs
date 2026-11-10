@@ -513,6 +513,36 @@ pub(crate) fn stage(
     retire(directory, &kept);
 }
 
+/// Name again the table each staged entry of `keys` names, after the
+/// driver grew it in place for a later demand of the same build (#1618).
+/// The crate, its build scripts' outputs and the inputs the entry checks
+/// are those it was staged with; only the table's record changes. Best
+/// effort: an entry not renamed fails its replay, and the demand is probed
+/// as before.
+pub(crate) fn restage(directory: &Path, keys: &[&str]) {
+    for key in keys {
+        let entry = directory.join(key);
+        let kept = home::hold(directory, key).and_then(|_lease| {
+            let meta = fs::read(entry.join(META)).ok()?;
+            let copy = serde_json::from_slice::<Copy>(&fs::read(entry.join(COPY)).ok()?).ok()?;
+            Some((meta, copy))
+        });
+        let Some((meta, kept)) = kept else {
+            continue;
+        };
+        let Some(copy) = Copy::of(&kept.path, Some(&kept)) else {
+            continue;
+        };
+        if copy == kept {
+            continue;
+        }
+        let Ok(copy) = serde_json::to_vec(&copy) else {
+            continue;
+        };
+        let _ = home::publish(directory, key, &[(META, &meta), (COPY, &copy)]);
+    }
+}
+
 /// Where staged/ records the keys of each plan it staged for.
 const PLANS: &str = ".plans";
 /// The plans whose keys staged/ keeps, as the project keeps the Cargo

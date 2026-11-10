@@ -53,6 +53,7 @@ use crate::cargo::{self, Limits, Request};
 use crate::input::{self, stored};
 use crate::{metrics, store};
 
+mod carried;
 mod memo;
 
 /// The exact admitted node and the successful replay that admitted its bytes.
@@ -574,6 +575,11 @@ fn evaluate(
             parts: Parts::Remembered(Box::new(remembered)),
         })));
     }
+    // A demand round of the build an earlier round of this process
+    // completed: its tables, grown by its probe run again (`carried`).
+    if let Some(parts) = state.carried_parts(&attestation) {
+        return Ok(remembered(state, parts, &attestation));
+    }
     let validator = Arc::clone(&state);
     let executor = Arc::clone(&state);
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
@@ -597,25 +603,7 @@ fn evaluate(
                 .ok()
                 .and_then(|mut shared| shared.take());
             return match shared {
-                Some(parts) => {
-                    memo::remember(
-                        state.cached.context.rawr(),
-                        &memo::Resolution {
-                            request: state.identity.as_bytes(),
-                            attestation: &attestation,
-                            identity: &parts.identity,
-                            native: &parts.native,
-                            files: &parts.files,
-                            settled: &parts.settled,
-                            generations: &parts.generations,
-                            materials: &parts.materials,
-                        },
-                    );
-                    Ok(Resolved::Shared(Box::new(SharedReady {
-                        evaluation: state,
-                        parts: Parts::Read(Box::new(parts)),
-                    })))
-                }
+                Some(parts) => Ok(remembered(state, parts, &attestation)),
                 None => Err(error),
             };
         }
@@ -643,6 +631,27 @@ fn evaluate(
         replay,
         evaluation: state,
     })))
+}
+
+/// The shared resolution `parts` gave, remembered for the next run (`memo`).
+fn remembered(state: Arc<Evaluation>, parts: Shared, attestation: &[u8; 32]) -> Resolved {
+    memo::remember(
+        state.cached.context.rawr(),
+        &memo::Resolution {
+            request: state.identity.as_bytes(),
+            attestation,
+            identity: &parts.identity,
+            native: &parts.native,
+            files: &parts.files,
+            settled: &parts.settled,
+            generations: &parts.generations,
+            materials: &parts.materials,
+        },
+    );
+    Resolved::Shared(Box::new(SharedReady {
+        evaluation: state,
+        parts: Parts::Read(Box::new(parts)),
+    }))
 }
 
 impl Evaluation {
@@ -982,12 +991,28 @@ impl Evaluation {
         )?;
         // Every selected crate's table in the home: no nightly build and no
         // probe. The attempt is abandoned; the API is read from the tables.
-        if let Some(parts) = self.shared_parts(&harness, &layout)
+        let final_form = layout.final_form();
+        let basis = carried::Basis {
+            plan: &harness.extraction_plan,
+            graph: &harness.initial,
+            metadata: &harness.metadata,
+            selected: &harness.selected,
+            toolchain: &harness.toolchain,
+            manifest: final_form.manifest(),
+            lock: final_form.lock(),
+        };
+        if let Some(parts) = self.shared_parts(&basis)
             && let Ok(mut shared) = self.shared.lock()
         {
             *shared = Some(parts);
             return Err(node::Error::State(SHARED));
         }
+        let carrying = carried::Carried::of(
+            &harness,
+            final_form.manifest(),
+            final_form.lock(),
+            &self.limits,
+        );
         let built = self.request.build_harness_in(
             &self.cached,
             &layout,
@@ -1016,6 +1041,10 @@ impl Evaluation {
         if let Ok(mut settled) = self.settled.lock() {
             *settled = std::mem::take(&mut completed.settlement);
         }
+        let reprobe = completed
+            .capture
+            .as_mut()
+            .and_then(crate::extract::plan::Capture::take_reprobe);
         // The build's own completion names the product; the one replay after
         // publication proves the bundle reaches it, so the sealed bundle is
         // not replayed here as well.
@@ -1034,6 +1063,13 @@ impl Evaluation {
         };
         let bundled = node::Bundled::validate(product, pending, |value, _| value.completed())?;
         accounts.refused = false;
+        let attestation = self.cached.attestation.content().digest();
+        if let (Some(reprobe), Some(key)) = (
+            reprobe,
+            carried::key(&self.request, &attestation.as_bytes()),
+        ) {
+            carried::keep(key, carrying.probed(reprobe));
+        }
         Ok(bundled)
     }
 
@@ -1161,18 +1197,16 @@ impl Evaluation {
     /// The shared bindings of every selected crate, when the home has them
     /// all and they replay this demand. The final-form harness is kept under
     /// the project's Rawr directory, where the runner reads it.
-    fn shared_parts(&self, harness: &cargo::Harness, layout: &layout::Layout) -> Option<Shared> {
+    fn shared_parts(&self, harness: &carried::Basis<'_>) -> Option<Shared> {
         use sha2::{Digest as _, Sha256};
         let current = input::bindings::Current::capture(
             &self.request.project_root,
             &self.request.config,
             &self.limits,
         )?;
-        let shared = harness.extraction_plan.shared_document(
-            &harness.initial,
-            &harness.metadata,
-            &current,
-        )?;
+        let shared = harness
+            .plan
+            .shared_document(harness.graph, harness.metadata, &current)?;
         let kept = self.cached.context.rawr().join("shared");
         std::fs::create_dir_all(&kept).ok()?;
         let mut entries = Vec::new();
@@ -1209,12 +1243,14 @@ impl Evaluation {
             }
             Some(())
         };
-        let final_form = layout.final_form();
         for (from, name) in [
-            (final_form.manifest(), "Cargo.toml"),
-            (final_form.lock(), "Cargo.lock"),
+            (harness.manifest, "Cargo.toml"),
+            (harness.lock, "Cargo.lock"),
         ] {
             let to = kept.join(name);
+            // A copy of a sealed bundle's file keeps its read-only mode:
+            // the next copy replaces it.
+            let _ = std::fs::remove_file(&to);
             std::fs::copy(from, &to).ok()?;
             file(input::proof::Role::Harness, &to)?;
         }
@@ -1227,10 +1263,10 @@ impl Evaluation {
                 document: shared.document,
                 external: shared.external,
                 context: crate::extract::shared_context(
-                    &harness.metadata,
-                    &harness.initial,
-                    &harness.selected,
-                    &harness.toolchain,
+                    harness.metadata,
+                    harness.graph,
+                    harness.selected,
+                    harness.toolchain,
                     &self.request.target,
                     &self.request.profile,
                     &self.limits,
