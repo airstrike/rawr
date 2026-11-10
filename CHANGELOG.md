@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.176 (2026-11-10)
+
 - Native code can call a marked generic function at a type that sits below a private module, as inboard's `workspace::spreadsheet` uses its private `sidebar` module's `Message`. (#1598)
 - Native code can call a generic marked method or function taking an impl of a marked trait, as inboard's `Sidebar::content(impl IntoContent<'a, Message>)`, with the trait's own type or any iterator of elements. A body edit swaps in place. (#1586; part of #1539)
 - A crate function that takes trait objects in a slice, each alone or in an `Option`, and gives back a value that borrows them, as tracing-core's `fields.value_set_all(&[Some(&n as &dyn Value), None])`, runs from marked code. The value can be read, passed to a crate function such as `Event::dispatch(meta, &set)`, or passed to a closure. (#1591)

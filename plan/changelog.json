@@ -4,28 +4,33 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"Native code can call a marked generic function at a type that sits below a private module, as inboard's `workspace::spreadsheet` uses its private `sidebar` module's `Message`.","issues":[1598]},
-      {"text":"Native code can call a generic marked method or function taking an impl of a marked trait, as inboard's `Sidebar::content(impl IntoContent<'a, Message>)`, with the trait's own type or any iterator of elements. A body edit swaps in place.","issues":[1586],"refs":[1539]},
-      {"text":"A crate function that takes trait objects in a slice, each alone or in an `Option`, and gives back a value that borrows them, as tracing-core's `fields.value_set_all(&[Some(&n as &dyn Value), None])`, runs from marked code. The value can be read, passed to a crate function such as `Event::dispatch(meta, &set)`, or passed to a closure.","issues":[1591]},
-      {"text":"A generic marked function's call to another marked generic takes its type arguments from the expected type (a return, `let` annotation, argument or field), as rustc does, so inboard's `Sidebar::default()` in a function returning `Sidebar<'a, Message>` passes `rawr check`. A turbofish no longer counts an argument-position `impl Trait`.","issues":[578],"refs":[408]},
-      {"text":"A `Box<dyn Iterator<Item = T>>` that marked code makes, as inboard's sidebar `Header::new` keeps, crosses to native code as an iterator that pulls one item from marked code at each `next`. Native code and marked `&mut self` methods pull from the same iterator.","issues":[1600]},
-      {"text":"When `cargo check` also fails, `rawr check` and `rawr run` show cargo's errors alone, with rustc's own text and positions. A supervised run's `failed` event carries rustc's diagnostics.","issues":[1605]},
-      {"text":"A marked type boxed as a native trait object works again when the crate's root imports the trait, as with `use page::Page;`. The trait is now compared by the one path it's known by.","issues":[1607],"refs":[1578]},
-      {"text":"A crate's re-exported enum variant reads by its path in marked code, as in `.align_y(iced::Center)` with iced's `pub use Alignment::Center;`.","issues":[1608]},
-      {"text":"inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone.","issues":[1584,1587,1588]},
-      {"text":"A method taking `self` or `mut self` can move a part below its fields out of the receiver, as in `let items = self.content.items;`, as rustc allows. Behind `&self` or `&mut self` the move is rustc's E0507, naming the place.","issues":[1589]},
-      {"text":"A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc.","issues":[1596]},
-      {"text":"`rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install.","issues":[1610],"refs":[1604]},
-      {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
-      {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]},
-      {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]},
-      {"text":"`rawr check` classifies a crate's API without re-reading a trait's implementations for every implementation and function that bounds one of its associated types, and finds a type's definition through an index instead of hashing every definition. In inboard's post-bump check this work was about 40% of rawr-import's single-threaded time.","issues":[1616],"refs":[1604]},
-      {"text":"A use of an owned `self`'s field, or of `self`, after a field moved out of it is rustc's E0382. A use after only part of a value moved says \"partially moved\", as rustc does.","issues":[1609]},
-      {"text":"A crate trait's methods work on a std number, `bool` or `char` with the trait in scope, as `count.to_u32()` with num-traits' `NumCast`, and through a qualified path, as `<u64 as NumCast>::from(n)`.","issues":[1614,1613]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.176",
+      "date": "2026-11-10",
+      "entries": [
+        {"text":"Native code can call a marked generic function at a type that sits below a private module, as inboard's `workspace::spreadsheet` uses its private `sidebar` module's `Message`.","issues":[1598]},
+        {"text":"Native code can call a generic marked method or function taking an impl of a marked trait, as inboard's `Sidebar::content(impl IntoContent<'a, Message>)`, with the trait's own type or any iterator of elements. A body edit swaps in place.","issues":[1586],"refs":[1539]},
+        {"text":"A crate function that takes trait objects in a slice, each alone or in an `Option`, and gives back a value that borrows them, as tracing-core's `fields.value_set_all(&[Some(&n as &dyn Value), None])`, runs from marked code. The value can be read, passed to a crate function such as `Event::dispatch(meta, &set)`, or passed to a closure.","issues":[1591]},
+        {"text":"A generic marked function's call to another marked generic takes its type arguments from the expected type (a return, `let` annotation, argument or field), as rustc does, so inboard's `Sidebar::default()` in a function returning `Sidebar<'a, Message>` passes `rawr check`. A turbofish no longer counts an argument-position `impl Trait`.","issues":[578],"refs":[408]},
+        {"text":"A `Box<dyn Iterator<Item = T>>` that marked code makes, as inboard's sidebar `Header::new` keeps, crosses to native code as an iterator that pulls one item from marked code at each `next`. Native code and marked `&mut self` methods pull from the same iterator.","issues":[1600]},
+        {"text":"When `cargo check` also fails, `rawr check` and `rawr run` show cargo's errors alone, with rustc's own text and positions. A supervised run's `failed` event carries rustc's diagnostics.","issues":[1605]},
+        {"text":"A marked type boxed as a native trait object works again when the crate's root imports the trait, as with `use page::Page;`. The trait is now compared by the one path it's known by.","issues":[1607],"refs":[1578]},
+        {"text":"A crate's re-exported enum variant reads by its path in marked code, as in `.align_y(iced::Center)` with iced's `pub use Alignment::Center;`.","issues":[1608]},
+        {"text":"inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone.","issues":[1584,1587,1588]},
+        {"text":"A method taking `self` or `mut self` can move a part below its fields out of the receiver, as in `let items = self.content.items;`, as rustc allows. Behind `&self` or `&mut self` the move is rustc's E0507, naming the place.","issues":[1589]},
+        {"text":"A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc.","issues":[1596]},
+        {"text":"`rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install.","issues":[1610],"refs":[1604]},
+        {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
+        {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]},
+        {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]},
+        {"text":"`rawr check` classifies a crate's API without re-reading a trait's implementations for every implementation and function that bounds one of its associated types, and finds a type's definition through an index instead of hashing every definition. In inboard's post-bump check this work was about 40% of rawr-import's single-threaded time.","issues":[1616],"refs":[1604]},
+        {"text":"A use of an owned `self`'s field, or of `self`, after a field moved out of it is rustc's E0382. A use after only part of a value moved says \"partially moved\", as rustc does.","issues":[1609]},
+        {"text":"A crate trait's methods work on a std number, `bool` or `char` with the trait in scope, as `count.to_u32()` with num-traits' `NumCast`, and through a qualified path, as `<u64 as NumCast>::from(n)`.","issues":[1614,1613]}
+      ]
+    },
     {
       "version": "0.3.175",
       "date": "2026-11-09",
