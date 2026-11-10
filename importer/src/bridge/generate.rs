@@ -4742,6 +4742,11 @@ fn prepare_engine(
     progress(3)?;
     let engine = engine.retain_imported_native(native)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
+    // Each source's lowering an earlier runner kept under the project's
+    // `target/rawr`, and the parses `rawr` kept there (#1638).
+    if let Some(directory) = std::env::var_os("RAWR_DIRECTORY") {
+        engine.keep_resident_in(std::path::Path::new(&directory));
+    }
     Ok((engine, bindings, application_contract))
 }
 
@@ -5033,7 +5038,18 @@ mod __rawr_profile {
         _contract: &ApplicationContract,
         _expected: &[u8; 32],
     ) -> std::io::Result<(Option<__rawr_internal::reload::Candidate>, __rawr_internal::AST)> {
-        engine.compile_package_snapshot_generation_with_top_level(snapshot)
+        let compiled = engine.compile_package_snapshot_generation_with_top_level(snapshot);
+        // `RAWR_VERBOSE` says what the start's compile did, beside what an
+        // earlier runner kept (#1638).
+        if std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0") {
+            eprintln!(
+                "rawr runner: a start parsed {} sources, revealed {} files, lowered {} files",
+                engine.resident_parsed(),
+                engine.resident_revealed(),
+                engine.resident_lowered(),
+            );
+        }
+        compiled
             .map(|(candidate, ast)| (Some(candidate), ast))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }

@@ -38,15 +38,16 @@ const FORMAT: u32 = 14;
 /// checks the syntax of what a `#[cfg]` leaves out (the `syntax` feature),
 /// and the widths that change what a parse holds.
 fn stamp() -> String {
+    stamp_checking(cfg!(feature = "syntax"))
+}
+
+/// [`stamp`], of a build that checks what a `#[cfg]` leaves out or not.
+fn stamp_checking(syntax: bool) -> String {
     format!(
         "{FORMAT}/{}/{}{}/{}.{}",
         env!("CARGO_PKG_VERSION"),
         env!("RAWR_PARSER_DIGEST"),
-        if cfg!(feature = "syntax") {
-            "+syntax"
-        } else {
-            ""
-        },
+        if syntax { "+syntax" } else { "" },
         core::mem::size_of::<crate::INT>(),
         core::mem::size_of::<crate::FLOAT>(),
     )
@@ -180,7 +181,7 @@ impl Cells {
         }
         let bytes = fs::read(self.path(path)).ok()?;
         let mut reader = Reader { bytes: &bytes };
-        if reader.take(MAGIC.len())? != MAGIC || reader.text()? != self.stamp {
+        if reader.take(MAGIC.len())? != MAGIC || !self.reads(reader.text()?) {
             self.stale.set(self.stale.get() + 1);
             return None;
         }
@@ -198,6 +199,14 @@ impl Cells {
     pub(crate) fn parsed(&self, path: &Path, text: &str, features: &Enabled, unit: &parse::Unit) {
         self.parsed.set(self.parsed.get() + 1);
         self.hold(path, digest(text, features), unit);
+    }
+
+    /// Whether a cell stamped `stamp` holds a parse this build reads: one
+    /// it wrote, or, when it doesn't check what a `#[cfg]` leaves out, one a
+    /// build that checks it wrote, whose parse is the same. A project's
+    /// runner reads the cells `rawr` wrote (#1638).
+    fn reads(&self, stamp: &str) -> bool {
+        stamp == self.stamp || (!cfg!(feature = "syntax") && stamp == stamp_checking(true))
     }
 
     fn hold(&self, path: &Path, text_digest: [u8; 32], unit: &parse::Unit) {

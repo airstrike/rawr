@@ -334,11 +334,12 @@ pub(crate) const NOMINAL_MATCH_SENTINEL: &str = "__rawr_nominal_match_";
 
 /// Stable runtime proof for one value exposed by a nominal enum pattern.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum NominalPayloadType {
     /// Unit has no Rust `TypeId` entry in the evaluator's ordinary values.
     Unit,
     /// Builtin or registered host Rust type.
-    Host(TypeId),
+    Host(#[cfg_attr(feature = "rust-import", serde(with = "crate::stored::type_id"))] TypeId),
     /// A generic type parameter, erased: any value.
     Any,
     /// Script nominal type with its exact compatibility schema.
@@ -350,6 +351,7 @@ pub(crate) enum NominalPayloadType {
 
 /// Stable proof attached to a nominal enum case after compiler-only lowering.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct NominalEnumPattern {
     pub enum_name: Identifier,
     pub identity: type_def::Identity,
@@ -361,6 +363,7 @@ pub(crate) struct NominalEnumPattern {
 
 /// One recursively proven nominal enum payload pattern.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum NominalPattern {
     /// Introduce one fresh arm-local binding after the complete pattern matches.
     Binding {
@@ -420,6 +423,7 @@ pub(crate) enum NominalPattern {
 
 /// A literal in a pattern, compared by value.
 #[derive(Debug, Clone, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum NominalLiteral {
     Int(INT),
     Bool(bool),

@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// item the host invokes like a named function, after the values it
 /// captured.
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Lifted {
     pub(super) key: crate::item::Key,
     pub(super) value: Option<crate::item::Value>,

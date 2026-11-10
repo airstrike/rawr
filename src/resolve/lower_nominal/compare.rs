@@ -9,6 +9,7 @@ use super::*;
 /// Where a value's static type reads integers as unsigned: a `u64` or a
 /// `usize` is its bits in the runtime's `i64`.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Shape {
     /// Compared as the values say.
     Plain,

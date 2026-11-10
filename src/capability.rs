@@ -134,6 +134,7 @@ impl Kind {
 
 /// An opaque set proving the capabilities validated for one type definition.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Set(u16);
 
 /// An exact canonical set of capabilities attached to a symbolic item.
@@ -141,9 +142,11 @@ pub struct Set(u16);
 /// The representation is compared directly and is not a serialized digest or
 /// a cross-version compatibility promise.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Fingerprint(Box<[Name]>);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum Name {
     Default,
     Debug,

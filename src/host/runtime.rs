@@ -181,6 +181,7 @@ pub struct Registry {
 
 /// One exact static operation required by an executable's private lowering.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Requirement {
     owner: host::facade::Dependency,
     binding: Binding,
@@ -191,6 +192,7 @@ pub(crate) struct Requirement {
     /// The instance of a generic imported item this call uses.
     #[cfg(feature = "rust-import")]
     instance: Option<[u8; 32]>,
+    #[cfg_attr(feature = "rust-import", serde(skip))]
     bound: Bound,
 }
 
@@ -254,6 +256,7 @@ impl Ord for Bound {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum Binding {
     Item(host::item::Fingerprint),
     // Only the Rust importer admits generated structural adapters.

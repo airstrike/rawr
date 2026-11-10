@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 /// Which of Rust's sequence types a `Ty::Array` is. Each is its own type,
 /// as in Rust, and every one is an array at runtime.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Kind {
     /// `[T; N]`, of its length.
     Array(usize),
@@ -55,6 +56,7 @@ impl Kind {
 
 #[cfg(feature = "rust-import")]
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Constructor {
     key: Option<Box<[u8]>>,
     target: Option<Type>,

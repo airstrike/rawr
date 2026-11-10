@@ -106,6 +106,20 @@ impl Engine {
         lock(&self.resident_lowerings).revealed()
     }
 
+    /// Keep this runner's compiles in `directory`, its project's
+    /// `target/rawr`, for the next runner: each source's lowering and
+    /// reveal's readings of its bodies. Its first compile reuses what an
+    /// earlier runner kept there under the same keys, and reads each
+    /// source `rawr` parsed from the parse `rawr` kept there (#1638).
+    #[doc(hidden)]
+    pub fn keep_resident_in(&self, directory: &std::path::Path) {
+        if let Some(disk) = crate::resolve::lower_nominal::Disk::new(directory.join("lowered")) {
+            lock(&self.resident_lowerings).store(disk);
+        }
+        *lock(&self.resident_parses) =
+            Some(package::Cells::new(directory.join("parse")).remember());
+    }
+
     /// The package graph of `snapshot`. A runner's compiler, which compiles
     /// the program again on each save, reads each source whose text its
     /// last compile parsed from that parse, and parses only the sources

@@ -321,6 +321,14 @@ impl Registry {
         self.exported.iter().any(|exported| exported == root)
     }
 
+    /// The Rust types its facades link, by their `TypeId`s.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn linked(&self) -> impl Iterator<Item = std::any::TypeId> + '_ {
+        self.types
+            .iter()
+            .filter_map(type_def::Definition::native_identity)
+    }
+
     /// Where an app exported the Rust type `identity`: its root and path.
     pub(crate) fn exported_path(&self, identity: std::any::TypeId) -> Option<String> {
         self.types

@@ -8,6 +8,7 @@ use std::fmt;
 /// Keys survive recompilation while the declaration's package, module path,
 /// and declared name remain unchanged.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Key(program::Path);
 
 impl fmt::Display for Key {
@@ -46,6 +47,7 @@ impl Key {
 
 /// Stable semantic identity for a host or script type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Identity {
     /// A linked or symbolic imported type registered by the host.
     Host(crate::host::type_def::Identity),
@@ -62,6 +64,7 @@ pub enum Identity {
 /// let _ = rawr::type_def::Id(0);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Id(usize);
 
 impl Id {
@@ -102,6 +105,7 @@ impl Id {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Kind {
     Struct,
     Enum,
@@ -118,6 +122,7 @@ pub(crate) struct Declaration {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Definition {
     id: Id,
     item: item::Id,

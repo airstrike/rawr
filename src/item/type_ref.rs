@@ -85,6 +85,7 @@ pub(crate) const BINDING_PREFIX: &str = "=";
 
 /// A parsed type reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Type {
     /// The unit type `()`.
     Unit(Span),
@@ -123,6 +124,7 @@ impl Type {
 
 /// A qualified type path.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Path {
     /// Qualified path segments.
     pub segments: Box<[Segment]>,
@@ -134,6 +136,7 @@ pub struct Path {
 
 /// One type path segment and its generic arguments.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Segment {
     /// Segment name.
     pub name: item::Name,
@@ -145,6 +148,7 @@ pub struct Segment {
 
 /// A type or lifetime generic argument.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Argument {
     /// A nested type argument.
     Type(Type),
@@ -154,6 +158,7 @@ pub enum Argument {
 
 /// A Rust-shaped lifetime marker retained for interop headers.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Lifetime {
     /// Lifetime name or underscore placeholder.
     pub name: item::Name,

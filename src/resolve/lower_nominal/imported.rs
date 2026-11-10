@@ -481,7 +481,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         pending = waiting;
     }
     if let Some(readings) = &mut readings {
-        readings.succeeded();
+        readings.succeeded(program);
     }
     Ok(())
 }

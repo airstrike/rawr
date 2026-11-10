@@ -54,6 +54,8 @@
   <li><code>store.parts/</code> holds the large ones, cut into parts of about 80&nbsp;KB. That covers the API, the generic contract, the facade, the overlay and a runner&rsquo;s generated sources. Each part is kept once, and the store keeps the list of parts of each one. An edit changes a few regions of these, so its generation writes only the parts it changed.</li>
   <li><code>store.sessions/</code> holds one lease for each project that uses the store.</li>
   <li><code>runner/</code> is where your <code>cargo</code> builds the runner.</li>
+  <li><code>parse/</code> holds each source file&rsquo;s parse, keyed by its text. The runner reads it too, so a source rawr parsed isn&rsquo;t parsed again.</li>
+  <li><code>lowered/</code> holds what the runner compiled of each marked file. Each file is keyed by the file&rsquo;s text and by what it reads of the rest of the program. A new runner compiles only the files whose key changed, so a start with no edits compiles none of them. A file another build of the runner wrote is never read.</li>
 </ul>
 <p>A project keeps its four newest runners, resolutions and native builds, and the runner that is live and the last good one. A runner&rsquo;s generation is everything the project made for it. When a runner goes, its generation goes with it, apart from what a kept generation still uses. A part goes with the last thing that lists it. So an undo to any of the four newest generations finds all of it and rebuilds nothing.</p>
 

@@ -4,6 +4,7 @@ use crate::{capability, host, ImmutableString};
 
 /// A validated callable signature before facade path resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Definition {
     type_parameters: Box<[(host::path::Path, capability::Set)]>,
     /// Each type parameter's index in `type_parameters`, in the order the
@@ -33,6 +34,7 @@ pub struct Definition {
 /// trait selection infers them: `random_range(0.5..1.0)` gives the `T` of
 /// the range's floats.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Relation {
     parameter: ImmutableString,
     arguments: Box<[Pattern]>,
@@ -52,6 +54,7 @@ pub struct Relation {
 
 /// One implementation of a [`Relation`]'s trait.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Case {
     this: Pattern,
     arguments: Box<[Pattern]>,
@@ -61,6 +64,7 @@ pub struct Case {
 /// A bound `<ty as Trait>::Name == value` of a [`Case`]'s implementation,
 /// with each type `ty` may be and the associated type it gives there.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Projection {
     pub(crate) ty: Pattern,
     pub(crate) value: Pattern,
@@ -70,6 +74,7 @@ pub struct Projection {
 /// A type in a [`Relation`]: the item's type parameter, an
 /// implementation's own type parameter, or a type made of them.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Pattern {
     /// The item's type parameter by name.
     Parameter(ImmutableString),
@@ -210,6 +215,7 @@ impl Case {
 
 /// A deterministic exact structural signature proof.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Fingerprint {
     type_parameters: Box<[(ImmutableString, capability::Set)]>,
     parameters: Box<[host::type_ref::Type]>,

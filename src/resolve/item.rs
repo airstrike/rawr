@@ -159,6 +159,7 @@ impl Binding {
 /// A generic type parameter and its bounds: built-in derivable traits as
 /// capabilities, user traits by name.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Generic {
     pub name: crate::item::Name,
     pub bounds: crate::capability::Set,
@@ -252,6 +253,7 @@ pub(crate) struct ReferenceForward {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Struct {
     pub header: crate::item::Header,
     pub definition: type_def::Id,
@@ -266,6 +268,7 @@ pub(crate) struct Struct {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Field {
     pub name: crate::item::Name,
     pub ty: type_ref::Type,
@@ -278,6 +281,7 @@ pub(crate) struct Field {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Enum {
     pub header: crate::item::Header,
     pub definition: type_def::Id,
@@ -295,6 +299,7 @@ pub(crate) struct Enum {
 /// fields' types by where they are written, and whether it bounds them
 /// (`'b: 'a`, `T: 'a`).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct TypeRegions {
     pub params: Box<[crate::ImmutableString]>,
     pub written: Lifetimes,
@@ -324,6 +329,7 @@ impl TypeRegions {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Variant {
     pub name: crate::item::Name,
     pub payload: Box<[type_ref::Type]>,
@@ -426,6 +432,7 @@ pub(crate) struct OpaqueBound {
 /// resolved type keeps only that), the receiver's, the outlives bounds, and
 /// for a method the impl's owner, which `self` is.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Lifetimes {
     pub names: std::collections::BTreeMap<Span, crate::ImmutableString>,
     /// `'a` of `&'a self`.

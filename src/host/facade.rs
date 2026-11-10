@@ -7,6 +7,7 @@ use std::hash::{Hash, Hasher};
 
 /// A non-zero facade ABI version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Abi(u32);
 
 impl Abi {
@@ -445,6 +446,7 @@ pub(crate) struct RegistryParts {
 
 /// A deterministic exact proof of a complete static facade contract.
 #[derive(Clone, Debug, Eq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Fingerprint {
     root: ImmutableString,
     abi: Abi,
@@ -478,12 +480,14 @@ impl Hasher for ContentHasher {
 /// only after a complete facade has finished validation. Legacy direct
 /// registrations deliberately have no dependency proof.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Dependency {
     root: ImmutableString,
     fingerprint: Fingerprint,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct TypeProof {
     contract: host::type_def::Contract,
     projections: Box<[host::type_def::Projection]>,

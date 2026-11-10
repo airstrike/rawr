@@ -6,6 +6,7 @@ use std::fmt;
 use std::ops::Range;
 
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Output {
     pub(super) generated: Range<usize>,
     pub(super) original: Span,

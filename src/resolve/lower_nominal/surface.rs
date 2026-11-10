@@ -95,6 +95,7 @@ pub(super) fn impl_surface_type(
 
 #[cfg(feature = "rust-import")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct ImportedUse {
     pub(crate) source: crate::program::source::Id,
     pub(crate) path: ImmutableString,
@@ -121,6 +122,7 @@ pub(crate) struct ImportedUse {
 
 #[cfg(feature = "rust-import")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct ImportedFunctionUse {
     pub(crate) position: u32,
     /// A generic function's instance, in its declared parameter order.
@@ -132,6 +134,7 @@ pub(crate) struct ImportedFunctionUse {
 
 #[cfg(feature = "rust-import")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct ImportedMapperUse {
     pub(crate) position: u32,
     pub(crate) seal: [u8; 16],
@@ -140,6 +143,7 @@ pub(crate) struct ImportedMapperUse {
 
 #[cfg(feature = "rust-import")]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct ImportedFunctionProof {
     pub(super) item: crate::host::item::Definition,
     pub(super) owner: crate::host::facade::Dependency,

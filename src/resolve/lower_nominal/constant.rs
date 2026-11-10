@@ -472,6 +472,7 @@ impl<'a> Parser<'a> {
 /// Where code reads its compile-time variables: its file and its
 /// program's root file, each when it is a file on disk.
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Place {
     file: Option<std::path::PathBuf>,
     entry: Option<std::path::PathBuf>,

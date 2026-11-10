@@ -20,6 +20,8 @@ pub(crate) mod counted;
 mod coverage;
 pub(crate) mod cow;
 
+#[cfg(feature = "rust-import")]
+mod disk;
 mod dispatch;
 mod drops;
 mod emit;
@@ -144,6 +146,8 @@ use conversion::{HostInto, PendingConversion, TextInto};
 use coverage::{
     bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
 };
+#[cfg(feature = "rust-import")]
+pub(crate) use disk::Disk;
 pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_names, method_copied};

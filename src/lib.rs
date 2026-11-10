@@ -194,6 +194,8 @@ pub mod signature;
 /// Source text retained by parsed compilation units.
 pub mod source;
 mod std_facade;
+#[cfg(feature = "rust-import")]
+mod stored;
 // D711: std's paths, kinds, stability and generics, from the sysroot.
 #[doc(hidden)]
 pub mod std_table;
