@@ -12,7 +12,9 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once.","issues":[446,470],"refs":[1604]}
+        {"text":"A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once.","issues":[446,470],"refs":[1604]},
+        {"text":"An operator on a type without an impl of its trait is rustc's error in rustc's words, at the operator: E0369 for `+`, `|`, `<=` and `==`, E0368 for `+=`, E0600 for unary `-`, and E0308 for a right operand the one impl doesn't take. A `.into()` that nothing fixes is E0283 in every build.","issues":[1615,1617]},
+        {"text":"A project's record of native instances is keyed by the rawr build that kept it, and the runner a check builds reads the same key, so a record from an older rawr is never reused. A borrow of a local given where a crate keeps a `&'static dyn Trait` is rustc's E0597 before the program runs.","issues":[1606,1594]}
       ]
     },
     "releases": [
@@ -3498,7 +3500,7 @@
     {"issue":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open","category":"No glue (D593)"},
     {"issue":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open","category":"No glue (D593)"},
-    {"issue":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open","category":"No glue (D593)"},
+    {"issue":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"closed","category":"No glue (D593)"},
     {"issue":1595,"title":"Two modules each declaring a trait of one name are refused as a duplicate item","state":"closed","category":"Divergences from rustc","release":"0.3.175"},
     {"issue":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
     {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed","category":"Divergences from rustc"},
@@ -3510,7 +3512,7 @@
     {"issue":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
     {"issue":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open","category":"No glue (D593)"},
     {"issue":1605,"title":"When cargo check fails too, rawr printed its own copy of the same error after cargo's","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
-    {"issue":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open","category":"No glue (D593)"},
+    {"issue":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"closed","category":"No glue (D593)"},
     {"issue":1607,"title":"A marked type boxed as a native trait object is refused when the crate root imports the trait","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1608,"title":"A crate's re-exported enum variant named by its qualified path in an expression is E0425","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
@@ -3519,10 +3521,11 @@
     {"issue":1612,"title":"The runner's handle identity names u64::from, which a crate trait's own from makes ambiguous (E0034)","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
     {"issue":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
-    {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open","category":"Divergences from rustc"},
+    {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"closed","category":"Divergences from rustc"},
     {"issue":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"closed","category":"No glue (D593)","release":"0.3.176"},
-    {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"open","category":"Divergences from rustc"},
-    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open","category":"No glue (D593)"}
+    {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed","category":"Divergences from rustc"},
+    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open","category":"No glue (D593)"},
+    {"issue":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4534,7 +4537,7 @@
             {"number":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
             {"number":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open"},
-            {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open"},
+            {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"closed"},
             {"number":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"closed"},
             {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed"},
             {"number":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed"},
@@ -4544,13 +4547,14 @@
             {"number":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"closed"},
             {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"closed"},
             {"number":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open"},
-            {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open"},
+            {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"closed"},
             {"number":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"closed"},
             {"number":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"closed"},
             {"number":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"closed"},
-            {"number":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open"},
-            {"number":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"open"},
-            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"}
+            {"number":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"closed"},
+            {"number":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed"},
+            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"},
+            {"number":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open"}
           ]
         }
       ]
