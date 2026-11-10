@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too.","issues":[1643]},
-        {"text":"A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed.","issues":[1654],"refs":[1646]}
+        {"text":"A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed.","issues":[1654],"refs":[1646]},
+        {"text":"`rawr test` of a program whose package has Rust dependencies runs its tests in the program's runner, as `rawr run` runs its `main` there, and reports as `cargo test` does. That covers each test's result, a failure's output and panic, libtest's filters and options, the exit status, and `cargo check --profile test`'s errors after the report.","issues":[1653]}
       ]
     },
     "releases": [
@@ -3613,7 +3614,7 @@
     {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
-    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open","category":"Divergences from rustc"},
+    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"closed","category":"Divergences from rustc"},
     {"issue":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
@@ -4381,7 +4382,7 @@
           "start": 74,
           "size": 4,
           "state": "now",
-          "note": "rustlings at f7b9b3c in its own package: 95 of 95 solutions run and match. 0 of 132 tests and 71 of 95 exercises, because `rawr test` of a program with Rust dependencies goes to rawr-import, which has no test command (the new gap on this row). Before that regression: 132 of 132 tests and 93 of 95 exercises.",
+          "note": "rustlings at f7b9b3c in its own package (tokio): 95 of 95 solutions run and match, 132 of 132 tests pass, and 95 of 95 exercises fail as rustc fails them (#1653). Left: rustc's exact notes and lints on the open issues of this row.",
           "issues": [
             {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
             {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
@@ -4438,7 +4439,7 @@
             {"number":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"closed"},
             {"number":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"closed"},
             {"number":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"closed"},
-            {"number":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open"}
+            {"number":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"closed"}
           ]
         },
         {
