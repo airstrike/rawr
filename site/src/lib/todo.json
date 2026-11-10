@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-10",
-  "version": "0.3.179",
+  "version": "0.3.180",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,17 +9,19 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too.","issues":[1643]},
-        {"text":"A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed.","issues":[1654],"refs":[1646]},
-        {"text":"`rawr test` of a program whose package has Rust dependencies runs its tests in the program's runner, as `rawr run` runs its `main` there, and reports as `cargo test` does. That covers each test's result, a failure's output and panic, libtest's filters and options, the exit status, and `cargo check --profile test`'s errors after the report.","issues":[1653]},
-        {"text":"A save that adds or removes a line in a marked file keeps every other marked file's lowering, as long as the line is in a function body or is a blank or comment line. The save lowers only its own file.","issues":[1655],"refs":[1646]},
-        {"text":"A save reads each marked file's outline once per text and keeps it across passes and saves. Before, it blanked every file's text against every body on each pass.","issues":[1656],"refs":[1646]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.180",
+        "date": "2026-11-10",
+        "entries": [
+          {"text":"rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too.","issues":[1643]},
+          {"text":"A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed.","issues":[1654],"refs":[1646]},
+          {"text":"`rawr test` of a program whose package has Rust dependencies runs its tests in the program's runner, as `rawr run` runs its `main` there, and reports as `cargo test` does. That covers each test's result, a failure's output and panic, libtest's filters and options, the exit status, and `cargo check --profile test`'s errors after the report.","issues":[1653]},
+          {"text":"A save that adds or removes a line in a marked file keeps every other marked file's lowering, as long as the line is in a function body or is a blank or comment line. The save lowers only its own file.","issues":[1655],"refs":[1646]},
+          {"text":"A save reads each marked file's outline once per text and keeps it across passes and saves. Before, it blanked every file's text against every body on each pass.","issues":[1656],"refs":[1646]}
+        ]
+      },
       {
         "version": "0.3.179",
         "date": "2026-11-10",
@@ -3606,7 +3608,7 @@
     {"issue":1640,"title":"A deeply nested crate type fails rawr check with a sidecar recursion-limit error","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)"},
     {"issue":1642,"title":"An anonymous import of anything but a trait fails the extraction (anonymous-import-kind)","state":"closed","category":"No glue (D593)","release":"0.3.178"},
-    {"issue":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.180"},
     {"issue":1644,"title":"A save's work grew with the program's dependencies: each native use was matched against every inventory row","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1646,"title":"A save resolves and lowers every marked file again","state":"open","category":"No glue (D593)"},
@@ -3616,10 +3618,10 @@
     {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
-    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"closed","category":"Divergences from rustc"},
-    {"issue":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"open","category":"No glue (D593)"},
-    {"issue":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"open","category":"No glue (D593)"},
-    {"issue":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"open","category":"No glue (D593)"},
+    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"closed","category":"Divergences from rustc","release":"0.3.180"},
+    {"issue":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed","category":"No glue (D593)","release":"0.3.180"},
+    {"issue":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.180"},
+    {"issue":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed","category":"No glue (D593)","release":"0.3.180"},
     {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
@@ -4670,10 +4672,10 @@
             {"number":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed"},
             {"number":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed"},
             {"number":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed"},
-            {"number":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"open"},
+            {"number":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed"},
             {"number":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"open"},
-            {"number":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"open"},
-            {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"open"}
+            {"number":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed"},
+            {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"}
           ]
         }
       ]

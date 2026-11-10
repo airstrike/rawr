@@ -4,15 +4,20 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too.","issues":[1643]},
-      {"text":"A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed.","issues":[1654],"refs":[1646]},
-      {"text":"`rawr test` of a program whose package has Rust dependencies runs its tests in the program's runner, as `rawr run` runs its `main` there, and reports as `cargo test` does. That covers each test's result, a failure's output and panic, libtest's filters and options, the exit status, and `cargo check --profile test`'s errors after the report.","issues":[1653]},
-      {"text":"A save that adds or removes a line in a marked file keeps every other marked file's lowering, as long as the line is in a function body or is a blank or comment line. The save lowers only its own file.","issues":[1655],"refs":[1646]},
-      {"text":"A save reads each marked file's outline once per text and keeps it across passes and saves. Before, it blanked every file's text against every body on each pass.","issues":[1656],"refs":[1646]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.180",
+      "date": "2026-11-10",
+      "entries": [
+        {"text":"rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too.","issues":[1643]},
+        {"text":"A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed.","issues":[1654],"refs":[1646]},
+        {"text":"`rawr test` of a program whose package has Rust dependencies runs its tests in the program's runner, as `rawr run` runs its `main` there, and reports as `cargo test` does. That covers each test's result, a failure's output and panic, libtest's filters and options, the exit status, and `cargo check --profile test`'s errors after the report.","issues":[1653]},
+        {"text":"A save that adds or removes a line in a marked file keeps every other marked file's lowering, as long as the line is in a function body or is a blank or comment line. The save lowers only its own file.","issues":[1655],"refs":[1646]},
+        {"text":"A save reads each marked file's outline once per text and keeps it across passes and saves. Before, it blanked every file's text against every body on each pass.","issues":[1656],"refs":[1646]}
+      ]
+    },
     {
       "version": "0.3.179",
       "date": "2026-11-10",
