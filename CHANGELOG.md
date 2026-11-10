@@ -18,6 +18,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`. (#1282)
 - A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core. (#1627)
 - Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION. (#1625)
+- A program with marked generic instances keeps its extracted tables for the next demand round again, so a round whose items the tables already hold needs no nightly build or probe. A check no longer generates its bindings plan twice per round, and `rawr check` with `RAWR_VERBOSE=1` prints what each round's stages did. (#1629; part of #1618)
 
 ## 0.3.176 (2026-11-10)
 

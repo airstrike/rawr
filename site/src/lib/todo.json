@@ -24,7 +24,8 @@
         {"text":"A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span(\"right\")])` runs again inside a view.","issues":[1369,1368,1366]},
         {"text":"A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`.","issues":[1282]},
         {"text":"A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core.","issues":[1627]},
-        {"text":"Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION.","issues":[1625]}
+        {"text":"Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION.","issues":[1625]},
+        {"text":"A program with marked generic instances keeps its extracted tables for the next demand round again, so a round whose items the tables already hold needs no nightly build or probe. A check no longer generates its bindings plan twice per round, and `rawr check` with `RAWR_VERBOSE=1` prints what each round's stages did.","issues":[1629],"refs":[1618]}
       ]
     },
     "releases": [
@@ -3544,7 +3545,8 @@
     {"issue":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"closed","category":"Divergences from rustc"},
     {"issue":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1627,"title":"A marked module that names tracing only through another crate's re-export fails with unknown member Level::le","state":"open","category":"No glue (D593)"},
-    {"issue":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open","category":"Divergences from rustc"}
+    {"issue":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open","category":"Divergences from rustc"},
+    {"issue":1629,"title":"A program with recorded generated crates never kept its extracted tables for the next demand round","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
