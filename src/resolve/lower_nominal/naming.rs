@@ -61,6 +61,16 @@ pub(super) fn text_into_placeholder(index: usize) -> String {
     format!("{head:_<width$}")
 }
 
+/// A trait's name as a generated name holds it: a trait known by its path,
+/// `home::IntoContent`, as `home__IntoContent`.
+fn identifier(trait_name: &str) -> std::borrow::Cow<'_, str> {
+    if trait_name.contains("::") {
+        trait_name.replace("::", "__").into()
+    } else {
+        trait_name.into()
+    }
+}
+
 /// The text of a generic trait's argument list: `i64, String`.
 pub(super) fn instance_text(arguments: &[type_ref::Type]) -> String {
     arguments
@@ -74,12 +84,18 @@ pub(super) fn instance_text(arguments: &[type_ref::Type]) -> String {
 /// `index` of a generic trait; `FALLBACK_INSTANCE` dispatches by the
 /// receiver's type alone. Same length as `instance_placeholder`.
 pub(super) fn instance_dispatcher_name(trait_name: &str, method: &str, index: usize) -> String {
-    format!("{DISPATCH_SENTINEL}{trait_name}__{method}__{index:08}")
+    format!(
+        "{DISPATCH_SENTINEL}{}__{method}__{index:08}",
+        identifier(trait_name)
+    )
 }
 
 /// A call's dispatcher before inference fixes its trait arguments.
 pub(super) fn instance_placeholder(trait_name: &str, method: &str, pending: usize) -> String {
-    format!("{DISPATCH_SENTINEL}{trait_name}__{method}__p{pending:07}")
+    format!(
+        "{DISPATCH_SENTINEL}{}__{method}__p{pending:07}",
+        identifier(trait_name)
+    )
 }
 
 pub(super) const FALLBACK_INSTANCE: usize = 99_999_999;
@@ -87,7 +103,10 @@ pub(super) const FALLBACK_INSTANCE: usize = 99_999_999;
 /// The generated function that runs `trait_name::function`, a function
 /// without `self`, for the type a witness names.
 pub(super) fn static_dispatcher_name(trait_name: &str, function: &str) -> String {
-    format!("{DISPATCH_SENTINEL}static_{trait_name}__{function}")
+    format!(
+        "{DISPATCH_SENTINEL}static_{}__{function}",
+        identifier(trait_name)
+    )
 }
 
 /// The static dispatcher of a generic trait's function without `self` for
@@ -97,7 +116,10 @@ pub(super) fn static_instance_dispatcher_name(
     function: &str,
     index: usize,
 ) -> String {
-    format!("{DISPATCH_SENTINEL}static_{trait_name}__{function}__{index:08}")
+    format!(
+        "{DISPATCH_SENTINEL}static_{}__{function}__{index:08}",
+        identifier(trait_name)
+    )
 }
 
 /// A static call's dispatcher before inference fixes its trait arguments.
@@ -106,7 +128,10 @@ pub(super) fn static_instance_placeholder(
     function: &str,
     pending: usize,
 ) -> String {
-    format!("{DISPATCH_SENTINEL}static_{trait_name}__{function}__p{pending:07}")
+    format!(
+        "{DISPATCH_SENTINEL}static_{}__{function}__p{pending:07}",
+        identifier(trait_name)
+    )
 }
 
 /// The hidden parameter carrying the witness of the generic `name`.
@@ -122,7 +147,7 @@ pub(super) fn witness_placeholder(index: usize) -> String {
 /// The generated function that runs `trait_name::method` for a value by its
 /// runtime type.
 pub(super) fn trait_dispatcher_name(trait_name: &str, method: &str) -> String {
-    format!("{DISPATCH_SENTINEL}{trait_name}__{method}")
+    format!("{DISPATCH_SENTINEL}{}__{method}", identifier(trait_name))
 }
 
 /// A placeholder long enough for any method helper name it becomes.

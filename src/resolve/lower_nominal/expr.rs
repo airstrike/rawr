@@ -664,6 +664,13 @@ impl<'a> Parser<'a> {
                     (trait_name, trait_span) = self.expect_name("trait in a qualified path")?;
                     segments += 1;
                 }
+                // `<C as Shape>` of the module's `Shape`, when another
+                // module's trait has that name too.
+                if segments == 1
+                    && let Some(known) = self.models.trait_name(&trait_name)
+                {
+                    trait_name = known.clone();
+                }
                 // A path through a crate, as `serde::de::Error`, names the
                 // crate's trait, never std's of the same name.
                 // `fmt::Display` after `use std::fmt;` is std's.
@@ -1737,13 +1744,17 @@ impl<'a> Parser<'a> {
             return self.parse_std_trait_call(trait_name, member, name_span.start());
         }
         // `Shape::area(&c)`, `Convert::<i64>::convert(&c)`: a crate trait's
-        // function called by path.
+        // function called by path. A name another module's trait has too
+        // is the trait this module declares or imports by it.
+        let known = self.models.trait_name(&name).cloned();
         if matches!(self.peek(), Token::DoubleColon)
-            && self.ufcs_trait(&name)
-            && self.models.get(&name).is_none()
-            && self.models.import(&name).is_none()
+            && (known.is_some()
+                || self.ufcs_trait(&name)
+                    && self.models.get(&name).is_none()
+                    && self.models.import(&name).is_none())
             && !self.bindings.contains_key(name.as_str())
         {
+            let name = known.unwrap_or(name);
             self.next();
             let explicit = if matches!(self.peek(), Token::LessThan) {
                 let arguments = self.parse_trait_path_arguments()?;

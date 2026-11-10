@@ -409,7 +409,9 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
         inputs.push((Input::Receiver, positions));
         outer.push(receiver_region.clone());
     }
+    let written = signature.lifetimes.written_parameters.as_deref();
     for (index, ty) in signature.parameters.iter().enumerate() {
+        let ty = written.and_then(|written| written.get(index)).unwrap_or(ty);
         let mut positions = Positions::new();
         reader.positions(ty, Path::ROOT, false, &mut positions);
         let reference = matches!(ty, Type::Reference { .. }) || ty.is_str();

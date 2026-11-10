@@ -655,3 +655,52 @@ fn rust_use_forms_and_qualified_types() {
     let target = rawr::project::Target::discover(project.path()).unwrap();
     assert!(Engine::new().compile_package_executable(&target).is_err());
 }
+
+/// Items are identified by their module path, as rustc's are: two modules
+/// each declare their own trait `Shape`, and each is used through a bound,
+/// a method call with the trait imported, and calls by the trait's name and
+/// as `<Line as Shape>`. One type implements both, each with its own `size`.
+#[test]
+fn two_modules_declare_their_own_trait_of_one_name() {
+    let project = Project::new("same-trait-name");
+    project.write(
+        "src/main.rs",
+        "mod home;\nmod sidebar;\nuse home::Shape;\npub fn answer() -> i64 {\n    home::area(home::Square(3))\n        + sidebar::area(sidebar::Line(4))\n        + home::Square(1).size()\n        + home::five()\n        + sidebar::seven()\n        + home::area(sidebar::Line(2))\n}\n",
+    );
+    project.write(
+        "src/home.rs",
+        "pub struct Square(pub i64);\npub trait Shape { fn size(&self) -> i64; }\nimpl Shape for Square { fn size(&self) -> i64 { self.0 * self.0 } }\npub fn area<T: Shape>(shape: T) -> i64 { shape.size() }\npub fn five() -> i64 { Shape::size(&Square(5)) }\n",
+    );
+    project.write(
+        "src/sidebar.rs",
+        "pub struct Line(pub i64);\npub trait Shape { fn size(&self) -> i64; fn twice(&self) -> i64 { self.size() * 2 } }\nimpl Shape for Line { fn size(&self) -> i64 { self.0 } }\nimpl crate::home::Shape for Line { fn size(&self) -> i64 { 100 } }\npub fn area<T: Shape>(shape: T) -> i64 { shape.twice() }\npub fn seven() -> i64 { <Line as Shape>::size(&Line(7)) }\n",
+    );
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let engine = Shared::new(Engine::new());
+
+    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let authority = engine.authorize(executable).unwrap();
+    let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
+    assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 9 + 8 + 1 + 25 + 7 + 100);
+}
+
+/// A crate trait one module imports by `use` is implemented and bounded
+/// there by its name, as rustc reads it: the import binds the trait, never
+/// a path into a dependency.
+#[test]
+fn an_imported_crate_trait_is_implemented_by_its_name() {
+    let project = Project::new("imported-trait");
+    project.write("src/main.rs", "mod home;\nmod sidebar;\npub fn answer() -> i64 { sidebar::area(sidebar::Line(4)) }\n");
+    project.write("src/home.rs", "pub trait Area { fn size(&self) -> i64; }\n");
+    project.write(
+        "src/sidebar.rs",
+        "use crate::home::Area;\npub struct Line(pub i64);\nimpl Area for Line { fn size(&self) -> i64 { self.0 } }\npub fn area<T: Area>(shape: T) -> i64 { shape.size() }\n",
+    );
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let engine = Shared::new(Engine::new());
+
+    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let authority = engine.authorize(executable).unwrap();
+    let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
+    assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 4);
+}

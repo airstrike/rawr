@@ -44,7 +44,7 @@ impl<'a> Parser<'a> {
                     (lists.len() == 1).then(|| lists[0].to_vec())
                 }
                 ty => owner_id(&ty).and_then(|id| {
-                    let mut candidates = self.impl_candidates(trait_name, id);
+                    let mut candidates = self.impl_candidates(trait_name, id, owner_arguments(&ty));
                     (candidates.len() == 1).then(|| candidates.remove(0))
                 }),
             };
@@ -1124,8 +1124,8 @@ impl<'a> Parser<'a> {
                     let lists = self.bound_trait_arguments(&ty, trait_name);
                     (lists.len() == 1).then(|| lists[0].to_vec())
                 }
-                Ty::Script(id, _) => {
-                    let mut candidates = self.impl_candidates(trait_name, id);
+                Ty::Script(id, arguments) => {
+                    let mut candidates = self.impl_candidates(trait_name, id, &arguments);
                     (candidates.len() == 1).then(|| candidates.remove(0))
                 }
                 _ => None,

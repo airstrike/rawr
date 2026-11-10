@@ -21,8 +21,13 @@ use crate::{method, type_def, Engine, Shared, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Each `impl Trait<A> for Owner` of a generic trait: the impl's own
-/// parameters and the trait's arguments.
-pub(super) type ImplArguments = Vec<(Box<[ImmutableString]>, Box<[type_ref::Type]>)>;
+/// parameters, the one each of the owner's type arguments is when it is
+/// one (`T` of `Wrapper<T>`), and the trait's arguments.
+pub(super) type ImplArguments = Vec<(
+    Box<[ImmutableString]>,
+    Box<[Option<ImmutableString>]>,
+    Box<[type_ref::Type]>,
+)>;
 
 #[cfg(feature = "rust-import")]
 pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
@@ -1533,6 +1538,17 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             let mut instance = definition.clone();
             instance.name.text = name;
             instance.generics = Box::default();
+            // The signature says what each parameter borrows, as the
+            // template writes it (`Lifetimes::written_parameters`).
+            if instance.lifetimes.written_parameters.is_none() {
+                instance.lifetimes.written_parameters = Some(
+                    definition
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.ty.clone())
+                        .collect(),
+                );
+            }
             for parameter in instance.parameters.iter_mut() {
                 parameter.ty = substitute_parameters(&parameter.ty, &substituted);
             }

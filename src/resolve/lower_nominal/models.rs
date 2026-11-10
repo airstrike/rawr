@@ -73,6 +73,9 @@ pub(super) struct Tables {
     pub(super) qualified_pattern_owners:
         BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     pub(super) qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The name each source writes a crate trait by, when another module's
+    /// trait has that name too, with the path the trait is known by.
+    trait_names: BTreeMap<(crate::program::source::Id, ImmutableString), ImmutableString>,
     /// The app crate whose shadow holds an async `main`'s entry (D513.4).
     pub(super) entry_crate: Option<ImmutableString>,
     /// The marked types the runner holds as their mirrors in rawr's copy
@@ -597,30 +600,6 @@ impl Models {
                     None => continue,
                 },
             };
-            impls.insert((name.text.clone(), *definition));
-            if !trait_arguments.is_empty() {
-                impl_arguments
-                    .entry((name.text.clone(), *definition))
-                    .or_default()
-                    .push((
-                        implementation
-                            .generics
-                            .iter()
-                            .map(|generic| generic.name.text.clone())
-                            .collect(),
-                        trait_arguments.clone(),
-                    ));
-                if !trait_arguments.iter().any(mentions_parameter) {
-                    let instances = trait_instances.entry(name.text.clone()).or_default();
-                    let text = instance_text(trait_arguments);
-                    if !instances
-                        .iter()
-                        .any(|instance| instance_text(instance) == text)
-                    {
-                        instances.push(trait_arguments.clone());
-                    }
-                }
-            }
             // `impl<T> Shape for Wrapper<T>`: the owner's type arguments bind
             // the impl's parameters.
             let parameters: Box<[Option<ImmutableString>]> = owner
@@ -636,6 +615,31 @@ impl Models {
                     type_ref::Argument::Lifetime(_) => None,
                 })
                 .collect();
+            impls.insert((name.text.clone(), *definition));
+            if !trait_arguments.is_empty() {
+                impl_arguments
+                    .entry((name.text.clone(), *definition))
+                    .or_default()
+                    .push((
+                        implementation
+                            .generics
+                            .iter()
+                            .map(|generic| generic.name.text.clone())
+                            .collect(),
+                        parameters.clone(),
+                        trait_arguments.clone(),
+                    ));
+                if !trait_arguments.iter().any(mentions_parameter) {
+                    let instances = trait_instances.entry(name.text.clone()).or_default();
+                    let text = instance_text(trait_arguments);
+                    if !instances
+                        .iter()
+                        .any(|instance| instance_text(instance) == text)
+                    {
+                        instances.push(trait_arguments.clone());
+                    }
+                }
+            }
             // Keyed by trait: two traits may each give one type an
             // `Output`.
             for (assoc, ty) in &implementation.associated {
@@ -800,6 +804,7 @@ impl Models {
             qualified_owners: program.qualified_owners.clone(),
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
+            trait_names: program.trait_names.clone(),
             entry_crate: program.entry_crate.clone(),
             #[cfg(feature = "rust-import")]
             mirrors: program.mirrors.keys().cloned().collect(),
@@ -1237,6 +1242,13 @@ impl Models {
     pub(super) fn qualified_function(&self, span: Span) -> Option<&ScriptFunction> {
         let key = self.qualified_functions.get(&(self.context, span))?;
         self.functions_by_key.get(key)
+    }
+
+    /// The path the crate trait this source names `name` is known by, when
+    /// another module's trait has that name too, as `sidebar::Shape` of
+    /// `Shape` in `mod sidebar`.
+    pub(super) fn trait_name(&self, name: &str) -> Option<&ImmutableString> {
+        self.trait_names.get(&(self.context, name.into()))
     }
 
     pub(super) fn import(&self, name: &str) -> Option<&crate::resolve::item::Binding> {

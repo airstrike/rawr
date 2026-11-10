@@ -622,18 +622,7 @@ impl<'a> Parser<'a> {
                 let _ = self.fix_opaque_in(bound, &substitution[&generic.name.text], substitution);
             }
         }
-        // A literal argument takes the kind the one impl its bound reaches
-        // gives, as rustc selects it, before its instance is chosen: `50`
-        // for `impl Into<Pixels>` is the `u32` of `From<u32>`.
-        let literals = self
-            .pending_traits
-            .iter()
-            .filter(|(ty, ..)| contains_open_literal(&self.inference.resolve(ty)))
-            .cloned()
-            .collect::<Vec<_>>();
-        for (ty, trait_name, arguments, _) in literals {
-            self.type_implements_with(&ty, &trait_name, &arguments);
-        }
+        self.fix_by_impls();
         let types = function
             .definition
             .generics
@@ -682,6 +671,56 @@ impl<'a> Parser<'a> {
                 call,
             }
         })
+    }
+
+    /// Fix what the one impl a pending bound reaches gives, before a call's
+    /// instance is chosen, as rustc selects that impl. A literal argument
+    /// takes its kind: `50` for `impl Into<Pixels>` is the `u32` of
+    /// `From<u32>`. A bound's argument takes the type the impl for a known
+    /// type gives: `M` of `impl IntoContent<'a, M>` given a `Content<Message>`
+    /// is `Message` by `impl<M> IntoContent<'_, M> for Content<M>`.
+    #[cfg(feature = "rust-import")]
+    fn fix_by_impls(&mut self) {
+        let open = self
+            .pending_traits
+            .iter()
+            .filter(|(ty, _, arguments, _)| {
+                let ty = self.inference.resolve(ty);
+                contains_open_literal(&ty)
+                    || !is_unsettled(&ty)
+                        && arguments
+                            .iter()
+                            .any(|argument| contains_inference(&self.inference.resolve(argument)))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for (ty, trait_name, arguments, _) in open {
+            let resolved = self.inference.resolve(&ty);
+            if contains_open_literal(&resolved) {
+                self.type_implements_with(&ty, &trait_name, &arguments);
+                continue;
+            }
+            let Some(owner) = owner_id(&resolved) else {
+                continue;
+            };
+            let candidates = self.impl_candidates(&trait_name, owner, owner_arguments(&resolved));
+            let mut fitting = Vec::new();
+            for candidate in candidates {
+                if candidate.len() == arguments.len()
+                    && candidate
+                        .iter()
+                        .zip(arguments.iter())
+                        .all(|(candidate, argument)| self.unifies(candidate, argument))
+                {
+                    fitting.push(candidate);
+                }
+            }
+            if let [candidate] = &fitting[..] {
+                for (candidate, argument) in candidate.iter().zip(arguments.iter()) {
+                    let _ = self.unify_type(candidate, argument);
+                }
+            }
+        }
     }
 
     /// The names of the types a call of a template gives its parameters:
@@ -735,6 +774,7 @@ impl<'a> Parser<'a> {
                 let _ = self.fix_opaque_in(bound, &substitution[&generic.name.text], substitution);
             }
         }
+        self.fix_by_impls();
         let types = definition
             .generics()
             .iter()
