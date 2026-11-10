@@ -15,6 +15,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A save of a marked file in a running `rawr run` no longer does work that grows with the program's dependencies. Each native use finds its binding by one search of an index built when the runner starts, and the owner and the runner parse only the file that changed. (#1644; part of #1604)
 - A save of a marked file no longer re-reads, re-encodes or re-stages the running build's native watch: a body edit registers no watcher root. (#1645; part of #1604)
 - A method with elided lifetimes whose output borrows its receiver, as `fn user(&self, id: &Id) -> Option<&User>`, can be called from marked code: its lifetimes are read as the call's own, not as a higher-ranked signature. A method that gives `&T` or `Option<&T>` also works on a receiver native code lent, or on a field of one, and may take arguments. (#1647)
+- A save that changes a script impl's shape, such as a provided method it now overrides or a signature it changes, now reaches native code. `rawr run` used to swap in the new code while native code kept calling the old shape; the save now rebuilds the runner, and body edits still apply in place. (#326)
 
 ## 0.3.177 (2026-11-10)
 
