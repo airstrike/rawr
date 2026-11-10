@@ -312,17 +312,9 @@ impl<'a> Parser<'a> {
             return Ok(());
         };
         let resolved = self.inference.resolve(hidden);
-        if !contains_inference(&resolved) || matches!(resolved, Ty::Infer(_)) {
+        if matches!(resolved, Ty::Infer(_)) {
             return Ok(());
         }
-        let Ok(path) = crate::host::path::Path::parse(trait_name) else {
-            return Ok(());
-        };
-        let Some(header) = self.models.host.trait_header(&path).cloned() else {
-            return Ok(());
-        };
-        // The facade that declares the trait, whose types its headers name.
-        let owner = self.models.host.type_owner(trait_name).cloned();
         let type_ref::Type::Path(opaque) = written else {
             return Ok(());
         };
@@ -336,6 +328,23 @@ impl<'a> Parser<'a> {
                 type_ref::Argument::Lifetime(_) => None,
             })
             .collect::<Vec<_>>();
+        // A known type fixes the bound's arguments a call leaves open, as
+        // `Message` of `fn zoomed<Message>(content: impl Widget<Message>)`
+        // given a `Rule<Message>` is `impl<M> Widget<M> for Rule<M>`'s.
+        let open = written_arguments
+            .iter()
+            .any(|argument| contains_inference(&self.inference.resolve(argument)));
+        if !contains_inference(&resolved) && !open {
+            return Ok(());
+        }
+        let Ok(path) = crate::host::path::Path::parse(trait_name) else {
+            return Ok(());
+        };
+        let Some(header) = self.models.host.trait_header(&path).cloned() else {
+            return Ok(());
+        };
+        // The facade that declares the trait, whose types its headers name.
+        let owner = self.models.host.type_owner(trait_name).cloned();
         let mut parameters = BTreeMap::new();
         let mut arguments = Vec::with_capacity(header.parameters.len());
         for (index, name) in header.parameters.iter().enumerate() {
