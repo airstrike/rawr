@@ -14,7 +14,7 @@ mod reexport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 60;
+const SCHEMA: u32 = 61;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -4501,6 +4501,7 @@ fn relations(
 
 /// A generic item's signature whose callable parameter takes a script
 /// closure: the parameter is the closure's type, and is no type parameter.
+/// Nor is a future parameter beside it, as `Task::perform`'s (`signature`).
 fn callable_signature(
     source: &representability::signature::Signature,
     calls: &[&representability::callable::Call],
@@ -4509,9 +4510,10 @@ fn callable_signature(
         .parameters()
         .iter()
         .filter(|parameter| {
-            calls
-                .iter()
-                .all(|call| parameter.index() != call.parameter())
+            parameter.kind() != representability::signature::Kind::Future
+                && calls
+                    .iter()
+                    .all(|call| parameter.index() != call.parameter())
         })
         .cloned()
         .collect::<Vec<_>>();

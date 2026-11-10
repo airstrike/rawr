@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 163;
+const CLASSIFIER_VERSION: u32 = 164;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1251,6 +1251,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     output = true;
                     returned = Some(ty.clone());
                 }
+                // A projection of another parameter's bound, as
+                // `Task::perform`'s `<impl Future as Future>::Output == A`:
+                // rustc checks it where the bridge calls the item.
+                model::Predicate::ProjectionEquality {
+                    projection: model::Type::Projection { arguments, .. },
+                    ..
+                } if !matches!(
+                    arguments.first(),
+                    Some(model::Argument::Type(model::Type::Parameter { index, .. }))
+                        if *index == parameter
+                ) => {}
                 // `F: 'a` of an early `'a`, which is `'static` (D558).
                 model::Predicate::TypeOutlives {
                     ty: model::Type::Parameter { index, .. },
@@ -2448,12 +2459,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         &self,
         generics: &model::Generics,
         parameters: &mut Box<[representability::signature::Parameter]>,
-        callable: bool,
     ) -> Vec<(u32, api::identity::Definition)> {
         use representability::signature;
-        if callable {
-            return Vec::new();
-        }
         let mut futures = Vec::new();
         for predicate in generics.predicates() {
             let model::Predicate::Bound {
@@ -8883,7 +8890,8 @@ impl<P: api::Phase> Context<'_, P> {
         };
         // `F: Future` takes a script future as `rawr::future::Script`, and
         // `F::Output` is a synthetic type parameter the script infers (D527).
-        let futures = self.future_parameters(generics, &mut parameters, callable_class.is_some());
+        // So does one beside a callable, as `Task::perform(future, f)` takes.
+        let futures = self.future_parameters(generics, &mut parameters);
         // `T: Clone` keeps `Clone`: a script type fills `T` as `Value`,
         // which implements it, so Rawr checks the script type (review 3).
         parameters = parameters

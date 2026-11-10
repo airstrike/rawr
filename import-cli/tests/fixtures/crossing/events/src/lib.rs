@@ -197,6 +197,19 @@ impl<T> Task<T> {
         panic!("the future never ended");
     }
 
+    /// iced's `Task::perform`: the work that gives `f` of `future`'s
+    /// output.
+    pub fn perform<A>(
+        future: impl std::future::Future<Output = A> + MaybeSend + 'static,
+        f: impl FnOnce(A) -> T + MaybeSend + 'static,
+    ) -> Self
+    where
+        T: MaybeSend + 'static,
+        A: MaybeSend + 'static,
+    {
+        Task(Task::future(future).0.map(f))
+    }
+
     /// iced's `Task::then`: the work `f` makes of this work's value.
     pub fn then<O>(self, mut f: impl FnMut(T) -> Task<O> + MaybeSend + 'static) -> Task<O>
     where
@@ -316,6 +329,31 @@ impl<S, Output, Progress, Error> Straw<Output, Progress, Error> for S where
 pub trait MaybeSend: Send {}
 
 impl<T: Send> MaybeSend for T {}
+
+/// A future that ends once it has been polled `ticks` more times, as
+/// tokio's `sleep` gives its `Sleep`.
+pub fn sleep(ticks: u32) -> Sleep {
+    Sleep(ticks)
+}
+
+/// The future `sleep` gives.
+pub struct Sleep(u32);
+
+impl std::future::Future for Sleep {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        if self.0 == 0 {
+            return std::task::Poll::Ready(());
+        }
+        self.0 -= 1;
+        context.waker().wake_by_ref();
+        std::task::Poll::Pending
+    }
+}
 
 /// A function of two inputs with its first one given, as iced's
 /// `Function`: every `Fn(A, B) -> O` has it through the blanket impl.
