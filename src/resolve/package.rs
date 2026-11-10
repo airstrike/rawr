@@ -40,9 +40,11 @@ struct Declaration {
 #[derive(Clone)]
 enum Target {
     Module,
-    /// A crate trait: Rawr's traits are known by name in the whole crate,
-    /// so importing one binds nothing new.
-    Trait,
+    /// A crate trait at its address: Rawr's traits are known by name in
+    /// the whole crate, so importing one binds nothing new; a name two
+    /// modules declare a trait of is known by its path
+    /// ([`Resolver::trait_names`]).
+    Trait(Address),
     HostModuleItem {
         definitions: Box<[host::item::Definition]>,
         owner: Option<host::facade::Dependency>,
@@ -59,7 +61,7 @@ impl Target {
     /// The namespace an import of the target binds its name in.
     const fn namespace(&self) -> item::Namespace {
         match self {
-            Self::Module | Self::Trait | Self::Type(_) => item::Namespace::Type,
+            Self::Module | Self::Trait(_) | Self::Type(_) => item::Namespace::Type,
             Self::Item(_) | Self::HostItem { .. } => item::Namespace::Value,
             Self::HostModuleItem { .. } => item::Namespace::Both,
         }
@@ -133,6 +135,11 @@ struct Resolver<'a> {
     /// shadow, as in Rust.
     globs: BTreeMap<Address, Export>,
     type_declarations: Vec<type_def::Declaration>,
+    /// Each crate trait whose name another module's trait has too, by its
+    /// address, with the path it is known by, as rustc names it then:
+    /// `home::IntoContent` beside `sidebar::IntoContent`. A trait whose
+    /// name is the crate's only one is known by its name.
+    trait_names: BTreeMap<Address, ImmutableString>,
     /// Each crate enum's variant names, for `use Shape::Circle;` and
     /// `use Shape::*;`.
     enum_variants: BTreeMap<type_def::Id, Box<[ImmutableString]>>,
@@ -277,6 +284,7 @@ impl<'a> Resolver<'a> {
             other_aliases: BTreeMap::new(),
             globs: BTreeMap::new(),
             type_declarations: Vec::new(),
+            trait_names: BTreeMap::new(),
             enum_variants: BTreeMap::new(),
             expanded,
             #[cfg(feature = "rust-import")]
@@ -286,6 +294,7 @@ impl<'a> Resolver<'a> {
         };
         resolver.predeclare()?;
         resolver.predeclare_globs();
+        resolver.trait_names = resolver.shared_trait_names();
         Ok(resolver)
     }
 
@@ -327,13 +336,14 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
                 if let crate::item::Parsed::Trait(declared) = parsed {
+                    let address = context.address(&declared.name.text);
                     self.insert_declaration(
-                        context.address(&declared.name.text),
+                        address.clone(),
                         Declaration {
                             source: context.source,
                             span: declared.name.span,
                             public: declared.header.visibility.is_some(),
-                            target: Target::Trait,
+                            target: Target::Trait(address),
                         },
                     )?;
                 }
@@ -447,6 +457,37 @@ impl<'a> Resolver<'a> {
             self.units[unit_index].slots = slots;
         }
         Ok(())
+    }
+
+    /// Each trait whose name another declared trait has, with its path from
+    /// its crate's root, its package's name first outside the entry
+    /// package.
+    fn shared_trait_names(&self) -> BTreeMap<Address, ImmutableString> {
+        let mut by_name = BTreeMap::<&str, Vec<&Address>>::new();
+        for declaration in self.declarations.values() {
+            if let Target::Trait(address) = &declaration.target {
+                by_name
+                    .entry(address.name.as_str())
+                    .or_default()
+                    .push(address);
+            }
+        }
+        by_name
+            .into_values()
+            .filter(|addresses| addresses.len() > 1)
+            .flatten()
+            .map(|address| {
+                let package = (address.package != self.package).then_some(&address.package);
+                let path = package
+                    .into_iter()
+                    .chain(address.modules.iter())
+                    .chain(std::iter::once(&address.name))
+                    .map(ImmutableString::as_str)
+                    .collect::<Vec<_>>()
+                    .join("::");
+                (address.clone(), path.into())
+            })
+            .collect()
     }
 
     /// Bind each private glob import's names, and the variants a public
@@ -587,7 +628,7 @@ impl<'a> Resolver<'a> {
                                 continue;
                             }
                             Target::Module
-                            | Target::Trait
+                            | Target::Trait(_)
                             | Target::HostModuleItem { .. }
                             | Target::Item(_) => {}
                             Target::HostItem { .. }
@@ -644,7 +685,7 @@ impl<'a> Resolver<'a> {
                             );
                         }
                         Target::Module
-                        | Target::Trait
+                        | Target::Trait(_)
                         | Target::HostModuleItem { .. }
                         | Target::Item(_)
                         | Target::HostItem { .. }
@@ -691,6 +732,7 @@ impl<'a> Resolver<'a> {
         );
 
         self.resolve_aliases()?;
+        let trait_names = self.source_trait_names();
         let prelude = self.prelude();
         let mut aliases = BTreeMap::new();
         let mut lexical = BTreeMap::new();
@@ -738,7 +780,8 @@ impl<'a> Resolver<'a> {
                 root_types = Some(types.clone());
             }
             // The host modules this unit's `use`s bind, by name: an imported
-            // trait is one (`use freya::prelude::IntoElement;`).
+            // trait is one (`use freya::prelude::IntoElement;`). A crate
+            // trait it imports is known by its name, never a host path.
             let modules = uses
                 .iter()
                 .flatten()
@@ -747,6 +790,14 @@ impl<'a> Resolver<'a> {
                     matches!(
                         binding.target,
                         item::Import::Module | item::Import::ModuleItem { .. }
+                    ) && !matches!(
+                        self.resolve_path(
+                            &context,
+                            &["self".into(), binding.name.text.clone()],
+                            binding.name.span,
+                            &mut BTreeSet::new(),
+                        ),
+                        Ok(Target::Trait(_))
                     )
                 })
                 .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
@@ -764,6 +815,7 @@ impl<'a> Resolver<'a> {
                     qualify_opaque_bounds(&mut parsed, &modules);
                     write_renamed_modules(&mut parsed, &modules);
                     self.write_native_trait_objects(&context, &mut parsed, &modules);
+                    self.write_trait_names(&context, &mut parsed);
                     parsed
                 };
                 let shell = super::resolve_item(
@@ -848,6 +900,7 @@ impl<'a> Resolver<'a> {
             qualified_owners: qualified_calls.owners,
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
+            trait_names,
             entry_crate,
             #[cfg(feature = "rust-import")]
             mirrors: self.mirrors,
@@ -1351,7 +1404,7 @@ impl<'a> Resolver<'a> {
                 && address.modules == context.namespace.modules
             {
                 let namespace = match declaration.target {
-                    Target::Module | Target::Trait => item::Namespace::Type,
+                    Target::Module | Target::Trait(_) => item::Namespace::Type,
                     Target::Item(_) => item::Namespace::Value,
                     _ => item::Namespace::Both,
                 };
@@ -1498,7 +1551,7 @@ impl<'a> Resolver<'a> {
                 );
                 let import = match target {
                     _ if let Some(variant) = variant.clone() => variant,
-                    Target::Module | Target::Trait => item::Import::Module,
+                    Target::Module | Target::Trait(_) => item::Import::Module,
                     // `use a::m::{self}` imports the module `m` only.
                     Target::HostModuleItem { .. } if module_only => item::Import::Module,
                     Target::HostModuleItem { definitions, owner } => {
@@ -1641,7 +1694,7 @@ impl<'a> Resolver<'a> {
                     types.insert(segments.join("::").into(), target);
                 }
                 Target::Module
-                | Target::Trait
+                | Target::Trait(_)
                 | Target::HostModuleItem { .. }
                 | Target::Item(_)
                 | Target::HostItem { .. } => {}
@@ -1893,6 +1946,112 @@ impl<'a> Resolver<'a> {
         each_signature_path(item, &path);
     }
 
+    /// The name each unit writes a trait of [`Resolver::trait_names`] by, its
+    /// own or one it imports, with the path the trait is known by, so a
+    /// body's `Shape::size(&c)` calls the trait the module names.
+    fn source_trait_names(
+        &self,
+    ) -> BTreeMap<(program::source::Id, ImmutableString), ImmutableString> {
+        let names = self
+            .trait_names
+            .keys()
+            .map(|address| &address.name)
+            .collect::<BTreeSet<_>>();
+        let mut known = BTreeMap::new();
+        for unit in &self.units {
+            for name in &names {
+                let path = ["self".into(), (*name).clone()];
+                let resolved =
+                    self.resolve_path(&unit.context, &path, Span::NONE, &mut BTreeSet::new());
+                if let Ok(Target::Trait(address)) = resolved
+                    && let Some(path) = self.trait_names.get(&address)
+                {
+                    let source = program::source::Id::from_index(unit.context.source.index());
+                    known.insert((source, (*name).clone()), path.clone());
+                }
+            }
+        }
+        known
+    }
+
+    /// Each path of `item`'s signatures and bounds that names a crate trait
+    /// whose name another module's trait has, as `IntoContent<'a, Message>`
+    /// in `mod sidebar` or `crate::home::IntoContent`, written as the one
+    /// segment of the path the trait is known by
+    /// ([`Resolver::trait_names`]), its own arguments kept, and a trait
+    /// declaration of such a name so renamed: two traits of one name are
+    /// two items, as rustc's are.
+    fn write_trait_names(&self, context: &Context, item: &mut crate::item::Parsed) {
+        use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
+        if self.trait_names.is_empty() {
+            return;
+        }
+        let path = |path: &mut Path| {
+            let skip = usize::from(
+                path.segments
+                    .first()
+                    .is_some_and(|first| first.name.text.as_str() == DYN_SEGMENT),
+            );
+            let written = &path.segments[skip..];
+            let Some(last) = written.last() else {
+                return;
+            };
+            if !self
+                .trait_names
+                .keys()
+                .any(|address| address.name == last.name.text)
+            {
+                return;
+            }
+            let mut names = written
+                .iter()
+                .map(|segment| segment.name.text.clone())
+                .collect::<Vec<_>>();
+            if names.len() == 1 {
+                names.insert(0, "self".into());
+            }
+            let resolved = self.resolve_path(context, &names, path.span, &mut BTreeSet::new());
+            let Ok(Target::Trait(address)) = resolved else {
+                return;
+            };
+            let Some(known) = self.trait_names.get(&address) else {
+                return;
+            };
+            let segment = Segment {
+                name: crate::item::Name {
+                    text: known.clone(),
+                    span: last.name.span,
+                },
+                ..last.clone()
+            };
+            path.segments = path.segments[..skip]
+                .iter()
+                .cloned()
+                .chain(std::iter::once(segment))
+                .collect();
+            path.global = false;
+        };
+        each_signature_path(item, &path);
+        if let crate::item::Parsed::Trait(declared) = item {
+            if let Some(known) = self.trait_names.get(&context.address(&declared.name.text)) {
+                declared.name.text = known.clone();
+            }
+            for bound in declared
+                .supertraits
+                .iter_mut()
+                .chain(declared.associated_bounds.iter_mut().flatten())
+                .chain(
+                    declared
+                        .generics
+                        .iter_mut()
+                        .flat_map(|generic| generic.bounds.iter_mut()),
+                )
+            {
+                path(bound);
+            }
+        }
+    }
+
     /// `crate::…`, `super::…` or child-module paths that land in a `.rs`
     /// module of the current package, or name one, spelled through the
     /// app's crate name. A `use` that binds a `.rs` module (`use
@@ -2119,7 +2278,7 @@ impl<'a> Resolver<'a> {
     ) -> Failure {
         let item = match &declaration.target {
             Target::Module => Private::Module,
-            Target::Trait => Private::Trait,
+            Target::Trait(_) => Private::Trait,
             Target::Type(type_ref::Target::Script { definition, .. })
                 if self.enum_variants.contains_key(definition) =>
             {

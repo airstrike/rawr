@@ -437,6 +437,11 @@ pub(crate) struct Lifetimes {
     /// output borrows, and the hidden type does not (rustc's E0106 and
     /// edition 2024 capture rules read the `impl Trait`).
     pub written_output: Option<Box<type_ref::Type>>,
+    /// An instance's parameters as its template writes them: the signature
+    /// says what each borrows, as rustc reads the generic signature, and a
+    /// type argument written without its lifetimes, as `Content<M>` for
+    /// `impl IntoContent<'a, M> + 'a`, does not.
+    pub written_parameters: Option<Box<[type_ref::Type]>>,
 }
 
 impl Lifetimes {

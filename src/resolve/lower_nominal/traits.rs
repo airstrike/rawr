@@ -1054,7 +1054,7 @@ impl<'a> Parser<'a> {
                 .map(|arguments| arguments.to_vec())
                 .collect(),
             ty => match owner_id(&ty) {
-                Some(id) => self.impl_candidates(trait_name, id),
+                Some(id) => self.impl_candidates(trait_name, id, owner_arguments(&ty)),
                 None => Vec::new(),
             },
         };
@@ -1097,11 +1097,14 @@ impl<'a> Parser<'a> {
     }
 
     /// The trait arguments of each impl of the generic trait `trait_name`
-    /// for `owner`, each impl's own parameters fresh.
+    /// for `owner`, each impl's own parameters fresh but those the owner's
+    /// type arguments `owner_arguments` are: `impl<M> IntoContent<M> for
+    /// Content<M>` gives `Content<i64>` the arguments `[i64]`.
     pub(super) fn impl_candidates(
         &mut self,
         trait_name: &str,
         owner: type_def::Id,
+        owner_arguments: &[Ty],
     ) -> Vec<Vec<Ty>> {
         let impls = self
             .models
@@ -1111,11 +1114,16 @@ impl<'a> Parser<'a> {
             .unwrap_or_default();
         impls
             .iter()
-            .map(|(parameters, arguments)| {
-                let substitution = parameters
+            .map(|(parameters, owner_parameters, arguments)| {
+                let mut substitution: BTreeMap<ImmutableString, Ty> = parameters
                     .iter()
                     .map(|name| (name.clone(), self.inference.fresh()))
                     .collect();
+                for (parameter, argument) in owner_parameters.iter().zip(owner_arguments) {
+                    if let Some(parameter) = parameter {
+                        substitution.insert(parameter.clone(), argument.clone());
+                    }
+                }
                 arguments
                     .iter()
                     .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))

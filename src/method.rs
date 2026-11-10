@@ -376,6 +376,14 @@ impl Definition {
         instance.id = id;
         instance.key = key;
         instance.name.text = name;
+        if instance.lifetimes.written_parameters.is_none() {
+            instance.lifetimes.written_parameters = Some(
+                self.parameters
+                    .iter()
+                    .map(|parameter| parameter.ty.clone())
+                    .collect(),
+            );
+        }
         for parameter in instance.parameters.iter_mut() {
             parameter.ty = substitute(&parameter.ty);
         }

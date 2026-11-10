@@ -1744,6 +1744,15 @@ pub(super) fn owner_id(ty: &Ty) -> Option<type_def::Id> {
     }
 }
 
+/// The type arguments of a crate type `ty`, `[i64]` of `Wrapper<i64>`, and
+/// none of any other type.
+pub(super) fn owner_arguments(ty: &Ty) -> &[Ty] {
+    match ty {
+        Ty::Script(_, arguments) => arguments,
+        _ => &[],
+    }
+}
+
 /// The runtime type key a dispatcher compares for an impl owner: the
 /// definition index, or a builtin's witness code.
 pub(super) fn owner_key(owner: type_def::Id) -> String {

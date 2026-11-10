@@ -467,6 +467,10 @@ struct Generator<'a> {
     /// declared, with their impls, so a marked function may take an `impl`
     /// of one ([`Pass::Trait`]).
     shown: BTreeSet<&'a str>,
+    /// The path of each marked trait whose name another module's marked
+    /// trait has too, which the interpreter knows it by, as
+    /// `home::IntoContent` beside `sidebar::IntoContent`.
+    shared: BTreeSet<String>,
     /// The std traits each marked type implements, derived or written, by
     /// the type's name: what its stand-in implements too (#1301).
     implemented: BTreeMap<&'a str, BTreeSet<Std>>,
@@ -482,6 +486,10 @@ struct Generator<'a> {
     /// The instance entries of the methods of the impl being written,
     /// which go beside it.
     entries: std::cell::RefCell<Vec<String>>,
+    /// The type parameters of the function being written and its impl,
+    /// which shadow a marked type of their name, as `Message` of `fn
+    /// tab<Message>` beside the module's `enum Message`.
+    parameters: std::cell::RefCell<BTreeSet<String>>,
 }
 
 /// A std trait a stand-in implements for the marked type it holds, as a
@@ -573,6 +581,7 @@ impl<'a> Generator<'a> {
         let mut named = BTreeSet::new();
         let mut traits = BTreeSet::new();
         let mut shown = BTreeSet::new();
+        let mut trait_paths = BTreeMap::<&str, Vec<String>>::new();
         let mut implemented = BTreeMap::<&str, BTreeSet<Std>>::new();
         for source in sources {
             for item in source.items {
@@ -606,6 +615,10 @@ impl<'a> Generator<'a> {
                     ),
                     item::Parsed::Trait(declared) => {
                         traits.insert(declared.name.text.as_str());
+                        trait_paths
+                            .entry(declared.name.text.as_str())
+                            .or_default()
+                            .push(path_of(source.modules, &declared.name.text));
                         if declared.header.visibility.is_some() {
                             shown.insert(declared.name.text.as_str());
                         }
@@ -635,10 +648,16 @@ impl<'a> Generator<'a> {
             crossing: BTreeSet::new(),
             traits,
             shown,
+            shared: trait_paths
+                .into_values()
+                .filter(|paths| paths.len() > 1)
+                .flatten()
+                .collect(),
             implemented,
             holding: BTreeSet::new(),
             generic: std::cell::RefCell::default(),
             entries: std::cell::RefCell::default(),
+            parameters: std::cell::RefCell::default(),
         };
         // A generic one crosses too: each part of a type its parameters
         // name is a native one, which only an instance entry moves (D869).
@@ -725,6 +744,14 @@ impl<'a> Generator<'a> {
         if path.global {
             return None;
         }
+        if let [segment] = &path.segments[..]
+            && self
+                .parameters
+                .borrow()
+                .contains(segment.name.text.as_str())
+        {
+            return None;
+        }
         let names = path
             .segments
             .iter()
@@ -758,6 +785,27 @@ impl<'a> Generator<'a> {
             }
             _ => None,
         })
+    }
+
+    /// The trait `trait_` an impl in `file` names, as the interpreter keys
+    /// its functions (the free `instance`), by its path when another module's
+    /// marked trait has its name (`Generator::shared`).
+    fn instance(&self, file: &Source<'_>, trait_: &type_ref::Path) -> String {
+        let names = trait_
+            .segments
+            .iter()
+            .map(|segment| segment.name.text.as_str())
+            .collect::<Vec<_>>();
+        let known = absolute(file, &names, 0)
+            .map(|path| path.join("::"))
+            .filter(|path| !trait_.global && self.shared.contains(path));
+        let written = instance(trait_);
+        match (known, trait_.segments.last()) {
+            (Some(known), Some(last)) => {
+                format!("{known}{}", &written[last.name.text.len()..])
+            }
+            _ => written,
+        }
     }
 
     /// Whether `path`, written in `file`, names a struct, enum or alias the
@@ -1753,7 +1801,7 @@ impl<'a> Generator<'a> {
         // Each function is its owner's member, a trait's by the trait's
         // instance, `From<palette::Theme>::from`, as the interpreter keys
         // it.
-        let instance = trait_.map(instance);
+        let instance = trait_.map(|trait_| self.instance(file, trait_));
         let prefix = match &instance {
             Some(instance) => format!("{path}::{instance}"),
             None => path.clone(),
@@ -1985,6 +2033,30 @@ impl<'a> Generator<'a> {
     /// the stand-in, which doesn't cross, and its receiver is the program
     /// value's handle.
     fn stub(
+        &self,
+        file: &Source<'_>,
+        function: &item::Function,
+        outer: Option<&item::Impl>,
+        owner: Owner<'_>,
+        object: bool,
+        path: &str,
+    ) -> Result<String, String> {
+        // The function's and its impl's type parameters are in scope
+        // while it is written ([`Generator::parameters`]).
+        let parameters = outer
+            .into_iter()
+            .flat_map(|outer| outer.generics.iter())
+            .chain(function.generics.iter())
+            .map(|generic| generic.name.text.to_string())
+            .collect();
+        let outside = self.parameters.replace(parameters);
+        let stub = self.stub_in_scope(file, function, outer, owner, object, path);
+        self.parameters.replace(outside);
+        stub
+    }
+
+    /// [`Generator::stub`], its type parameters in scope.
+    fn stub_in_scope(
         &self,
         file: &Source<'_>,
         function: &item::Function,
