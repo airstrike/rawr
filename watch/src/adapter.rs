@@ -56,14 +56,14 @@ enum Filter {
 }
 
 struct Direct {
-    current: rawr::reload::source::Inputs,
+    current: Arc<rawr::reload::source::Inputs>,
     staged: Vec<DirectEntry>,
     next: u64,
 }
 
 struct DirectEntry {
     stamp: u64,
-    inputs: rawr::reload::source::Inputs,
+    inputs: Arc<rawr::reload::source::Inputs>,
 }
 
 /// One watcher lifecycle notice for the owning session.
@@ -110,6 +110,24 @@ pub enum Error {
     StageExhausted,
     /// A staged input proof belongs to another watcher or is no longer live.
     StaleStage,
+}
+
+/// Whether a filter held staged inputs already, so the roots they need are
+/// registered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Held {
+    Already,
+    New,
+}
+
+impl Held {
+    const fn of(held: bool) -> Self {
+        if held {
+            Self::Already
+        } else {
+            Self::New
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -187,7 +205,7 @@ impl Adapter {
             inputs.clone(),
         ));
         let filter = Arc::new(Filter::Direct(RwLock::new(Direct {
-            current: inputs.clone(),
+            current: Arc::new(inputs.clone()),
             staged: Vec::new(),
             next: 0,
         })));
@@ -245,7 +263,7 @@ impl Adapter {
             inputs.clone(),
         ));
         let filter = Arc::new(Filter::Direct(RwLock::new(Direct {
-            current: inputs,
+            current: Arc::new(inputs),
             staged: Vec::new(),
             next: 0,
         })));
@@ -363,8 +381,17 @@ impl Adapter {
     pub fn start(&self, now: Instant) -> Option<scheduler::Request> {
         let request = self.gate.start(now)?;
         // Rearm after parent creation even if the candidate later fails to
-        // compile, so subsequent children remain observable.
-        for error in self.control.reconcile() {
+        // compile, so subsequent children remain observable. Only an event
+        // that may have created or removed a directory moves the roots: a
+        // save that writes a Rawr source derives none (#1604).
+        if !self.history.take_roots_moved() {
+            return Some(request);
+        }
+        let errors = self.control.reconcile();
+        if !errors.is_empty() {
+            self.history.roots_moved();
+        }
+        for error in errors {
             match error {
                 Error::Watch { path, source } => {
                     self.gate.suspend();
@@ -446,19 +473,23 @@ impl Adapter {
     }
 
     /// Register a candidate filter's roots without changing current event
-    /// relevance before the generated owner admits that candidate.
+    /// relevance before the generated owner admits that candidate. Inputs
+    /// the filter already holds, current or staged, register nothing: a
+    /// save that changes only a source's text stages no root (#1604).
     pub fn prepare_inputs(
         &self,
-        inputs: rawr::reload::source::Inputs,
+        inputs: impl Into<Arc<rawr::reload::source::Inputs>>,
     ) -> Result<StagedInputs, Error> {
-        let transport = inputs.clone();
-        let stamp = self.filter.stage(inputs)?;
+        let inputs = inputs.into();
+        let (stamp, held) = self.filter.stage(Arc::clone(&inputs))?;
         let staged = StagedInputs {
             control: Arc::downgrade(&self.control),
             stamp,
             active: true,
         };
-        if let Err(error) = self.control.prepare(&transport) {
+        if held == Held::New
+            && let Err(error) = self.control.prepare(&inputs)
+        {
             drop(staged);
             return Err(error);
         }
@@ -466,7 +497,8 @@ impl Adapter {
     }
 
     /// Publish one admitted generated-owner filter and retire roots no longer
-    /// reachable from the last-good generation.
+    /// reachable from the last-good generation. When the admitted inputs
+    /// are the very ones already current, every root still stands.
     pub fn commit_inputs(&self, mut staged: StagedInputs) -> Result<Vec<Error>, Error> {
         let Some(control) = staged.control.upgrade() else {
             return Err(Error::StaleStage);
@@ -474,8 +506,11 @@ impl Adapter {
         if !Arc::ptr_eq(&control, &self.control) {
             return Err(Error::StaleStage);
         }
-        self.filter.commit(staged.stamp)?;
+        let held = self.filter.commit(staged.stamp)?;
         staged.active = false;
+        if held == Held::Already {
+            return Ok(Vec::new());
+        }
         Ok(self.control.reconcile())
     }
 }
@@ -734,7 +769,19 @@ impl Wanted {
     }
 }
 
+/// How many roots this process's watchers derived from their inputs, each
+/// by finding the directory that exists for it.
+static DERIVED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many watcher roots this process derived from inputs so far: a save
+/// that changes only a marked source's text derives none (#1604).
+#[must_use]
+pub fn derived_roots() -> usize {
+    DERIVED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn existing_directory(path: &Path) -> Result<PathBuf, Error> {
+    DERIVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for candidate in path.ancestors() {
         match std::fs::metadata(candidate) {
             Ok(metadata) if metadata.is_dir() => return Ok(candidate.to_path_buf()),
@@ -930,18 +977,29 @@ impl Filter {
         }
     }
 
-    fn stage(&self, inputs: rawr::reload::source::Inputs) -> Result<u64, Error> {
+    /// Stage `inputs`, and say whether the filter held these inputs
+    /// already, the very ones current or staged or the current ones' equal,
+    /// whose roots then stand.
+    fn stage(&self, inputs: Arc<rawr::reload::source::Inputs>) -> Result<(u64, Held), Error> {
         let Self::Direct(state) = self else {
             return Err(Error::FixedFilter);
         };
         let mut state = write(state);
+        let held = Held::of(
+            std::iter::once(&state.current)
+                .chain(state.staged.iter().map(|entry| &entry.inputs))
+                .any(|held| Arc::ptr_eq(held, &inputs))
+                || state.current == inputs,
+        );
         let stamp = state.next;
         state.next = state.next.checked_add(1).ok_or(Error::StageExhausted)?;
         state.staged.push(DirectEntry { stamp, inputs });
-        Ok(stamp)
+        Ok((stamp, held))
     }
 
-    fn commit(&self, stamp: u64) -> Result<(), Error> {
+    /// Make the staged inputs current, and say whether they were the inputs
+    /// current already.
+    fn commit(&self, stamp: u64) -> Result<Held, Error> {
         let Self::Direct(state) = self else {
             return Err(Error::FixedFilter);
         };
@@ -952,8 +1010,10 @@ impl Filter {
             .position(|entry| entry.stamp == stamp)
             .ok_or(Error::StaleStage)?;
         let entry = state.staged.swap_remove(index);
+        // `Arc`'s equality compares the pointers first.
+        let held = Held::of(state.current == entry.inputs);
         state.current = entry.inputs;
-        Ok(())
+        Ok(held)
     }
 
     fn withdraw(&self, stamp: u64) {
@@ -1008,6 +1068,9 @@ impl Handler {
         self.notices.publish_with(|| {
             match self.gate.observe_if_notice(now, || {
                 let (relevant, source_only) = self.filter.classify(&change);
+                if !source_only {
+                    self.history.roots_moved();
+                }
                 // A source write the poll already delivered, reported late.
                 let relevant = relevant
                     && !(source_only
@@ -1304,7 +1367,7 @@ mod tests {
                 candidate_path.clone(),
             )]);
         let filter = Filter::Direct(std::sync::RwLock::new(Direct {
-            current,
+            current: Arc::new(current),
             staged: Vec::new(),
             next: 0,
         }));
@@ -1313,14 +1376,18 @@ mod tests {
         );
 
         assert!(!filter.relevant(&change));
-        let aborted = filter.stage(candidate.clone()).expect("candidate stages");
+        let (aborted, _) = filter
+            .stage(Arc::new(candidate.clone()))
+            .expect("candidate stages");
         assert!(filter.relevant(&change));
         assert!(filter.wanted().directories.contains_key(&candidate_root));
         filter.withdraw(aborted);
         assert!(!filter.relevant(&change));
         assert!(!filter.wanted().directories.contains_key(&candidate_root));
 
-        let committed = filter.stage(candidate).expect("candidate restages");
+        let (committed, _) = filter
+            .stage(Arc::new(candidate))
+            .expect("candidate restages");
         filter.commit(committed).expect("candidate commits");
         assert!(filter.relevant(&change));
         assert!(filter.wanted().directories.contains_key(&candidate_root));
@@ -2007,11 +2074,11 @@ mod tests {
         let change = super::input::Change::from_event(&source_event(&fixture.source));
         for (current, candidate) in [(source.clone(), native.clone()), (native, source)] {
             let direct = Filter::Direct(std::sync::RwLock::new(Direct {
-                current: current.clone(),
+                current: Arc::new(current.clone()),
                 staged: Vec::new(),
                 next: 0,
             }));
-            direct.stage(candidate.clone()).unwrap();
+            direct.stage(Arc::new(candidate.clone())).unwrap();
             assert_eq!(direct.classify(&change), (true, false));
             let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(current));
             let _staged = publication.register(candidate);
@@ -2286,7 +2353,7 @@ mod tests {
             Filter::Publication(Arc::clone(&publication))
         } else {
             Filter::Direct(std::sync::RwLock::new(Direct {
-                current: inputs.clone(),
+                current: Arc::new(inputs.clone()),
                 staged: Vec::new(),
                 next: 0,
             }))

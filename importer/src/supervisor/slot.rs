@@ -64,6 +64,17 @@ impl<B> Slot<B> {
             .native_watch()
     }
 
+    /// The identity of the actual owned native artifact's input proof,
+    /// which names its watch obligations ([`Self::native_watch`]).
+    pub fn native_fingerprint(
+        &self,
+    ) -> Result<crate::input::fingerprint::Fingerprint, crate::process::RunnerError> {
+        self.current
+            .as_ref()
+            .ok_or(crate::process::RunnerError::NoCurrent)?
+            .native_fingerprint()
+    }
+
     /// Why `request` needs another runner than the current one, in one
     /// line; `None` when the current one serves it, or none runs.
     pub fn native_change(

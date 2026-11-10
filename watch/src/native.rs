@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// One watcher's native invalidation watermark captured before full validation.
@@ -81,6 +81,10 @@ struct Counters {
     rescans: AtomicU64,
     /// How many times the watcher replaced its registration.
     registrations: AtomicU64,
+    /// Whether an event since the watcher last derived its roots may have
+    /// created or removed a directory they derive from: any event but a
+    /// write to a Rawr source with nothing watched beneath it.
+    roots_moved: AtomicBool,
     /// The path of the latest native event, when it named one.
     changed: Mutex<Option<PathBuf>>,
     /// Each source input's identity as [`History::poll`] last saw it, and
@@ -153,6 +157,18 @@ impl History {
     /// The watcher replaced its registration with a successor's.
     pub(super) fn registered(&self) {
         self.0.registrations.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// An event may have created or removed a directory the watcher's roots
+    /// derive from.
+    pub(super) fn roots_moved(&self) {
+        self.0.roots_moved.store(true, Ordering::Release);
+    }
+
+    /// Whether an event since the last call may have moved the watcher's
+    /// roots, which the caller derives again.
+    pub(super) fn take_roots_moved(&self) -> bool {
+        self.0.roots_moved.swap(false, Ordering::AcqRel)
     }
 
     /// The backend dropped events: anything may have changed, so eligibility
