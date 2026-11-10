@@ -120,17 +120,6 @@ impl Run {
         )
     }
 
-    /// Keep the output the run printed since the last [`Run::until`] that
-    /// its pipes already gave, without waiting for more.
-    pub fn take_printed(&mut self) {
-        while let Ok(line) = self.lines.try_recv() {
-            self.seen.push(match line {
-                Line::Out(line) => line,
-                Line::Err(line) => format!("stderr: {line}"),
-            });
-        }
-    }
-
     /// Wait for the run to end, and keep the output it printed since the
     /// last [`Run::until`], to the end of its pipes.
     pub fn wait(&mut self) -> std::process::ExitStatus {

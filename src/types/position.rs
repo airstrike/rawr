@@ -136,13 +136,67 @@ impl fmt::Debug for Position {
     #[cold]
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let line = Lines::written(self.line);
         if self.is_none() {
             f.write_str("none")
         } else if self.is_beginning_of_line() {
-            write!(f, "{}", self.line)
+            write!(f, "{line}")
         } else {
-            write!(f, "{}:{}", self.line, self.pos)
+            write!(f, "{line}:{}", self.pos)
         }
+    }
+}
+
+thread_local! {
+    /// The lines this thread writes positions by (`Lines::writing`).
+    static WRITING: std::cell::RefCell<Option<Lines>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A text's lines, each by the number it is written as: what a digest
+/// writes one source's positions by, so a save that moves them without
+/// changing what they mean writes them the same (#1646).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Lines(std::sync::Arc<[u16]>);
+
+impl Lines {
+    /// Line `n` written as `numbers[n - 1]`; a line past them as itself.
+    pub(crate) fn new(numbers: Vec<u16>) -> Self {
+        Self(numbers.into())
+    }
+
+    /// Run `write` with each position this thread writes by `Debug`
+    /// written at its line's number here.
+    pub(crate) fn writing<T>(&self, write: impl FnOnce() -> T) -> T {
+        /// Puts back the lines written by before, as `write` ends or
+        /// unwinds.
+        struct Restore(Option<Lines>);
+
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let previous = self.0.take();
+                WRITING.with(|writing| *writing.borrow_mut() = previous);
+            }
+        }
+
+        let previous = WRITING.with(|writing| writing.borrow_mut().replace(self.clone()));
+        let _restore = Restore(previous);
+        write()
+    }
+
+    /// The number `line` is written as on this thread.
+    fn written(line: u16) -> u16 {
+        WRITING.with(|writing| {
+            writing
+                .borrow()
+                .as_ref()
+                .and_then(|lines| lines.0.get(usize::from(line).checked_sub(1)?).copied())
+                .unwrap_or(line)
+        })
+    }
+
+    /// Whether this thread writes positions by some lines.
+    fn active() -> bool {
+        WRITING.with(|writing| writing.borrow().is_some())
     }
 }
 
@@ -267,6 +321,9 @@ impl fmt::Debug for Span {
     #[cold]
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if Lines::active() {
+            return write!(f, "{:?}-{:?}", self.start, self.end);
+        }
         fmt::Display::fmt(self, f)
     }
 }

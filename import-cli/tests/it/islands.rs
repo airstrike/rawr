@@ -1279,8 +1279,9 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 /// save costs the same however many dependencies the program has (#1604).
 /// The runner lowers that file again and reuses every other file's
 /// lowering, one that reads a file and a variable outside the program
-/// included, as inboard's `theme.rs` reads its logo (#1646).
-/// `RAWR_VERBOSE` says what each save did, in the owner
+/// included, as inboard's `theme.rs` reads its logo (#1646), and on a
+/// save that adds a line above a function, after which an error below it
+/// names its own line. `RAWR_VERBOSE` says what each save did, in the owner
 /// and in the runner.
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
@@ -1310,12 +1311,50 @@ fn a_save_parses_only_the_file_it_changed() {
     // declarations, not its body.
     edit(&sidebar, "\"{title} sidebar\"", "\"{title} panel\"");
     run.until(|line| line.starts_with("tock ") && line.contains("[bar panel styled 0, "));
+    // A line above a function moves the file's later declarations, which
+    // the other files' lowering reads, but never their places.
+    let text = fs::read_to_string(&sidebar).unwrap();
+    assert!(text.contains("/// A sidebar row:"), "{text}");
+    let text = text
+        .replace("/// A sidebar row:", "// The rows.\n/// A sidebar row:")
+        .replace("\"{label} entry\"", "\"{label} line\"");
+    fs::write(&sidebar, text).unwrap();
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick line styled 0"));
+    // An error below the moved lines names its own line.
+    edit(
+        &sidebar,
+        "    ui::label(&format!(\"{label} line\"))",
+        "    let _ = unknown_row;\n    ui::label(&format!(\"{label} line\"))",
+    );
+    let text = fs::read_to_string(&sidebar).unwrap();
+    let line = text
+        .lines()
+        .position(|line| line.contains("unknown_row"))
+        .unwrap()
+        + 1;
+    let told = run.told(&events, |text| text.contains("\"event\":\"failed\""));
+    let failed = told
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "failed")
+        .unwrap();
+    // The runner's error names its line and column; the report names the
+    // crate's root as its file (#397).
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("`unknown_row`"))
+            && failed["line"] == line
+            && failed["column"] == 13,
+        "{failed}"
+    );
     // The program ends; `rawr run` keeps watching for the next save.
     fs::write(&stop, "").unwrap();
     run.told(&events, |text| {
         text.contains("{\"event\":\"ended\",\"status\":0}")
     });
-    run.take_printed();
+    run.child.kill().unwrap();
+    run.wait();
     let seen = run.seen.join("\n");
     assert!(!seen.contains("preparing again"), "{seen}");
     // Each save says what it did; one the watcher heard twice compiles the
@@ -1339,11 +1378,12 @@ fn a_save_parses_only_the_file_it_changed() {
             "stderr: rawr-import: a save parsed ",
             ", Cargo resolutions 0, API tables loaded 0, facades registered 0, watch roots staged 0"
         ),
-        3,
+        4,
         "{seen}"
     );
     // The runner reads for its instances and lowers again only the file
-    // the save changed: the edit is to a body, which nothing another file
+    // the save changed: each edit is to a body, which nothing another file
+    // reads, or moves declarations, whose places nothing another file
     // reads (#1646).
     let runner = run
         .seen
@@ -1360,13 +1400,15 @@ fn a_save_parses_only_the_file_it_changed() {
     assert!(
         runner.iter().all(|[parsed, revealed, lowered]| *parsed <= 1
             && revealed == parsed
-            && lowered == parsed),
+            && lowered <= parsed),
         "{runner:?}\n{seen}"
     );
+    // The save with the error fails as it reveals, and lowers nothing.
     assert_eq!(
-        runner.iter().map(|[parsed, ..]| parsed).sum::<usize>(),
-        3,
-        "{seen}"
+        runner.iter().fold([0; 3], |sum, counts| [0, 1, 2]
+            .map(|count| sum[count] + counts[count])),
+        [5, 5, 4],
+        "{runner:?}\n{seen}"
     );
 }
 
