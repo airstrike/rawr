@@ -227,6 +227,39 @@ pub(crate) fn probed() {
     count_round(|round| &mut round.probed, 1);
 }
 
+/// How many units this process's runner builds compiled: the artifacts
+/// Cargo reported that it did not find fresh ([`runner_units`]).
+static RUNNER_UNITS: AtomicUsize = AtomicUsize::new(0);
+/// How many times this process ran Cargo to build a runner.
+static RUNNER_BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+/// Count one runner build and the units it compiled, from its JSON
+/// `messages`.
+pub(crate) fn runner_built(messages: &[u8]) {
+    RUNNER_BUILDS.fetch_add(1, Ordering::Relaxed);
+    let compiled = messages
+        .split(|byte| *byte == b'\n')
+        .filter(|line| {
+            count(line, b"\"reason\":\"compiler-artifact\"") > 0
+                && count(line, b"\"fresh\":false") > 0
+        })
+        .count();
+    RUNNER_UNITS.fetch_add(compiled, Ordering::Relaxed);
+}
+
+/// How many units this process's runner builds compiled: a warm start's
+/// build finds every unit fresh and compiles none.
+#[must_use]
+pub fn runner_units() -> usize {
+    RUNNER_UNITS.load(Ordering::Relaxed)
+}
+
+/// How many times this process ran Cargo to build a runner.
+#[must_use]
+pub fn runner_builds() -> usize {
+    RUNNER_BUILDS.load(Ordering::Relaxed)
+}
+
 /// What this process has done to read its dependencies' API so far.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Work {

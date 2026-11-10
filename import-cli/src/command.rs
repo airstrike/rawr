@@ -180,7 +180,22 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
             ExitCode::FAILURE
         };
     }
-    match owner::run_program(&target, Some(graph), &Plain, arguments, cargo) {
+    let ran = owner::run_program(&target, Some(graph), &Plain, arguments, cargo);
+    // What the run's preparation did: a warm start reads, classifies,
+    // generates and compiles nothing (#1604).
+    if rawr_cli::cells::verbose() {
+        eprintln!(
+            "rawr-import: run rounds {}, {}, runner builds {}, runner units compiled {}",
+            crate::plain::rounds(),
+            rawr_import::progress::work(),
+            rawr_import::progress::runner_builds(),
+            rawr_import::progress::runner_units()
+        );
+        for (index, round) in rawr_import::progress::rounds().iter().enumerate() {
+            eprintln!("rawr-import: round {}: {round}", index + 1);
+        }
+    }
+    match ran {
         // The program printed its own error as it ran; its status stands.
         Ok(code) => ExitCode::from(u8::try_from(code & 0xff).unwrap_or(1)),
         Err(Some(report)) => failure(&report),

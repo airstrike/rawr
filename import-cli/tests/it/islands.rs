@@ -1149,6 +1149,75 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// Each file under `directory` with its modification time.
+fn modified(
+    directory: &Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, std::time::SystemTime> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).unwrap().flatten() {
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                files.insert(entry.path(), entry.metadata().unwrap().modified().unwrap());
+            }
+        }
+    }
+    files
+}
+
+/// A second `rawr run` of an unchanged project rebuilds nothing (#1604):
+/// no Cargo resolution, nightly build, probe or runner build, nothing read,
+/// classified or generated, and no file under `target` written again, so
+/// the runner it starts is the first run's. It prints what the first run
+/// printed.
+#[test]
+fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-warm");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(THEME), &root);
+    let mut first = start(&root, &[]);
+    let status = first.wait();
+    assert!(status.success(), "{}", first.seen.join("\n"));
+    let printed = first
+        .seen
+        .iter()
+        .filter(|line| !line.starts_with("stderr: "))
+        .fold(String::new(), |text, line| text + line.as_str() + "\n");
+    let built = modified(&root.join("target"));
+    let second = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env("RAWR_VERBOSE", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "{said}");
+    assert_eq!(String::from_utf8_lossy(&second.stdout), printed, "{said}");
+    assert!(
+        said.contains(
+            "rawr-import: run rounds 1, Cargo resolutions 0, nightly builds 0, probes 0, \
+             runner builds 0, runner units compiled 0\n\
+             rawr-import: round 1: compiled 0, probes 0, read 0, classified 0, generated 0\n"
+        ),
+        "{said}"
+    );
+    let rebuilt = modified(&root.join("target"));
+    let written = rebuilt
+        .iter()
+        .filter(|(path, time)| built.get(*path) != Some(*time))
+        .map(|(path, _)| path.display().to_string())
+        .collect::<Vec<_>>();
+    assert!(written.is_empty(), "written again: {written:?}\n{said}");
+}
+
 /// A marked function generic over the message that native code calls
 /// through a generic native helper, as inboard's `small_input` calls
 /// `row_group`, swaps a body edit into the running program: the instance
