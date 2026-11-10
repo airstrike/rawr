@@ -13,7 +13,10 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"Native code can call a marked generic function at a type that sits below a private module, as inboard's `workspace::spreadsheet` uses its private `sidebar` module's `Message`.","issues":[1598]},
-        {"text":"Native code can call a generic marked method or function taking an impl of a marked trait, as inboard's `Sidebar::content(impl IntoContent<'a, Message>)`, with the trait's own type or any iterator of elements. A body edit swaps in place.","issues":[1586],"refs":[1539]}
+        {"text":"Native code can call a generic marked method or function taking an impl of a marked trait, as inboard's `Sidebar::content(impl IntoContent<'a, Message>)`, with the trait's own type or any iterator of elements. A body edit swaps in place.","issues":[1586],"refs":[1539]},
+        {"text":"A crate function that takes trait objects in a slice, each alone or in an `Option`, and gives back a value that borrows them, as tracing-core's `fields.value_set_all(&[Some(&n as &dyn Value), None])`, runs from marked code. The value can be read, passed to a crate function such as `Event::dispatch(meta, &set)`, or passed to a closure.","issues":[1591]},
+        {"text":"A generic marked function's call to another marked generic takes its type arguments from the expected type (a return, `let` annotation, argument or field), as rustc does, so inboard's `Sidebar::default()` in a function returning `Sidebar<'a, Message>` passes `rawr check`. A turbofish no longer counts an argument-position `impl Trait`.","issues":[578],"refs":[408]},
+        {"text":"A `Box<dyn Iterator<Item = T>>` that marked code makes, as inboard's sidebar `Header::new` keeps, crosses to native code as an iterator that pulls one item from marked code at each `next`. Native code and marked `&mut self` methods pull from the same iterator.","issues":[1600]}
       ]
     },
     "releases": [
@@ -2459,7 +2462,7 @@
     {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
     {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"closed","category":"Health"},
     {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.75"},
-    {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)"},
+    {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"closed","category":"No glue (D593)"},
     {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","release":"0.3.63"},
     {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)","release":"0.3.63"},
     {"issue":581,"title":"Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc"},
@@ -3472,7 +3475,7 @@
     {"issue":1588,"title":"A Vec mixing an element marked code built with one native code gave fails exact type attestation in a crate call","state":"open","category":"No glue (D593)"},
     {"issue":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"open","category":"No glue (D593)"},
     {"issue":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"open","category":"No glue (D593)"},
-    {"issue":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"open","category":"No glue (D593)"},
+    {"issue":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed","category":"No glue (D593)"},
     {"issue":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open","category":"No glue (D593)"},
     {"issue":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open","category":"No glue (D593)"},
     {"issue":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open","category":"No glue (D593)"},
@@ -3481,7 +3484,10 @@
     {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open","category":"Divergences from rustc"},
     {"issue":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed","category":"No glue (D593)"},
     {"issue":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open","category":"No glue (D593)"},
-    {"issue":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"open","category":"No glue (D593)"}
+    {"issue":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"closed","category":"No glue (D593)"},
+    {"issue":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"open","category":"No glue (D593)"},
+    {"issue":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"open","category":"No glue (D593)"},
+    {"issue":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4490,7 +4496,7 @@
             {"number":1588,"title":"A Vec mixing an element marked code built with one native code gave fails exact type attestation in a crate call","state":"open"},
             {"number":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"open"},
             {"number":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"open"},
-            {"number":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"open"},
+            {"number":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
             {"number":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open"},
             {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open"},
@@ -4498,7 +4504,10 @@
             {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open"},
             {"number":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed"},
             {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"},
-            {"number":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"open"}
+            {"number":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"closed"},
+            {"number":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"open"},
+            {"number":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"open"},
+            {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"open"}
           ]
         }
       ]
