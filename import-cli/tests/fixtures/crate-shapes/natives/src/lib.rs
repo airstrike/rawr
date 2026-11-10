@@ -578,6 +578,9 @@ pub mod looks {
         /// Every look, as iced's `Theme::ALL`.
         pub const ALL: [Look; 2] = [Look::Light, Look::Dark];
 
+        /// Every look's name, as a slice of strings (#1626).
+        pub const NAMES: &'static [&'static str] = &["light", "dark"];
+
         pub fn all() -> Vec<Look> {
             vec![Look::Light, Look::Dark]
         }

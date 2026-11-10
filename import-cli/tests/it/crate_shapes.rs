@@ -106,12 +106,13 @@ fn a_crate_field_of_a_type_no_path_names_derefs() {
 /// and the type's, passed where a crate function takes `impl Fn(&T) ->
 /// String`, coerced to a `fn` pointer, and called by path. A script
 /// function of `&Look` fills the same slot. The type's associated `const
-/// ALL: [Look; 2]` and a function giving `[Look; 2]` are its values (#967).
+/// ALL: [Look; 2]` and a function giving `[Look; 2]` are its values (#967),
+/// and so is its `const NAMES: &'static [&'static str]` (#1626).
 #[test]
 fn a_crate_types_methods_are_function_values() {
     runs_as_cargo_does(
         "method_paths",
-        "[\"Light\", \"Dark\"]\nDark [Light, Dark]\n[\"<Light>\", \"<Dark>\"]\n[\"light\", \"dark\"] [200, 30] [200, 30]\n[100, -70] [100, -70] [100, -70]\ndark light Dark\n",
+        "[\"Light\", \"Dark\"]\nDark [Light, Dark]\n[\"<Light>\", \"<Dark>\"]\n[\"light\", \"dark\"] [200, 30] [200, 30]\n[100, -70] [100, -70] [100, -70]\ndark light Dark\n[\"light\", \"dark\"] 2 light\n",
     );
 }
 

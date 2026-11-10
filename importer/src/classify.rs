@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 159;
+const CLASSIFIER_VERSION: u32 = 160;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8242,9 +8242,11 @@ impl<P: api::Phase> Context<'_, P> {
     /// The type of a `const` or `static` of a slice of numbers, `bool`s or
     /// `char`s, as `pub const BYTES: &[u8]`: `&'static [T]` in either, a
     /// borrow of Rawr's array of them, so a `for` over it gives `&T` and
-    /// `.len()` reads it as rustc's do (#1146).
+    /// `.len()` reads it as rustc's do (#1146). A slice of `&str`, as a
+    /// type's `const NAMES: &'static [&'static str]`, is one of strings
+    /// that live as long as it does (#1626).
     fn static_scalars(&self, ty: &model::Type) -> Option<representability::convert::Type> {
-        use representability::convert::Type;
+        use representability::convert::{Builtin, Type};
         let model::Type::Reference {
             mutability: model::Mutability::Shared,
             ty: target,
@@ -8256,7 +8258,11 @@ impl<P: api::Phase> Context<'_, P> {
         let model::Type::Slice(element) = &**target else {
             return None;
         };
-        let element = self.convert(element).ok()?;
+        let element = if is_str_reference(element) {
+            Type::Builtin(Builtin::StaticStr)
+        } else {
+            self.convert(element).ok()?
+        };
         matches!(element, Type::Builtin(_)).then(|| Type::Borrowed {
             mutable: false,
             ty: Box::new(Type::Sequence {
