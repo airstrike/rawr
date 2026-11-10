@@ -3470,7 +3470,9 @@
     {"issue":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open","category":"No glue (D593)"},
     {"issue":1595,"title":"Two modules each declaring a trait of one name are refused as a duplicate item","state":"open","category":"Divergences from rustc"},
     {"issue":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open","category":"Divergences from rustc"}
+    {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open","category":"Divergences from rustc"},
+    {"issue":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"open","category":"No glue (D593)"},
+    {"issue":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4484,7 +4486,9 @@
             {"number":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open"},
             {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open"},
             {"number":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"open"},
-            {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open"}
+            {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open"},
+            {"number":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"open"},
+            {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"}
           ]
         }
       ]
