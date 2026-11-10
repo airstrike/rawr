@@ -22934,6 +22934,7 @@ impl TypePaths {
         });
         // A provided trait method can have arrived through a macro's
         // `$crate` while the same trait has a public path in source.
+        let mut through = Vec::new();
         for owner in facade
             .into_iter()
             .flat_map(crate::surface::facade::Plan::facades)
@@ -22948,13 +22949,26 @@ impl TypePaths {
                 PATH_IDENTITIES.with_borrow_mut(|identities| {
                     identities.entry(path.clone()).or_insert(*header.identity());
                 });
-                if !path.contains(crate::api::ledger::CRATE_SEGMENT) {
+                if path.contains(crate::api::ledger::CRATE_SEGMENT) {
+                    through.push((*header.identity(), path));
+                } else {
                     TYPE_PATHS.with_borrow_mut(|paths| {
                         paths.entry(*header.identity()).or_insert(path);
                     });
                 }
             }
         }
+        // A trait the root reaches through no path, as tracing-core's
+        // `field::Value` where only a crate re-exporting tracing's macros
+        // reaches it, is named through the crate that defines it, as such a
+        // type is.
+        TYPE_PATHS.with_borrow_mut(|paths| {
+            for (identity, path) in through {
+                if let Some(spelled) = hidden_spelling(&path) {
+                    paths.entry(identity).or_insert(spelled);
+                }
+            }
+        });
         FAMILIES.with_borrow_mut(std::collections::BTreeMap::clear);
         family::clear();
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);

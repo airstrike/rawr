@@ -1930,6 +1930,9 @@ impl<'a> Parser<'a> {
         };
         if !binding.mutable {
             return Err(match &binding.kind {
+                BindingKind::Receiver { .. } if !matches!(lvalue, Lvalue::Binding { .. }) => {
+                    self.receiver_assignment(&binding.ty, value.span)
+                }
                 BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
                     owner: owner.clone(),
                     mutation: value.span,

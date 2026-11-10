@@ -2273,3 +2273,29 @@ fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     );
     checks_and_prints(&root, &printed);
 }
+
+/// A marked module logs as inboard's inbox does, through its own `log`
+/// crate's re-export of tracing's `warn!` inside an `unwrap_or_else`
+/// closure, and names neither tracing nor tracing-core, which only that
+/// crate reaches. The macro's level check, `Level <= LevelFilter`, misses
+/// `tracing_core::Level::le` as rustc names the type, and the member is
+/// demanded under the `log` crate's hidden segment for tracing-core, the
+/// one root that reaches it.
+#[test]
+fn a_marked_module_logs_through_a_crate_that_re_exports_tracing_s_macros() {
+    const THROUGH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-log-through"
+    );
+    let root = crate::support::scratch().join("islands-log-through");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(THROUGH), &root);
+    let printed = cargo_prints(&root);
+    assert_eq!(
+        printed,
+        "WARN islands_log_through::workspace::notice line Some(21): message=bad created_at \
+         \"yesterday\": input contains invalid characters\n\
+         timestamp 0\n"
+    );
+    checks_and_prints(&root, &printed);
+}

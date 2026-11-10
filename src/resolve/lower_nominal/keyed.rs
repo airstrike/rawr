@@ -290,11 +290,9 @@ impl Parser<'_> {
             return Ok(());
         }
         Err(match &binding.kind {
-            BindingKind::Receiver { owner } => Error::ImmutableReceiver {
-                owner: owner.clone(),
-                mutation,
-                receiver: binding.declaration,
-            },
+            BindingKind::Receiver { .. } => {
+                self.receiver_borrow(&binding.ty, self.written_place(mutation), mutation)
+            }
             BindingKind::Local | BindingKind::Invocation => Error::borrow_immutable(name, mutation),
         })
     }
