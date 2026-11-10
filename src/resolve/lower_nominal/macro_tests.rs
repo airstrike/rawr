@@ -185,6 +185,41 @@ fn main() {
     assert_eq!(printed(source), "41\n5\nlocal\nshadowed\nlocal\n");
 }
 
+/// A call where a type or a pattern goes is the type or the pattern it
+/// expands to (#961), and one that expands 120 deep, which rustc's limit
+/// of 128 allows, nests as deep as it does (#962).
+#[test]
+fn a_call_expands_where_a_type_or_a_pattern_goes_and_nests_120_deep() {
+    let source = r#"
+macro_rules! number {
+    () => { i64 };
+}
+macro_rules! some {
+    ($x:pat) => { Some($x) };
+}
+macro_rules! count {
+    () => { 0 };
+    ($head:tt $($tail:tt)*) => { 1 + count!($($tail)*) };
+}
+fn main() {
+    let x: number!() = 4;
+    let o: Option<Vec<number!()>> = Some(vec![x]);
+    match o {
+        some!(v) if v.len() == 1 => println!("one {}", v[0]),
+        _ => println!("other"),
+    }
+    println!("{}", matches!(Some(3), some!(3 | 4)));
+    let n: u32 = count!(
+        a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a
+        a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a
+        a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a
+    );
+    println!("{n}");
+}
+"#;
+    assert_eq!(printed(source), "one 4\ntrue\n120\n");
+}
+
 #[test]
 fn a_later_definition_shadows_an_earlier_one_from_where_it_is() {
     let source = r#"

@@ -9,6 +9,17 @@ use crate::resolve::macro_rules;
 /// keeps expanding to more calls without nesting them.
 const EXPANSION_LIMIT: usize = 65_536;
 
+/// Where a macro's call is, which decides what its expansion is parsed as.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// One expression, parenthesised or a block.
+    Expression,
+    /// The statements it expands to, among the block's.
+    Statement,
+    /// A type or a pattern: its tokens as they are.
+    Bare,
+}
+
 impl Parser<'_> {
     /// `name!(..)`, `name![..]` or `name! {..}` of a dependency's
     /// `macro_rules!` macro `rules`, from its `!`.
@@ -142,7 +153,7 @@ impl Parser<'_> {
         krate: &str,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        self.splice_expansion(rules, krate, name_span, false)?;
+        self.splice_expansion(rules, krate, name_span, Place::Expression)?;
         self.parse_primary()
     }
 
@@ -169,18 +180,38 @@ impl Parser<'_> {
         let rules = self
             .program_macro(&name, position)
             .expect("`macro_statement_ahead` found the macro")?;
-        self.splice_expansion(&rules, "crate", name_span, true)
+        self.splice_expansion(&rules, "crate", name_span, Place::Statement)
+    }
+
+    /// When a call of the program's own macro is next, where a type or a
+    /// pattern goes, put its expansion in its place, as rustc parses it
+    /// there, and say so.
+    pub(super) fn splice_macro_ahead(&mut self) -> Result<bool, Error> {
+        let Token::Identifier(name) = self.peek() else {
+            return Ok(false);
+        };
+        if !matches!(self.peek_second(), Token::Bang) {
+            return Ok(false);
+        }
+        let position = self.position();
+        let Some(rules) = self.program_macro(&name, position) else {
+            return Ok(false);
+        };
+        let rules = rules?;
+        self.next();
+        let name_span = span(position, text_end(position, &name));
+        self.splice_expansion(&rules, "crate", name_span, Place::Bare)?;
+        Ok(true)
     }
 
     /// Expand the call of `rules` from its `!` and put its tokens next in
-    /// the input: one expression, parenthesised or a block, or, for a call
-    /// that is a `statement`, the statements it expands to.
+    /// the input, as its `place` parses them.
     fn splice_expansion(
         &mut self,
         rules: &macro_rules::Rules,
         krate: &str,
         name_span: Span,
-        statement: bool,
+        place: Place,
     ) -> Result<(), Error> {
         let name: ImmutableString = rules.name().into();
         self.expect(Token::Bang, "'!' after a macro name")?;
@@ -262,7 +293,9 @@ impl Parser<'_> {
         };
         let at = name_span.start();
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
-        if statement && statements {
+        if place == Place::Bare {
+            spliced.extend(expansion);
+        } else if place == Place::Statement && statements {
             // The call's own `;` ends the last statement when it has none.
             let ended = matches!(
                 expansion.last(),
