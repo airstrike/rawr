@@ -701,12 +701,17 @@ impl Arguments {
             .filter(|parameter| parameter.kind() == representability::signature::Kind::Constant)
             .count();
         // A call whose callables are slots needs each parameter to cross.
+        // A crate's own callable value fills the one callable parameter a
+        // script closure would as itself, as `Function::with`'s `impl Fn`
+        // fills `Widget::map`'s `F`.
         if !self.slots.is_empty() {
             let crossings = form.map_or(&[][..], |item| item.crossings());
+            let native = form.is_some_and(|item| item.call().is_some())
+                && self.slots.iter().all(Slot::is_native);
             return if type_parameters == self.types.len()
                 && constant_parameters == self.constants.len()
                 && self.callable.is_none()
-                && !crossings.is_empty()
+                && (!crossings.is_empty() || native)
             {
                 Ok(())
             } else {

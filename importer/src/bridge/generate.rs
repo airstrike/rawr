@@ -1338,7 +1338,7 @@ macro_rules! give_pointer {
 /// text.
 impl std::fmt::Display for NativeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = arena_access(|arena| arena.display(self.clone())).flatten();
+        let text = arena_read(|arena| arena.display(self.clone())).flatten();
         match text {
             Some(text) => f.write_str(&text),
             None => f.write_str("NativeHandle"),
@@ -1349,7 +1349,7 @@ impl std::fmt::Display for NativeHandle {
 /// `{:?}` of an imported value prints its Rust `Debug` text.
 impl std::fmt::Debug for NativeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = arena_access(|arena| arena.debug(self.clone())).flatten();
+        let text = arena_read(|arena| arena.debug(self.clone())).flatten();
         match text {
             Some(text) => f.write_str(&text),
             None => f.write_str("NativeHandle"),
@@ -1464,6 +1464,20 @@ fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
         .try_with(|cell| match cell.try_borrow_mut() {
             Ok(mut arena) => Some(call(arena.as_mut()?)),
             Err(_) => __rawr_internal::island::lend::with(call),
+        })
+        .ok()
+        .flatten()
+}
+
+/// `call` with this thread's arena read, as [`arena_access`] gives it. A
+/// value's `{:?}` that prints a native value it holds, as a program's
+/// `Curve { from: Point, .. }` inside a crate's `Action<Curve>` does, reads
+/// the arena again while the outer read holds it.
+fn arena_read<R>(call: impl FnOnce(&Arena) -> R) -> Option<R> {
+    NATIVE_ARENA
+        .try_with(|cell| match cell.try_borrow() {
+            Ok(arena) => Some(call(arena.as_ref()?)),
+            Err(_) => __rawr_internal::island::lend::with(|arena: &mut Arena| call(arena)),
         })
         .ok()
         .flatten()
@@ -16603,9 +16617,21 @@ fn render_function_arguments(
                     render_slot(position, runtime, slot, signature, substitutions, output)?;
                 } else if let Some(native) = crossed.native_at(position, ty, call) {
                     let rust = boxed_call(native, signature, substitutions)?;
+                    // An output that names the callable's type, as
+                    // `Widget::map`'s `Map<Self, F, Message>` does, names
+                    // the boxed closure the classifier wrote there (T417),
+                    // which the held box coerces to.
+                    let named = boxed_callable(signature.output())
+                        .map(|boxed| {
+                            concrete_type(&substituted(boxed, signature, substitutions)?)
+                                .ok_or_else(|| request::drift("a boxed closure's type"))
+                        })
+                        .transpose()?
+                        .map(|boxed| format!(": {boxed}"))
+                        .unwrap_or_default();
                     writeln!(
                         output,
-                        "    let argument_{position} = take_native::<{rust}>(arguments, {runtime})?;"
+                        "    let argument_{position}{named} = take_native::<{rust}>(arguments, {runtime})?;"
                     )
                     .map_err(request::unwritable)?;
                 } else if let Some(call) = call
@@ -17540,9 +17566,10 @@ fn render_take_input(
     // A value native code lent the call where it takes one by value, as a
     // marked `&mut self` method's `.spacing(self.spacing)` reads its lent
     // `Pixels`, is a copy of it, as rustc copies a `Copy` place it reads.
-    // A type with lifetimes is never in the arena, nor lent as one.
+    // A type with lifetimes, named or elided as `Pin<&str>`'s, is never
+    // lent as one.
     let moved = format!("    let argument_{local} = take_native(arguments, {index})?;\n");
-    let taken = if taken == moved && !annotation.contains('\'') {
+    let taken = if taken == moved && !annotation.contains(['\'', '&']) {
         format!(
             "    let argument_{local}: {annotation} = match lent_copy!(arguments, {index}, {annotation}) {{ Some(copy) => copy?, None => take_native(arguments, {index})? }};\n"
         )

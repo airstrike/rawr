@@ -1247,6 +1247,40 @@ pub mod widgets {
         }
     }
 
+    /// One widget at fixed coordinates, as iced's `Pin<W>`, whose content a
+    /// string literal fills as `Pin<&str>`.
+    pub struct Pin<W> {
+        content: W,
+        x: u16,
+    }
+
+    /// `content` pinned at the origin, as iced's `pin(content)`.
+    pub fn pin<W>(content: W) -> Pin<W> {
+        Pin { content, x: 0 }
+    }
+
+    impl<W> Pin<W> {
+        /// The widget pinned `x` across.
+        pub fn x(mut self, x: u16) -> Self {
+            self.x = x;
+            self
+        }
+    }
+
+    impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Pin<W>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("pin {}", self.x));
+            self.content.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.content.press(label)
+        }
+    }
+
     /// A widget that sends a message when pressed outside its content, as
     /// iced's `MouseArea<'a, Message, W>`, whose lifetime only its default
     /// content names.
