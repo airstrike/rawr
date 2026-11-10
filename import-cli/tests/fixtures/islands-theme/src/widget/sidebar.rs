@@ -85,6 +85,20 @@ impl<'a, Message: 'a> Sidebar<'a, Message> {
         self.content.items.push(item);
     }
 
+    /// The sidebar's element, built from what native code keeps in it and
+    /// leaves it empty, as a `&mut self` view moves its parts out (#1587).
+    #[allow(clippy::wrong_self_convention)]
+    pub fn to_element(&mut self) -> Element<'a, Message> {
+        let mut children = Vec::new();
+        if let Some(header) = &mut self.header {
+            children.append(&mut header.actions);
+        }
+        children.append(&mut self.content.items);
+        ui::Column::with_children(children)
+            .spacing(self.content.spacing)
+            .boxed()
+    }
+
     pub fn into_element(self) -> Element<'a, Message> {
         let Sidebar { header, content } = self;
         let mut items = Vec::new();

@@ -1039,6 +1039,30 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
+    // ... and inboard's `to_element(&mut self)` of the sidebar native code
+    // keeps: a crate call copies its lent `Pixels` (#1584), and a row mixes
+    // a crate element the program's path to `ui` makes with one `common`'s
+    // `space!()` makes through its re-export (#1588). Another `&mut self`
+    // method moves the elements native code keeps out (#1587), a
+    // non-generic marked panel borrows native code's `&Theme` by the
+    // crate root's `pub use theme::Theme`, cloning nothing, and a `Vec`
+    // mixes an element marked code builds with one native code gives
+    // (#1588).
+    assert!(
+        printed.contains(
+            "\nsidebar column Fill by 5 [row [tools styled 21 idle, space FillxFill idle, \
+             add row styled 0], column Fill by 4 [first row styled 0]] Some(Tile(19))\n\
+             sidebar column Shrink by 3 [left row styled 0, right row styled 0] Some(Tile(21)) \
+             leaves 0\n\
+             panel column Bounded { max: 120.0 } by 0 [column Fill by 5 [row [tools styled 21 \
+             idle, space FillxFill idle, + styled 0 idle], column Fill by 4 [row [one styled 0 \
+             idle, two styled 0 idle], container ShrinkxShrink styled 121 (row [input 50 of 100, \
+             % styled 21 idle])]], column Fill by 5 [row [rows styled 21 idle, space FillxFill \
+             idle]]] Some(Typed(\"100\"))\n\
+             mixed column Shrink by 0 [built styled 0, given styled 0] idle\n"
+        ),
+        "{printed}"
+    );
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

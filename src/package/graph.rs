@@ -74,6 +74,10 @@ struct NativeRoot {
     ///
     /// [`island::module_text`]: super::island::module_text
     bridges: Vec<Box<[ImmutableString]>>,
+    /// The root's top-level `use` declarations, parsed: what a marked
+    /// module's path through `crate` stands for, as `pub use
+    /// theme::Theme;` makes `crate::Theme` the marked `theme::Theme`.
+    uses: Box<[crate::item::Parsed]>,
 }
 
 /// A package's binary crate when the program runs from its library: an
@@ -500,7 +504,17 @@ impl Graph {
             sources.map(|(source, unit)| {
                 (source.modules(), source.path(), source.text(), unit.items())
             }),
+            self.native_root_items(),
         ))
+    }
+
+    /// The `use` declarations of the native crate root, which name marked
+    /// types by other paths, as `pub use theme::Theme;` does.
+    fn native_root_items(&self) -> &[crate::item::Parsed] {
+        self.entry_package()
+            .native_root
+            .as_ref()
+            .map_or(&[], |root| &root.uses)
     }
 
     /// The marked statics of a native root that marked code reads as native
@@ -520,6 +534,7 @@ impl Graph {
                         && !entry.is_bridge(source.modules())
                 })
                 .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
+            self.native_root_items(),
         )
     }
 
@@ -540,6 +555,7 @@ impl Graph {
                         && !entry.is_bridge(source.modules())
                 })
                 .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
+            self.native_root_items(),
         )
     }
 
@@ -877,6 +893,16 @@ impl<'a> Builder<'a> {
         let read = if !marked && self.reaches_marked(package, &module_root, &text).is_some() {
             let declarations =
                 super::island::root_text(&text, has_bin, &self.packages[package.0].features);
+            // A `use` Rawr can't parse names nothing marked: the native
+            // build reads it.
+            let uses = self
+                .engine
+                .parse_unit_with(
+                    &super::polyglot::uses_text(&text),
+                    &self.packages[package.0].features,
+                )
+                .map(|unit| unit.items().into())
+                .unwrap_or_default();
             self.packages[package.0].native_root = Some(NativeRoot {
                 module: RustModule {
                     modules: Box::default(),
@@ -885,6 +911,7 @@ impl<'a> Builder<'a> {
                 },
                 marked: Box::default(),
                 bridges: Vec::new(),
+                uses,
             });
             declarations
         } else {

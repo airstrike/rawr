@@ -225,6 +225,13 @@ pub fn panel(theme: &Theme) -> Element<'_, Message> {
         .boxed()
 }
 
+/// A column of an element marked code builds and one native code gives,
+/// in one `Vec` (#1588).
+pub fn mixed(given: Element<'_, Message>) -> Element<'_, Message> {
+    let items = vec![crate::widget::label("built").boxed(), given];
+    ui::Column::with_children(items).boxed()
+}
+
 /// What typing in the panel's input gives: the closure native code calls
 /// is the marked `Message::Typed`, handed on to the crate's `on_input`.
 pub fn typed() -> Option<Message> {
