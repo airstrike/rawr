@@ -29,6 +29,8 @@ mod dependency;
 #[cfg(feature = "rustc-driver")]
 pub(crate) use dependency::scan::{escape_environment, escape_path};
 pub mod fingerprint;
+#[cfg(feature = "rustc-driver")]
+pub(crate) mod join;
 #[cfg(test)]
 mod membership;
 pub(crate) mod native;
@@ -478,63 +480,6 @@ impl Evidence {
         Ok(selected.into_boxed_slice())
     }
 
-    #[cfg(feature = "rustc-driver")]
-    pub(crate) fn authority_for_artifact(
-        &self,
-        graph: &cargo::unit::BuildGraph,
-        artifact: &Path,
-        allocation: &mut crate::extract::Allocation,
-    ) -> Result<ArtifactJoin> {
-        let matches = self
-            .artifacts
-            .iter()
-            .filter(|candidate| candidate.outputs.iter().any(|output| output == artifact));
-        let mut authorities = Vec::new();
-        for package in matches {
-            for unit in graph.artifacts() {
-                if compare_artifact(unit, package) != Ordering::Equal
-                    || !graph.artifact_selected_reachable(unit.semantic_key())?
-                {
-                    continue;
-                }
-                authorities.push((
-                    unit.platform(),
-                    artifact_authority(unit, package, allocation)?,
-                ));
-            }
-        }
-        authorities.sort_unstable_by(|left, right| left.1.semantic_key.cmp(&right.1.semantic_key));
-        authorities.dedup_by(|left, right| left == right);
-        if authorities.is_empty() {
-            return Ok(ArtifactJoin::Missing);
-        }
-        if authorities.len() > 1 {
-            // Cargo's public artifact projection omits the platform, so a host
-            // unit and a target unit of one package can share it. Cargo places
-            // target-platform output under its triple directory; keep the units
-            // whose platform agrees with the artifact's location.
-            let under = |triple: &str| {
-                artifact
-                    .components()
-                    .any(|component| component.as_os_str() == triple)
-            };
-            let triples = authorities
-                .iter()
-                .filter_map(|(platform, _)| *platform)
-                .collect::<Vec<_>>();
-            authorities.retain(|(platform, _)| match platform {
-                Some(triple) => under(triple),
-                None => !triples.iter().any(|triple| under(triple)),
-            });
-        }
-        let Some((_, authority)) = authorities.pop() else {
-            return Ok(ArtifactJoin::Ambiguous);
-        };
-        if !authorities.is_empty() {
-            return Ok(ArtifactJoin::Ambiguous);
-        }
-        Ok(ArtifactJoin::Available(authority))
-    }
     #[cfg(all(feature = "rustc-driver", test))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_extern_artifact(
@@ -550,7 +495,8 @@ impl Evidence {
         artifact: &Path,
     ) -> Result<()> {
         let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
-        match self.authority_for_artifact(graph, artifact, &mut allocation)? {
+        let joins = join::Index::of(self, graph, &mut allocation)?;
+        match joins.authority(artifact, &mut allocation)? {
             ArtifactJoin::Available(authority)
                 if authority.semantic_key.as_ref() == semantic_key
                     && authority.package_id.as_ref() == package_id
@@ -949,14 +895,12 @@ impl Build {
     }
 
     #[cfg(feature = "rustc-driver")]
-    pub(crate) fn authority_for_artifact(
-        &self,
-        graph: &cargo::unit::BuildGraph,
-        artifact: &Path,
+    pub(crate) fn joins<'a>(
+        &'a self,
+        graph: &'a cargo::unit::BuildGraph,
         allocation: &mut crate::extract::Allocation,
-    ) -> Result<ArtifactJoin> {
-        self.evidence
-            .authority_for_artifact(graph, artifact, allocation)
+    ) -> Result<join::Index<'a>> {
+        join::Index::of(&self.evidence, graph, allocation)
     }
 
     #[cfg(all(feature = "rustc-driver", test))]
@@ -1180,9 +1124,9 @@ fn public_output_key(output: &cargo::unit::Output) -> PublicArtifactKey<'_> {
     )
 }
 
-fn compare_artifact(output: &cargo::unit::Output, artifact: &Artifact) -> Ordering {
+fn public_message_key(artifact: &Artifact) -> PublicArtifactKey<'_> {
     let key = &artifact.key;
-    public_output_key(output).cmp(&(
+    (
         key.package_id.as_ref(),
         key.target.as_path(),
         key.target_kinds.as_ref(),
@@ -1190,7 +1134,11 @@ fn compare_artifact(output: &cargo::unit::Output, artifact: &Artifact) -> Orderi
         key.crate_name.as_ref(),
         key.features.as_ref(),
         &artifact.profile,
-    ))
+    )
+}
+
+fn compare_artifact(output: &cargo::unit::Output, artifact: &Artifact) -> Ordering {
+    public_output_key(output).cmp(&public_message_key(artifact))
 }
 
 impl Baseline {

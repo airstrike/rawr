@@ -17,6 +17,9 @@ use super::config::{self, Selected, Source};
 use super::{canonical_file, digest, Digest, Limits, Selection};
 use crate::{Error, Result};
 
+#[cfg(feature = "rustc-driver")]
+pub(crate) mod reachable;
+
 const HARNESS_PACKAGE: &str = "rawr-resolution-harness";
 /// The document a package record error names.
 const METADATA_OUTPUT: &str = "`cargo metadata` output";
@@ -1643,7 +1646,7 @@ impl Output {
     }
 
     #[cfg(all(test, feature = "rustc-driver"))]
-    fn with_fixture_dependencies(mut self, dependencies: Box<[Box<str>]>) -> Self {
+    pub(crate) fn with_fixture_dependencies(mut self, dependencies: Box<[Box<str>]>) -> Self {
         self.dependencies = dependencies
             .into_vec()
             .into_iter()
@@ -1882,95 +1885,6 @@ impl BuildGraph {
         epoch.require(limits);
         self._allocation = epoch.retained;
         Ok(())
-    }
-}
-
-#[cfg(feature = "rustc-driver")]
-impl BuildGraph {
-    pub(crate) fn artifact_reachable(&self, roots: &BTreeSet<&str>, target: &str) -> Result<bool> {
-        let mut allocation = self._allocation;
-        self.artifact_reachable_budgeted(roots, target, &mut allocation)
-    }
-
-    fn artifact_reachable_budgeted(
-        &self,
-        roots: &BTreeSet<&str>,
-        target: &str,
-        allocation: &mut JsonAllocation,
-    ) -> Result<bool> {
-        allocation.member_nodes(
-            "Cargo reachability artifact-index nodes",
-            self.artifacts.len(),
-        )?;
-        let mut artifacts = BTreeMap::new();
-        for artifact in &self.artifacts {
-            artifacts.insert(artifact.semantic_key(), artifact);
-            #[cfg(test)]
-            OWNED_REACHABILITY_NODES.with(|owned| owned.set(owned.get().saturating_add(1)));
-        }
-        allocation.nodes("Cargo reachability pending nodes", roots.len())?;
-        let mut pending = Vec::new();
-        pending
-            .try_reserve_exact(roots.len())
-            .map_err(|source| Error::Allocation {
-                operation: "Cargo artifact reachability",
-                source,
-            })?;
-        for root in roots {
-            pending.push(*root);
-            #[cfg(test)]
-            OWNED_REACHABILITY_NODES.with(|owned| owned.set(owned.get().saturating_add(1)));
-        }
-        let mut visited = BTreeSet::new();
-        while let Some(key) = pending.pop() {
-            if key == target {
-                return Ok(true);
-            }
-            if visited.contains(key) {
-                continue;
-            }
-            allocation.member_nodes("Cargo reachability visited nodes", 1)?;
-            visited.insert(key);
-            #[cfg(test)]
-            OWNED_REACHABILITY_NODES.with(|owned| owned.set(owned.get().saturating_add(1)));
-            if let Some(artifact) = artifacts.get(key) {
-                for dependency in artifact.dependency_keys() {
-                    allocation.nodes("Cargo reachability pending nodes", 1)?;
-                    pending.try_reserve(1).map_err(|source| Error::Allocation {
-                        operation: "Cargo artifact reachability",
-                        source,
-                    })?;
-                    pending.push(dependency);
-                    #[cfg(test)]
-                    OWNED_REACHABILITY_NODES.with(|owned| owned.set(owned.get().saturating_add(1)));
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    #[cfg(test)]
-    fn artifact_reachable_allocation(
-        &self,
-        roots: &BTreeSet<&str>,
-        target: &str,
-    ) -> Result<JsonAllocation> {
-        let mut allocation = self._allocation;
-        let _ = self.artifact_reachable_budgeted(roots, target, &mut allocation)?;
-        Ok(allocation)
-    }
-
-    pub(crate) fn artifact_selected_reachable(&self, target: &str) -> Result<bool> {
-        let mut allocation = self._allocation;
-        let mut roots = BTreeSet::new();
-        for extraction in &self.extraction {
-            let key = extraction.semantic_key();
-            if !roots.contains(key) {
-                allocation.member_nodes("Cargo reachability selected-root nodes", 1)?;
-                roots.insert(key);
-            }
-        }
-        self.artifact_reachable_budgeted(&roots, target, &mut allocation)
     }
 }
 
@@ -6504,14 +6418,14 @@ mod allocation_tests {
         let graph = BuildGraph::fixture_artifacts(Box::from([root]));
         let roots = BTreeSet::from(["root"]);
         let usage = graph
-            .artifact_reachable_allocation(&roots, "absent")
+            .artifact_reachable_allocation(&roots)
             .expect("standard high-fanout traversal measures");
 
         assert!(!graph
             .artifact_reachable(&roots, "absent")
             .expect("the high-fanout traversal completes"));
         let traversed_usage = graph
-            .artifact_reachable_allocation(&roots, "absent")
+            .artifact_reachable_allocation(&roots)
             .expect("the repeated traversal measures");
         assert_eq!(traversed_usage.items, usage.items);
     }
@@ -6552,7 +6466,7 @@ mod allocation_tests {
             let mut graph = BuildGraph::fixture_artifacts(Box::from([root]));
             graph.bind_reachability(&epoch, limits)?;
             let roots = BTreeSet::from(["root"]);
-            let usage = graph.artifact_reachable_allocation(&roots, "absent")?;
+            let usage = graph.artifact_reachable_allocation(&roots)?;
             Ok::<_, crate::Error>((
                 usage,
                 OWNED_JSON_VALUES.with(std::cell::Cell::get),
