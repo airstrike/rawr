@@ -275,25 +275,41 @@ pub fn work() -> Work {
     }
 }
 
-/// What one round of a check did at each stage: how many units the
-/// nightly compiled, whether the probe ran, how many definitions the round
-/// read from the API and classified, and how many classified paths it
-/// generated bindings for. A stage a cache answered counts nothing.
+/// What one round of a check did at each stage: how many resolution
+/// harnesses it bound, how many units the nightly compiled, how many build
+/// outputs it copied into a resolution bundle and how many bundles it
+/// sealed, whether the probe ran, how many definitions the round read from
+/// the API and classified, how many classified paths it generated bindings
+/// for, and how many of the program's sources it parsed. A stage a cache
+/// answered counts nothing.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Round {
+    harnessed: usize,
     compiled: usize,
+    copied: usize,
+    sealed: usize,
     probed: usize,
     read: usize,
     classified: usize,
     generated: usize,
+    parsed: usize,
 }
 
 impl std::fmt::Display for Round {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "compiled {}, probes {}, read {}, classified {}, generated {}",
-            self.compiled, self.probed, self.read, self.classified, self.generated
+            "harnesses {}, compiled {}, copied {}, sealed {}, probes {}, read {}, \
+             classified {}, generated {}, parsed {}",
+            self.harnessed,
+            self.compiled,
+            self.copied,
+            self.sealed,
+            self.probed,
+            self.read,
+            self.classified,
+            self.generated,
+            self.parsed
         )
     }
 }
@@ -340,6 +356,29 @@ pub(crate) fn classified(definitions: usize) {
 /// Count the classified paths bindings were generated for in this round.
 pub(crate) fn generated(outcomes: usize) {
     count_round(|round| &mut round.generated, outcomes);
+}
+
+/// Count one resolution harness bound in this round.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn harnessed() {
+    count_round(|round| &mut round.harnessed, 1);
+}
+
+/// Count one build output copied into a resolution bundle in this round.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn copied() {
+    count_round(|round| &mut round.copied, 1);
+}
+
+/// Count one resolution bundle sealed in this round.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn sealed() {
+    count_round(|round| &mut round.sealed, 1);
+}
+
+/// Count `sources` of the program parsed in this round.
+pub fn parsed(sources: usize) {
+    count_round(|round| &mut round.parsed, sources);
 }
 
 /// How many lines this process has printed above the status line: a

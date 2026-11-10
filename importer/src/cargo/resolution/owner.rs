@@ -948,6 +948,7 @@ impl Evaluation {
                         cargo::unit::Allocation::begin(&self.limits),
                     );
                     let layout = layout::Layout::bind(attempt, graph)?;
+                    crate::progress::harnessed();
                     #[cfg(test)]
                     let script = self
                         .script
@@ -1085,6 +1086,7 @@ impl Evaluation {
         }
         .map_err(error)?;
         let record = stored::Record::decode(&bytes, &mut budget).map_err(error)?;
+        crate::progress::sealed();
         bundle::Stored::capture(layout, &record, &scope, &mut budget).map_err(error)
     }
 }
