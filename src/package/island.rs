@@ -271,7 +271,13 @@ enum Pass {
     /// the signature writes it, as inboard's `impl IntoContent<'a,
     /// Message>`: the impl that applies to the argument's type gives it,
     /// by its [`GIVE`] function, as a value of a type it crosses as.
-    Trait { path: String },
+    /// `given` is the trait's [`GIVEN`] at the bound's arguments, by which
+    /// a generic function's instance gives it boxed.
+    Trait { path: String, given: String },
+    /// An argument-position `impl` of a marked trait that a generic
+    /// function's trampoline boxed as the trait's [`GIVEN`], at `path`,
+    /// given by its [`GIVE_BOXED`].
+    Boxed { path: String },
 }
 
 /// The function each marked trait native code sees has beside its own, by
@@ -280,6 +286,77 @@ enum Pass {
 /// impl's bound does. A trait native code implements itself keeps the
 /// trait's own, which panics.
 const GIVE: &str = "__rawr_give";
+
+/// The prefix of the trait each marked trait native code sees has beside
+/// it, by which a generic function's trampoline hands an `impl` of the
+/// trait to its instance boxed, whose type it can name ([`given_boxed`]).
+const GIVEN: &str = "__RawrGiven";
+
+/// The function of a [`GIVEN`] trait: the boxed value's [`GIVE`].
+const GIVE_BOXED: &str = "__rawr_give_boxed";
+
+/// The function each marked trait native code sees has beside [`GIVE`],
+/// by which each of its impls names itself to a generic function's
+/// trampoline: `+` and its type's name as written, `+Content`, or `+_`
+/// for an impl for every type of a bound, which the trampoline adds to its
+/// instance's key, as the resolver compiles one instance for each impl
+/// (D869).
+const GIVEN_NAME: &str = "__rawr_given";
+
+/// The [`GIVEN`] trait of the marked trait `declared`, generic as it is,
+/// and its impl for every type that implements it. Its functions are
+/// callable on a trait object, so a generic function's trampoline boxes an
+/// argument-position `impl` of the trait as one, which its instance
+/// entry, where each type is `'static`, gives by the impl's [`GIVE`]
+/// (D869).
+fn given_boxed(declared: &item::Trait) -> String {
+    let island = format!("crate::{MODULE}");
+    let name = &declared.name.text;
+    let parameters = declared
+        .lifetimes
+        .params
+        .iter()
+        .map(|lifetime| format!("'{}", lifetime.text.trim_start_matches('\'')))
+        .chain(
+            declared
+                .generics
+                .iter()
+                .map(|generic| generic.name.text.to_string()),
+        )
+        .collect::<Vec<_>>();
+    let arguments = if parameters.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", parameters.join(", "))
+    };
+    let generics = parameters
+        .iter()
+        .cloned()
+        .chain(std::iter::once(format!("__T: {name}{arguments}")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let statics = declared
+        .generics
+        .iter()
+        .map(|generic| format!("{}: 'static", generic.name.text))
+        .collect::<Vec<_>>();
+    let clause = if statics.is_empty() {
+        String::new()
+    } else {
+        format!("\n    where\n        {}", statics.join(",\n        "))
+    };
+    let signature = format!(
+        "fn {GIVE_BOXED}(self: ::std::boxed::Box<Self>, __call: &mut {island}::Call<'_>){clause}"
+    );
+    let named = format!("fn {GIVEN_NAME}(&self) -> &'static str");
+    format!(
+        "#[doc(hidden)]\npub(crate) trait {GIVEN}{name}{arguments} {{\n    \
+         {signature};\n    {named};\n}}\n\
+         impl<{generics}> {GIVEN}{name}{arguments} for __T {{\n    \
+         {signature} {{\n        {name}::{GIVE}(*self, __call)\n    }}\n    \
+         {named} {{\n        {name}::{GIVEN_NAME}(self)\n    }}\n}}\n"
+    )
+}
 
 /// What a trampoline makes of an argument-position `impl Trait`, as
 /// inboard's `ids: impl IntoIterator<Item = Id>`, whose value may be of
@@ -1097,6 +1174,7 @@ impl<'a> Generator<'a> {
                     None,
                     Pass::Trait {
                         path: trait_path(bound),
+                        given: given_path(file, bound),
                     },
                 )));
             }
@@ -1722,16 +1800,30 @@ impl<'a> Generator<'a> {
             "rawr: native code can't give a value to a marked function as an `impl {name}` \
              when native code implements `{name}`"
         );
+        // A value moves to the interpreter only where each type it is
+        // generic over is `'static`, as in a generic function's instance
+        // entry (D869).
+        let statics = declared
+            .generics
+            .iter()
+            .map(|generic| format!(",\n        {}: 'static", generic.name.text))
+            .collect::<String>();
         text.insert_str(
             end,
             &format!(
                 "    #[doc(hidden)]\n    \
                  fn {GIVE}(self, __call: &mut {island}::Call<'_>)\n    \
+                 where\n        Self: ::std::marker::Sized{statics},\n    \
+                 {{\n        ::core::panic!({message:?})\n    }}\n    \
+                 #[doc(hidden)]\n    \
+                 fn {GIVEN_NAME}(&self) -> &'static str\n    \
                  where\n        Self: ::std::marker::Sized,\n    \
-                 {{\n        ::core::panic!({message:?})\n    }}\n"
+                 {{\n        \"\"\n    }}\n"
             ),
         );
-        format!("{}\n", without_rawr_attributes(&text))
+        let mut text = format!("{}\n", without_rawr_attributes(&text));
+        text.push_str(&given_boxed(declared));
+        text
     }
 
     /// The marked impl `declared` as native code sees it: an impl of a
@@ -1876,15 +1968,48 @@ impl<'a> Generator<'a> {
         generic: Option<&item::GenericParam>,
         owner: Owner<'_>,
     ) -> Option<String> {
+        // The trait's own type arguments, as `Message` of `impl<'a,
+        // Message> IntoContent<'a, Message> for Content<'a, Message>`: each
+        // `'static` where the value moves, as the trait's own `GIVE` says.
+        let arguments = declared
+            .trait_
+            .as_ref()
+            .and_then(|trait_| trait_.segments.last())
+            .map(|last| {
+                last.arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        type_ref::Argument::Type(ty) => Some(ty),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let argument = |name: &str| {
+            arguments.iter().any(|ty| {
+                matches!(ty, type_ref::Type::Path(path)
+                    if matches!(&path.segments[..], [segment]
+                        if segment.name.text == name && segment.arguments.is_empty()))
+            })
+        };
         // A value whose type names another of the impl's type parameters
         // crosses no more than a generic function's.
-        let others = declared
-            .generics
-            .iter()
-            .any(|other| generic.is_none_or(|generic| other.name.text != generic.name.text));
+        let others = declared.generics.iter().any(|other| {
+            generic.is_none_or(|generic| other.name.text != generic.name.text)
+                && !argument(&other.name.text)
+        });
         if others {
             return None;
         }
+        let statics = arguments
+            .iter()
+            .map(|ty| format!("{}: 'static", slice(file.text, ty.span()).trim()))
+            .collect::<Vec<_>>();
+        let clause = if statics.is_empty() {
+            " ".to_owned()
+        } else {
+            format!("\nwhere\n    {},\n", statics.join(",\n    "))
+        };
         let owner_written = slice(file.text, declared.owner.span()).trim();
         let (stand, pass) = match generic {
             Some(generic) => {
@@ -1901,7 +2026,7 @@ impl<'a> Generator<'a> {
             ),
         };
         let island = format!("crate::{MODULE}");
-        let mut text = format!("fn {GIVE}(self, __call: &mut {island}::Call<'_>) {{\n");
+        let mut text = format!("fn {GIVE}(self, __call: &mut {island}::Call<'_>){clause}{{\n");
         match stand {
             Some(Stand { written, make, .. }) => {
                 let _ = writeln!(
@@ -1917,6 +2042,18 @@ impl<'a> Generator<'a> {
         }
         give(&pass, "__value", "*__call", &island, &mut text);
         text.push_str("}\n");
+        // The impl's name, by its type's as written, or `_` for an impl for
+        // every type of a bound, as the resolver names its instance
+        // (`resolve::lower_nominal::imported::given_types`).
+        let named = match (&declared.owner, generic) {
+            (_, Some(_)) => "_".into(),
+            (type_ref::Type::Path(path), None) => path.segments.last()?.name.text.clone(),
+            _ => return None,
+        };
+        let _ = writeln!(
+            text,
+            "fn {GIVEN_NAME}(&self) -> &'static str {{\n    \"+{named}\"\n}}"
+        );
         Some(text)
     }
 
@@ -2246,11 +2383,27 @@ impl<'a> Generator<'a> {
                 at.position().unwrap_or(1)
             ));
         }
-        // A marked trait's impl gives its value by the impl's own type, which
-        // no instance is keyed by.
-        if generic && passes.iter().any(|pass| matches!(pass, Pass::Trait { .. })) {
-            reasons
-                .push("a generic function's `impl` of a marked trait can't cross yet".to_owned());
+        // A marked trait's impl gives its value by the impl's own type,
+        // which no instance is keyed by and which only an instance entry,
+        // where each type is `'static`, can give: the trampoline boxes it as
+        // the trait's `GIVEN`, whose type the entry names.
+        if generic {
+            for (pass, stand) in passes.iter_mut().zip(&mut stands) {
+                let Pass::Trait { given, .. } = pass else {
+                    continue;
+                };
+                let path = given
+                    .split_once('<')
+                    .map_or(given.as_str(), |(path, _)| path)
+                    .to_owned();
+                // Only its written type is read: no pass is found for it.
+                *stand = Some(Stand {
+                    ty: type_ref::Type::Unit(function.span),
+                    written: format!("::std::boxed::Box<dyn {given} + '_>"),
+                    make: "::std::boxed::Box::new(__value)".to_owned(),
+                });
+                *pass = Pass::Boxed { path };
+            }
         }
         let island = format!("crate::{MODULE}");
         let mut text = format!("{signature} {{\n");
@@ -2286,12 +2439,30 @@ impl<'a> Generator<'a> {
         }
         let owned = !matches!(owner, Owner::None) || object;
         if generic {
-            // The instance's own function, keyed by its types' names.
-            let _ = writeln!(
-                text,
-                "    let mut __call = {island}::Call::new({island}::keyed({path:?}, \
-                 ::std::any::type_name::<{tuple}>()), {owned});"
-            );
+            // The instance's own function, keyed by its types' names and the
+            // impl each boxed argument names itself by.
+            let given = passes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, pass)| match pass {
+                    Pass::Boxed { path } => Some(format!("{path}::{GIVEN_NAME}(&*__a{index})")),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let _ = if given.is_empty() {
+                writeln!(
+                    text,
+                    "    let mut __call = {island}::Call::new({island}::keyed({path:?}, \
+                     ::std::any::type_name::<{tuple}>()), {owned});"
+                )
+            } else {
+                writeln!(
+                    text,
+                    "    let mut __call = {island}::Call::new({island}::keyed_given({path:?}, \
+                     ::std::any::type_name::<{tuple}>(), &[{}]), {owned});",
+                    given.join(", ")
+                )
+            };
         } else {
             let _ = writeln!(
                 text,
@@ -2320,8 +2491,11 @@ impl<'a> Generator<'a> {
             | Pass::Give
             | Pass::GiveForCall { .. }
             | Pass::GiveHeld { .. } => give(&pass, name, "__call", &island, text),
-            Pass::Trait { path } => {
+            Pass::Trait { path, .. } => {
                 let _ = writeln!(text, "    {path}::{GIVE}({name}, &mut __call);");
+            }
+            Pass::Boxed { path } => {
+                let _ = writeln!(text, "    {path}::{GIVE_BOXED}({name}, &mut __call);");
             }
             Pass::Borrow => {
                 let _ = writeln!(text, "    __call.argument({name});");
@@ -4029,7 +4203,8 @@ fn give(pass: &Pass, name: &str, call: &str, island: &str, text: &mut String) {
         | Pass::LendSlice { .. }
         | Pass::LendParts { .. }
         | Pass::Object
-        | Pass::Trait { .. } => {
+        | Pass::Trait { .. }
+        | Pass::Boxed { .. } => {
             unreachable!("only a by-value pass gives its value")
         }
     }
@@ -4076,6 +4251,28 @@ fn trait_path(bound: &type_ref::Path) -> String {
     } else {
         names
     }
+}
+
+/// The [`GIVEN`] trait of the marked trait `bound` names in `file`, at
+/// the bound's arguments: `crate::widget::sidebar::__RawrGivenIntoContent<'a,
+/// Message>` of `IntoContent<'a, Message>`, by its path from the crate's
+/// root, as no `use` brings it.
+fn given_path(file: &Source<'_>, bound: &type_ref::Path) -> String {
+    let names = bound
+        .segments
+        .iter()
+        .map(|segment| segment.name.text.as_str())
+        .collect::<Vec<_>>();
+    let written = slice(file.text, bound.span).trim();
+    let arguments = written.find('<').map_or("", |at| &written[at..]);
+    let mut path = match absolute(file, &names, 0).filter(|_| !bound.global) {
+        Some(path) => std::iter::once("crate".to_owned()).chain(path).collect(),
+        None => names.iter().map(ToString::to_string).collect::<Vec<_>>(),
+    };
+    if let Some(last) = path.last_mut() {
+        *last = format!("{GIVEN}{last}");
+    }
+    format!("{}{arguments}", path.join("::"))
 }
 
 /// The statements that lend the parameter `name`, a `&mut referent` or a
@@ -4484,6 +4681,22 @@ pub mod __rawr_island {
         }
         let key: &'static str = ::std::boxed::Box::leak(::std::format!("{path}#{hash:016x}").into_boxed_str());
         keys.push((path, name, key));
+        key
+    }
+
+    /// [`keyed`], and the name each impl of a marked trait a boxed
+    /// argument is of gives itself (`+Content`), as the resolver compiles
+    /// one instance for each impl.
+    pub fn keyed_given(path: &'static str, name: &'static str, given: &[&'static str]) -> &'static str {
+        static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, ::std::vec::Vec<&'static str>, &'static str)>> =
+            ::std::sync::Mutex::new(::std::vec::Vec::new());
+        let base = keyed(path, name);
+        let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
+        if let Some((_, _, key)) = keys.iter().find(|(known, names, _)| *known == base && names.as_slice() == given) {
+            return key;
+        }
+        let key: &'static str = ::std::boxed::Box::leak(::std::format!("{base}{}", given.concat()).into_boxed_str());
+        keys.push((base, given.to_vec(), key));
         key
     }
 
@@ -7672,5 +7885,49 @@ mod tests {
             .unwrap();
         assert!(entry > close, "{text}");
         assert!(!text.contains("can't call"), "{text}");
+    }
+
+    /// A generic method's `impl` of a marked trait, as inboard's `impl
+    /// IntoContent<'a, Message>`, is boxed as the trait's `GIVEN` for its
+    /// instance, which gives it by the impl that applies and keys its call
+    /// by that impl's name; each impl's `GIVE` is `'static` in the trait's
+    /// arguments (D869, #1586).
+    #[test]
+    fn a_generic_functions_impl_of_a_marked_trait_is_boxed_for_its_instance() {
+        let text = generate(
+            "// rawr\nuse ui::Element;\n\
+             pub struct Content<'a, Message: 'a> { pub items: Vec<Element<'a, Message>> }\n\
+             pub struct Sidebar<'a, Message: 'a> { pub content: Content<'a, Message> }\n\
+             pub trait IntoContent<'a, Message> { fn into_content(self) -> Content<'a, Message>; }\n\
+             impl<'a, Message: 'a> IntoContent<'a, Message> for Content<'a, Message> {\n    \
+             fn into_content(self) -> Content<'a, Message> { self }\n}\n\
+             impl<'a, T, Message: 'a> IntoContent<'a, Message> for T\n\
+             where\n    T: IntoIterator<Item = Element<'a, Message>> + 'a,\n{\n    \
+             fn into_content(self) -> Content<'a, Message> { Content { items: self.into_iter().collect() } }\n}\n\
+             impl<'a, Message: 'a> Sidebar<'a, Message> {\n    \
+             pub fn content(mut self, content: impl IntoContent<'a, Message>) -> Self { self }\n}\n",
+        );
+        assert!(text.refused.is_empty(), "{:?}", text.refused);
+        let text = &text.files[0].1;
+        for expected in [
+            "pub(crate) trait __RawrGivenIntoContent<'a, Message> {",
+            "impl<'a, Message, __T: IntoContent<'a, Message>> __RawrGivenIntoContent<'a, Message> for __T {",
+            "where\n        Self: ::std::marker::Sized,\n        Message: 'static,",
+            "let __a0: ::std::boxed::Box<dyn crate::physics::__RawrGivenIntoContent<'a, Message> + '_> = \
+             { let __value = __a0; ::std::boxed::Box::new(__value) };",
+            "crate::__rawr_island::keyed_given(\"physics::Sidebar::content\", \
+             ::std::any::type_name::<(Message,)>(), \
+             &[crate::physics::__RawrGivenIntoContent::__rawr_given(&*__a0)])",
+            "crate::physics::__RawrGivenIntoContent::__rawr_give_boxed(__a0, &mut __call);",
+            "fn __rawr_give(self, __call: &mut crate::__rawr_island::Call<'_>)\n    where\n        Message: 'static,\n    {",
+            "\"+Content\"",
+            "\"+_\"",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(
+            !text.contains("can't call `physics::Sidebar::content`"),
+            "{text}"
+        );
     }
 }

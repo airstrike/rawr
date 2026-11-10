@@ -6,8 +6,8 @@
 mod grid;
 mod home;
 mod inbox;
-// Marked builders `rawr check` checks; native code calls none of them,
-// as running generic marked code from native code waits on #1539.
+// Marked builders `rawr check` checks; native code calls none of them, as
+// a marked boxed iterator can't cross to native code yet.
 #[allow(dead_code)]
 mod sidebar;
 mod style;
@@ -184,6 +184,15 @@ fn main() {
         Message::Home(home::Message::Grid(grid::Message::Tile(10))),
     )]);
     let element = screen.into_element();
+    println!("sidebar {} {:?}", element.draw(&theme), element.message());
+    // The marked `Content` given whole, by its own `IntoContent` impl, as
+    // inboard's `.content(sidebar::content(..))`.
+    let given =
+        widget::sidebar::header::<grid::Message>("given", []).content(widget::sidebar::Content {
+            items: vec![small_row("whole", grid::Message::Tile(14))],
+            spacing: ui::Pixels(2.0),
+        });
+    let element = given.into_element();
     println!("sidebar {} {:?}", element.draw(&theme), element.message());
     let group: Element<'_, grid::Message> = widget::sidebar::Group {
         label: "rows",

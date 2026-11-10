@@ -35,8 +35,8 @@ pub struct Content<'a, Message: 'a> {
 }
 
 impl<'a, Message: 'a> Sidebar<'a, Message> {
-    pub fn content(mut self, content: impl IntoIterator<Item = Element<'a, Message>>) -> Self {
-        self.content.items = content.into_iter().collect();
+    pub fn content(mut self, content: impl IntoSections<'a, Message>) -> Self {
+        self.content = content.into_sections();
         self
     }
 
@@ -68,6 +68,32 @@ impl<'a, Message: 'a> Sidebar<'a, Message> {
             .spacing(content.spacing.0 as u32)
             .boxed();
         ui::Column::with_children([ui::label(&format!("{title} sidebar")).boxed(), body]).boxed()
+    }
+}
+
+/// What a sidebar takes as its content, as inboard's `IntoContent`: its
+/// own `Content`, or any iterator of elements. Named apart from the two
+/// other modules' `IntoContent`, as a method call doesn't yet weigh which
+/// of them is in scope (#767).
+pub trait IntoSections<'a, Message> {
+    fn into_sections(self) -> Content<'a, Message>;
+}
+
+impl<'a, Message: 'a> IntoSections<'a, Message> for Content<'a, Message> {
+    fn into_sections(self) -> Content<'a, Message> {
+        self
+    }
+}
+
+impl<'a, T, Message: 'a> IntoSections<'a, Message> for T
+where
+    T: IntoIterator<Item = Element<'a, Message>> + 'a,
+{
+    fn into_sections(self) -> Content<'a, Message> {
+        Content {
+            items: self.into_iter().collect(),
+            spacing: ui::Pixels(0.0),
+        }
     }
 }
 
