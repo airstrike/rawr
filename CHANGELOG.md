@@ -11,6 +11,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Marked code calls a crate trait's `&self` methods on a trait object, as `held.0.area()` on a `&'static dyn Shape` or a `Box<dyn Shape>` a crate gave. A marked value is lent to native code as a native trait's `&dyn`, written `&page as &dyn Page` or `&page`, and `Rc<dyn Trait>` and `Arc<dyn Trait>` cross for marked types, numbers and crate values. (#1593, #1304)
 - `&format_args!(..)` needs no `as &dyn Value` where a crate call takes `&dyn Value`. A slice of objects lent to a call whose result keeps none of them is accepted. (#1621; part of #1592)
 - inboard's marked files that name a std trait beside tracing's macros pass `rawr check` again. The extraction error now names the item it misread, not a bare hash. (#1622)
+- `-` of an unsigned integer or literal is rustc's E0600 ("unsigned values cannot be negated"), and changing a std collection through a `&` reference is rustc's E0596 in its words. (#945, #938)
+- More std paths run as cargo's build runs them: `std::num::ParseIntError` written in full in a `let`, an imported `Duration` or `Instant` in a `let`, `Instant::now` as a value, `fmt::Formatter::write_str(f, s)`, `Iterator::sum::<i64>(it)`, `<i64 as FromStr>::from_str`, `<T as TryFrom<U>>::try_from`, and `SystemTime`'s `+`, `-`, `+=`, `-=` with a `Duration` and its ordering. (#922, #1002, #978, #977, #924)
+- A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text. (#969)
 
 ## 0.3.176 (2026-11-10)
 
