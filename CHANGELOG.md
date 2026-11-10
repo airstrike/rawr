@@ -19,6 +19,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install. (#1610; part of #1604)
 - `rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking. (#1611; part of #1604)
 - inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner. (#1583, #1612; part of #766)
+- Real `tracing::warn!("..")` and `info!("..")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`. (#1561, #1602, #1603)
 
 ## 0.3.175 (2026-11-09)
 

@@ -25,7 +25,8 @@
         {"text":"A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc.","issues":[1596]},
         {"text":"`rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install.","issues":[1610],"refs":[1604]},
         {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
-        {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]}
+        {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]},
+        {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]}
       ]
     },
     "releases": [
@@ -3454,7 +3455,7 @@
     {"issue":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open","category":"No glue (D593)"},
     {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)"},
-    {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"open","category":"Divergences from rustc"},
+    {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"closed","category":"Divergences from rustc"},
     {"issue":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open","category":"Divergences from rustc"},
     {"issue":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open","category":"Hot reload of a marked `main` (D555)"},
@@ -3495,8 +3496,8 @@
     {"issue":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open","category":"No glue (D593)"},
     {"issue":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"closed","category":"No glue (D593)"},
     {"issue":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"closed","category":"No glue (D593)"},
-    {"issue":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"open","category":"No glue (D593)"},
-    {"issue":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"open","category":"Divergences from rustc"},
+    {"issue":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"closed","category":"No glue (D593)"},
+    {"issue":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"closed","category":"Divergences from rustc"},
     {"issue":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open","category":"No glue (D593)"},
     {"issue":1605,"title":"When cargo check fails too, rawr printed its own copy of the same error after cargo's","state":"open","category":"Divergences from rustc"},
     {"issue":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open","category":"No glue (D593)"},
@@ -3507,7 +3508,8 @@
     {"issue":1611,"title":"rawr check shows nothing while it works, so a slow phase can't be told from outside","state":"open","category":"No glue (D593)"},
     {"issue":1612,"title":"The runner's handle identity names u64::from, which a crate trait's own from makes ambiguous (E0034)","state":"open","category":"No glue (D593)"},
     {"issue":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open","category":"Divergences from rustc"}
+    {"issue":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open","category":"Divergences from rustc"},
+    {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4489,7 +4491,7 @@
             {"number":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"closed"},
             {"number":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open"},
             {"number":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open"},
-            {"number":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"open"},
+            {"number":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"closed"},
             {"number":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"closed"},
             {"number":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open"},
             {"number":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open"},
@@ -4526,13 +4528,14 @@
             {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"},
             {"number":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"closed"},
             {"number":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"closed"},
-            {"number":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"open"},
-            {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"open"},
+            {"number":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"closed"},
+            {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"closed"},
             {"number":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open"},
             {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open"},
             {"number":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"open"},
             {"number":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"open"},
-            {"number":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open"}
+            {"number":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open"},
+            {"number":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open"}
           ]
         }
       ]

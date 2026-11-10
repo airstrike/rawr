@@ -18,7 +18,8 @@
       {"text":"A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc.","issues":[1596]},
       {"text":"`rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install.","issues":[1610],"refs":[1604]},
       {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
-      {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]}
+      {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]},
+      {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]}
     ]
   },
   "releases": [
