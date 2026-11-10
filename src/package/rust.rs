@@ -317,6 +317,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
     let directory = rawr_import::location::rawr_directory(entry.root(), environment).join("crate");
     let package = cargo.path.parent().unwrap_or(entry.root());
     let copies = directory.join("src");
+    let mut instances = Vec::new();
     let mut files = if let Some(root) = entry.native_root() {
         let shadow = graph
             .island_shadow()
@@ -336,6 +337,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
             .path()
             .strip_prefix(&module_root)
             .unwrap_or(root.path());
+        instances = graph.instance_entries(&shadow.generic);
         let mut files = vec![
             (
                 directory.join("Cargo.toml"),
@@ -348,7 +350,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
                     package,
                     !entry.is_library(),
                     &shadow.objects,
-                    &graph.instance_entries(&shadow.generic),
+                    &instances,
                 ),
             ),
         ];
@@ -372,6 +374,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
             (directory.join("lib.rs"), library),
         ]
     };
+    let named = named_by_instances(&instances);
     for module in entry.rust_modules() {
         let Ok(relative) = module.path().strip_prefix(&module_root) else {
             continue;
@@ -384,6 +387,14 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
         // (#1467).
         let copy = if entry.is_bridge(module.modules()) {
             super::polyglot::root_items_public(&widened)
+        } else if let Some(names) = named.get(
+            &module
+                .modules()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        ) {
+            super::polyglot::named_items_public(&widened, names)
         } else {
             widened
         };
@@ -411,6 +422,34 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
         recorded.push(directory.with_file_name("bin"));
     }
     Ok(App { crates, recorded })
+}
+
+/// What the support table names below the crate's root, by the module
+/// that declares it: each module on the way to an item its instances'
+/// types and entries name, and the item itself (D869). The root's own
+/// items are its descendants' to name, the table's included.
+fn named_by_instances(
+    instances: &[super::instances::Entry],
+) -> std::collections::BTreeMap<Vec<String>, std::collections::BTreeSet<String>> {
+    let mut named = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+    let texts = instances.iter().flat_map(|instance| {
+        instance
+            .types
+            .iter()
+            .chain(std::iter::once(&instance.function))
+    });
+    for text in texts {
+        for path in crate_paths(text) {
+            let segments = path.split("::").map(str::to_owned).collect::<Vec<_>>();
+            for end in 1..segments.len() {
+                named
+                    .entry(segments[..end].to_vec())
+                    .or_default()
+                    .insert(segments[end].clone());
+            }
+        }
+    }
+    named
 }
 
 /// The generated package of a native binary that runs the program from the

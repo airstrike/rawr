@@ -1138,12 +1138,20 @@ pub(super) fn method_instance(
     instance
 }
 
-/// The types of `template`'s generic parameters after its first `named`,
+/// The types of `template`'s generic parameters after those `named` gives,
 /// the lifted `impl Trait`s a native call's record leaves out (D869): each
 /// the owned stand-in the trampoline gives the call, the `T` of an `impl
-/// Into<T>`. `None` when one has no such stand-in.
+/// Into<T>`, or for an `impl` of the program's own trait one instance for
+/// each of the trait's impls, by what that impl gives ([`given_types`]).
+/// Each comes with what the trampoline adds to the instance's key for it:
+/// the impls' names. `None` when one has no such stand-in.
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
-fn stood_types(program: &Program, template: &crate::item::Key, named: usize) -> Option<Vec<Ty>> {
+fn stood_types(
+    program: &Program,
+    template: &crate::item::Key,
+    named: &[Ty],
+    models: &Models,
+) -> Option<Vec<(Vec<Ty>, String)>> {
     let generics = match program
         .methods
         .iter()
@@ -1161,20 +1169,118 @@ fn stood_types(program: &Program, template: &crate::item::Key, named: usize) -> 
             _ => return None,
         },
     };
-    generics
-        .get(named..)?
+    // The named parameters at the types native code calls them at.
+    let substituted = generics
         .iter()
-        .map(|generic| {
-            let (_, arguments) = generic
-                .trait_arguments
-                .iter()
-                .find(|(name, _)| name.as_str() == "Into")?;
-            match &arguments[..] {
-                [target] => Some(Ty::from_resolved(target)),
-                _ => None,
-            }
+        .zip(named)
+        .map(|(generic, ty)| {
+            Some((
+                generic.name.text.clone(),
+                named_type(ty, models, Span::NONE)?,
+            ))
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()?;
+    let mut alternatives = vec![(Vec::new(), String::new())];
+    for generic in generics.get(named.len()..)? {
+        let into = generic
+            .trait_arguments
+            .iter()
+            .find(|(name, _)| name.as_str() == "Into");
+        let choices = match into {
+            Some((_, arguments)) => match &arguments[..] {
+                [target] => vec![(Ty::from_resolved(target), String::new())],
+                _ => return None,
+            },
+            None => given_types(program, generic, &substituted)?,
+        };
+        alternatives = alternatives
+            .into_iter()
+            .flat_map(|(types, key)| {
+                choices.iter().map(move |(ty, given)| {
+                    let mut types = types.clone();
+                    types.push(ty.clone());
+                    (types, format!("{key}{given}"))
+                })
+            })
+            .collect();
+    }
+    Some(alternatives)
+}
+
+/// What each impl of the program's own trait that bounds the lifted
+/// `impl Trait` `generic` gives a call native code makes, its trait's type
+/// arguments at `substituted`: the impl's own type, or for an impl for
+/// every type of a bound `IntoIterator<Item = T>`, the `Vec<T>` its
+/// trampoline drains the value into. Each comes with `+` and the impl's
+/// type's name as written, `+Content`, or `+_` for an impl for every type
+/// of a bound, as the impl's `__rawr_given` names it to the trampoline
+/// (D869). `None` when the trait has no impl rawr can name.
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+fn given_types(
+    program: &Program,
+    generic: &item::Generic,
+    substituted: &[(ImmutableString, type_ref::Type)],
+) -> Option<Vec<(Ty, String)>> {
+    let (trait_name, arguments) = generic.trait_arguments.first()?;
+    let arguments = arguments
+        .iter()
+        .map(|argument| type_ref::substitute_parameters(argument, substituted))
+        .collect::<Vec<_>>();
+    let mut given = Vec::new();
+    for shell in &program.items {
+        let item::Kind::Impl(implementation) = &shell.kind else {
+            continue;
+        };
+        let Some(item::TraitImpl::User {
+            name,
+            arguments: written,
+        }) = &implementation.trait_
+        else {
+            continue;
+        };
+        if name.text != *trait_name {
+            continue;
+        }
+        // Each impl parameter the trait's arguments are written as.
+        let bound = written
+            .iter()
+            .zip(&arguments)
+            .filter_map(|(written, argument)| match written {
+                type_ref::Type::Path(path)
+                    if matches!(path.target, type_ref::Target::Parameter) =>
+                {
+                    Some((path.name.clone(), argument.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        // An impl for a type no path names gives native code nothing.
+        let type_ref::Type::Path(owner) = &implementation.owner else {
+            continue;
+        };
+        let (ty, name) = match implementation.owner.iterated_element() {
+            // An impl for every type of a bound `IntoIterator<Item = T>`,
+            // its type read as that bound, gives the `Vec<T>` its items are
+            // drained into.
+            Some(item) => {
+                let ty = type_ref::Type::Path(type_ref::Path {
+                    name: "Vec".into(),
+                    target: type_ref::Target::Builtin,
+                    arguments: Box::new([type_ref::Argument::Type(
+                        type_ref::substitute_parameters(item, &bound),
+                    )]),
+                    span: Span::NONE,
+                });
+                (ty, "_")
+            }
+            None => (
+                type_ref::substitute_parameters(&implementation.owner, &bound),
+                owner.name.rsplit("::").next().unwrap_or_default(),
+            ),
+        };
+        given.push((Ty::from_resolved(&ty), format!("+{name}")));
+    }
+    (!given.is_empty()).then_some(given)
 }
 
 /// Polymorphic recursion would make instances without end.
@@ -1256,7 +1362,9 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 return Err(crate::resolve::ImportedFailure::Surface(error));
             }
         }
-        for definition in program.methods.iter() {
+        // A builtin type's methods too, as an impl for every type of a bound
+        // `IntoIterator`, whose instance calls `Content::with_children`.
+        for definition in program.methods.iter().chain(program.builtin_methods.iter()) {
             if templates.contains(definition.key()) {
                 continue;
             }
@@ -1321,29 +1429,37 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 continue;
             };
             let instances = &program.instances.templates[&template];
-            let mut types = native
+            let types = native
                 .types
                 .iter()
                 .map(Ty::from_resolved)
                 .collect::<Vec<_>>();
             // Each lifted `impl Trait` after the named parameters takes the
-            // type its trampoline's owned stand-in is (D869).
-            let Some(stood) = stood_types(program, &template, types.len()) else {
+            // type its trampoline's owned stand-in is, and an `impl` of the
+            // program's own trait one instance for each impl, keyed by it
+            // (D869).
+            let Some(alternatives) = stood_types(program, &template, &types, &models) else {
                 continue;
             };
-            types.extend(stood);
-            let Some(names) = instance_names(&types, &models) else {
-                continue;
-            };
-            let known = instances
-                .iter()
-                .any(|(written, _)| written.as_ref() == names.as_slice())
-                || added
+            for (stood, given) in alternatives {
+                let mut types = types.clone();
+                types.extend(stood);
+                let Some(names) = instance_names(&types, &models) else {
+                    continue;
+                };
+                let known = instances
                     .iter()
-                    .any(|(key, written, _)| *key == template && *written == names);
-            if !known {
-                keyed.insert((template.clone(), names.clone()), native.key.clone());
-                added.push((template, names, types));
+                    .any(|(written, _)| written.as_ref() == names.as_slice())
+                    || added
+                        .iter()
+                        .any(|(key, written, _)| *key == template && *written == names);
+                if !known {
+                    keyed.insert(
+                        (template.clone(), names.clone()),
+                        format!("{}{given}", native.key).into(),
+                    );
+                    added.push((template.clone(), names, types));
+                }
             }
         }
         // Two calls a macro gives one span may take two instances: neither

@@ -449,8 +449,40 @@ pub(crate) fn widened(
     allow(dead_code)
 )]
 pub(crate) fn root_items_public(text: &str) -> String {
+    let inserts = private_items(&tokens(text))
+        .into_iter()
+        .map(|(at, _)| at)
+        .collect::<Vec<_>>();
+    inserted(text, &inserts, "pub ")
+}
+
+/// `text`, a module of the crate, with `pub ` before each of its own items
+/// named in `names` that has no visibility: a module on the way to a type
+/// native code calls a marked generic at, or the type itself, which the
+/// support table at the crate's root and the runner name by its path
+/// (D869), as [`root_items_public`]'s are. rustc lets the native caller
+/// name the type where it calls, though no path from the root may reach
+/// it, as inboard's `workspace::spreadsheet` declares `mod sidebar;` and
+/// uses its `Message`.
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
+pub(crate) fn named_items_public(text: &str, names: &std::collections::BTreeSet<String>) -> String {
     let tokens = tokens(text);
-    let mut inserts = Vec::new();
+    let inserts = private_items(&tokens)
+        .into_iter()
+        .filter(|(_, index)| item_name(&tokens, *index).is_some_and(|name| names.contains(name)))
+        .map(|(at, _)| at)
+        .collect::<Vec<_>>();
+    inserted(text, &inserts, "pub ")
+}
+
+/// Each of the module's own items that has no visibility and may take one:
+/// where a visibility goes, and the index of its first token past its
+/// attributes.
+fn private_items(tokens: &[Token<'_>]) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
     let mut depth = 0_usize;
     let mut start = true;
     let mut index = 0;
@@ -458,12 +490,12 @@ pub(crate) fn root_items_public(text: &str) -> String {
         let token = tokens[index];
         if depth == 0 && start {
             if token == Token::Punct(b'#') {
-                index = attribute_end(&tokens, index);
+                index = attribute_end(tokens, index);
                 continue;
             }
             start = false;
-            if let Some(at) = private_item(&tokens, index) {
-                inserts.push(at);
+            if let Some(at) = private_item(tokens, index) {
+                found.push((at, index));
             }
         }
         match token {
@@ -477,15 +509,35 @@ pub(crate) fn root_items_public(text: &str) -> String {
         }
         index += 1;
     }
-    let mut public = String::with_capacity(text.len() + 4 * inserts.len());
+    found
+}
+
+/// The name the item whose first token is at `index` declares: the first
+/// word past its keywords, and none for a `use`.
+fn item_name<'t>(tokens: &[Token<'t>], index: usize) -> Option<&'t str> {
+    tokens[index..].iter().find_map(|token| match *token {
+        Token::Ident(
+            "fn" | "const" | "static" | "mut" | "struct" | "enum" | "type" | "trait" | "union"
+            | "mod" | "async" | "unsafe" | "extern",
+            _,
+        )
+        | Token::Str(_) => None,
+        Token::Ident("use", _) | Token::Punct(_) => Some(None),
+        Token::Ident(name, _) => Some(Some(name)),
+    })?
+}
+
+/// `text` with `visibility` at each of `inserts`, in order.
+fn inserted(text: &str, inserts: &[usize], visibility: &str) -> String {
+    let mut written = String::with_capacity(text.len() + visibility.len() * inserts.len());
     let mut cursor = 0;
-    for at in inserts {
-        public.push_str(&text[cursor..at]);
-        public.push_str("pub ");
+    for &at in inserts {
+        written.push_str(&text[cursor..at]);
+        written.push_str(visibility);
         cursor = at;
     }
-    public.push_str(&text[cursor..]);
-    public
+    written.push_str(&text[cursor..]);
+    written
 }
 
 /// Where `pub ` goes for the item whose first token (past its attributes)
@@ -955,6 +1007,26 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
         );
         // A module a `.rs` module declares: its `super` is Rust, not Rawr.
         assert!(widened(text, false, file, Path::new("/app")).contains("pub(super) fn up()"));
+    }
+
+    /// The modules and types an instance names become public, and nothing
+    /// else does (D869).
+    #[test]
+    fn a_modules_named_private_items_become_public() {
+        let text =
+            "mod tiles;\nmod other;\npub(super) mod kept;\n#[derive(Debug)]\nenum Message { A }\n\
+                    struct Hidden;\nuse tiles::strip;\nconst fn tiles() -> u8 { 1 }\n";
+        let names = ["tiles", "Message", "kept", "strip"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let visible = super::named_items_public(text, &names);
+        assert_eq!(
+            visible,
+            "pub mod tiles;\nmod other;\npub(super) mod kept;\n#[derive(Debug)]\n\
+             pub enum Message { A }\nstruct Hidden;\nuse tiles::strip;\n\
+             pub const fn tiles() -> u8 { 1 }\n"
+        );
     }
 
     #[test]

@@ -975,8 +975,10 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     );
     // A marked `Sidebar<'a, Message>` made by a marked generic fn with an
     // `impl IntoIterator` argument and built by its generic methods, at two
-    // native message types, and a marked `From<Group<'a, Message>>` for the
-    // element (D869 for methods and generic marked types).
+    // native message types, its content an `impl` of a marked trait given by
+    // the blanket impl over an array and a `Vec` and by `Content`'s own
+    // (#1586), and a marked `From<Group<'a, Message>>` for the element (D869
+    // for methods and generic marked types).
     assert!(
         printed.contains(
             "sidebar tiles on native text true\n\
@@ -984,9 +986,17 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
              [add row styled 0, first row styled 0, pushed row styled 0]] Some(Tile(8))\n\
              sidebar column Shrink by 0 [home sidebar styled 0, column Shrink by 0 \
              [inbox row styled 0]] Some(Home(Grid(Tile(10))))\n\
+             sidebar column Shrink by 0 [given sidebar styled 0, column Shrink by 2 \
+             [whole row styled 0]] Some(Tile(14))\n\
              sidebar column Shrink by 0 [rows group styled 0, column Shrink by 0 \
              [row row styled 0]] Some(Tile(11))\n"
         ),
+        "{printed}"
+    );
+    // A marked generic at a message type of a private module, which no
+    // path from the crate root names (`grid::tiles`).
+    assert!(
+        printed.contains("\nsidebar strip row styled 0 Some(Strip(13))\n"),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.
