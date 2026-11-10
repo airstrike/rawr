@@ -1035,7 +1035,27 @@ impl<'a> Parser<'a> {
                                             name,
                                         )
                                         .unwrap_or(expression);
-                                    return Err(this.moved_value(name, binding, reference, true));
+                                    // A `let x;` without a value yet is
+                                    // E0381 once the body's types are
+                                    // settled, or E0282 where its type
+                                    // stays unknown, as an expression's is.
+                                    if let Some(first) =
+                                        this.deferred.get(&binding.declaration).copied()
+                                        && !this.moved_at.contains_key(&binding.declaration)
+                                    {
+                                        this.uninitialized.push(super::UninitializedUse {
+                                            name: name.as_str().into(),
+                                            declaration: binding.declaration,
+                                            reference,
+                                            ty: binding.ty.clone(),
+                                            possibly: first.is_some(),
+                                            operator: None,
+                                        });
+                                    } else {
+                                        return Err(
+                                            this.moved_value(name, binding, reference, true)
+                                        );
+                                    }
                                 }
                                 // The macro borrows the local where it runs.
                                 this.mention(
