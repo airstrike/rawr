@@ -404,6 +404,9 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
         files.extend(build_script(cargo, &directory, entry.features())?);
     }
     write_changed(files)?;
+    if entry.native_root().is_some() || !entry.rust_modules().is_empty() {
+        link_assets(&module_root, &copies)?;
+    }
     // The features Cargo enabled for the package under the command's
     // feature flags, and no others: `default` among them when it is on.
     let features = || entry.features().names();
@@ -633,6 +636,71 @@ fn bin_package(cargo: &super::manifest::cargo::Cargo) -> String {
 
 /// Write each file whose text differs from what it holds, so a file that
 /// stays the same is not built again.
+/// Each file of the module tree at `from` that isn't Rust source, at its
+/// place under `to` beside the copied modules, so a macro that reads one
+/// relative to its module reads what the original reads: a crate's macro
+/// that expands to `include_str!("shader/vert.wgsl")` in the copy, as
+/// iced's integration example's `wgpu::include_wgsl!` does. A file is
+/// linked where it can be and copied otherwise, and kept while it is as
+/// new as the original. Hidden directories, `target` and the copies' own
+/// tree are passed over.
+fn link_assets(from: &Path, to: &Path) -> rawr_import::Result<()> {
+    let io = |operation, path: &Path| {
+        let path = path.to_path_buf();
+        move |source| rawr_import::Error::Io {
+            operation,
+            path,
+            source,
+        }
+    };
+    let mut pending = vec![from.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).map_err(io("read directory", &directory))?;
+        for entry in entries {
+            let entry = entry.map_err(io("read directory", &directory))?;
+            let path = entry.path();
+            let name = entry.file_name();
+            let kind = entry.file_type().map_err(io("read file type", &path))?;
+            if kind.is_dir() {
+                let passed = name.to_string_lossy().starts_with('.')
+                    || name == "target"
+                    || to.starts_with(&path);
+                if !passed {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if !kind.is_file() || path.extension().is_some_and(|extension| extension == "rs") {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(from) else {
+                continue;
+            };
+            let target = to.join(relative);
+            let original = entry.metadata().map_err(io("read metadata", &path))?;
+            let current = std::fs::metadata(&target).ok().is_some_and(|linked| {
+                linked.len() == original.len()
+                    && linked
+                        .modified()
+                        .ok()
+                        .zip(original.modified().ok())
+                        .is_some_and(|(linked, original)| linked >= original)
+            });
+            if current {
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(io("create directory", parent))?;
+            }
+            let _ = std::fs::remove_file(&target);
+            if std::fs::hard_link(&path, &target).is_err() {
+                std::fs::copy(&path, &target).map_err(io("copy", &target))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Result<()> {
     let io = |operation, path: &Path| {
         let path = path.to_path_buf();
@@ -1498,6 +1566,38 @@ preview = ["dep:rawr-macros"]
             generated.contains("build = \"build-script/build.rs\"\n"),
             "{generated}"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A module tree's other files are beside the copied modules, as a
+    /// crate macro's `include_str!` in a copy reads them (#314), and an
+    /// edited one is taken again; Rust sources, hidden directories and
+    /// `target` are not.
+    #[test]
+    fn a_module_tree_s_other_files_are_beside_the_copies() {
+        let root = std::env::temp_dir().join(format!("rawr-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("src");
+        let write = |path: &str, text: &str| {
+            let path = source.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("scene.rs", "fn f() {}\n");
+        write("shader/vert.wgsl", "vertex\n");
+        write(".git/HEAD", "ref\n");
+        write("target/out.txt", "built\n");
+        let copies = root.join("generated/src");
+        super::link_assets(&source, &copies).unwrap();
+        let read = |path: &str| std::fs::read_to_string(copies.join(path)).ok();
+        assert_eq!(read("shader/vert.wgsl").as_deref(), Some("vertex\n"));
+        assert_eq!(read("scene.rs"), None);
+        assert_eq!(read(".git/HEAD"), None);
+        assert_eq!(read("target/out.txt"), None);
+        std::fs::remove_file(source.join("shader/vert.wgsl")).unwrap();
+        write("shader/vert.wgsl", "edited vertex\n");
+        super::link_assets(&source, &copies).unwrap();
+        assert_eq!(read("shader/vert.wgsl").as_deref(), Some("edited vertex\n"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
