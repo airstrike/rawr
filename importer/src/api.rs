@@ -28,7 +28,7 @@ pub use retained::keep_graphs;
 #[cfg(feature = "rustc-driver")]
 pub use retained::Continuation;
 
-const CANONICALIZER_VERSION: u32 = 16;
+const CANONICALIZER_VERSION: u32 = 17;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -501,7 +501,6 @@ pub struct Context {
     profile: Box<str>,
     resolution_universe: [u8; 32],
     resolution_proof: [u8; 32],
-    #[serde(skip)]
     final_lock: Option<[u8; 32]>,
     selections: Box<[Selection]>,
 }
@@ -1855,6 +1854,20 @@ impl Context {
 
     pub(crate) fn resolution_universe(&self) -> Option<[u8; 32]> {
         (self.resolution_universe != [0; 32]).then_some(self.resolution_universe)
+    }
+
+    /// This context, read with no resolution universe, pinned by the bytes
+    /// of the lockfile its resolution settled: the package versions and
+    /// sources the unit graph was resolved from, without the paths Cargo's
+    /// metadata names, which move with each Rawr build's host directory.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn locked(mut self, lock: &[u8]) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"rawr.api.resolved-lock/v1");
+        digest.update((lock.len() as u64).to_le_bytes());
+        digest.update(lock);
+        self.final_lock = Some(digest.finalize().into());
+        self
     }
 }
 

@@ -1258,6 +1258,7 @@ impl Evaluation {
             file(input::proof::Role::Authority, authority.path())?;
         }
         let native: [u8; 32] = native.finalize().into();
+        let lock = std::fs::read(harness.lock).ok()?;
         Some(Shared {
             materials: Materials {
                 document: shared.document,
@@ -1271,7 +1272,8 @@ impl Evaluation {
                     &self.request.profile,
                     &self.limits,
                 )
-                .ok()?,
+                .ok()?
+                .locked(&lock),
             },
             identity: shared.identity,
             settled: shared.settled,
