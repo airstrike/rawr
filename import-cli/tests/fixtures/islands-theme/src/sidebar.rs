@@ -4,11 +4,13 @@
 //! from a native crate, a struct update through its own `Default`, a
 //! dependency's trait with only a lifetime argument, and closures handed to
 //! crate widgets.
+use common::cast::NumCast;
+use common::function::*;
 use common::space;
 use common::text::IntoFragment;
-use ui::{column, container, row, Fill, Padding, Pixels, Widget};
+use ui::{button as ui_button, column, container, row, rule, Fill, Padding, Pixels, Widget};
 
-use crate::widget::{Container, TextInput};
+use crate::widget::{mouse_area, Button, Container, TextInput};
 use crate::{theme, Element, Theme};
 
 pub struct Sidebar<'a, Message: 'a> {
@@ -238,4 +240,84 @@ pub fn typed() -> Option<Message> {
     let input: Element<'_, Message> =
         percentage_input("50", Message::Typed, Message::Submitted).boxed();
     input.message()
+}
+
+/// A tab whose rule a crate styles by a marked closure over the `&Theme`
+/// it lends.
+pub fn tab<'a, Message>(
+    label: Element<'a, Message>,
+    message: Message,
+    selected: bool,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    mouse_area(column![
+        container(label).center_x(Fill),
+        rule::horizontal(1).style(move |theme: &Theme| match selected {
+            true => theme::rule::accent(theme),
+            false => theme::rule::divider(theme),
+        })
+    ])
+    .on_press(message)
+    .boxed()
+}
+
+pub fn button<'a, Message: Clone + 'a>(
+    icon: Element<'a, Message>,
+    message: impl Fn() -> Message + 'a,
+) -> Button<'a, Message> {
+    ui::button(icon)
+        .on_press(message())
+        .style(|theme: &Theme, status| ui_button::Style {
+            text_color: theme.colors().text + 80,
+            ..theme::button::board_toolbar(theme, status)
+        })
+}
+
+pub fn muted_tab<'a, Message>(
+    label: Element<'a, Message>,
+    message: Message,
+    selected: bool,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    mouse_area(container(label))
+        .style(theme::mouse_area::muted_tab.with(selected))
+        .on_press(message)
+        .boxed()
+}
+
+pub fn nav_item<'a, Message: Clone + 'a>(
+    label: &'a str,
+    on_press: Message,
+    selected: bool,
+) -> Element<'a, Message> {
+    ui::button(crate::widget::label(label))
+        .on_press(on_press)
+        .style(theme::button::sidebar_nav(selected))
+        .boxed()
+}
+
+/// inboard's sidebar builders whose styles a crate calls with the marked
+/// `&Theme`: a struct update over a crate `Style`, the `impl Fn(&Theme,
+/// Status)` a native function gives, and a native style function's last
+/// argument given ahead by `common::function::Ternary::with`, which the
+/// glob import brings beside `Function::with` (#766, #1583).
+pub fn navigation() -> Element<'static, Message> {
+    column![
+        tab(tab_label("one"), Message::Tab(1), true),
+        muted_tab(tab_label("two"), Message::Tab(2), false),
+        button(tab_label("+"), || Message::Pressed),
+        nav_item("home", Message::Tab(3), true),
+    ]
+    .boxed()
+}
+
+/// A count narrowed by a crate's trait that also has a conversion named
+/// as `From`'s, as num-traits' `NumCast` does, which brings that trait
+/// into the runner's scope.
+pub fn narrowed(count: u64) -> Option<u32> {
+    common::cast::Count(count).to_u32()
 }

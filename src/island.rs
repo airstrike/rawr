@@ -981,6 +981,41 @@ pub fn mirror_in(bytes: &[u8], given: &mut [Option<Given>]) -> Result<Dynamic, S
     with_types(|model, types| model.island_read(types, &[], given, None, &mut Reader { bytes }, 0))
 }
 
+/// `body` of the program value of a mirror native code lends a program
+/// function by `&` (#1583), as a crate calls a style closure with its
+/// `&Theme`: what rawr's copy of the crate wrote of it as a marked
+/// function's `&` argument (`bytes`), its native parts and the value whole
+/// lent where they are (`lent`, D841) while `body` runs, as a call from
+/// native code lends them.
+pub fn mirror_lent<R>(
+    bytes: &[u8],
+    given: &mut [Option<Given>],
+    lent: &[(
+        std::any::TypeId,
+        &'static str,
+        *mut (),
+        Option<crate::scope::Accessor>,
+        crate::scope::Accessor,
+    )],
+    body: impl FnOnce(Dynamic) -> R,
+) -> Result<R, String> {
+    let lent = lent.iter().map(|&lent| Loan(lent)).collect::<Vec<_>>();
+    // What the read notes of the value's whole ends with its lends.
+    let wholes = WHOLES.with_borrow(Vec::len);
+    let output = lend_all(
+        &lent,
+        &mut Vec::with_capacity(lent.len()),
+        Box::new(|lent| {
+            let value = with_types(|model, types| {
+                model.island_read(types, lent, given, None, &mut Reader { bytes }, 0)
+            })?;
+            Ok(body(value))
+        }),
+    );
+    WHOLES.with_borrow_mut(|noted| noted.truncate(wholes));
+    output
+}
+
 /// Note that native code lent `value`, a marked value read from a call's
 /// arguments, whole by `whole` (#1484), as well as part by part. A value
 /// none of whose parts is lent in place needs no note: it crosses whole by
@@ -1112,13 +1147,13 @@ pub fn take_entry() -> Option<fn() -> i32> {
     START.lock().ok().and_then(|mut start| start.take())
 }
 
+/// What [`lend_all`] runs once its lends are made, with the script values
+/// that stand for them.
+type Lending<'b, R> = Box<dyn FnOnce(&[crate::scope::Lent]) -> R + 'b>;
+
 /// Run `body` with each of `lent` lent, outermost first, and the script
 /// values that stand for them. Every lend ends before this returns.
-fn lend_all<R>(
-    lent: &[Loan],
-    values: &mut Vec<crate::scope::Lent>,
-    body: &mut dyn FnMut(&[crate::scope::Lent]) -> R,
-) -> R {
+fn lend_all<R>(lent: &[Loan], values: &mut Vec<crate::scope::Lent>, body: Lending<'_, R>) -> R {
     let Some((Loan((key, name, place, mutable, shared)), rest)) = lent.split_first() else {
         return body(values);
     };
@@ -1710,9 +1745,11 @@ impl Calls {
     ) -> Vec<u8> {
         // What the call notes of its wholes ends with its lends.
         let wholes = WHOLES.with_borrow(Vec::len);
-        let reply = lend_all(lent, &mut Vec::with_capacity(lent.len()), &mut |lent| {
-            self.call(call, given, lent, natives)
-        });
+        let reply = lend_all(
+            lent,
+            &mut Vec::with_capacity(lent.len()),
+            Box::new(|lent| self.call(call, given, lent, natives)),
+        );
         WHOLES.with_borrow_mut(|noted| noted.truncate(wholes));
         reply.unwrap_or_else(|message| failure(&message))
     }

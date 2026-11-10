@@ -1063,6 +1063,22 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
+    // inboard's sidebar styles: a crate calls marked closures with the
+    // `&Theme` it lends, and holds the opaque `impl Fn(&Theme, Status)`
+    // a native function and `Ternary::with` give (#766, #1583).
+    assert!(
+        printed.contains(
+            "\nnavigation column Shrink by 0 [area styled 0 (column Shrink by 0 [container \
+             FillxShrink centered styled 0 (one styled 0), rule 1 styled 120] idle), area \
+             styled 7 (container ShrinkxShrink styled 0 (two styled 0) idle), button Style { \
+             text_color: 87, background: 122 } (+ styled 0 idle), button Style { text_color: \
+             8, background: 122 } (home styled 0 idle)] Some(Tab(1))\n"
+        ),
+        "{printed}"
+    );
+    // A crate's conversion named as `From`'s, as num-traits' `NumCast`, is
+    // in the runner's scope, which names `From` for itself.
+    assert!(printed.contains("\nnarrowed Some(7)\n"), "{printed}");
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -1086,31 +1102,6 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     }
     let status = run.child.wait().unwrap();
     assert!(status.success(), "{}", run.seen.join("\n"));
-
-    // inboard's sidebar.rs also hands a crate's `style` closures over the
-    // marked `&Theme`, one a struct update over a crate `Style`, the `impl
-    // Fn(&Theme, Status)` a native function gives, and a native style
-    // function's last argument given ahead by `common::function::Ternary::
-    // with`, which the glob import brings beside `Function::with`. `rawr
-    // check` passes as `cargo check` does; the runner can't build them yet.
-    let sidebar = root.join("src/sidebar.rs");
-    let mut text = fs::read_to_string(&sidebar).unwrap();
-    text.push_str(OPAQUE_STYLES);
-    fs::write(&sidebar, text).unwrap();
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .arg("check")
-        .arg(&root)
-        .env("RAWR_HOME", crate::support::runtime_home())
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
-        .output()
-        .unwrap();
-    assert!(
-        check.status.success(),
-        "{}",
-        String::from_utf8_lossy(&check.stderr)
-    );
 }
 
 /// A marked function generic over the message that native code calls
@@ -1154,69 +1145,6 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
         text.contains("{\"event\":\"ended\",\"status\":0}")
     });
 }
-
-/// The sidebar builders of inboard's whose styles a crate calls with the
-/// marked `&Theme`, and a non-generic caller that instantiates them.
-const OPAQUE_STYLES: &str = "
-use common::function::*;
-use ui::{button as ui_button, rule};
-
-use crate::widget::{mouse_area, Button};
-
-pub fn tab<'a, Message>(label: Element<'a, Message>, message: Message, selected: bool) -> Element<'a, Message>
-where
-    Message: Clone + 'a,
-{
-    mouse_area(column![
-        container(label).center_x(Fill),
-        rule::horizontal(1).style(move |theme: &Theme| match selected {
-            true => theme::rule::accent(theme),
-            false => theme::rule::divider(theme),
-        })
-    ])
-    .on_press(message)
-    .boxed()
-}
-
-pub fn button<'a, Message: Clone + 'a>(
-    icon: Element<'a, Message>,
-    message: impl Fn() -> Message + 'a,
-) -> Button<'a, Message> {
-    ui::button(icon)
-        .on_press(message())
-        .style(|theme: &Theme, status| ui_button::Style {
-            text_color: theme.colors().text + 80,
-            ..theme::button::board_toolbar(theme, status)
-        })
-}
-
-pub fn muted_tab<'a, Message>(label: Element<'a, Message>, message: Message, selected: bool) -> Element<'a, Message>
-where
-    Message: Clone + 'a,
-{
-    mouse_area(container(label))
-        .style(theme::mouse_area::muted_tab.with(selected))
-        .on_press(message)
-        .boxed()
-}
-
-pub fn nav_item<'a, Message: Clone + 'a>(label: &'a str, on_press: Message, selected: bool) -> Element<'a, Message> {
-    ui::button(crate::widget::label(label))
-        .on_press(on_press)
-        .style(theme::button::sidebar_nav(selected))
-        .boxed()
-}
-
-pub fn navigation() -> Element<'static, Message> {
-    column![
-        tab(tab_label(\"one\"), Message::Tab(1), true),
-        muted_tab(tab_label(\"two\"), Message::Tab(2), false),
-        button(tab_label(\"+\"), || Message::Pressed),
-        nav_item(\"home\", Message::Tab(3), true),
-    ]
-    .boxed()
-}
-";
 
 /// A generic method of a marked type generic over the message, which
 /// native code builds and keeps, as inboard's `Sidebar<'a, Message>`,
