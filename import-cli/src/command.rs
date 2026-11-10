@@ -156,8 +156,11 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
     let cargo = rawr_cli::cargo::begin(&graph);
     if check {
         let cargo = cargo.map(owner::Checking::start);
+        rawr_import::progress::begin_phases();
         let checked = owner::check(&target, Some(graph), &Plain);
+        rawr_import::progress::phase("checking");
         let cargo = cargo.map(owner::Checking::finish);
+        rawr_import::progress::finish(checked.is_ok());
         let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
         let checked = checked.as_deref().map_err(Option::as_ref);
         let cargo = cargo.map(|cargo| cargo.status);

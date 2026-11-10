@@ -344,10 +344,12 @@ where
             let mut transform = checked::Transform::new();
             let result = store.with_staged_batch(retention, &crate::metrics::Current, |batch| {
                 let profile = acquire(profile, &profile_recipe, batch, || {
+                    crate::progress::phase("classifying");
                     let parts = adapter.classify_parts(graph.graph()).map_err(failure)?;
                     Profile::capture_parts(&parts).map_err(failure)
                 })?;
                 let generic = acquire(generic, &generic_recipe, batch, || {
+                    crate::progress::phase("classifying");
                     Generic::capture(graph.graph(), policy, limits).map_err(failure)
                 })?;
                 let (facade_recipe, facade_outcome, parts) = match facade {
@@ -369,6 +371,7 @@ where
                     }
                 };
                 let facade = acquire(facade_outcome, &facade_recipe, batch, || {
+                    crate::progress::phase("generating");
                     Facade::capture_parts(graph.graph(), &parts)
                 })?;
                 let (checked_recipe, checked_outcome, profile_parts) = match prepared_checked {
@@ -445,6 +448,7 @@ where
                                 generic,
                                 facade,
                             )?;
+                            crate::progress::phase("checking");
                             let product =
                                 transform.capture(contract.fingerprint(), snapshot, || {
                                     execute(&contract, &profile, &facade)

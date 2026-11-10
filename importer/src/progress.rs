@@ -14,6 +14,10 @@
 //! first stage settles within [`QUIET`] prints nothing, so warm launches stay
 //! silent; once shown, the line stays up until the window appears or the launch
 //! fails.
+//!
+//! A check shows its phase on the same line instead: the phase's name, and
+//! for extraction the units Cargo has finished of the planned total. It has
+//! no bar and no clock, and is redrawn only when the phase or its count moves.
 
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -61,7 +65,13 @@ struct State {
     current: [Record; 4],
     compiled: bool,
     shown: f64,
+    /// Whether this process shows a check's phases.
+    phases: bool,
+    phase: Option<&'static str>,
 }
+
+/// The phase whose line counts Cargo's finished units.
+const EXTRACTING: &str = "extracting";
 
 const RECORD: Record = Record {
     crates: 0,
@@ -152,6 +162,27 @@ pub fn finish(success: bool) {
     }
     clear(&mut state);
     state.launch = None;
+    state.phases = false;
+    state.phase = None;
+}
+
+/// Show a check's phases on the status line until [`finish`].
+pub fn begin_phases() {
+    lock().phases = true;
+}
+
+/// Enter `phase` of a check. Outside a check, or during a launch, whose
+/// line names its own stages, nothing is shown.
+pub fn phase(phase: &'static str) {
+    let mut state = lock();
+    if !state.phases || state.phase == Some(phase) {
+        return;
+    }
+    state.phase = Some(phase);
+    if phase == EXTRACTING {
+        state.lines = 0;
+    }
+    draw(&mut state);
 }
 
 /// Print `line` once per process, above the status line.
@@ -190,6 +221,10 @@ fn say_above(state: &mut State, line: &str) {
 /// Enter `stage` (1-based); stages only move forward.
 pub(crate) fn stage(stage: usize) {
     lock().advance(stage, Instant::now());
+    // The build that feeds extraction is a check's extracting phase.
+    if stage == 2 {
+        phase(EXTRACTING);
+    }
 }
 
 /// Record the planned unit count from a `--unit-graph` listing.
@@ -204,7 +239,11 @@ pub(crate) fn plan(unit_graph: &[u8]) {
 pub(crate) fn observe(stdout: bool, chunk: &[u8]) {
     let mut state = lock();
     if stdout {
-        state.lines += count(chunk, b"\n");
+        let lines = count(chunk, b"\n");
+        state.lines += lines;
+        if lines > 0 && state.phase == Some(EXTRACTING) {
+            draw(&mut state);
+        }
     } else {
         state.compiling += count(chunk, b"Compiling ");
     }
@@ -235,6 +274,8 @@ impl State {
             current: [RECORD; 4],
             compiled: false,
             shown: 0.0,
+            phases: false,
+            phase: None,
         }
     }
 
@@ -342,6 +383,7 @@ fn parse(text: &str) -> Option<[Record; 4]> {
 
 fn draw(state: &mut State) {
     let (Some(launch), Some(since)) = (state.launch, state.since) else {
+        draw_phase(state);
         return;
     };
     if !state.drawn && since.elapsed() < QUIET {
@@ -354,17 +396,7 @@ fn draw(state: &mut State) {
     let percent = state.percent(Instant::now());
     let mut stderr = std::io::stderr().lock();
     if stderr.is_terminal() {
-        let width = rustix::termios::tcgetwinsize(&stderr).map_or(80, |size| size.ws_col);
-        let utf8 = ["LC_ALL", "LC_CTYPE", "LANG"]
-            .iter()
-            .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
-            .is_some_and(|value| value.to_ascii_lowercase().replace('-', "").contains("utf8"));
-        let style = Style {
-            width: Some(usize::from(if width == 0 { 80 } else { width })),
-            unicode: utf8,
-            color: std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()),
-            truecolor: palette::truecolor(),
-        };
+        let style = Style::terminal(&stderr);
         state.tick = state.tick.wrapping_add(1);
         let line = render(state.stage, percent, launch.elapsed(), state.tick, &style);
         let _ = write!(stderr, "\r\x1b[2K{line}");
@@ -381,6 +413,26 @@ fn draw(state: &mut State) {
         state.announced = state.stage;
     }
     let _ = stderr.flush();
+}
+
+/// Draw a check's phase in place. A phase line is for a person at a
+/// terminal; a log or a test reading stderr sees none of it.
+fn draw_phase(state: &mut State) {
+    let Some(phase) = state.phase.filter(|_| state.phases) else {
+        return;
+    };
+    if crate::process::terminal::raw() {
+        return;
+    }
+    let mut stderr = std::io::stderr().lock();
+    if !stderr.is_terminal() {
+        return;
+    }
+    let count = (phase == EXTRACTING).then_some((state.lines, state.units));
+    let line = render_phase(phase, count, &Style::terminal(&stderr));
+    let _ = write!(stderr, "\r\x1b[2K{line}");
+    let _ = stderr.flush();
+    state.drawn = true;
 }
 
 fn clear(state: &mut State) {
@@ -405,6 +457,23 @@ struct Style {
     unicode: bool,
     color: bool,
     truecolor: bool,
+}
+
+impl Style {
+    /// The style of the terminal `stderr` is.
+    fn terminal(stderr: &std::io::StderrLock<'_>) -> Self {
+        let width = rustix::termios::tcgetwinsize(stderr).map_or(80, |size| size.ws_col);
+        let utf8 = ["LC_ALL", "LC_CTYPE", "LANG"]
+            .iter()
+            .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
+            .is_some_and(|value| value.to_ascii_lowercase().replace('-', "").contains("utf8"));
+        Self {
+            width: Some(usize::from(if width == 0 { 80 } else { width })),
+            unicode: utf8,
+            color: std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()),
+            truecolor: palette::truecolor(),
+        }
+    }
 }
 
 /// The CLI's palette: the site's two reds (site/src/styles/tokens.css's
@@ -523,9 +592,67 @@ fn render(stage: usize, percent: f64, elapsed: Duration, tick: usize, style: &St
     )
 }
 
+/// One check phase's line: its name, and `count`'s finished units of the
+/// planned total when the phase counts them.
+fn render_phase(phase: &str, count: Option<(usize, Option<usize>)>, style: &Style) -> String {
+    use palette::{LIGHT_GRAY, LIGHT_RED, RED};
+    let count = match count {
+        // Cargo may report more finished units than the plan listed.
+        Some((done, Some(total))) => format!("{} of {total}", done.min(total)),
+        Some((done, None)) => done.to_string(),
+        None => String::new(),
+    };
+    let line = if count.is_empty() {
+        format!("rawr > {phase}")
+    } else {
+        format!("rawr > {phase}  {count}")
+    };
+    let width = style.width.unwrap_or(usize::MAX);
+    if line.chars().count() >= width {
+        return line.chars().take(width.saturating_sub(1)).collect();
+    }
+    if !style.color {
+        return line;
+    }
+    let tc = style.truecolor;
+    let mut painted = format!(
+        "{} {} {}",
+        LIGHT_RED.paint("rawr", true, tc),
+        RED.paint(">", false, tc),
+        LIGHT_GRAY.paint(phase, false, tc),
+    );
+    if !count.is_empty() {
+        painted.push_str("  ");
+        painted.push_str(&LIGHT_RED.paint(&count, false, tc));
+    }
+    painted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_check_phase_line_names_the_phase_and_its_finished_units() {
+        assert_eq!(render_phase("resolving", None, &WIDE), "rawr > resolving");
+        assert_eq!(
+            render_phase(EXTRACTING, Some((12, Some(340))), &WIDE),
+            "rawr > extracting  12 of 340"
+        );
+        assert_eq!(
+            render_phase(EXTRACTING, Some((400, Some(340))), &WIDE),
+            "rawr > extracting  340 of 340"
+        );
+        assert_eq!(
+            render_phase(EXTRACTING, Some((7, None)), &WIDE),
+            "rawr > extracting  7"
+        );
+        let narrow = Style {
+            width: Some(12),
+            ..WIDE
+        };
+        assert_eq!(render_phase("classifying", None, &narrow), "rawr > clas");
+    }
 
     const WIDE: Style = Style {
         width: Some(120),

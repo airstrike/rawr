@@ -1350,55 +1350,84 @@ impl Probe {
         for entry in &entries {
             selected_roots.insert(entry.unit_key.as_ref());
         }
+        let joins = build.joins(graph, &mut allocation)?;
+        let loaded_reachable = graph.reachable(&selected_roots)?;
+        let mut parents = None;
+        // Every crate that loads an artifact names it, so each path joins
+        // once: a later naming reads the join the first one made.
+        let mut joined = Vec::<(PathBuf, crate::input::ArtifactAuthority)>::new();
+        let mut join_of = BTreeMap::<&str, usize>::new();
         let mut loaded_digests = BTreeSet::new();
         for fragment in &decoded.fragments {
             for loaded in &fragment.handshake.loaded_crates {
-                let mut authority = None;
+                let mut authority = None::<usize>;
                 for raw_path in &loaded.artifacts {
-                    let path = canonical_under_either(
-                        &self.artifact_directory,
-                        &self.target_directory,
-                        Path::new(raw_path),
-                        "loaded compiler artifact",
-                        &mut allocation,
-                    )?;
-                    let resolved =
-                        match build.authority_for_artifact(graph, &path, &mut allocation)? {
-                            crate::input::ArtifactJoin::Available(authority) => authority,
-                            crate::input::ArtifactJoin::Missing => {
-                                return Err(extraction("missing-loaded-artifact-join", raw_path));
-                            }
-                            crate::input::ArtifactJoin::Ambiguous => {
-                                return Err(extraction("ambiguous-loaded-artifact-join", raw_path));
-                            }
-                        };
+                    let index = match join_of.get(raw_path.as_str()) {
+                        Some(index) => *index,
+                        None => {
+                            let parents = match &mut parents {
+                                Some(parents) => parents,
+                                None => parents.insert(Parents::of(
+                                    &self.artifact_directory,
+                                    &self.target_directory,
+                                    &mut allocation,
+                                )?),
+                            };
+                            let path = parents.canonical(
+                                Path::new(raw_path),
+                                "loaded compiler artifact",
+                                &mut allocation,
+                            )?;
+                            let resolved = match joins.authority(&path, &mut allocation)? {
+                                crate::input::ArtifactJoin::Available(authority) => authority,
+                                crate::input::ArtifactJoin::Missing => {
+                                    return Err(extraction(
+                                        "missing-loaded-artifact-join",
+                                        raw_path,
+                                    ));
+                                }
+                                crate::input::ArtifactJoin::Ambiguous => {
+                                    return Err(extraction(
+                                        "ambiguous-loaded-artifact-join",
+                                        raw_path,
+                                    ));
+                                }
+                            };
+                            allocation.items(1)?;
+                            allocation.reserve(&mut joined, 1)?;
+                            joined.push((path, resolved));
+                            join_of.insert(raw_path, joined.len() - 1);
+                            joined.len() - 1
+                        }
+                    };
+                    let (path, resolved) = &joined[index];
                     if resolved.crate_name.as_ref() != loaded.crate_name
-                        || !graph
-                            .artifact_reachable(&selected_roots, resolved.semantic_key.as_ref())?
+                        || !loaded_reachable.contains(resolved.semantic_key.as_ref())
                     {
                         return Err(extraction("unreachable-loaded-artifact", raw_path));
                     }
-                    match &authority {
-                        Some(previous) if previous != &resolved => {
+                    match authority {
+                        Some(previous) if joined[previous].1 != *resolved => {
                             return Err(extraction("split-loaded-crate-authority", raw_path));
                         }
                         Some(_) => {}
-                        None => authority = Some(resolved),
+                        None => authority = Some(index),
                     }
-                    // Every crate that loads an artifact names it: it is read
-                    // once, and checked against the selected artifact it is.
-                    if !loaded_digests.contains(&path) {
+                    // It is read once, and checked against the selected
+                    // artifact it is.
+                    if !loaded_digests.contains(path) {
                         let (length, digest) =
-                            artifact_digest(&path, &mut allocation, self.graph_budget.as_ref())?;
+                            artifact_digest(path, &mut allocation, self.graph_budget.as_ref())?;
                         allocation.items(1)?;
-                        loaded_digests.insert(allocation.clone_path(&path)?);
+                        loaded_digests.insert(allocation.clone_path(path)?);
+                        let path = allocation.clone_path(path)?;
                         insert_artifact(&mut artifacts, path, length, digest, &mut allocation)?;
                     }
                 }
                 let record = crate::bindings::External {
                     crate_name: loaded.crate_name.clone(),
                     stable_crate_id: loaded.stable_crate_id.clone(),
-                    unit_key: authority.map(|authority| authority.semantic_key.to_string()),
+                    unit_key: authority.map(|index| joined[index].1.semantic_key.to_string()),
                 };
                 if !self.sharing.loaded.contains(&record) {
                     self.sharing.loaded.push(record);
@@ -1412,11 +1441,7 @@ impl Probe {
                 let mut join = ExternalJoin::default();
                 for artifact in &external_crate.artifacts {
                     join.observe(
-                        build.authority_for_artifact(
-                            graph,
-                            Path::new(artifact),
-                            &mut allocation,
-                        )?,
+                        joins.authority(Path::new(artifact), &mut allocation)?,
                         artifact,
                     )?;
                 }
@@ -2255,40 +2280,53 @@ fn canonical_under(
     field: &'static str,
     allocation: &mut Allocation,
 ) -> Result<PathBuf> {
-    canonical_under_either(parent, parent, path, field, allocation)
+    Parents::of(parent, parent, allocation)?.canonical(path, field, allocation)
 }
 
-fn canonical_under_either(
-    parent: &Path,
-    other_parent: &Path,
-    path: &Path,
-    field: &'static str,
-    allocation: &mut Allocation,
-) -> Result<PathBuf> {
-    let same_parent = parent == other_parent;
-    let parent = canonical_path(parent, "canonicalize extraction parent", allocation)?;
-    let other = if same_parent {
-        None
-    } else {
-        Some(canonical_path(
-            other_parent,
-            "canonicalize extraction parent",
-            allocation,
-        )?)
-    };
-    let canonical = canonical_path(path, "canonicalize extraction path", allocation)?;
-    if !canonical.starts_with(&parent)
-        && !other
-            .as_ref()
-            .is_some_and(|root| canonical.starts_with(root))
-    {
-        return Err(Error::Path {
-            field,
-            path: canonical,
-            reason: "is outside its directory".into(),
-        });
+/// The canonical directories an extraction path must lie under, resolved once
+/// for every path checked against them.
+struct Parents {
+    parent: PathBuf,
+    other: Option<PathBuf>,
+}
+
+impl Parents {
+    fn of(parent: &Path, other_parent: &Path, allocation: &mut Allocation) -> Result<Self> {
+        let same_parent = parent == other_parent;
+        let parent = canonical_path(parent, "canonicalize extraction parent", allocation)?;
+        let other = if same_parent {
+            None
+        } else {
+            Some(canonical_path(
+                other_parent,
+                "canonicalize extraction parent",
+                allocation,
+            )?)
+        };
+        Ok(Self { parent, other })
     }
-    Ok(canonical)
+
+    fn canonical(
+        &self,
+        path: &Path,
+        field: &'static str,
+        allocation: &mut Allocation,
+    ) -> Result<PathBuf> {
+        let canonical = canonical_path(path, "canonicalize extraction path", allocation)?;
+        if !canonical.starts_with(&self.parent)
+            && !self
+                .other
+                .as_ref()
+                .is_some_and(|root| canonical.starts_with(root))
+        {
+            return Err(Error::Path {
+                field,
+                path: canonical,
+                reason: "is outside its directory".into(),
+            });
+        }
+        Ok(canonical)
+    }
 }
 
 fn canonical_path(
