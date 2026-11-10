@@ -5300,6 +5300,8 @@ struct Resident<'a> {
 enum ResidentResult {
     Compiled(Program, Option<[u8; 32]>, [u8; 32], [u8; 32]),
     Miss,
+    /// The compile's error, as its report's text, which the owner reads
+    /// back whole (#397).
     Diagnostic(String),
     Resource(String),
 }
@@ -5315,7 +5317,7 @@ fn compile_resident(
     let compiled = match __rawr_profile::compile_resident(resident.engine, snapshot, resident.contract) {
         Ok(Outcome::Compiled(compiled)) => compiled,
         Ok(Outcome::NeedsPreparation) => return Ok(ResidentResult::Miss),
-        Err(Error::Source(error)) => return Ok(ResidentResult::Diagnostic(error.to_string())),
+        Err(Error::Source(error)) => return Ok(ResidentResult::Diagnostic(error.reported().encode())),
         Err(Error::Resource(error)) => return Ok(ResidentResult::Resource(error.to_string())),
         Err(error) => return Err(std::io::Error::other(error.to_string())),
     };
@@ -6321,6 +6323,8 @@ struct PendingLive {
 enum ResidentResult {
     Compiled(__rawr_internal::package::import::resident::Compiled),
     Miss,
+    /// The compile's error, as its report's text, which the owner reads
+    /// back whole (#397).
     Diagnostic(String),
     Obsolete,
     Resource(String),
@@ -6359,7 +6363,7 @@ fn prepare_resident(
     let output = match __rawr_profile::compile_resident(engine, snapshot, contract) {
         Ok(Outcome::Compiled(compiled)) => ResidentResult::Compiled(compiled),
         Ok(Outcome::NeedsPreparation) => ResidentResult::Miss,
-        Err(Error::Source(error)) => ResidentResult::Diagnostic(error.to_string()),
+        Err(Error::Source(error)) => ResidentResult::Diagnostic(error.reported().encode()),
         Err(Error::Resource(error)) => ResidentResult::Resource(error.to_string()),
         Err(error) => return Err(std::io::Error::other(error.to_string())),
     };

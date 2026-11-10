@@ -491,6 +491,20 @@ impl Error {
             Kind::Diagnostic(error) => Err(error.clone()),
         }
     }
+
+    /// [`Self::report`], or the report that says why it can't be kept: what
+    /// a runner tells its owner its compile found, as text
+    /// ([`diagnostic::Report::encode`]).
+    #[must_use]
+    pub fn reported(&self) -> diagnostic::Report {
+        self.report().unwrap_or_else(|error| {
+            diagnostic::Report::error(
+                diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
+                format!("cannot report the package's error: {error}"),
+            )
+            .finish()
+        })
+    }
 }
 
 /// A failure with no position in the file, as the single-file compiler

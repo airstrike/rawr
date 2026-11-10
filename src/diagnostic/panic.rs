@@ -15,6 +15,23 @@ pub fn panic(report: &Report) -> String {
     format!("{}{BACKTRACE_NOTE}\n", panicked(report, "main"))
 }
 
+/// Whether a panic printed Rust's note on backtraces yet: Rust's hook
+/// prints it after a process's first panic alone.
+static NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `report`, a run-time failure in the thread named `thread`, as Rust's
+/// panic hook prints it: [`panicked`], then the note on backtraces when
+/// it is the first panic of the process to print it.
+#[must_use]
+pub fn hooked(report: &Report, thread: &str) -> String {
+    let panicked = panicked(report, thread);
+    if NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        panicked
+    } else {
+        format!("{panicked}{BACKTRACE_NOTE}\n")
+    }
+}
+
 /// What maps a run-time failure's position in the lowered program back to
 /// the program's files: the running program's, once it compiled.
 type Locator = dyn Fn(&crate::EvalAltResult) -> Option<Report> + Send + Sync;

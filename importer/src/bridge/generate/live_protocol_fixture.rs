@@ -40,8 +40,21 @@ mod __rawr_internal {
                     Compiled(Compiled),
                     NeedsPreparation,
                 }
+                /// A compile's error, which the runner sends as its report's text.
+                pub struct Failure(pub &'static str);
+                impl Failure {
+                    pub fn reported(&self) -> Reported {
+                        Reported(self.0)
+                    }
+                }
+                pub struct Reported(&'static str);
+                impl Reported {
+                    pub fn encode(&self) -> String {
+                        self.0.to_owned()
+                    }
+                }
                 pub enum Error {
-                    Source(&'static str),
+                    Source(Failure),
                     Resource(&'static str),
                     Unowned,
                 }
@@ -207,11 +220,11 @@ mod __rawr_profile {
         __rawr_internal::package::import::resident::Outcome,
         __rawr_internal::package::import::resident::Error,
     > {
-        use __rawr_internal::package::import::resident::{Compiled, Error, Outcome};
+        use __rawr_internal::package::import::resident::{Compiled, Error, Failure, Outcome};
         let serial = engine.compiled.fetch_add(1, Ordering::SeqCst) + 1;
         match snapshot.0 {
             1 => return Ok(Outcome::NeedsPreparation),
-            2 => return Err(Error::Source("source diagnostic")),
+            2 => return Err(Error::Source(Failure("source diagnostic"))),
             3 => return Err(Error::Resource("native resource limit")),
             4 => {
                 engine.revision.fetch_add(1, Ordering::SeqCst);
@@ -226,7 +239,7 @@ mod __rawr_profile {
                 // be rewritten to a native miss by a late eligibility change.
                 engine.eligible.store(false, Ordering::SeqCst);
                 return Err(if snapshot.0 == 7 {
-                    Error::Source("source diagnostic")
+                    Error::Source(Failure("source diagnostic"))
                 } else {
                     Error::Resource("native resource limit")
                 });
