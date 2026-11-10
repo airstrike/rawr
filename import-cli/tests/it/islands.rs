@@ -939,9 +939,10 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// marked `From<Group<'a, Message>> for Element<'a, Message>` gives an
 /// element by `.into()` (D869). inboard's `sidebar::header(..).content(
 /// ..).spacing(4)` keeps native code's elements in a `Box<dyn Iterator>`
-/// marked code makes, which native code pulls from (#1600). `rawr check`
-/// passes as `cargo check` does, and `rawr run` prints what `cargo run`
-/// prints.
+/// marked code makes, which native code pulls from (#1600), and names the
+/// crate's `pub use Length::Fill;` by its path, `ui::Fill`, as inboard
+/// names `iced::Center`. `rawr check` passes as `cargo check` does, and
+/// `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");

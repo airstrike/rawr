@@ -61,7 +61,7 @@ impl<'a, Message: 'a> Sidebar<'a, Message> {
             None => column![self.content.to_element()],
         }
         .spacing(5)
-        .width(Fill)
+        .width(ui::Fill)
         .boxed()
     }
 }

@@ -937,51 +937,79 @@ impl<'a> Parser<'a> {
                 }
                 (None, _) => written.to_owned(),
             };
-            let parsed = crate::host::path::Path::parse(&path).ok()?;
             if !type_ref::is_native_trait(&path) {
                 return None;
             }
-            // One trait reached through several crates' paths is one trait
-            // (D872), as tracing's `field::Value` is tracing-core's.
-            let header = self.models.host.trait_header(&parsed)?;
-            Some(
-                self.models
-                    .host
-                    .trait_name(&header.identity)
-                    .unwrap_or_else(|| path.into()),
-            )
+            self.trait_known_as(&path)
         }
         #[cfg(not(feature = "rust-import"))]
         None
     }
 
+    /// The one path a crate trait at `path` is known by: one trait reached
+    /// through several paths is one trait (D872), as tracing's
+    /// `field::Value` is tracing-core's, and `page::Page` is the crate's
+    /// `Page` after its root's `use page::Page;`. `None` when no crate
+    /// declares a trait at `path`.
+    #[cfg(feature = "rust-import")]
+    fn trait_known_as(&self, path: &str) -> Option<ImmutableString> {
+        let parsed = crate::host::path::Path::parse(path).ok()?;
+        let header = self.models.host.trait_header(&parsed)?;
+        Some(
+            self.models
+                .host
+                .trait_name(&header.identity)
+                .unwrap_or_else(|| path.into()),
+        )
+    }
+
     /// The path from the crate's root of `concrete`, a type of the program's
     /// own with no parameters, when the program implements the native trait
     /// `trait_name` for it: what rawr's copy of the crate names the type's
-    /// stand-in by (`package::island`, #1264).
-    pub(super) fn native_object_owner(&self, concrete: &Ty, trait_name: &str) -> Option<String> {
+    /// stand-in by (`package::island`, #1264). With it, the trait's path as
+    /// the impl writes it, which the stand-in's impl compares with its own:
+    /// the trait object names the trait by the path it is known by, as
+    /// `Page` after the root's `use page::Page;` (`Self::native_trait`).
+    pub(super) fn native_object_owner(
+        &self,
+        concrete: &Ty,
+        trait_name: &str,
+    ) -> Option<(String, ImmutableString)> {
         let Ty::Script(definition, arguments) = self.inference.resolve(concrete) else {
             return None;
         };
-        let implemented = arguments.is_empty()
-            && self.models.script_impls.iter().any(|candidate| {
-                candidate.path.as_str() == trait_name
-                    && candidate.generics.is_empty()
-                    && candidate.arguments.is_empty()
-                    && matches!(&candidate.owner, type_ref::Type::Path(type_ref::Path {
-                        target: type_ref::Target::Script { definition: owner, .. },
-                        ..
-                    }) if *owner == definition)
-            });
-        implemented.then(|| {
-            let key = self.models.definition(definition).definition().key();
-            key.modules()
-                .iter()
-                .map(ImmutableString::as_str)
-                .chain([key.name()])
-                .collect::<Vec<_>>()
-                .join("::")
-        })
+        if !arguments.is_empty() {
+            return None;
+        }
+        let names = |path: &str| {
+            path == trait_name || {
+                #[cfg(feature = "rust-import")]
+                {
+                    self.trait_known_as(path)
+                        .is_some_and(|known| known.as_str() == trait_name)
+                }
+                #[cfg(not(feature = "rust-import"))]
+                false
+            }
+        };
+        let implemented = self.models.script_impls.iter().find(|candidate| {
+            candidate.generics.is_empty()
+                && candidate.arguments.is_empty()
+                && matches!(&candidate.owner, type_ref::Type::Path(type_ref::Path {
+                    target: type_ref::Target::Script { definition: owner, .. },
+                    ..
+                }) if *owner == definition)
+                && names(candidate.path.as_str())
+        })?;
+        let key = self.models.definition(definition).definition().key();
+        let owner = key
+            .modules()
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([key.name()])
+            .collect::<Vec<_>>()
+            .join("::");
+        Some((owner, implemented.path.clone()))
     }
 
     /// `dyn Trait` of a crate trait that can be made into an object.

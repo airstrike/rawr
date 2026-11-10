@@ -379,7 +379,7 @@ impl<'a> Parser<'a> {
             // handle and calls the impl's functions through it (#1264).
             if type_ref::is_native_trait(&trait_name)
                 && matches!(target, Ty::Boxed(_))
-                && let Some(owner) = self.native_object_owner(&concrete, &trait_name)
+                && let Some((owner, written)) = self.native_object_owner(&concrete, &trait_name)
             {
                 let source = std::mem::take(&mut value.source);
                 value.source = self.prelude_op(
@@ -387,7 +387,7 @@ impl<'a> Parser<'a> {
                     [
                         source,
                         format!("{owner:?}").into(),
-                        format!("{trait_name:?}").into(),
+                        format!("{written:?}").into(),
                     ],
                 );
                 value.source.cover(value.span);

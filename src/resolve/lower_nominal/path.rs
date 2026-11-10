@@ -593,6 +593,18 @@ impl<'a> Parser<'a> {
             {
                 return Ok(value);
             }
+            // `layout::Center` after `use iced::layout;`, of the module's
+            // `pub use Alignment::Center;`.
+            #[cfg(feature = "rust-import")]
+            if self.models.host_items(&path).is_none()
+                && matches!(
+                    binding.target,
+                    item::Import::Module | item::Import::ModuleItem { .. }
+                )
+                && let Some(value) = self.reexported_variant(&path, owner_span, member_span)?
+            {
+                return Ok(value);
+            }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
                 if let Some(error) = self.pending_family_call(&path, &member, member_span) {
@@ -723,6 +735,9 @@ impl<'a> Parser<'a> {
                     .chain([(&member, member_span)])
                     .collect::<Vec<_>>();
                 if let Some(value) = self.imported_struct_path(&path, &written, path_span)? {
+                    return Ok(value);
+                }
+                if let Some(value) = self.reexported_variant(&path, owner_span, member_span)? {
                     return Ok(value);
                 }
             }
@@ -1500,6 +1515,41 @@ impl<'a> Parser<'a> {
             evaluation: crate::host::usage::Evaluation::Required,
         }
         .retain_origin())
+    }
+
+    /// The variant a crate re-exports at `path`, as `iced::Center` names
+    /// `Alignment::Center` through `pub use Alignment::Center;`, built
+    /// through its enum. `None` when `path` is no such re-export.
+    #[cfg(feature = "rust-import")]
+    fn reexported_variant(
+        &mut self,
+        path: &str,
+        owner_span: Span,
+        member_span: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let host = &self.models.host;
+        let canonical = host.canonical_str(path);
+        if canonical.as_str() == path {
+            return Ok(None);
+        }
+        let Some(owner) = host.enum_variant(path) else {
+            return Ok(None);
+        };
+        let Some(crate::host::Entry::Type(definition)) = host.entry(&owner) else {
+            return Ok(None);
+        };
+        let definition = definition.clone();
+        let dependency = host.type_owner(&owner).cloned();
+        let variant = canonical.rsplit("::").next().unwrap_or_default().into();
+        self.parse_imported_variant(
+            owner,
+            definition,
+            dependency,
+            variant,
+            owner_span,
+            member_span,
+        )
+        .map(Some)
     }
 
     #[cfg(feature = "rust-import")]
