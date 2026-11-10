@@ -4,23 +4,28 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed.","issues":[1634],"refs":[1618]},
-      {"text":"A demand round no longer resolves, builds or seals a new bundle when an earlier round built the same crates: it probes the new demand over that build and replays the grown tables. A cold check of a marked theme builds the nightly twice instead of four times.","issues":[1636],"refs":[1618]},
-      {"text":"`RAWR_VERBOSE=1 rawr run` says what preparing the run did: its rounds, Cargo resolutions, nightly builds, probes, runner builds and the units they compiled. A second run of an unchanged project shows all of them at zero.","issues":[1637],"refs":[1604]},
-      {"text":"rawr compiles the dependency versions your Cargo.lock pins. A project without a resolution universe was resolved without its lock and could get newer compatible versions than cargo builds. The runner also no longer warns about a `[patch]` only the rest of your workspace uses.","issues":[1635]},
-      {"text":"A project whose Cargo.lock is over 1 MiB resolves from its lock. A crate type's `&'static [&'static str]` const can be read. `Some(&value)` where an `Option<&dyn Trait>` is expected coerces to the trait object, as rustc does. Borrowing a local for a crate's `&'static dyn` field is rustc's E0597 before the run.","issues":[1639,1626,1623,1620]},
-      {"text":"A crate whose types nest deeply, such as a long combinator chain, no longer fails `rawr check` with \"rawr misread rustc's output (`sidecar-schema`): recursion limit exceeded\". The compiler's output also writes each definition id once, which cuts its definitions to about 57% of their former size.","issues":[1640]},
-      {"text":"A crate's `use Item as _` of an item that is surely not a trait, such as a module, struct or function, no longer fails the extraction with \"rawr misread rustc's output (`anonymous-import-kind`)\": as in rustc it adds nothing. A trait's `use Trait as _` still brings its methods into scope, and a declaration whose shape failed closed is refused by name, since it may be a trait.","issues":[1642]},
-      {"text":"A save of a marked file in a running `rawr run` no longer does work that grows with the program's dependencies. Each native use finds its binding by one search of an index built when the runner starts, and the owner and the runner parse only the file that changed.","issues":[1644],"refs":[1604]},
-      {"text":"A save of a marked file no longer re-reads, re-encodes or re-stages the running build's native watch: a body edit registers no watcher root.","issues":[1645],"refs":[1604]},
-      {"text":"A method with elided lifetimes whose output borrows its receiver, as `fn user(&self, id: &Id) -> Option<&User>`, can be called from marked code: its lifetimes are read as the call's own, not as a higher-ranked signature. A method that gives `&T` or `Option<&T>` also works on a receiver native code lent, or on a field of one, and may take arguments.","issues":[1647]},
-      {"text":"A save that changes a script impl's shape, such as a provided method it now overrides or a signature it changes, now reaches native code. `rawr run` used to swap in the new code while native code kept calling the old shape; the save now rebuilds the runner, and body edits still apply in place.","issues":[326]},
-      {"text":"An expected type reaches every arm of `if`/`else` and `match`, a block-like tail of a block or function body, and every `break` value of a `loop`, and each arm coerces to it as rustc does. `let style: Box<dyn Fn(&Theme) -> Style> = if c { Box::new(|t| ..) } else { Box::new(|t| ..) };` checks, as do `&dyn` and `fn`-pointer arms.","issues":[1648]},
-      {"text":"A save of one marked file lowers only that file again; every other file reuses its lowering from the last compile. `RAWR_VERBOSE` says how many files a save lowered.","issues":[1649],"refs":[1646,1604]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.178",
+      "date": "2026-11-10",
+      "entries": [
+        {"text":"A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed.","issues":[1634],"refs":[1618]},
+        {"text":"A demand round no longer resolves, builds or seals a new bundle when an earlier round built the same crates: it probes the new demand over that build and replays the grown tables. A cold check of a marked theme builds the nightly twice instead of four times.","issues":[1636],"refs":[1618]},
+        {"text":"`RAWR_VERBOSE=1 rawr run` says what preparing the run did: its rounds, Cargo resolutions, nightly builds, probes, runner builds and the units they compiled. A second run of an unchanged project shows all of them at zero.","issues":[1637],"refs":[1604]},
+        {"text":"rawr compiles the dependency versions your Cargo.lock pins. A project without a resolution universe was resolved without its lock and could get newer compatible versions than cargo builds. The runner also no longer warns about a `[patch]` only the rest of your workspace uses.","issues":[1635]},
+        {"text":"A project whose Cargo.lock is over 1 MiB resolves from its lock. A crate type's `&'static [&'static str]` const can be read. `Some(&value)` where an `Option<&dyn Trait>` is expected coerces to the trait object, as rustc does. Borrowing a local for a crate's `&'static dyn` field is rustc's E0597 before the run.","issues":[1639,1626,1623,1620]},
+        {"text":"A crate whose types nest deeply, such as a long combinator chain, no longer fails `rawr check` with \"rawr misread rustc's output (`sidecar-schema`): recursion limit exceeded\". The compiler's output also writes each definition id once, which cuts its definitions to about 57% of their former size.","issues":[1640]},
+        {"text":"A crate's `use Item as _` of an item that is surely not a trait, such as a module, struct or function, no longer fails the extraction with \"rawr misread rustc's output (`anonymous-import-kind`)\": as in rustc it adds nothing. A trait's `use Trait as _` still brings its methods into scope, and a declaration whose shape failed closed is refused by name, since it may be a trait.","issues":[1642]},
+        {"text":"A save of a marked file in a running `rawr run` no longer does work that grows with the program's dependencies. Each native use finds its binding by one search of an index built when the runner starts, and the owner and the runner parse only the file that changed.","issues":[1644],"refs":[1604]},
+        {"text":"A save of a marked file no longer re-reads, re-encodes or re-stages the running build's native watch: a body edit registers no watcher root.","issues":[1645],"refs":[1604]},
+        {"text":"A method with elided lifetimes whose output borrows its receiver, as `fn user(&self, id: &Id) -> Option<&User>`, can be called from marked code: its lifetimes are read as the call's own, not as a higher-ranked signature. A method that gives `&T` or `Option<&T>` also works on a receiver native code lent, or on a field of one, and may take arguments.","issues":[1647]},
+        {"text":"A save that changes a script impl's shape, such as a provided method it now overrides or a signature it changes, now reaches native code. `rawr run` used to swap in the new code while native code kept calling the old shape; the save now rebuilds the runner, and body edits still apply in place.","issues":[326]},
+        {"text":"An expected type reaches every arm of `if`/`else` and `match`, a block-like tail of a block or function body, and every `break` value of a `loop`, and each arm coerces to it as rustc does. `let style: Box<dyn Fn(&Theme) -> Style> = if c { Box::new(|t| ..) } else { Box::new(|t| ..) };` checks, as do `&dyn` and `fn`-pointer arms.","issues":[1648]},
+        {"text":"A save of one marked file lowers only that file again; every other file reuses its lowering from the last compile. `RAWR_VERBOSE` says how many files a save lowered.","issues":[1649],"refs":[1646,1604]}
+      ]
+    },
     {
       "version": "0.3.177",
       "date": "2026-11-10",
