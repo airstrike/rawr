@@ -620,6 +620,7 @@ export function drift(plan, todo, issues, projectItems) {
     seenT.add(item.t);
     seenIssue.add(item.issue);
     if (!item.title.startsWith(`${item.t}: `)) say(`${item.t}'s title doesn't start with "${item.t}: "`);
+    if (tNumber(item.t) !== item.issue) say(`${item.t} is #${item.issue}; a T number is its issue's number`);
     if (!(item.category in plan.project.categories)) say(`${item.t}: category "${item.category}" isn't in plan/project.json`);
     for (const l of item.labels) if (!labels.has(l)) say(`${item.t}: label "${l}" isn't in plan/project.json`);
     if (item.gantt) {
@@ -891,13 +892,28 @@ function addItem(ctx, op, { category, text, title, labels, decisions, gantt, rel
   if (release && !plan.changelog.releases.some((r) => r.version === release)) fail(`release ${release} isn't in the changelog`);
   labels = labelsChecked(ctx, labels ?? labelsFor(plan.project, category, text));
   rowChecked(ctx, gantt);
-  const fullTitle = `${t}: ${title ?? shortTitle(publicText(text))}`;
+  const short = title ?? shortTitle(publicText(text));
+  let fullTitle = `${t}: ${short}`;
 
   let number;
   const existing = ctx.issueByT(t);
   if (op.issue === "new" || op.op === "changelog") {
     if (existing) number = existing.number; // a rerun after the issue was made
-    else number = ctx.createIssue(fullTitle, issueBody(t, category, text), labels);
+    else {
+      number = ctx.createIssue(fullTitle, issueBody(t, category, text), labels);
+      // GitHub numbers issues and PRs together, and an issue made outside
+      // the plan takes a number too, so the item is named after its issue.
+      if (!ctx.dry && number !== tNumber(t)) {
+        if (line) fail(`${t} came back as #${number}; rename the TODO line to T${number}`);
+        t = `T${String(number).padStart(3, "0")}`;
+        fullTitle = `${t}: ${short}`;
+        ctx.patch(number, { title: fullTitle, body: issueBody(t, category, text) });
+        if (op.op === "add") {
+          op.t = t;
+          ctx.saveChange();
+        }
+      }
+    }
   } else {
     number = op.issue;
     const issue = ctx.issues.get(number) ?? fail(`#${number} doesn't exist`);

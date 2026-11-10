@@ -9,6 +9,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A type alias of an associated type takes its defaulted parameters written, so `fn f() -> canvas::Geometry<Renderer>` checks and runs, as iced's sandpiles writes it. (#317)
 - A crate function's or method's type parameter that only an argument's std-trait bound names is inferred from std's impl for the argument's type, as in rustc. `Link` of iced's `rich_text(spans)` given a `Vec<Span<'static, ()>>`, an array or a slice is `()`, through `AsRef`, `Borrow` and the other std impls. (#1651)
 - A crate function a `use` names can be called with a turbofish, as `span::<()>("e")`. (#1652)
+- An expression nests and a function recurses as deep as a debug build of Rust allows. There is no expression-depth limit, and the call depth is 100 000. (#962, #1624)
+- A spawned thread's panic, and a runner's main panic, name the file, line and column where they panicked. (#948)
+- `collect()` into a `Result` or an `Option` of a map or a set runs. (#937)
+- `rawr test` runs `cargo check` on the tests beside it and reports what only rustc rejects. (#929)
 
 ## 0.3.178 (2026-11-10)
 
