@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A marked function that panics in a call from native `main` prints the panic cargo's build prints: its place in the marked file and Rust's message, with nothing of rawr's.","issues":[1657]},
+        {"text":"An error a save's compile finds in a marked module of a native app names its own file, line and column in rustc's form, such as `error[E0425]` in `src/widget/sidebar.rs`. Before, it named the crate root, as a framework error.","issues":[397]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.180",
@@ -2362,7 +2368,7 @@
     {"issue":394,"title":"A single non-'static Fn callable parameter is not bound","state":"open","category":"Divergences from rustc"},
     {"issue":395,"title":"Script-written vectors of library values don't keep native allocation history","state":"open","category":"Divergences from rustc"},
     {"issue":396,"title":"D651 operation inventory and Miri coverage for native places","state":"open","category":"Divergences from rustc"},
-    {"issue":397,"title":"Show the full package report for a resident source error","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":397,"title":"Show the full package report for a resident source error","state":"closed","category":"Hot reload of a marked `main` (D555)"},
     {"issue":398,"title":"A new import path of a bound crate re-extracts the API","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.27"},
     {"issue":399,"title":"Compare build-script outputs before sharing intrinsic entries","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":400,"title":"A program's first proved call compiles it twice","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
@@ -3622,7 +3628,7 @@
     {"issue":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed","category":"No glue (D593)","release":"0.3.180"},
     {"issue":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.180"},
     {"issue":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed","category":"No glue (D593)","release":"0.3.180"},
-    {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"open","category":"Divergences from rustc"}
+    {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4673,9 +4679,10 @@
             {"number":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed"},
             {"number":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed"},
             {"number":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed"},
-            {"number":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"open"},
+            {"number":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed"},
             {"number":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed"},
-            {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"}
+            {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"},
+            {"number":397,"title":"Show the full package report for a resident source error","state":"closed"}
           ]
         }
       ]
