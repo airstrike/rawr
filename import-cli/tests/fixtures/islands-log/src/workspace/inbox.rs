@@ -116,6 +116,25 @@ pub fn modules() -> String {
     format!("{TARGET}; {NAMED}; {}", folder::Folder.path())
 }
 
+/// Real `tracing` events, one through a crate's re-export of `warn!` as
+/// inboard's `log::warn!` is, which native code's subscriber prints, the
+/// enabled check of `level_enabled!`, and `format_args!` written by
+/// `fmt::Arguments`'s own `Debug` and `Display`.
+pub fn events() -> String {
+    let count = 3;
+    let subject = "hello";
+    located::warn!("{count} unread in {subject:?}");
+    tracing::info!("read {}", count - 1);
+    let enabled = tracing::level_enabled!(tracing::Level::WARN);
+    let written = format!(
+        "{:?} [{:>6}] {}",
+        format_args!("a {}", count),
+        format_args!("b"),
+        format_args!("c {count}").to_string()
+    );
+    format!("enabled {enabled}; {written}")
+}
+
 /// A crate's callsite name, from std's macros it names only inside
 /// `concat!`, and the field names of a message alone.
 pub fn site() -> String {

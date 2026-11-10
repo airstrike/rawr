@@ -181,6 +181,14 @@ impl<'g, P: api::Phase> Headers<'g, P> {
         if matches!(std_binding::of(definition), Some(std_binding::Std::String)) {
             return Some(Some(convert::Type::Builtin(convert::Builtin::String)));
         }
+        // core's `fmt::Arguments<'_>`, as tracing-core's `impl Value for
+        // fmt::Arguments<'_>` is for: the program's `format_args!` (#1561).
+        if matches!(
+            std_binding::of(definition),
+            Some(std_binding::Std::Arguments)
+        ) {
+            return Some(Some(convert::Type::Builtin(convert::Builtin::Arguments)));
+        }
         if let Some(element) = option_element(definition, arguments) {
             return Some(
                 self.ty(element)

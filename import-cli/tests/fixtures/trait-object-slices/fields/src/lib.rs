@@ -1,7 +1,8 @@
 //! tracing-core's value set: values of a trait lent as objects in a slice
 //! of `Option`s, which the set a field set's method makes borrows for as
 //! long as it lives, and a function that takes the set, as
-//! `Event::dispatch` does.
+//! `Event::dispatch` does. Its edition is 2021, older than 2024 as
+//! tracing's is, for its `values!` block.
 
 pub trait Value {
     fn record(&self) -> String;
@@ -14,6 +15,12 @@ impl Value for i64 {
 }
 
 impl Value for bool {
+    fn record(&self) -> String {
+        format!("{self}")
+    }
+}
+
+impl Value for std::fmt::Arguments<'_> {
     fn record(&self) -> String {
         format!("{self}")
     }
@@ -66,6 +73,22 @@ impl ValueSet<'_> {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+/// One value, as a subscriber's visitor records it.
+pub fn one(value: &dyn Value) -> String {
+    value.record()
+}
+
+/// The set of `values`, each lent as a `&dyn Value`, made in a block whose
+/// value is the set, as tracing's `valueset_all!` makes one: the block's
+/// temporaries live to the end of its caller's statement in this crate's
+/// edition.
+#[macro_export]
+macro_rules! values {
+    ($fields:expr, [$($value:expr),*]) => {{
+        $fields.value_set_all(&[$(Some(&$value as &dyn $crate::Value)),*])
+    }};
 }
 
 /// What a subscriber is given, as `Event::dispatch(meta, &value_set)`

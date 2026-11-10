@@ -1132,6 +1132,22 @@ impl<'a> Parser<'a> {
                 value = self.operator_expr(source, ty, span(value.span.start(), end));
                 continue;
             }
+            // `args.to_string()` and `args.clone()` of `format_args!`'s
+            // `fmt::Arguments`: the text it formats, which is its value.
+            if number == Ty::Arguments
+                && matches!(member.as_str(), "to_string" | "clone")
+                && matches!(self.peek(), Token::Unit)
+            {
+                let end = self.next().1;
+                let ty = if member.as_str() == "clone" {
+                    Ty::Arguments
+                } else {
+                    Ty::String
+                };
+                let source = value.rendered_source();
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
+                continue;
+            }
             // `x.clone()` of a `Copy` scalar is the value.
             if member.as_str() == "clone"
                 && matches!(

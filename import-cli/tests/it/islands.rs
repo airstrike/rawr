@@ -2224,7 +2224,13 @@ fn checks_and_prints(root: &Path, printed: &str) {
 /// the `fmt::Arguments` a crate function takes. A re-export of std's macro
 /// a crate's macro names only inside `concat!` is asked for as any other
 /// path, and `$($e:expr),* $(,)*` reads `"message", ,` as rustc does, as
-/// tracing's callsite name and `fieldset!` need.
+/// tracing's callsite name and `fieldset!` need. Real `tracing::warn!` and
+/// `info!` events, one through a crate's re-export of `warn!` as inboard's
+/// `log::warn!` is, reach native code's subscriber as cargo's build gives
+/// them: `format_args!` is `fmt::Arguments` coerced to `&dyn Value`, made in
+/// the frame that lends the event's values (#1561), and `__CALLSITE.
+/// metadata()` is a lasting place of the static (#1602). So does
+/// `level_enabled!`'s check (#1603).
 #[test]
 fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
@@ -2234,7 +2240,7 @@ fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     let printed = cargo_prints(&root);
     assert!(
         printed.starts_with(
-            "compiled true current false off true filter false equal true unequal true \
+            "compiled true current true off true filter false equal true unequal true \
              same true log true\n\
              ab1 islands_log::workspace::inbox event x34 ab1 2\n\
              src/workspace/inbox.rs:42:5 in islands_log::workspace::inbox\n"
@@ -2243,7 +2249,10 @@ fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
                 "Message { subject: \"hello\", unread: true }; [hello*]; count=2 (Some(\"two\")); \
                  [Some(Ok(Message { subject: \"old\", unread: false })), None]; 0xff; \
                  <hello has 2>; unread\n\
-                 event src/workspace/inbox.rs:123 [\"message\"]\n"
+                 event src/workspace/inbox.rs:142 [\"message\"]\n\
+                 WARN islands_log::workspace::inbox line Some(126): message=3 unread in \"hello\"\n\
+                 INFO islands_log::workspace::inbox line Some(127): message=read 2\n\
+                 enabled true; a 3 [b] c 3\n"
             ),
         "{printed}"
     );

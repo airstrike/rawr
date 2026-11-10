@@ -267,7 +267,11 @@ impl<'a> Parser<'a> {
                 return self.parse_local_fn_type(false);
             }
             // `dyn std::error::Error`: traits are crate-wide by name, as in
-            // item headers. A native trait is its full path.
+            // item headers. A native trait is its full path, which a
+            // leading `::` (`dyn ::tracing::Value`) roots at its crate.
+            if matches!(self.peek(), Token::DoubleColon) {
+                self.next();
+            }
             let (first, first_span) = self.expect_name("trait object type")?;
             let (mut trait_name, mut trait_span) = (first.clone(), first_span);
             let mut written = first.to_string();
@@ -281,9 +285,17 @@ impl<'a> Parser<'a> {
                 first_span.start(),
                 text_end(trait_span.start(), &trait_name),
             );
-            let trait_name = self
-                .native_trait(&first, &written, path_span)
-                .unwrap_or(trait_name);
+            let known = self.native_trait(&first, &written, path_span);
+            // A crate's path the facade doesn't have yet, as `dyn
+            // $crate::Value` of a crate's macro names its own trait: asked
+            // for as any missing path is, and known at the next check.
+            #[cfg(feature = "rust-import")]
+            if known.is_none()
+                && let Some(miss) = self.trait_path_miss(&first, &written, path_span)
+            {
+                return Err(miss);
+            }
+            let trait_name = known.unwrap_or(trait_name);
             let ty = self.dyn_type(&trait_name, trait_span)?;
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
@@ -961,6 +973,30 @@ impl<'a> Parser<'a> {
                 .trait_name(&header.identity)
                 .unwrap_or_else(|| path.into()),
         )
+    }
+
+    /// The miss of `written`, the path of a trait object's trait from the
+    /// crate root `first`, when the facade has nothing there yet, as a
+    /// crate's macro names its own trait through `$crate`: asked for as an
+    /// expression's missing path is. `None` for a path that names
+    /// something, or no crate.
+    #[cfg(feature = "rust-import")]
+    fn trait_path_miss(&self, first: &str, written: &str, reference: Span) -> Option<Error> {
+        if self.models.import(first).is_some() || self.models.host.entry(first).is_none() {
+            return None;
+        }
+        let parsed = crate::host::path::Path::parse(written).ok()?;
+        if self.models.host.trait_header(&parsed).is_some()
+            || self.models.host.source_type(written).is_some()
+        {
+            return None;
+        }
+        let (module, item) = written.rsplit_once("::")?;
+        Some(Error::NotInModule {
+            module: module.into(),
+            item: item.into(),
+            reference,
+        })
     }
 
     /// The path from the crate's root of `concrete`, a type of the program's

@@ -43,6 +43,7 @@ impl<'a> Parser<'a> {
                 definition: super::surface::host_surface_definition(&proof.definition)?,
                 arguments: Box::default(),
             },
+            Ty::Arguments => Type::Builtin(Builtin::Arguments),
             _ => return None,
         };
         let tag = rawr_import::classify::representability::object::tag(&converted)?;
@@ -1583,6 +1584,7 @@ fn implementor_tag(ty: &crate::host::type_ref::Type) -> Option<String> {
             Host::U32 => Builtin::U32,
             Host::U64 => Builtin::U64,
             Host::Usize => Builtin::Usize,
+            Host::Arguments => Builtin::Arguments,
             _ => return None,
         }),
         Shape::Imported {

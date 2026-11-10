@@ -1,5 +1,8 @@
 //! A crate whose macros name std's built-in macros through its own
-//! re-export, as tracing's `$crate::__macro_support::line!()` does.
+//! re-export, as tracing's `$crate::__macro_support::line!()` does, and
+//! that re-exports `tracing`'s `warn!`, as inboard's `log` crate does.
+
+pub use tracing::warn;
 
 /// Functions that format what they are lent, as tracing's `ValueSet`
 /// formats its `&dyn Value`s and log's `Record` its `fmt::Arguments`.

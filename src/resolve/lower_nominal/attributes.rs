@@ -70,12 +70,14 @@ impl<'a> Parser<'a> {
     /// they are on is configured in. A `#[cfg(..)]` that does not hold
     /// leaves it out, a `#[cfg_attr(..)]` whose predicate holds applies the
     /// attributes it lists, and every other attribute has no effect here.
+    /// An attribute runs nothing, so `allow(..)` is no call of a
+    /// statement's (`frame_effects`).
     pub(super) fn outer_attributes(&mut self) -> Result<bool, Error> {
         let mut configured = true;
         while self.attribute_ahead() {
             self.next();
             self.expect(Token::LeftBracket, "`[` to open an attribute")?;
-            configured &= self.attribute()?;
+            configured &= self.unnoted(Self::attribute)?;
             self.expect(Token::RightBracket, "`]` to close an attribute")?;
         }
         Ok(configured)

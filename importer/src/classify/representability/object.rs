@@ -123,14 +123,21 @@ impl Object {
     }
 }
 
+/// The tag of the program's `format_args!` coerced to an object, core's
+/// `fmt::Arguments<'_>`, which the adapter formats where the call runs.
+pub const ARGUMENTS: &str = "fmt::Arguments";
+
 /// The tag a program's value coerced to an object crosses with: the type
-/// it was coerced from, a number, `bool` or `char` by its Rust name, a
-/// crate type with no parameters by its identity. `None` for another type,
-/// which no impl the adapter knows is for.
+/// it was coerced from, a number, `bool` or `char` by its Rust name,
+/// `format_args!` as [`ARGUMENTS`], a crate type with no parameters by its
+/// identity. `None` for another type, which no impl the adapter knows is
+/// for.
 #[must_use]
 pub fn tag(ty: &Type) -> Option<String> {
     use std::fmt::Write as _;
     match ty {
+        // The program's `format_args!` (#1561).
+        Type::Builtin(super::convert::Builtin::Arguments) => Some(ARGUMENTS.to_owned()),
         Type::Builtin(builtin) => builtin.rust_name().map(str::to_owned),
         Type::Nominal {
             definition,

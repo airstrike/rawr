@@ -626,6 +626,11 @@ pub(super) enum Ty {
     /// `std::num::ParseIntError` and its kin, the error of `str::parse`:
     /// its message at runtime.
     ParseError(ParseError),
+    /// core's `fmt::Arguments<'_>`, what `format_args!` makes: the text it
+    /// formats at runtime, which `Display` and `Debug` both write as it is.
+    /// A type of its own, so a crate's impl for it is the one a coercion
+    /// picks (`impl Value for fmt::Arguments<'_>`, #1561).
+    Arguments,
     Reference {
         mutable: bool,
         target: Box<Ty>,
@@ -794,6 +799,7 @@ impl Ty {
             | Self::Ordering
             | Self::Time(_)
             | Self::ParseError(_)
+            | Self::Arguments
             | Self::Script(..)
             | Self::Dyn(..)
             | Self::Param(_)
@@ -1007,6 +1013,7 @@ impl Ty {
             Self::Ordering => "Ordering".into(),
             Self::Time(time) => time.name().into(),
             Self::ParseError(error) => error.name().into(),
+            Self::Arguments => "Arguments<'_>".into(),
             Self::Fn { inputs, output }
             | Self::FnItem { inputs, output, .. }
             | Self::FnChoice { inputs, output, .. } => {
@@ -1178,7 +1185,7 @@ impl Ty {
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<crate::Instant>()),
-            Self::ParseError(_) => Some(TypeId::of::<ImmutableString>()),
+            Self::ParseError(_) | Self::Arguments => Some(TypeId::of::<ImmutableString>()),
             Self::Reference { target, .. } | Self::Boxed(target) => target.native_type_id(models),
             Self::Counted(..) => Some(TypeId::of::<counted::Counted>()),
             Self::Weak(..) => Some(TypeId::of::<counted::Weak>()),
@@ -1310,6 +1317,7 @@ impl Ty {
             | Self::Ordering
             | Self::Time(_)
             | Self::ParseError(_)
+            | Self::Arguments
             | Self::Script(..)
             | Self::Param(_)
             | Self::Projection(..)

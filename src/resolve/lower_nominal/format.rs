@@ -1346,7 +1346,12 @@ impl<'a> Parser<'a> {
                         if spec.width.is_some()
                             && !matches!(
                                 ty,
-                                Ty::Int(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool
+                                Ty::Int(_)
+                                    | Ty::String
+                                    | Ty::Str
+                                    | Ty::Char
+                                    | Ty::Bool
+                                    | Ty::Arguments
                             )
                         {
                             return Err(self.unsupported("a `{:?}` width on a compound value"));
@@ -1374,8 +1379,10 @@ impl<'a> Parser<'a> {
                 && int.is_some()
                 && matches!(spec.kind, Kind::Radix(_) | Kind::HexDebug(_));
             let truncated = precision.is_some() && !number && spec.kind == Kind::Display;
-            // `str`'s and `char`'s `Debug` ignore width and precision.
-            let quoted = spec.kind == Kind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char);
+            // `str`'s and `char`'s `Debug` ignore width and precision, and
+            // so does each of `fmt::Arguments`'s writes, as rustc's.
+            let quoted = spec.kind == Kind::Debug && matches!(ty, Ty::String | Ty::Str | Ty::Char)
+                || ty == Ty::Arguments;
             if !quoted
                 && !spread
                 && (width.is_some() || spec.sign && number || prefixed || truncated)
@@ -1581,7 +1588,10 @@ impl<'a> Parser<'a> {
                 PreludeOp::FormatBits,
                 [value, "10".into(), kind.bits().to_string().into()],
             )),
-            Ty::String | Ty::Str => Some(self.prelude_op(PreludeOp::DisplayText, [value])),
+            // `format_args!`'s `Display` writes the text it formats.
+            Ty::String | Ty::Str | Ty::Arguments => {
+                Some(self.prelude_op(PreludeOp::DisplayText, [value]))
+            }
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool => Some(value),
             _ => None,
         }
@@ -2204,6 +2214,8 @@ impl<'a> Parser<'a> {
                 ));
                 source
             }
+            // `fmt::Arguments`'s `Debug` writes its text unquoted (#1561).
+            Ty::Arguments => self.prelude_op(PreludeOp::DisplayText, [value]),
             // Rust's `escape_debug`: quotes, `\n`, `\\`, `\u{..}` and kin.
             Ty::String | Ty::Str | Ty::Char => {
                 let code = STR_PIECES

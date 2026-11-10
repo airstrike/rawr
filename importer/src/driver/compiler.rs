@@ -105,10 +105,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // associated type it passes on from the type's arguments, and reads them
 // for an implementation's bound that fixes a parameter's associated type.
 // Schema 61 gives a struct its layout: its pointers that may hold a
-// static's address, for a cycle of body statics (D865).
+// static's address, for a cycle of body statics (D865). Schema 63 gives a
+// `dyn Trait` its trait's impls for numbers and std types (#1561).
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 62;
+const PROTOCOL_SCHEMA: u32 = 63;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3930,6 +3931,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     match predicate.skip_binder() {
                         ty::ExistentialPredicate::Trait(reference) => {
                             self.ensure(reference.def_id, Namespace::Type)?;
+                            self.request_object_implementations(reference.def_id)?;
                             self.budget.items(1)?;
                             bounds.try_reserve(1).map_err(|error| {
                                 format!("trait object bound allocation failed: {error}")
@@ -4850,6 +4852,60 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             def_path_hash: self.def_hash(def_id)?,
             namespace,
         })
+    }
+
+    /// The impls of `trait_id`, the trait of a `dyn Trait` a signature
+    /// names, that a program's value may be coerced through (D874): those
+    /// for a number, `bool`, `char` or `str`, and for a std type of no type
+    /// arguments, as tracing-core's `impl Value for i64` and `impl Value
+    /// for fmt::Arguments<'_>`. A crate type's impls come with the type.
+    fn request_object_implementations(&mut self, trait_id: DefId) -> Result<(), String> {
+        if trait_id.krate == rustc_span::def_id::LOCAL_CRATE
+            || self.is_sysroot_crate(trait_id.krate)?
+        {
+            return Ok(());
+        }
+        let mut implementations = Vec::new();
+        for implementation in self.implementations(trait_id)? {
+            self.budget.edge(1)?;
+            let impl_id = implementation.id();
+            if self.tcx.impl_polarity(impl_id) != ty::ImplPolarity::Positive
+                || self
+                    .tcx
+                    .generics_of(impl_id)
+                    .own_params
+                    .iter()
+                    .any(|parameter| !matches!(parameter.kind, ty::GenericParamDefKind::Lifetime))
+            {
+                continue;
+            }
+            let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
+                continue;
+            };
+            let coerced = match reference
+                .instantiate_identity()
+                .skip_norm_wip()
+                .self_ty()
+                .kind()
+            {
+                ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str => true,
+                ty::Adt(definition, arguments) => {
+                    arguments.types().next().is_none()
+                        && self.is_sysroot_crate(definition.did().krate)?
+                }
+                _ => false,
+            };
+            if coerced {
+                implementations.push(implementation);
+            }
+        }
+        implementations.sort_unstable_by_key(|implementation| {
+            self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+        });
+        for implementation in implementations {
+            self.request_implementation(implementation, trait_id, None)?;
+        }
+        Ok(())
     }
 
     fn is_sysroot_crate(&self, crate_num: CrateNum) -> Result<bool, String> {
