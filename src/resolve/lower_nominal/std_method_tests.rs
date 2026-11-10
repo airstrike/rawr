@@ -288,6 +288,24 @@ main();
     assert!(!report.contains("doesn't run"), "{report}");
 }
 
+/// A `Mutex`'s `get_mut()` and `into_inner()`, unwrapped as `lock()` is,
+/// reach its value (#949).
+#[test]
+fn a_mutex_s_get_mut_and_into_inner_reach_its_value() {
+    let source = r#"
+use std::sync::Mutex;
+fn main() {
+    let mut m = Mutex::new(vec![1]);
+    m.get_mut().unwrap().push(2);
+    *m.lock().unwrap() = vec![3, 4, 5];
+    m.get_mut().expect("not poisoned").push(6);
+    println!("{:?}", m.into_inner().unwrap());
+}
+main();
+"#;
+    assert_eq!(printed(source), "[3, 4, 5, 6]\n");
+}
+
 #[test]
 fn language_clone_from_and_try_into_go_through_method_lookup() {
     // `clone_from` is `Clone`'s provided method, on a std type and a

@@ -393,6 +393,7 @@ impl Parser<'_> {
     /// `mutex.lock().unwrap()` or `.lock().expect(msg)`: the lock, held as
     /// a `RefCell`'s mutable borrow is, which no thread poisons, since a
     /// panic in rawr ends the thread it is on before the guard drops.
+    /// `get_mut()` and `into_inner()`, unwrapped too, are a `RefCell`'s.
     /// A `LockResult` kept as it is, and `Mutex`'s other methods, are the
     /// not-yet error (D712.1).
     pub(super) fn parse_mutex_member(
@@ -404,7 +405,7 @@ impl Parser<'_> {
     ) -> Result<ParsedExpr, Error> {
         let mut ahead = self.input.clone();
         let mut next = || ahead.next().map_or(Token::EOF, |(token, _)| token);
-        let unwrapped = member.as_str() == "lock"
+        let unwrapped = matches!(member.as_str(), "lock" | "get_mut" | "into_inner")
             && next() == Token::Unit
             && next() == Token::Period
             && matches!(next(), Token::Identifier(name) if matches!(name.as_str(), "unwrap" | "expect"))
@@ -426,8 +427,12 @@ impl Parser<'_> {
                 reference: member_span,
             });
         }
-        let mut locked = self.parse_cell_member(value, inner, "borrow_mut".into(), member_span)?;
-        self.expect(Token::Period, "'.' after `lock()`")?;
+        let cell_member = match member.as_str() {
+            "lock" => "borrow_mut".into(),
+            _ => member.clone(),
+        };
+        let mut locked = self.parse_cell_member(value, inner, cell_member, member_span)?;
+        self.expect(Token::Period, "'.' after the call")?;
         let (unwrap, _) = self.expect_member_name()?;
         let (mut arguments, end) = self.parse_call_arguments("`unwrap` arguments")?;
         if unwrap.as_str() == "expect" {
@@ -445,7 +450,9 @@ impl Parser<'_> {
         // `let guard = m.lock().unwrap();` holds the lock for `guard`'s
         // block, as `let v = cell.borrow_mut();` does.
         locked.span = span(locked.span.start(), end);
-        if let Some(borrow) = &mut self.last_cell_borrow {
+        if member.as_str() != "into_inner"
+            && let Some(borrow) = &mut self.last_cell_borrow
+        {
             borrow.span = locked.span;
         }
         Ok(locked)
