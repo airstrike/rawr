@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A `Box<dyn Fn>`, a `&dyn Fn` or a `&Box<dyn Fn>` fills a function's `impl Fn` or `F: Fn` input, as in Rust, so a boxed style closure given to iced's `container::style` checks and runs. An `Rc` or `Arc` of one stays an error, as in rustc. Messages name a box or reference of a function `dyn Fn(..)`, and a crate method on a borrowed receiver can call back a closure the receiver holds. (#1650; part of #222)
+- A type alias of an associated type takes its defaulted parameters written, so `fn f() -> canvas::Geometry<Renderer>` checks and runs, as iced's sandpiles writes it. (#317)
+- A crate function's or method's type parameter that only an argument's std-trait bound names is inferred from std's impl for the argument's type, as in rustc. `Link` of iced's `rich_text(spans)` given a `Vec<Span<'static, ()>>`, an array or a slice is `()`, through `AsRef`, `Borrow` and the other std impls. (#1651)
+- A crate function a `use` names can be called with a turbofish, as `span::<()>("e")`. (#1652)
 
 ## 0.3.178 (2026-11-10)
 

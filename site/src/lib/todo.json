@@ -12,7 +12,10 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A `Box<dyn Fn>`, a `&dyn Fn` or a `&Box<dyn Fn>` fills a function's `impl Fn` or `F: Fn` input, as in Rust, so a boxed style closure given to iced's `container::style` checks and runs. An `Rc` or `Arc` of one stays an error, as in rustc. Messages name a box or reference of a function `dyn Fn(..)`, and a crate method on a borrowed receiver can call back a closure the receiver holds.","issues":[1650],"refs":[222]}
+        {"text":"A `Box<dyn Fn>`, a `&dyn Fn` or a `&Box<dyn Fn>` fills a function's `impl Fn` or `F: Fn` input, as in Rust, so a boxed style closure given to iced's `container::style` checks and runs. An `Rc` or `Arc` of one stays an error, as in rustc. Messages name a box or reference of a function `dyn Fn(..)`, and a crate method on a borrowed receiver can call back a closure the receiver holds.","issues":[1650],"refs":[222]},
+        {"text":"A type alias of an associated type takes its defaulted parameters written, so `fn f() -> canvas::Geometry<Renderer>` checks and runs, as iced's sandpiles writes it.","issues":[317]},
+        {"text":"A crate function's or method's type parameter that only an argument's std-trait bound names is inferred from std's impl for the argument's type, as in rustc. `Link` of iced's `rich_text(spans)` given a `Vec<Span<'static, ()>>`, an array or a slice is `()`, through `AsRef`, `Borrow` and the other std impls.","issues":[1651]},
+        {"text":"A crate function a `use` names can be called with a turbofish, as `span::<()>(\"e\")`.","issues":[1652]}
       ]
     },
     "releases": [
@@ -2262,7 +2265,7 @@
     {"issue":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.6"},
     {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.28"},
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.140"},
     {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.22"},
@@ -3594,7 +3597,9 @@
     {"issue":1647,"title":"A method with elided lifetimes whose output borrows self is refused as higher-ranked","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1648,"title":"An if/else whose arms box different closures into an annotated Box<dyn Fn> is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
     {"issue":1649,"title":"A save of one marked file lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.178"},
-    {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open","category":"Divergences from rustc"}
+    {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open","category":"Divergences from rustc"},
+    {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"open","category":"Divergences from rustc"},
+    {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4004,7 +4009,7 @@
           "name": "Native callback mutations",
           "start": 47,
           "size": 4,
-          "state": "now",
+          "state": "done",
           "note": "The audit and Miri remain",
           "issues": [
             {"number":365,"title":"Native mutable vectors lose script callback changes","state":"closed"}
@@ -4016,7 +4021,7 @@
           "name": "Struct literals and live edits",
           "start": 44,
           "size": 2,
-          "state": "next",
+          "state": "done",
           "note": "Crate struct literals work in a plain runner (#325). Live edits to an impl's shape are next (#326)",
           "issues": [
             {"number":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"closed"},
@@ -4029,10 +4034,10 @@
           "name": "Projections and function values",
           "start": 44,
           "size": 3,
-          "state": "now",
+          "state": "done",
           "note": "#317 and #319 remain",
           "issues": [
-            {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
+            {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"closed"},
             {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed"},
             {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"closed"},
             {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed"}
@@ -4638,7 +4643,10 @@
             {"number":1639,"title":"The project's Cargo.lock is read with the 1 MiB manifest limit, so a larger lock fails the resolution","state":"closed"},
             {"number":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open"},
             {"number":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed"},
-            {"number":1646,"title":"A save resolves and lowers every marked file again","state":"open"}
+            {"number":1646,"title":"A save resolves and lowers every marked file again","state":"open"},
+            {"number":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open"},
+            {"number":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"open"},
+            {"number":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"open"}
           ]
         }
       ]
