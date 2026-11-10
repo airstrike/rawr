@@ -134,6 +134,30 @@ impl<'a> Parser<'a> {
             value.ty = target;
             return Ok(None);
         }
+        // `Some(&point)` where an `Option<&dyn Value>` is expected, as an
+        // array's later element is: its payload coerces to the expected
+        // payload, as rustc's expectation reaches the constructor's
+        // argument (#1623). The option is the literal's, so it holds one.
+        if let (Ty::Option(to), Ty::Option(from)) = (&target, &source)
+            && let Some(payload) = self.some_payloads.get(&value.span.start()).copied()
+            && !self.unifies(to, from)
+        {
+            let option = self.temporary("option");
+            let read = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
+            let mut member = self.operator_expr(read, (**from).clone(), payload);
+            self.coerce_expr(to, &mut member)?;
+            let mut rendered = origin::Fragment::plain(format!("{{ let {option} = "));
+            rendered.push(value.rendered_source());
+            rendered.push_text("; ");
+            rendered.push(self.prelude_op(PreludeOp::Some, [member.rendered_source()]));
+            rendered.push_text(" }");
+            value.prelude = origin::Fragment::default();
+            value.source = rendered;
+            value.lvalue = None;
+            value.source.cover(value.span);
+            value.ty = target;
+            return Ok(None);
+        }
         // A crate function where a `fn` pointer is expected, as the array
         // `[primary as fn(&Theme, _) -> _, secondary]` holds two: the
         // closure that calls it, a function value at runtime.

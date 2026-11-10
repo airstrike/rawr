@@ -39,6 +39,12 @@ fn main() {
             Some(&point as &dyn fields::Value)
         ])
     );
+    // A later `Some(&point)` coerces to the element's `&dyn Value`, as
+    // rustc's expectation reaches the payload (#1623).
+    println!(
+        "{}",
+        fields.count(&[Some(&n as &dyn fields::Value), None, Some(&point)])
+    );
     (|set: fields::ValueSet| println!("{}", fields::dispatch("event", &set)))(fields::values!(
         fields,
         [format_args!("n {}", n), n, format_args!("x {n} y")]

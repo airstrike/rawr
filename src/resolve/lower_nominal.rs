@@ -597,6 +597,10 @@ struct Parser<'a> {
     /// Box<dyn Error>>` expected of it is a `Box<dyn Error>` expected of
     /// the error.
     err_payloads: BTreeMap<Position, Span>,
+    /// Where each `Some(value)` starts, with its value's span: an
+    /// `Option<&dyn Trait>` expected of it is a `&dyn Trait` expected of
+    /// the value, as rustc's expectation reaches the payload (#1623).
+    some_payloads: BTreeMap<Position, Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// Each type parameter of a dependency's trait method that native code
@@ -949,6 +953,7 @@ impl<'a> Parser<'a> {
             parse_count: 0,
             text_into: Vec::new(),
             err_payloads: BTreeMap::new(),
+            some_payloads: BTreeMap::new(),
             generics: BTreeMap::new(),
             opaque: BTreeMap::new(),
             pending_turbofish: None,

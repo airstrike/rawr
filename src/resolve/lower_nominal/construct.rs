@@ -551,9 +551,11 @@ impl<'a> Parser<'a> {
         if variant == Prelude::Err && inferred {
             self.box_returned_error(value)?;
         }
-        if variant == Prelude::Err {
-            self.err_payloads.insert(start.start(), value.span);
-        }
+        match variant {
+            Prelude::Err => self.err_payloads.insert(start.start(), value.span),
+            Prelude::Some => self.some_payloads.insert(start.start(), value.span),
+            Prelude::Ok | Prelude::None => None,
+        };
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
@@ -1465,6 +1467,17 @@ impl<'a> Parser<'a> {
             )?;
             self.coerce_expr(&expected, argument)?;
             self.consume_imported_value(argument, &path, argument.span)?;
+            // A field the crate keeps for the program's life, as tracing's
+            // `Identifier(pub &'static dyn Callsite)`: what the value
+            // borrows is borrowed for `'static`, which a local's borrow is
+            // not (rustc's E0597, #1620).
+            // The flow's guard ends with the statement that copies `held`.
+            if lasting(field.ty()) {
+                let held = self.flow().origins(argument.span).map(<[_]>::to_vec);
+                if let Some(held) = held {
+                    self.flow().forever(&held);
+                }
+            }
         }
         for (index, parameter) in instance.iter().enumerate() {
             if matches!(self.inference.resolve(parameter), Ty::Infer(_))
@@ -1527,4 +1540,17 @@ impl<'a> Parser<'a> {
         }
         .retain_origin())
     }
+}
+
+/// Whether a crate's field of type `ty` holds a borrow at `'static`: a
+/// `&'static dyn Trait` (D872).
+#[cfg(feature = "rust-import")]
+fn lasting(ty: &crate::host::type_ref::Type) -> bool {
+    matches!(
+        ty.shape(),
+        crate::host::type_ref::Shape::Object {
+            pointer: rawr_import::classify::representability::object::Pointer::Lasting,
+            ..
+        }
+    )
 }

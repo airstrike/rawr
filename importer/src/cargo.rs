@@ -642,6 +642,17 @@ enum Role {
     Lock,
 }
 
+impl Role {
+    /// The read bound for an input of this role: a manifest is the 1 MiB
+    /// manifest class, and a lock is the lock class a large graph needs.
+    const fn bytes(self) -> usize {
+        match self {
+            Self::Manifest => process::TAIL_BYTES,
+            Self::Lock => process::CAPTURE_BYTES,
+        }
+    }
+}
+
 impl Input {
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -1715,7 +1726,7 @@ impl Request {
         self.parallelism.revalidate(command)?;
         self.config.revalidate(limits, command)?;
         for input in &self.inputs {
-            if authority_input_digest(&input.path, process::TAIL_BYTES)? != input.digest {
+            if authority_input_digest(&input.path, input.role.bytes())? != input.digest {
                 return Err(Error::ResolutionDrift {
                     command,
                     field: "Cargo manifest/lock authority",
@@ -2649,7 +2660,7 @@ impl Resolution {
         self.retained_config
             .revalidate(limits, "publication validation")?;
         for input in &self.retained_inputs {
-            if authority_input_digest(&input.path, process::TAIL_BYTES)? != input.digest {
+            if authority_input_digest(&input.path, input.role.bytes())? != input.digest {
                 return Err(Error::ResolutionDrift {
                     command: "publication validation",
                     field: "Cargo manifest/lock authority",
@@ -2835,7 +2846,7 @@ impl Authority {
             });
             if present {
                 let lock = canonical_file("Cargo authority lock", &lock)?;
-                let bytes = read_bounded("Cargo authority lock", &lock, process::TAIL_BYTES)?;
+                let bytes = read_bounded("Cargo authority lock", &lock, Role::Lock.bytes())?;
                 if let Some(input) = lock_input.as_mut() {
                     input.digest = Some(digest(&bytes));
                 }
@@ -4091,7 +4102,7 @@ fn authority_inputs(
             });
             continue;
         }
-        let bytes = read_bounded("Cargo authority input", &path, process::TAIL_BYTES)?;
+        let bytes = read_bounded("Cargo authority input", &path, role.bytes())?;
         inputs.push(Input {
             path,
             digest: Some(digest(&bytes)),
@@ -5121,6 +5132,31 @@ mod authority_boundary_tests {
         super::OWNED_AUTHORITIES.with(|owned| owned.set(0));
         super::Authority::load(Some(&manifest)).expect("the authority loads");
         assert_eq!(super::OWNED_AUTHORITIES.with(std::cell::Cell::get), 1);
+        fs::remove_dir_all(root).expect("authority fixture is removed");
+    }
+
+    #[test]
+    fn a_lock_past_the_manifest_bound_loads_and_revalidates() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-authority-large-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir(&root).expect("authority fixture root is created");
+        let manifest = root.join("Cargo.toml");
+        fs::write(&manifest, "[workspace]\nresolver = \"3\"\n")
+            .expect("authority manifest is written");
+        let mut lock = b"version = 4\n".to_vec();
+        lock.resize(crate::process::TAIL_BYTES + 1, b'\n');
+        fs::write(root.join("Cargo.lock"), &lock).expect("authority lock is written");
+        let manifest = fs::canonicalize(manifest).expect("authority manifest canonicalizes");
+        let authority = super::Authority::load(Some(&manifest)).expect("the authority loads");
+        assert_eq!(authority.lock.as_deref().map(<[u8]>::len), Some(lock.len()));
+        for input in &authority.inputs {
+            let current = super::authority_input_digest(&input.path, input.role.bytes())
+                .expect("the input revalidates");
+            assert_eq!(current, input.digest);
+        }
         fs::remove_dir_all(root).expect("authority fixture is removed");
     }
 }

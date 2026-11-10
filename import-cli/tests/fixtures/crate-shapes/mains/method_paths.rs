@@ -30,4 +30,6 @@ fn main() {
         Look::name(&Look::Light),
         Look::to_string(&look)
     );
+    let first: &'static str = Look::NAMES[0];
+    println!("{:?} {} {first}", Look::NAMES, Look::NAMES.len());
 }
