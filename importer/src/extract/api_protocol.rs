@@ -2786,7 +2786,8 @@ fn struct_definition<const N: usize, const M: usize>(
             "fields":fields,
             "fields_complete":true,
             "non_exhaustive":false,
-            "generics":empty_generics()
+            "generics":empty_generics(),
+            "layout":{"kind":"absent"}
         }),
     )
 }
