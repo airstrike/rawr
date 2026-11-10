@@ -14,7 +14,7 @@ mod reexport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 58;
+const SCHEMA: u32 = 59;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -933,6 +933,10 @@ pub enum Type {
     /// from a `String` and a `&str`, so `From<String>`, `From<&'a str>`
     /// and `From<Cow<'a, str>>` of one type stay three forms (#1390).
     Text,
+    /// core's `fmt::Arguments<'_>`, as log's `Record` takes and tracing's
+    /// `impl Value for fmt::Arguments<'_>` is for: the program's
+    /// `format_args!`, apart from a `String` (#1561).
+    Arguments,
     /// Another Rust numeric primitive by name (`u32`, `f32`, ...).
     Primitive(Box<str>),
     /// Imported nominal type with exact semantic identity.
@@ -4710,13 +4714,10 @@ fn ty(
         Source::Builtin(Builtin::F64) => Type::F64,
         Source::Builtin(Builtin::I64) => Type::I64,
         Source::Builtin(Builtin::InclusiveRange) => Type::InclusiveRange,
-        Source::Builtin(
-            Builtin::String
-            | Builtin::Str
-            | Builtin::StaticStr
-            | Builtin::Text
-            | Builtin::Arguments,
-        ) => Type::String,
+        Source::Builtin(Builtin::String | Builtin::Str | Builtin::StaticStr | Builtin::Text) => {
+            Type::String
+        }
+        Source::Builtin(Builtin::Arguments) => Type::Arguments,
         Source::Builtin(builtin) => Type::Primitive(builtin.rust_name().unwrap_or_default().into()),
         Source::Nominal {
             definition,

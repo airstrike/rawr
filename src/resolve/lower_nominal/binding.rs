@@ -101,6 +101,7 @@ impl<'a> Parser<'a> {
         let pending = self.field_entries.len();
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
+        let opened = self.calls_noted;
         let depth = self.temporary_scopes.len();
         self.open_temporaries();
         self.flow().open_temporaries();
@@ -122,7 +123,7 @@ impl<'a> Parser<'a> {
             }
         }
         bound?;
-        self.statement_frames(start, frames, true)?;
+        self.statement_frames(start, opened, frames, true)?;
         self.end_lend_self(outer_lend, start);
         self.settle_parses()
     }

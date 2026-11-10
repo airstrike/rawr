@@ -3710,23 +3710,53 @@ fn pin_slice<T: 'static>(lent: SliceLent<T>) -> &'static [T] {
 
 /// A crate trait's object a slice of them lends (#1591): a static's place
 /// or an object native code gave, a program's number made for the call,
-/// or a crate value its slot shares.
+/// a crate value its slot shares, or the text of the program's
+/// `format_args!`, whose `fmt::Arguments` the frame makes (#1561).
 #[allow(dead_code)]
 enum HeldObject<T: ?Sized + 'static> {
     Lasting(&'static T),
     Made(Box<T>),
     Shared(std::rc::Rc<T>),
+    Text(ImmutableString),
 }
 
 #[allow(dead_code)]
 impl<T: ?Sized + 'static> HeldObject<T> {
-    fn get(&self) -> &T {
+    /// The object, `None` for a text, whose object the frame makes.
+    fn get(&self) -> Option<&T> {
         match self {
-            Self::Lasting(object) => object,
-            Self::Made(object) => object,
-            Self::Shared(object) => object,
+            Self::Lasting(object) => Some(object),
+            Self::Made(object) => Some(object),
+            Self::Shared(object) => Some(object),
+            Self::Text(_) => None,
         }
     }
+
+    fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// `body`, run with each of `texts` formatted as the `fmt::Arguments` of a
+/// `format_args!` in a `let` of its own, after the `made` ones: an
+/// `Arguments` lives only in the statement that makes it, so each is made
+/// in a call of its own and `body` runs innermost (#1561).
+#[allow(dead_code)]
+fn with_arguments<R>(
+    texts: &[&str],
+    made: Vec<&::core::fmt::Arguments<'_>>,
+    body: impl FnOnce(&[&::core::fmt::Arguments<'_>]) -> R,
+) -> R {
+    let Some((text, rest)) = texts.split_first() else {
+        return body(&made);
+    };
+    let arguments = ::core::format_args!("{text}");
+    let mut made: Vec<&::core::fmt::Arguments<'_>> = made;
+    made.push(&arguments);
+    with_arguments(rest, made, body)
 }
 
 #[allow(dead_code)]
@@ -11386,6 +11416,7 @@ fn render_adapter_body(
             if !opens && !pins && replay.is_none() && functions.is_empty() && mappers.is_empty() {
                 render_scoped_input(plan, signature, substitutions, crossed, output)?;
             }
+            let opening = OpensFrame::enter(opens);
             if replay.is_some() {
                 render_function_arguments(
                     signature,
@@ -11411,6 +11442,7 @@ fn render_adapter_body(
                     output,
                 )?;
             }
+            drop(opening);
             if opens {
                 render_opening(
                     plan,
@@ -11586,6 +11618,7 @@ fn render_adapter_body(
             // A `&'a T` the frame's output keeps with its receiver stays
             // the program's value until the frame reaches it (`kept_inputs`).
             let kept = kept_inputs(signature, substitutions)?;
+            let opens = OpensFrame::enter(true);
             for (index, ty) in signature.inputs().iter().enumerate() {
                 if kept.iter().any(|input| input.position == index) {
                     writeln!(
@@ -11606,6 +11639,7 @@ fn render_adapter_body(
                     )?;
                 }
             }
+            drop(opens);
             render_method_opening(
                 plan,
                 &path,
@@ -12261,6 +12295,7 @@ fn render_opening(
         before,
         back,
         with,
+        closed,
     } = frame_copies(signature, substitutions)?;
     // A frame is a script value, so what it holds is `Send` and `Sync`. A
     // native input stays in its arena slot by its handle until the frame
@@ -12326,7 +12361,7 @@ fn render_opening(
         .map_err(runtime_error)?;
         let result = __rawr_internal::scope::open_joined(&mut region, || rest(value));{back}
         result
-    }}){with};
+    {closed}}}){with};
     Ok(Dynamic::from(output))"
     )
     .map_err(encoding)
@@ -12799,6 +12834,8 @@ struct FrameCopies {
     before: String,
     back: String,
     with: String,
+    /// What closes `rebound`'s nesting, at the frame's end.
+    closed: String,
 }
 
 fn frame_copies(
@@ -12810,17 +12847,16 @@ fn frame_copies(
     // The take's own borrow of a string or value the frame owns is set
     // aside: the frame borrows what it moves in.
     let mut set_aside = String::new();
+    let mut closed = String::new();
     for (position, input) in signature.inputs().iter().enumerate() {
         // The objects a slice lends move into the frame, which lends them
-        // again (#1591).
+        // (#1591).
         if let Some(element) =
             object::lent_slice_element(&substituted(input, signature, substitutions)?)
         {
-            set_aside.push_str(&format!("drop(argument_{position}_lent);\n    "));
-            rebound.push_str(&format!(
-                "\n        {}",
-                object::lent_slice(position, element)?
-            ));
+            let object::Lent { open, close } = object::lent_slice(position, element, true)?;
+            rebound.push_str(&open);
+            closed.insert_str(0, &close);
             continue;
         }
         if lends_str(input, signature, substitutions) {
@@ -12846,6 +12882,7 @@ fn frame_copies(
             before: set_aside,
             back: String::new(),
             with: String::new(),
+            closed,
         });
     }
     let mut given = Vec::new();
@@ -12865,6 +12902,7 @@ fn frame_copies(
             given.join(", ")
         ),
         with: ".with_copies(copies)".to_owned(),
+        closed,
     })
 }
 
@@ -12943,6 +12981,7 @@ fn render_method_opening(
         before,
         back,
         with,
+        closed,
     } = frame_copies(signature, substitutions)?;
     let name = format!("{}::{}", rust_path(plan), plan.name());
     // The frame itself, once the call has made its output.
@@ -12993,18 +13032,34 @@ fn render_method_opening(
             None => "Some(scoped) => Err(runtime_error(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))),".to_owned(),
         };
         // A `&self` receiver of the arena is shared with the frame, as two
-        // shared borrows of it coexist, and a `&mut self` one is leased.
-        let held = if matches!(receiver, Receiver::Shared) {
-            format!(
-                "let held: std::rc::Rc<{container}> = with_arena(|arena| arena.share(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+        // shared borrows of it coexist, and a `&mut self` one is leased. A
+        // static's place, or what a method of one gave that borrows it, is
+        // lent where it is (#1602).
+        let (lasting, held) = if matches!(receiver, Receiver::Shared) {
+            (
+                format!(
+                    "let lasting = arguments.values.first().and_then(|value| __rawr_internal::place::statics::lasting::<{container}>(value));"
+                ),
+                format!(
+                    "let held: std::rc::Rc<{container}>;
                 #[allow(unused_mut)]
-                let mut receiver = &*held;"
+                let mut receiver: &{container} = match lasting {{
+                    Some(lasting) => lasting,
+                    None => {{
+                        held = with_arena(|arena| arena.share(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                        &*held
+                    }}
+                }};"
+                ),
             )
         } else {
-            format!(
-                "let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+            (
+                "let lasting: Option<&'static ()> = None;".to_owned(),
+                format!(
+                    "let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
                 #[allow(unused_mut)]
                 let mut receiver = held.get_mut();"
+                ),
             )
         };
         let texts = signature
@@ -13036,8 +13091,9 @@ fn render_method_opening(
             output,
             "    let scoped = scoped_value(arguments, 0);
     let lent = lent_value(arguments, 0);
-    let handle = match (scoped, lent) {{
-        (None, None) => Some(native_handle(arguments, 0, false)?),
+    {lasting}
+    let handle = match (scoped, lent, lasting) {{
+        (None, None, None) => Some(native_handle(arguments, 0, false)?),
         _ => None,
     }};
     {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
@@ -13053,7 +13109,7 @@ fn render_method_opening(
                 {frame}
             }}
         }}
-    }}){with};
+    {closed}}}){with};
     Ok(Dynamic::from(output))"
         )
         .map_err(encoding);
@@ -13081,7 +13137,7 @@ fn render_method_opening(
         .map_err(runtime_error)?;
         let result = __rawr_internal::scope::open(&mut region, || rest(value));{back}
         result
-    }}){with};
+    {closed}}}){with};
     Ok(Dynamic::from(output))"
     )
     .map_err(encoding)
@@ -14593,6 +14649,44 @@ fn render_guard(
             output,
         );
     }
+    // A static's place, of a body or of native code (D862), lends its
+    // `&'static` to the method, whose borrow of it lasts as long: the
+    // output is a place where the method gave it, as tracing's
+    // `__CALLSITE.metadata()` gives `&'static Metadata<'static>` (#1602).
+    let shared = matches!(guard, Guard::Shared)
+        && matches!(receiver, Receiver::Shared)
+        && signature.inputs().is_empty();
+    if shared {
+        let mut container = Vec::new();
+        render_container_path(
+            path,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            true,
+            &mut container,
+        )?;
+        let container = String::from_utf8(container).map_err(request::unwritable)?;
+        let mut turbofish = Vec::new();
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            &mut turbofish,
+        )?;
+        let turbofish = String::from_utf8(turbofish).map_err(request::unwritable)?;
+        writeln!(
+            output,
+            "    if let Some(receiver) = arguments.values.first().and_then(|value| __rawr_internal::place::statics::lasting::<{container}>(value)) {{
+        let witness = output_witness().ok_or(Error::Stale)?;
+        return Ok(__rawr_internal::place::statics::given(witness, receiver.{name}{turbofish}()));
+    }}",
+            name = plan.name()
+        )
+        .map_err(encoding)?;
+    }
     let copy = copy_macro(&target);
     // The method's inputs, given as they were taken: it is called once.
     let inputs = signature.inputs().len();
@@ -14642,6 +14736,15 @@ fn render_guard(
         container_parameters,
         output,
     )?;
+    // Out of a region or a static's place, a target that borrows for a
+    // lifetime of its own can't be copied out of the call that lends it.
+    if shared && carries_lifetime(&target) {
+        return writeln!(
+            output,
+            "    Err(Error::Value(\"a borrow that outlives the call lending it is not supported in Rawr yet\".to_owned()))"
+        )
+        .map_err(encoding);
+    }
     // A receiver native code lent (D558.3), as iced lends `draw` its
     // `&Theme`, whose `palette()` the program reads (#954): the method is
     // called through its accessor, and the copy goes out of it.
@@ -16591,10 +16694,14 @@ fn render_take_input(
     // `&[Option<&dyn Value>]`, as tracing-core's `value_set_all` takes:
     // the objects native code makes of the program's values, each held for
     // as long as the slice lends it (#1591).
+    // A frame lends them inside itself (`frame_copies`).
     if let Some(element) = object::lent_slice_element(&lent) {
         object::render_held_slice(local, index, element, output)?;
-        return writeln!(output, "    {}", object::lent_slice(local, element)?)
-            .map_err(request::unwritable);
+        if OPENS_FRAME.get() {
+            return Ok(());
+        }
+        let object::Lent { open, .. } = object::lent_slice(local, element, false)?;
+        return writeln!(output, "    {open}").map_err(request::unwritable);
     }
     if let Some(element) = lent_slice_element(ty, &lent) {
         let item =
@@ -17504,8 +17611,10 @@ fn render_lease(
         ("PlaceHeld", "lease_place")
     };
     // A static's place, of a body or of native code (D862), is lent where
-    // it is, as rustc lends `&STATIC`.
-    let lasting = (!*mutable && !future && !carries_lifetime(ty)).then(|| {
+    // it is, as rustc lends `&STATIC`, and so is what a method of one gave
+    // that borrows it, as `__CALLSITE.metadata()` gives `&'static
+    // Metadata<'static>` (#1602): a lifetime the type carries is `'static`.
+    let lasting = (!*mutable && !future).then(|| {
         format!(
             "if let Some(lasting) = arguments.values.get({index}).and_then(|value| __rawr_internal::place::statics::lasting::<{rust}>(value)) {{ lasting }} else "
         )
@@ -20063,6 +20172,9 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the call whose inputs are being taken opens a scope frame,
+    /// which lends a slice of objects inside itself (`frame_copies`).
+    static OPENS_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The `&[T]` arguments an adapter's body has as `slice_{index}`, each a
     /// native slice place's elements or `None` (`with_slice_argument`).
     static SLICE_ARGUMENTS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -20888,6 +21000,21 @@ impl LentArguments {
 impl Drop for LentArguments {
     fn drop(&mut self) {
         LENT_ARGUMENTS.set(self.0);
+    }
+}
+
+/// Sets `OPENS_FRAME` for as long as it lives.
+struct OpensFrame(bool);
+
+impl OpensFrame {
+    fn enter(on: bool) -> Self {
+        Self(OPENS_FRAME.replace(on))
+    }
+}
+
+impl Drop for OpensFrame {
+    fn drop(&mut self) {
+        OPENS_FRAME.set(self.0);
     }
 }
 

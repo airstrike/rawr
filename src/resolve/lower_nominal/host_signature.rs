@@ -1852,6 +1852,9 @@ impl<'a> Parser<'a> {
             // A crate's `Cow<'_, str>` input: std's `Cow<str>`, which a
             // `String` or a `&str` doesn't fill (E0277), as rustc has it.
             Shape::Builtin(Builtin::Text) => Ty::Cow(Box::new(Ty::UnsizedStr)),
+            // A crate's `fmt::Arguments<'_>`: the program's `format_args!`,
+            // which a `String` doesn't fill (E0308), as rustc has it.
+            Shape::Builtin(Builtin::Arguments) => Ty::Arguments,
             Shape::Builtin(Builtin::InclusiveRange) => {
                 Ty::InclusiveRange(Int::Var(self.inference.fresh_id()))
             }

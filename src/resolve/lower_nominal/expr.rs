@@ -1000,13 +1000,18 @@ impl<'a> Parser<'a> {
         // std's macro, by its name or its path.
         let unbound = std_macro || self.models.import(&name).is_none();
         // `format_args!(..)` is the text it formats, as rawr holds std's
-        // other `Display` values (`Path::display`).
+        // other `Display` values (`Path::display`), of core's
+        // `fmt::Arguments` type, apart from a `String` (#1561).
         if matches!(self.peek(), Token::Bang)
             && matches!(name.as_str(), "format" | "format_args")
             && unbound
         {
             self.next();
-            return self.parse_format(name_span, false);
+            let mut formatted = self.parse_format(name_span, false)?;
+            if name.as_str() == "format_args" {
+                formatted.ty = Ty::Arguments;
+            }
+            return Ok(formatted);
         }
         // `print!`, `println!`, `eprint!`, `eprintln!`.
         if matches!(self.peek(), Token::Bang)

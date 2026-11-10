@@ -282,3 +282,25 @@ fn recursion_stops_at_the_crates_recursion_limit() {
     );
     assert_eq!(message, "recursion limit reached while expanding `r!`");
 }
+
+#[test]
+fn an_error_in_an_expansion_of_an_argument_and_the_macros_own_tokens_is_reported() {
+    // tracing's `level_enabled!($lvl)` compares `$lvl` with its own
+    // `LevelFilter::current()`: the comparison starts at the argument and
+    // ends at the macro's tokens, which sit where it is called (#1603).
+    let source = "struct Level;\nfn current() -> Level {\n    Level\n}\n\
+                  macro_rules! raised {\n    ($level:expr) => {\n        $level + current()\n    };\n}\n\
+                  fn main() {\n    let raised = raised!(Level);\n}\nmain();\n";
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("rustc refuses it");
+    let source = Source::new("main.rs", source.to_owned()).expect("a test source has an identity");
+    let report = Report::from_parse(source, &error).expect("the error is in the source");
+    assert!(
+        report
+            .message()
+            .starts_with("binary operation `+` cannot be applied to type `Level`"),
+        "{report:?}"
+    );
+}

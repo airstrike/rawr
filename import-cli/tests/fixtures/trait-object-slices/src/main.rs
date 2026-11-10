@@ -2,7 +2,8 @@
 // A crate's trait objects in a slice of `Option`s (#1591): numbers, a
 // `bool` and a crate value lent as `&dyn Value`, and the set a field set
 // makes of them, which borrows them while it lives, read, given to a
-// function and to a closure, as tracing's `event!` gives its `ValueSet`.
+// function and to a closure, as tracing's `event!` gives its `ValueSet`,
+// and `format_args!` as such an object.
 
 fn main() {
     let fields = fields::FieldSet::new(&["a", "b", "c"]);
@@ -19,4 +20,15 @@ fn main() {
     (|set: fields::ValueSet| println!("{}", fields::dispatch("event", &set)))(
         fields.value_set_all(&[Some(&true as &dyn fields::Value), None, None]),
     );
+    // `format_args!` lent as an object, alone and among a set's values in
+    // the block a crate's macro makes, as tracing's `warn!("..")` lends its
+    // message (#1561).
+    println!(
+        "{}",
+        fields::one(&format_args!("one {}", n) as &dyn fields::Value)
+    );
+    (|set: fields::ValueSet| println!("{}", fields::dispatch("event", &set)))(fields::values!(
+        fields,
+        [format_args!("n {}", n), n, format_args!("x {n} y")]
+    ));
 }

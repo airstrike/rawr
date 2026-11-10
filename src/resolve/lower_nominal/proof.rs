@@ -393,6 +393,11 @@ impl<'a> Parser<'a> {
                 capability != capability::Kind::Copy && self.type_provides(&element, capability)
             }
             Ty::ParseError(error) => crate::capability::builtin_supports(error.name(), capability),
+            // `fmt::Arguments<'_>` is `Copy` and writes its text.
+            Ty::Arguments => matches!(
+                capability,
+                capability::Kind::Clone | capability::Kind::Copy | capability::Kind::Debug
+            ),
             Ty::Ordering => crate::capability::builtin_supports("Ordering", capability),
             Ty::Time(time) => crate::capability::builtin_supports(time.name(), capability),
             // `&T` compares, orders, hashes and prints as `T` does; a shared
@@ -700,7 +705,7 @@ impl<'a> Parser<'a> {
             Ty::Time(Time::Instant) => {
                 intrinsic::Type::builtin("Instant", TypeId::of::<crate::Instant>())
             }
-            Ty::ParseError(_) => {
+            Ty::ParseError(_) | Ty::Arguments => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
             }
             Ty::Reference { target, .. } => {

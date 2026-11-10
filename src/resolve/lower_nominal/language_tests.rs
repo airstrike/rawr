@@ -12110,6 +12110,28 @@ run()"#,
     assert_eq!(value, "xy 6 0 1 a");
 }
 
+#[test]
+fn language_format_args_writes_its_text_as_fmt_arguments_does() {
+    // `fmt::Arguments`'s `Debug` and `Display` both write the text, never
+    // quoted, and ignore width and precision (#1561).
+    let value = run_string(
+        r#"pub fn run() -> String {
+    let count = 2;
+    let copied = format_args!("c{}", count);
+    format!(
+        "{:?} [{:>6}] [{:.1}] {} {}",
+        format_args!("a \"{}\"", count),
+        format_args!("b"),
+        format_args!("long"),
+        copied,
+        copied.to_string().len()
+    )
+}
+run()"#,
+    );
+    assert_eq!(value, "a \"2\" [b] [long] c2 2");
+}
+
 /// The `Noisy` type the drop tests share: its `drop` prints its name.
 const NOISY: &str = r#"
 struct Noisy(&'static str);

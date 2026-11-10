@@ -90,6 +90,82 @@ impl Storage for Leaked {
     }
 }
 
+/// What a `&self` method of a static's place gives that borrows it, as
+/// tracing's `__CALLSITE.metadata()` gives a `&'static Metadata<'static>`
+/// (#1602): a `&'static` native code made, reached where it is, as the
+/// static is.
+struct Given(&'static dyn Lasting);
+
+/// A value a [`Given`] place reaches: any native value that may be shared.
+trait Lasting: Any + crate::func::SendSync {
+    fn any(&self) -> &dyn Any;
+}
+
+impl<T: Any + crate::func::SendSync> Lasting for T {
+    fn any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Storage for Given {
+    fn invoke(
+        &self,
+        _witness: &Witness,
+        _path: &[usize],
+        operation: Operation,
+        _arguments: &mut [Dynamic],
+        _rest: Option<&mut crate::scope::Rest<'_>>,
+    ) -> RawrResult {
+        Err(failure(format!(
+            "{operation:?} of a borrow of a static declared in a body is not supported in Rawr yet"
+        )))
+    }
+
+    fn reach(
+        &self,
+        _witness: &Witness,
+        path: &[usize],
+        mutable: bool,
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult {
+        if mutable {
+            return Err(failure(
+                "cannot borrow data in a `&` reference as mutable (E0596)",
+            ));
+        }
+        if !path.is_empty() {
+            return Err(failure(
+                "a part of a borrow of a static declared in a body is not supported in Rawr yet",
+            ));
+        }
+        visit(Access::Shared(self.0.any()))
+    }
+
+    fn copies(&self, _path: &[usize]) -> bool {
+        false
+    }
+
+    fn lasting(&self) -> Option<Box<dyn Any>> {
+        let pointer: *const dyn Any = self.0.any();
+        Some(Box::new(pointer))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// The place of `value`, a `&'static` a method of a static's place gave
+/// that borrows it, whose type `witness` attests (#1602): marked code
+/// passes it on and calls its methods, each reaching it where it is.
+pub fn given<T: Any + crate::func::SendSync>(witness: Witness, value: &'static T) -> Dynamic {
+    Dynamic::from(Place {
+        witness,
+        storage: Shared::new(Given(value)),
+        mutable: false,
+    })
+}
+
 /// The static the lowering keys `key`, reserved when no generation made it
 /// yet.
 #[must_use]

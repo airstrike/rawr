@@ -4,13 +4,14 @@
 use super::*;
 
 impl<'a> Parser<'a> {
-    /// The statement written from `start` with the scope frames its calls
-    /// open: bound ahead of it, and the statement run in their block, or,
-    /// for a `let` (`inline`), ahead of it in its own block, so the rest of
-    /// that block runs inside them.
+    /// The statement written from `start`, opened when `opened` calls were
+    /// noted, with the scope frames its calls open: bound ahead of it, and
+    /// the statement run in their block, or, for a `let` (`inline`), ahead
+    /// of it in its own block, so the rest of that block runs inside them.
     pub(super) fn statement_frames(
         &mut self,
         start: usize,
+        opened: usize,
         frames: Vec<Frame>,
         inline: bool,
     ) -> Result<(), Error> {
@@ -37,6 +38,34 @@ impl<'a> Parser<'a> {
         match self.last_expression {
             Some((tail, endpoint)) if tail >= start => {
                 let value = statement.split_off(tail - start);
+                // A block's tail alone in it whose value is the frame its
+                // call opens, as tracing's `valueset_all!` block gives the
+                // `ValueSet` its event's closure takes: the tail's
+                // temporaries live to the end of the enclosing statement
+                // before edition 2024, which is the only edition whose
+                // rustc lets the value leave the block, so the frame is the
+                // enclosing statement's.
+                if let [frame] = frames.as_slice()
+                    && frame.outer.is_empty()
+                    && frame.after.is_empty()
+                    && self.output.as_str().trim().is_empty()
+                    && statement.as_str().trim().is_empty()
+                    && frame
+                        .inner
+                        .as_str()
+                        .strip_prefix("let ")
+                        .and_then(|bound| bound.strip_prefix(value.as_str().trim()))
+                        .is_some_and(|rest| rest.starts_with(" = "))
+                    && self.frame_effects.last().is_some_and(|(_, effects)| {
+                        effects.iter().all(|(_, noted)| *noted >= opened)
+                    })
+                    && let Some(enclosing) = self.frames.last_mut()
+                {
+                    enclosing.extend(frames);
+                    let tail = self.write_output(value, endpoint);
+                    self.last_expression = Some((tail, endpoint));
+                    return Ok(());
+                }
                 let mut body = statement;
                 body.push_text(" ");
                 body.push(value);
@@ -89,6 +118,7 @@ impl<'a> Parser<'a> {
         let pending = self.field_entries.len();
         let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
+        let opened = self.calls_noted;
         self.open_temporaries();
         self.flow().open_temporaries();
         self.open_frames();
@@ -106,7 +136,7 @@ impl<'a> Parser<'a> {
         self.field_entries.truncate(pending);
         parsed?;
         self.statement_temporaries(start, &temporaries);
-        self.statement_frames(start, frames, false)?;
+        self.statement_frames(start, opened, frames, false)?;
         self.end_lend_self(outer_lend, start);
         self.settle_parses()
     }

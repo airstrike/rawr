@@ -632,7 +632,16 @@ pub(super) fn text_end(mut position: Position, text: &str) -> Position {
     position
 }
 
+/// The source from `start` to `end`. An expression a macro's expansion
+/// makes of an argument and the macro's own tokens, which sit where the
+/// macro is called, may end before it starts, as `$lvl <=
+/// $crate::level_filters::LevelFilter::current()` of `level_enabled!`
+/// does: it covers the call from the one to the other, where rustc reports
+/// an error in it (#1603).
 pub(super) fn span(start: Position, end: Position) -> Span {
+    if end < start {
+        return Span::new(end, start);
+    }
     Span::new(start, end)
 }
 

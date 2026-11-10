@@ -51,6 +51,9 @@ pub enum Builtin {
     /// `!`, the output of a function that never returns, as
     /// `std::process::exit` gives.
     Never,
+    /// core's `fmt::Arguments<'_>` a crate's item takes, or a crate's impl
+    /// is for: the program's `format_args!`, apart from a `String` (#1561).
+    Arguments,
 }
 
 impl Builtin {
@@ -78,7 +81,8 @@ impl Builtin {
             | Self::FloatInclusiveRange
             | Self::Duration
             | Self::Instant
-            | Self::Text => return None,
+            | Self::Text
+            | Self::Arguments => return None,
         })
     }
 
@@ -1107,6 +1111,7 @@ impl crate::digest::Write for Type {
                 Builtin::Instant => 0x2334,
                 Builtin::Never => 0x2335,
                 Builtin::Text => 0x2336,
+                Builtin::Arguments => 0x2337,
             }),
             Shape::Registered { path, arguments } => {
                 writer.tag(0x2305);

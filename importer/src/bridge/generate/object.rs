@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 use super::{concrete_type, render_from_dynamic, request, TYPE_PATHS};
 use crate::classify::representability::convert;
-use crate::classify::representability::object::{Object, Pointer};
+use crate::classify::representability::object::{Object, Pointer, ARGUMENTS};
 
 /// A type the facade implements a trait for that the adapter coerces a
 /// program's value of to the trait's object.
@@ -30,6 +30,10 @@ enum Kind {
     Primitive(convert::Builtin),
     /// A crate type with no parameters, by its Rust path: a native value.
     Native(String),
+    /// core's `fmt::Arguments<'_>`: the text of the program's
+    /// `format_args!`, which native code formats where the call runs, in a
+    /// `let` of its own, as rustc makes one (#1561).
+    Arguments,
 }
 
 thread_local! {
@@ -82,6 +86,12 @@ fn implementor(ty: &crate::surface::facade::Type) -> Option<Implementor> {
         return Some(Implementor {
             tag: crate::classify::representability::object::tag(&converted)?,
             kind: Kind::Primitive(builtin),
+        });
+    }
+    if matches!(ty, Type::Arguments) {
+        return Some(Implementor {
+            tag: ARGUMENTS.to_owned(),
+            kind: Kind::Arguments,
         });
     }
     let Type::Nominal {
@@ -182,8 +192,9 @@ fn arm(
     depth: usize,
 ) -> Result<String, request::Error> {
     Ok(match (&implementor.kind, object.pointer()) {
-        // A program's number lives in no static.
-        (Kind::Primitive(_), Pointer::Lasting) => {
+        // A program's number lives in no static, and `format_args!`'s
+        // `fmt::Arguments` borrows what it formats.
+        (Kind::Primitive(_), Pointer::Lasting) | (Kind::Arguments, _) => {
             "Err(Error::Value(\"borrowed value does not live long enough (E0597)\".to_owned()))"
                 .to_owned()
         }
@@ -231,6 +242,18 @@ pub(super) fn render_lent_input(
         let found = implementors.get(object.principal().as_bytes());
         for (position, implementor) in found.into_iter().flatten().enumerate() {
             let made = match &implementor.kind {
+                // The text of the program's `format_args!`, formatted in a
+                // `let` of its own before the object is made.
+                Kind::Arguments => {
+                    writeln!(
+                        kept,
+                        "    let argument_{local}_text = __rawr_internal::object::Coerced::of(&argument_{local}_value).filter(|(_, tag)| tag.as_str() == {ARGUMENTS:?}).and_then(|(inner, _)| inner.try_cast_result::<ImmutableString>().ok());
+    let argument_{local}_str: &str = argument_{local}_text.as_ref().map_or(\"\", |text| text.as_str());
+    let argument_{local}_arguments = ::core::format_args!(\"{{}}\", argument_{local}_str);"
+                    )
+                    .map_err(request::unwritable)?;
+                    format!("&argument_{local}_arguments")
+                }
                 Kind::Primitive(builtin) => {
                     let mut converted = String::new();
                     render_from_dynamic(
@@ -319,16 +342,102 @@ pub(super) fn render_held_slice(
     .map_err(request::unwritable)
 }
 
+/// The statements that lend a slice of objects, and what closes them.
+pub(super) struct Lent {
+    pub(super) open: String,
+    pub(super) close: String,
+}
+
 /// The statements that lend `argument_{local}_made` (`render_held_slice`)
-/// as `argument_{local}`, the `&[E]` of `element`s the call takes.
-pub(super) fn lent_slice(local: usize, element: &convert::Type) -> Result<String, request::Error> {
+/// as `argument_{local}`, the `&[E]` of `element`s the call takes. Inside
+/// a scope `frame`, each held text of the program's `format_args!` is
+/// formatted in a `let` of its own as `with_arguments` nests them, and the
+/// rest of the frame runs innermost, before what `close`s them: rustc's
+/// `fmt::Arguments` lives only in the statement that makes it (#1561).
+/// Outside a frame a held text is refused where it is lent.
+pub(super) fn lent_slice(
+    local: usize,
+    element: &convert::Type,
+    frame: bool,
+) -> Result<Lent, request::Error> {
+    let unwritten = || request::drift("a trait object's type");
     let mut lent = String::new();
-    lent_element(element, "held", &mut lent)?;
-    let rust = concrete_type(element).ok_or_else(|| request::drift("a trait object's type"))?;
-    Ok(format!(
-        "let argument_{local}_lent: Vec<{rust}> = argument_{local}_made.iter().map(|held| {lent}).collect();
+    lent_element(local, element, "held", &mut lent)?;
+    let rust = concrete_type(element).ok_or_else(unwritten)?;
+    let object = element_object(element).ok_or_else(unwritten)?;
+    let dynamic = object_type(object).ok_or_else(unwritten)?;
+    let lend = format!(
+        "let argument_{local}_lent: Vec<{rust}> = argument_{local}_made.iter().map(|held| -> Result<_, Error> {{ Ok({lent}) }}).collect::<Result<_, Error>>()"
+    );
+    let formats = IMPLEMENTORS.with_borrow(|implementors| {
+        implementors
+            .get(object.principal().as_bytes())
+            .is_some_and(|found| {
+                found
+                    .iter()
+                    .any(|implementor| matches!(implementor.kind, Kind::Arguments))
+            })
+    });
+    if !frame {
+        return Ok(Lent {
+            open: format!(
+                "let mut argument_{local}_next = std::iter::empty::<&({dynamic})>();
+    {lend}?;
     let argument_{local}: &[{rust}] = &argument_{local}_lent;"
-    ))
+            ),
+            close: String::new(),
+        });
+    }
+    if !formats {
+        return Ok(Lent {
+            open: format!(
+                "\n        let mut argument_{local}_next = std::iter::empty::<&({dynamic})>();
+        {lend}.map_err(runtime_error)?;
+        let argument_{local}: &[{rust}] = &argument_{local}_lent;"
+            ),
+            close: String::new(),
+        });
+    }
+    let mut text = String::new();
+    held_text(element, "held", &mut text)?;
+    Ok(Lent {
+        open: format!(
+            "\n        let argument_{local}_texts: Vec<&str> = argument_{local}_made.iter().filter_map(|held| {text}).collect();
+        with_arguments(&argument_{local}_texts, Vec::new(), |argument_{local}_arguments| -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+        let argument_{local}_objects: Vec<&({dynamic})> = argument_{local}_arguments.iter().map(|arguments| *arguments as &({dynamic})).collect();
+        let mut argument_{local}_next = argument_{local}_objects.iter().copied();
+        {lend}.map_err(runtime_error)?;
+        let argument_{local}: &[{rust}] = &argument_{local}_lent;"
+        ),
+        close: "\n        })".to_owned(),
+    })
+}
+
+/// The object an element of a lent slice is, or holds in its `Option`s.
+fn element_object(element: &convert::Type) -> Option<&Object> {
+    match element {
+        convert::Type::Option(inner) => element_object(inner),
+        convert::Type::Object(object) => Some(object),
+        _ => None,
+    }
+}
+
+/// The `Option<&str>` of the held text of the program's `format_args!`
+/// that `held`, a reference to what `held_element` made, holds.
+fn held_text(
+    element: &convert::Type,
+    held: &str,
+    output: &mut String,
+) -> Result<(), request::Error> {
+    match element {
+        convert::Type::Option(inner) => {
+            let mut text = String::new();
+            held_text(inner, "held", &mut text)?;
+            write!(output, "{held}.as_ref().and_then(|held| {text})").map_err(request::unwritable)
+        }
+        convert::Type::Object(_) => write!(output, "{held}.text()").map_err(request::unwritable),
+        _ => Err(request::drift("a lent trait object's element")),
+    }
 }
 
 /// A generated `Result<_, Error>` expression holding `element` of the
@@ -355,8 +464,11 @@ fn held_element(
 }
 
 /// The `&dyn Trait`, or the `Option` of one, that `held`, a reference to
-/// what `held_element` made, lends.
+/// what `held_element` made, lends: a held text lends the next of
+/// `argument_{local}_next`, the objects of the `fmt::Arguments` made of the
+/// texts in order.
 fn lent_element(
+    local: usize,
     element: &convert::Type,
     held: &str,
     output: &mut String,
@@ -364,10 +476,18 @@ fn lent_element(
     match element {
         convert::Type::Option(inner) => {
             let mut lent = String::new();
-            lent_element(inner, "held", &mut lent)?;
-            write!(output, "{held}.as_ref().map(|held| {lent})").map_err(request::unwritable)
+            lent_element(local, inner, "held", &mut lent)?;
+            write!(
+                output,
+                "match {held}.as_ref() {{ None => None, Some(held) => Some({lent}) }}"
+            )
+            .map_err(request::unwritable)
         }
-        convert::Type::Object(_) => write!(output, "{held}.get()").map_err(request::unwritable),
+        convert::Type::Object(_) => write!(
+            output,
+            "match {held}.get() {{ Some(object) => object, None => argument_{local}_next.next().ok_or_else(|| Error::Value(\"`format_args!` lent in a slice to a call that doesn't keep it is not supported in Rawr yet\".to_owned()))? }}"
+        )
+        .map_err(request::unwritable),
         _ => Err(request::drift("a lent trait object's element")),
     }
 }
@@ -398,6 +518,9 @@ fn held_object(object: &Object, value: &str, output: &mut String) -> Result<(), 
                 }
                 Kind::Native(path) => format!(
                     "match __rawr_internal::place::statics::lasting::<{path}>(&inner) {{ Some(lasting) => Ok({held}::Lasting(lasting)), None => inner.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.share::<{path}>(handle)).map(|shared| {held}::Shared(shared)) }}"
+                ),
+                Kind::Arguments => format!(
+                    "inner.try_cast_result::<ImmutableString>().map_err(|_| Error::TypeMismatch).map({held}::Text)"
                 ),
             };
             write!(arms, "{:?} => {made}, ", implementor.tag).map_err(request::unwritable)?;

@@ -6,7 +6,10 @@
 //! a macro builds at the call, a cycle of statics. Native code makes every
 //! object, and the program prints what cargo's build prints. So it does of
 //! objects lent in a slice of `Option`s, which the value a call makes of
-//! them borrows, as tracing-core's `value_set_all` gives its `ValueSet`.
+//! them borrows, as tracing-core's `value_set_all` gives its `ValueSet`,
+//! with `format_args!` among them, made in the frame that lends them, and
+//! in a block an older edition's macro makes, whose frame is its caller
+//! statement's (#1561).
 //! Build the driver first, as for `islands`.
 
 use std::fs;
@@ -91,6 +94,8 @@ fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
         runs_as_cargo("trait-object-slices"),
         "a=5 b=- c=(2, 3)\n\
          event a=5 b=- c=(2, 3)\n\
-         event a=true b=- c=-\n"
+         event a=true b=- c=-\n\
+         one 5\n\
+         event a=n 5 b=5 c=x 5 y\n"
     );
 }
