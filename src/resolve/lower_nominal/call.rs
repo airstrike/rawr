@@ -291,6 +291,21 @@ impl<'a> Parser<'a> {
         Some(tokens)
     }
 
+    /// Whether `name` is a crate's trait a `use` names, which Rawr names as
+    /// a module of its functions, as `use iced::widget::Widget;` does.
+    pub(super) fn imported_trait(&self, name: &str) -> bool {
+        self.models.import(name).is_some_and(|binding| {
+            matches!(binding.target, item::Import::Module)
+                && self.models.host_items(&binding.qualified).is_none()
+                && binding
+                    .qualified
+                    .rsplit("::")
+                    .next()
+                    .and_then(|last| last.chars().next())
+                    .is_some_and(char::is_uppercase)
+        })
+    }
+
     /// Put `tokens` before the rest of the input, to be parsed next.
     /// After `name`, a path `::seg::<A, B>::member`: the type `name::seg<A,
     /// B>` it writes, its arguments taken from the input so the path reads
@@ -314,8 +329,10 @@ impl<'a> Parser<'a> {
                 _ => return Ok(None),
             }
         }
-        // `Into::<T>::into(x)` and kin are a trait's turbofish.
+        // `Into::<T>::into(x)` and kin are a trait's turbofish, as is
+        // `Counted::<u16>::doubled(x)` of a crate's trait (#1282).
         if self.models.traits.contains_key(last.as_str())
+            || segments == 0 && self.imported_trait(name)
             || self.models.get(&last).is_none()
                 && crate::resolve::std_trait::anywhere(&last).is_some()
         {

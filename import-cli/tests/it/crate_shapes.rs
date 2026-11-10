@@ -98,12 +98,13 @@ fn a_borrowed_crate_field_derefs_without_moving_its_owner() {
 /// `to_string` and a trait's method by the trait's path, `<T as Trait>::`
 /// and the type's, passed where a crate function takes `impl Fn(&T) ->
 /// String`, coerced to a `fn` pointer, and called by path. A script
-/// function of `&Look` fills the same slot.
+/// function of `&Look` fills the same slot. The type's associated `const
+/// ALL: [Look; 2]` and a function giving `[Look; 2]` are its values (#967).
 #[test]
 fn a_crate_types_methods_are_function_values() {
     runs_as_cargo_does(
         "method_paths",
-        "[\"Light\", \"Dark\"]\n[\"<Light>\", \"<Dark>\"]\n[\"light\", \"dark\"] [200, 30] [200, 30]\n[100, -70] [100, -70] [100, -70]\ndark light Dark\n",
+        "[\"Light\", \"Dark\"]\nDark [Light, Dark]\n[\"<Light>\", \"<Dark>\"]\n[\"light\", \"dark\"] [200, 30] [200, 30]\n[100, -70] [100, -70] [100, -70]\ndark light Dark\n",
     );
 }
 
@@ -410,10 +411,11 @@ fn a_marked_binary_names_its_packages_library_by_the_crate_name() {
 /// itself, is a member of a plain type and of a generic one, each of
 /// which calls it and the opaque type's method. The crate imports: `Self`
 /// there is the opaque type, not the type the method is a member of
-/// (#1278).
+/// (#1278). The generic trait's method is called by its path with the
+/// trait's arguments too, as `Counted::<u8>::doubled(x)` (#1282).
 #[test]
 fn a_provided_methods_opaque_output_whose_supertrait_binds_self() {
-    runs_as_cargo_does("doubling", "6\n4\n");
+    runs_as_cargo_does("doubling", "6\n4\n8\n");
 }
 
 /// A crate's recursive enum, whose group holds `&'static [Self]`, is built

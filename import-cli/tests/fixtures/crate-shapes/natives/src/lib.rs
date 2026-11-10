@@ -575,8 +575,16 @@ pub mod looks {
     }
 
     impl Look {
+        /// Every look, as iced's `Theme::ALL`.
+        pub const ALL: [Look; 2] = [Look::Light, Look::Dark];
+
         pub fn all() -> Vec<Look> {
             vec![Look::Light, Look::Dark]
+        }
+
+        /// Every look, as an array.
+        pub fn both() -> [Look; 2] {
+            Look::ALL
         }
 
         pub fn name(&self) -> &'static str {
