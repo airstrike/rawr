@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once.","issues":[446,470],"refs":[1604]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.176",
@@ -2345,7 +2350,7 @@
     {"issue":443,"title":"Docs still describe behaviour that only held under rawr-iced","state":"open","category":"No glue (D593)"},
     {"issue":444,"title":"`?play` and the playground run every snippet through one compile path","state":"closed","category":"No glue (D593)","release":"0.3.33"},
     {"issue":445,"title":"An `async fn main` with no runtime attribute is rustc's E0752 (\"`main` function is not allowed…","state":"closed","category":"Divergences from rustc","release":"0.3.33"},
-    {"issue":446,"title":"A warm check reruns cargo resolution and the probe on each demand round","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":446,"title":"A warm check reruns cargo resolution and the probe on each demand round","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":447,"title":"Upstream component's generated runner fails to compile","state":"open","category":"No glue (D593)"},
     {"issue":448,"title":"rawr no longer carries the application, preview and widget protocols, host operations and…","state":"closed","category":"No glue (D593)","release":"0.3.35"},
     {"issue":449,"title":"Remove the profile event projection","state":"open","category":"No glue (D593)"},
@@ -2369,7 +2374,7 @@
     {"issue":467,"title":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2)…","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":472,"title":"Reading iced's whole dependency set passes the semantic API byte limit","state":"closed","category":"No glue (D593)","release":"0.3.41"},
     {"issue":473,"title":"Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)"},
@@ -3516,7 +3521,8 @@
     {"issue":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
     {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open","category":"Divergences from rustc"},
     {"issue":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"closed","category":"No glue (D593)","release":"0.3.176"},
-    {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"open","category":"Divergences from rustc"}
+    {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"open","category":"Divergences from rustc"},
+    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4543,7 +4549,8 @@
             {"number":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"closed"},
             {"number":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"closed"},
             {"number":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open"},
-            {"number":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"open"}
+            {"number":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"open"},
+            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"}
           ]
         }
       ]
