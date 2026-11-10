@@ -2508,6 +2508,19 @@ fn string_like_generics_take_what_their_bounds_impls_take() {
     );
 }
 
+/// A crate generic's parameter that appears only inside an argument's
+/// bound, as `L` of `rich(impl AsRef<[Span<'a, L>]>)`, is the one std's or
+/// the crate's impl of the bound for the argument's type gives: a `Vec`, an
+/// array, a slice, through `AsRef`, `Borrow`, `IntoIterator` and a crate
+/// trait, in a function and a method; and a function a `use` names takes a
+/// turbofish, as `span::<()>("e")`. The output is `cargo run`'s.
+#[test]
+fn a_crate_generics_parameter_is_inferred_through_an_arguments_bound() {
+    let (rawr, cargo) = both_printed("spans.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("rich a|b at 13\nrich c|d at 16"), "{rawr}");
+}
+
 /// image's `ImageBuffer::from_fn(w, h, |x, y| ..)`: an `FnMut` with no
 /// `'static` bound is borrowed for the call, so the closure changes what
 /// it captures and the program reads the change after, and function

@@ -4382,6 +4382,7 @@ fn relations(
             source
                 .associated()
                 .map(|associated| (associated.trait_identity(), associated.name())),
+            source.std_trait(),
             |ty| converted_pattern(ty, parameters),
         ) {
             builder.relation(relation)?;
@@ -4404,6 +4405,7 @@ pub(crate) fn relation<'a, T: 'a>(
     cases: impl Iterator<Item = (&'a T, &'a [T], CaseProjections<'a, T>)>,
     trait_identity: Option<[u8; 32]>,
     associated: Option<([u8; 32], &str)>,
+    std_trait: Option<&str>,
     pattern: impl Fn(&T) -> Option<host::signature::Pattern>,
 ) -> Option<host::signature::Relation> {
     let arguments = arguments
@@ -4441,6 +4443,7 @@ pub(crate) fn relation<'a, T: 'a>(
         host::signature::Relation::new(parameter, arguments, cases)
             .of_trait(trait_identity)
             .of_associated(associated.map(|(identity, name)| (identity, name.into())))
+            .of_std(std_trait.map(Into::into))
     })
 }
 
@@ -4475,10 +4478,7 @@ fn converted_pattern(
                 .map(|member| converted_pattern(member, parameters))
                 .collect::<Option<_>>()?,
         ),
-        Type::Nominal { .. }
-        | Type::Sequence {
-            length: Some(_), ..
-        } if !names_impl_parameter(ty) => {
+        Type::Nominal { .. } | Type::Sequence { .. } if !names_impl_parameter(ty) => {
             if undeclared_parameter(ty, parameters).is_some() {
                 return None;
             }
@@ -4487,7 +4487,7 @@ fn converted_pattern(
         // A crate type that names the impl's own parameters, as `Text<'a,
         // Theme, Renderer>` of `From<Text<..>> for Element<..>`: each is
         // named as the case's variable.
-        Type::Nominal { .. } => {
+        Type::Nominal { .. } | Type::Sequence { .. } => {
             let mut indices = Vec::new();
             impl_parameters(ty, &mut indices);
             let mut named = parameters.to_vec();

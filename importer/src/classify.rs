@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 161;
+const CLASSIFIER_VERSION: u32 = 162;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2623,9 +2623,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 }
                 continue;
             }
+            // A slice, as `[Span<'a, L>]` of iced's `rich_text(impl
+            // AsRef<[Span<'a, L>]>)`, is the borrowed sequence of its
+            // elements, which std's impls for a `Vec` or an array give.
             let Some(converted) = arguments
                 .iter()
                 .map(|argument| match argument {
+                    model::Argument::Type(model::Type::Slice(element)) => {
+                        self.convert(element).ok().map(|element| Type::Sequence {
+                            element: Box::new(element),
+                            owned: false,
+                            length: None,
+                        })
+                    }
                     model::Argument::Type(ty) => self.convert(ty).ok(),
                     _ => None,
                 })
@@ -2768,7 +2778,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             self.retain_array::<Case>(cases.len())?;
             relations.push(
                 Relation::new(*index, converted, cases.into_boxed_slice())
-                    .of_trait(*crate::surface::identity::Definition::of(trait_id).as_bytes()),
+                    .of_trait(*crate::surface::identity::Definition::of(trait_id).as_bytes())
+                    .of_std(self.std_trait_path(trait_id)),
             );
         }
         self.retain_array::<Relation>(relations.len())?;
@@ -10810,6 +10821,23 @@ impl<P: api::Phase> Context<'_, P> {
             );
         }
         false
+    }
+
+    /// The std path of the trait `id`, as `core::convert::AsRef`, when
+    /// std declares it.
+    fn std_trait_path(&self, id: &api::identity::Definition) -> Option<Box<str>> {
+        id.unit().authority().sysroot()?;
+        let definition = self
+            .graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definitions().nth(index))?;
+        Some(
+            definition
+                .display_path()
+                .collect::<Vec<_>>()
+                .join("::")
+                .into_boxed_str(),
+        )
     }
 
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {

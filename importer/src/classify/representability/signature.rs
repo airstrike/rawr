@@ -309,6 +309,12 @@ pub struct Relation {
     /// type that fills `P` gives it from its own bound (`State = S`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     associated: Option<Associated>,
+    /// The bound's trait by its std path, as `core::convert::AsRef`, when
+    /// std declares it: std's impls, which no crate's graph lists, are
+    /// its cases, as `impl<T> AsRef<[T]> for Vec<T>` gives `L` of
+    /// `impl AsRef<[Span<'a, L>]>` from a `Vec<Span<'static, ()>>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    std_trait: Option<Box<str>>,
 }
 
 /// An associated type of a trait, by the trait's definition identity and
@@ -404,12 +410,19 @@ impl Relation {
             cases,
             trait_identity: None,
             associated: None,
+            std_trait: None,
         }
     }
 
     /// The relation of the trait whose definition identity is `identity`.
     pub(crate) const fn of_trait(mut self, identity: [u8; 32]) -> Self {
         self.trait_identity = Some(identity);
+        self
+    }
+
+    /// The relation of the std trait whose path is `path`.
+    pub(crate) fn of_std(mut self, path: Option<Box<str>>) -> Self {
+        self.std_trait = path;
         self
     }
 
@@ -430,6 +443,12 @@ impl Relation {
     #[must_use]
     pub const fn trait_identity(&self) -> Option<[u8; 32]> {
         self.trait_identity
+    }
+
+    /// The bound's trait by its std path, when std declares it.
+    #[must_use]
+    pub fn std_trait(&self) -> Option<&str> {
+        self.std_trait.as_deref()
     }
 
     /// The type parameter the bound is on.

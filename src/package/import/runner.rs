@@ -1364,6 +1364,7 @@ pub(crate) fn signature(
             }),
             relation.trait_identity(),
             relation.associated(),
+            relation.std_trait(),
             |source| {
                 pattern(source, &|nominal| {
                     ty(nominal).ok().and_then(|ty| rooted(root, ty))
@@ -1405,6 +1406,7 @@ fn names_variable(source: &facade::Type) -> bool {
         }
         facade::Type::Option(element)
         | facade::Type::Array(element)
+        | facade::Type::Slice(element)
         | facade::Type::FixedArray { element, .. }
         | facade::Type::ConstArray { element, .. }
         | facade::Type::Range(element) => names_variable(element),
@@ -1441,7 +1443,10 @@ fn pattern(
                 .map(|member| pattern(member, nominal))
                 .collect::<Option<_>>()?,
         ),
-        facade::Type::Nominal { .. } | facade::Type::FixedArray { .. }
+        facade::Type::Nominal { .. }
+        | facade::Type::FixedArray { .. }
+        | facade::Type::Array(_)
+        | facade::Type::Slice(_)
             if !names_variable(source) =>
         {
             Pattern::Type(nominal(source)?)
@@ -1449,7 +1454,10 @@ fn pattern(
         // A crate type that names the impl's own parameters, as `Text<'a,
         // Theme, Renderer>` of `From<Text<..>> for Element<..>`: each is
         // named as the case's variable.
-        facade::Type::Nominal { .. } => Pattern::Generic(nominal(source)?),
+        facade::Type::Nominal { .. }
+        | facade::Type::FixedArray { .. }
+        | facade::Type::Array(_)
+        | facade::Type::Slice(_) => Pattern::Generic(nominal(source)?),
         _ => return None,
     })
 }
