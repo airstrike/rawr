@@ -14790,3 +14790,38 @@ main();
 "#;
     assert_eq!(printed(source), "Secondary Primary Dark(2) Light\n");
 }
+
+#[test]
+fn language_turbofish_leaves_out_impl_trait_arguments() {
+    // An argument-position `impl Trait` is no parameter a turbofish names,
+    // as rustc fills only the written ones (#408, #578).
+    let value = run_string(
+        r#"
+        trait Named { fn name(&self) -> String; }
+        struct A;
+        impl Named for A { fn name(&self) -> String { "a".to_string() } }
+        fn tagged<T: Default + std::fmt::Debug>(named: impl Named) -> String {
+            format!("{}{:?}", named.name(), T::default())
+        }
+        struct Holder;
+        impl Holder {
+            fn tagged<T: Default + std::fmt::Debug>(&self, named: impl Named) -> String {
+                format!("{}{:?}", named.name(), T::default())
+            }
+        }
+        pub fn run() -> String {
+            format!("{} {}", tagged::<i64>(A), Holder.tagged::<bool>(A))
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "a0 afalse");
+    // A turbofish naming the `impl Trait` too has one argument too many
+    // (E0107).
+    rejected(
+        "trait Named { fn name(&self) -> i64; } struct A; \
+         impl Named for A { fn name(&self) -> i64 { 1 } } \
+         fn tagged<T>(named: impl Named) -> i64 { named.name() } \
+         pub fn run() -> i64 { tagged::<i64, A>(A) } run()",
+    );
+}

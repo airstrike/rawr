@@ -182,6 +182,8 @@ pub(crate) struct Generic {
     /// function per instantiation (D629), and the trait's defaults and the
     /// crate's impls fix what a caller's type leaves open (D604).
     pub crate_bounds: Box<[type_ref::Type]>,
+    /// An argument-position `impl Trait`, which a turbofish doesn't name.
+    pub lifted: bool,
 }
 
 /// A trait declaration. `Self` in its signatures is the generic parameter

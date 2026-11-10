@@ -654,6 +654,10 @@ pub struct GenericParam {
     pub projections: Box<[(Name, Name, type_ref::Type)]>,
     /// A default type: `Self` of `trait Add<Rhs = Self>`.
     pub default: Option<type_ref::Type>,
+    /// An argument-position `impl Trait` read as a parameter of its own,
+    /// which a turbofish doesn't name: `content::<Message>(..)` for
+    /// `fn content<Message>(content: impl IntoContent<Message>)`.
+    pub lifted: bool,
 }
 
 /// The lifetimes an item declares and the outlives bounds written on them,
