@@ -141,6 +141,19 @@ impl Drop for Run {
     }
 }
 
+/// Cargo's report in the stderr of a run or check that `cargo check`
+/// failed too: the whole report, with no error of rawr's own before it.
+pub fn cargo_s_report(stderr: &str) -> &str {
+    let Some((own, cargo)) = stderr.split_once("cargo check found") else {
+        panic!("cargo check found no error:\n{stderr}");
+    };
+    assert!(
+        !own.contains("error"),
+        "rawr reported its own error:\n{stderr}"
+    );
+    cargo
+}
+
 /// The directory a test's projects and `RAWR_HOME` live in: `RAWR_TEST_TMPDIR`
 /// when set, so concurrent runs from different checkouts keep apart, and
 /// cargo's target tmp directory otherwise. A test that asks for it runs
