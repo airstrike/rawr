@@ -1,0 +1,14 @@
+[package]
+name = "islands-log-through"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Only inboard's own `log` crate, which wraps tracing: this package names
+# neither tracing nor tracing-core.
+[dependencies]
+log = { path = "log" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
+members = ["log"]

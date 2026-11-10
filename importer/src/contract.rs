@@ -161,7 +161,10 @@ impl Contract<Classified> {
     /// table reaches `alias`'s crate, by its hidden segment or a whole
     /// re-export (`other::__rawr_crate_<name>_<id>::a::Type`,
     /// `other::ratatui::a::Type`), or the crate defining the type by its
-    /// hidden segment, at the type's own path there. A trait of that other
+    /// hidden segment, at the type's own path there. An `owner` whose root
+    /// is a crate no root is, as rustc names a type only another crate
+    /// reaches, is under each root that reaches that crate's hidden
+    /// segment (`other::__rawr_crate_<name>_<id>::Type`). A trait of that other
     /// crate may give the type a member by an impl for it, as ratzilla's
     /// `impl<B> WebRenderer for Terminal<B>` gives ratatui's terminal
     /// `draw_web`, and only that crate's table reaches the trait (#1450).
@@ -224,6 +227,29 @@ impl Contract<Classified> {
                 let key = export.key();
                 if key.root_alias() != root && key.path().next() == Some(segment.as_str()) {
                     hidden.push(format!("{}::{segment}::{below}", key.root_alias()));
+                }
+            }
+        }
+        // A crate no root is, named as rustc names it, as `tracing_core::
+        // Level` is named where only inboard's `log` reaches tracing: under
+        // each root whose table reaches that crate's segment, the type at
+        // the same path there.
+        if own.is_empty() {
+            let prefix = format!("{}{root}_", api::ledger::CRATE_SEGMENT);
+            for export in exports() {
+                let key = export.key();
+                if let Some(segment) = key.path().next()
+                    && segment.strip_prefix(prefix.as_str()).is_some_and(|id| {
+                        id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
+                {
+                    hidden.push(
+                        std::iter::once(key.root_alias())
+                            .chain(std::iter::once(segment))
+                            .chain(rest.iter().copied())
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    );
                 }
             }
         }
