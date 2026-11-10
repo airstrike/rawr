@@ -160,12 +160,14 @@ pub(crate) struct Lines(std::sync::Arc<[u16]>);
 
 impl Lines {
     /// Line `n` written as `numbers[n - 1]`; a line past them as itself.
+    #[cfg(feature = "rust-import")]
     pub(crate) fn new(numbers: Vec<u16>) -> Self {
         Self(numbers.into())
     }
 
     /// Run `write` with each position this thread writes by `Debug`
     /// written at its line's number here.
+    #[cfg(feature = "rust-import")]
     pub(crate) fn writing<T>(&self, write: impl FnOnce() -> T) -> T {
         /// Puts back the lines written by before, as `write` ends or
         /// unwinds.
