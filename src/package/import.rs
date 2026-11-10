@@ -3500,6 +3500,8 @@ fn written(
                 Pointer::Lasting => format!("&'static dyn {name}"),
                 Pointer::Shared => format!("&dyn {name}"),
                 Pointer::Boxed => format!("Box<dyn {name}>"),
+                Pointer::Rc => format!("Rc<dyn {name}>"),
+                Pointer::Arc => format!("Arc<dyn {name}>"),
             }
         }
     }

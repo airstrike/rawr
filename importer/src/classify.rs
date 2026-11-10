@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 158;
+const CLASSIFIER_VERSION: u32 = 159;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9450,6 +9450,22 @@ impl<P: api::Phase> Context<'_, P> {
                             )?,
                         )?]),
                     },
+                    // An `Rc<dyn Trait>` or `Arc<dyn Trait>` of a crate's
+                    // trait, as a `Box<dyn Trait>` is (#1304).
+                    Some(Std::Counted { arc })
+                        if let Some(model::Type::TraitObject { bounds, lifetime }) =
+                            std_binding::type_argument(arguments, 0) =>
+                    {
+                        if !matches!(lifetime, model::Lifetime::Static) {
+                            return Err(representability::reject::Kind::TraitObject.into());
+                        }
+                        let pointer = if arc {
+                            representability::object::Pointer::Arc
+                        } else {
+                            representability::object::Pointer::Rc
+                        };
+                        self.convert_object(pointer, bounds)?
+                    }
                     // An `Rc<T>` or `Arc<T>` of a crate's type: rawr's
                     // counted pointer, whose value is the crate's own
                     // pointer, so passing it copies nothing (#775). Of any

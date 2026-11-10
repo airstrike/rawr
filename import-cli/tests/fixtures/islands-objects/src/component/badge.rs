@@ -3,6 +3,9 @@
 //! type that implements the native `Page` trait, and native code keeps it
 //! as a `Box<dyn page::Page>`.
 
+use std::rc::Rc;
+use std::sync::Arc;
+
 use crate::page::{self, Message, Task};
 
 #[derive(Clone, Debug)]
@@ -65,4 +68,25 @@ pub fn new(page_index: usize) -> Box<dyn page::Page> {
         label: "clicks".to_string(),
         names: Vec::new(),
     })
+}
+
+/// A page lent to native code as a `&dyn page::Page`, coerced and as
+/// rustc coerces it at the call, and given as an `Rc` and an `Arc` of
+/// one, while marked code keeps it (#1304).
+pub fn described(page_index: usize) -> String {
+    let page = BadgePage {
+        page_index,
+        count: 2,
+        label: "lent".to_string(),
+        names: Vec::new(),
+    };
+    let first = page::describe(&page as &dyn page::Page);
+    let second = page::describe(&page);
+    let counted = page::counted(Rc::new(page.clone()) as Rc<dyn page::Page>);
+    let shared: Arc<dyn page::Page> = Arc::new(page.clone());
+    let shared = page::shared(shared);
+    format!(
+        "{first}; {second}; {counted}; {shared}; still {}",
+        page.count
+    )
 }

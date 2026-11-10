@@ -62,6 +62,15 @@ pub fn boxed_area(shape: Box<dyn Shape>) -> i64 {
     shape.area()
 }
 
+/// A shape shared by count, and how many hold it.
+pub fn counted_area(shape: std::rc::Rc<dyn Shape>) -> (i64, usize) {
+    (shape.area(), std::rc::Rc::strong_count(&shape))
+}
+
+pub fn shared_area(shape: std::sync::Arc<dyn Shape>) -> i64 {
+    shape.area()
+}
+
 /// What metadata points back at.
 pub trait Site: Sync {
     fn name(&self) -> &'static str;

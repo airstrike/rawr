@@ -1142,6 +1142,8 @@ impl crate::digest::Write for Type {
                     Pointer::Lasting => 0x2361,
                     Pointer::Shared => 0x2362,
                     Pointer::Boxed => 0x2363,
+                    Pointer::Rc => 0x2364,
+                    Pointer::Arc => 0x2365,
                 });
                 writer.bytes(identity);
                 write_slice(writer, arguments)?;

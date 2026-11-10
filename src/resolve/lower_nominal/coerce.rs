@@ -376,9 +376,14 @@ impl<'a> Parser<'a> {
             // A box of the program's own type that implements a native
             // trait becomes that trait's object: the stand-in rawr's copy of
             // the crate declares for the type, which holds the value's
-            // handle and calls the impl's functions through it (#1264).
+            // handle and calls the impl's functions through it (#1264). A
+            // shared borrow of it is that stand-in lent for the call that
+            // takes it, which shares the value with the program (#1304).
             if type_ref::is_native_trait(&trait_name)
-                && matches!(target, Ty::Boxed(_))
+                && matches!(
+                    target,
+                    Ty::Boxed(_) | Ty::Counted(..) | Ty::Reference { mutable: false, .. }
+                )
                 && let Some((owner, written)) = self.native_object_owner(&concrete, &trait_name)
             {
                 let source = std::mem::take(&mut value.source);
@@ -401,7 +406,6 @@ impl<'a> Parser<'a> {
             // where native code takes the object.
             #[cfg(feature = "rust-import")]
             if type_ref::is_native_trait(&trait_name)
-                && !matches!(target, Ty::Counted(..))
                 && let Some(tag) =
                     self.native_implementor(&concrete, &trait_name, &dyn_arguments(&bindings))
             {

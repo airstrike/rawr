@@ -83,6 +83,8 @@ fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them()
          square 4\n\
          boxed 16\n\
          made 6\n\
+         counted (25, 1)\n\
+         shared 7\n\
          tick tick back true\n\
          tick tick back true\n"
     );

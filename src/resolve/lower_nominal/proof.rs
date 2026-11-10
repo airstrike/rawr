@@ -640,6 +640,14 @@ impl<'a> Parser<'a> {
             // A `Box` is its value at runtime (D492.3), which a crate's
             // `Box<T>` boxes where it takes it.
             Ty::Boxed(inner) => self.proven_type(&inner, operation, span)?,
+            // An `Rc` or `Arc` of a crate's trait object is the object, as
+            // a `Box` of one is: native code makes it (#1304).
+            Ty::Counted(_, inner)
+                if matches!(self.inference.resolve(&inner),
+                    Ty::Dyn(name, _) if type_ref::is_native_trait(&name)) =>
+            {
+                self.proven_type(&inner, operation, span)?
+            }
             // An `Rc` or `Arc` a crate takes or gives (#775): rawr's
             // pointer, whose value the crate's own pointer holds.
             Ty::Counted(counter, inner) => {

@@ -78,4 +78,5 @@ fn main() {
         }
         println!("{}", shown[1].summary(2));
     });
+    println!("{}", badge::described(7));
 }
