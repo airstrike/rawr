@@ -3606,7 +3606,8 @@
     {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
-    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open","category":"Divergences from rustc"}
+    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open","category":"Divergences from rustc"},
+    {"issue":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4358,11 +4359,12 @@
           "name": "Any nightly",
           "start": 72,
           "size": 2,
-          "state": "done",
+          "state": "now",
           "note": "The project's nightly reads crate APIs; a daily job moves the window",
           "issues": [
             {"number":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"closed"},
-            {"number":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed"}
+            {"number":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed"},
+            {"number":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"open"}
           ],
           "milestone": "0.3"
         },

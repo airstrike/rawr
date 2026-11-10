@@ -878,6 +878,7 @@ function addItem(ctx, op, { category, text, title, labels, decisions, gantt, rel
   if (!todo.parsed.sections.has(category)) fail(`"${category}" isn't a heading of TODO.md: ${[...todo.parsed.sections.keys()].join("; ")}`);
   if (!(category in plan.project.categories)) fail(`"${category}" has no label in plan/project.json`);
   publicText(text);
+  if (!t && typeof op.issue === "number") t = `T${String(op.issue).padStart(3, "0")}`;
   if (!t) {
     const numbers = [...todo.parsed.items.keys(), ...plan.items.items.map((i) => i.t)].map(tNumber);
     t = `T${String(Math.max(0, ...numbers) + 1).padStart(3, "0")}`;
