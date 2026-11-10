@@ -4,8 +4,10 @@
 //! `Box<dyn Trait>` a crate gives and one the program makes, and tracing's
 //! callsite, whose metadata holds it as an `Identifier(&'static dyn Site)`
 //! a macro builds at the call, a cycle of statics. Native code makes every
-//! object, and the program prints what cargo's build prints. Build the
-//! driver first, as for `islands`.
+//! object, and the program prints what cargo's build prints. So it does of
+//! objects lent in a slice of `Option`s, which the value a call makes of
+//! them borrows, as tracing-core's `value_set_all` gives its `ValueSet`.
+//! Build the driver first, as for `islands`.
 
 use std::fs;
 use std::path::Path;
@@ -13,7 +15,7 @@ use std::process::Command;
 
 use crate::support::copy;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/trait-objects");
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -31,11 +33,12 @@ fn rawr_import(command: &str, root: &Path) -> std::process::Output {
         .unwrap()
 }
 
-#[test]
-fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them() {
-    let root = crate::support::scratch().join("trait-objects");
+/// What the fixture `name` prints, once `rawr-import check` passes it and
+/// `rawr-import run` prints what `cargo run` does.
+fn runs_as_cargo(name: &str) -> String {
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
+    copy(&Path::new(FIXTURES).join(name), &root);
     let check = rawr_import("check", &root);
     assert!(
         check.status.success(),
@@ -53,8 +56,22 @@ fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them()
         .output()
         .unwrap();
     assert!(native.status.success(), "{}", text(&native.stderr));
+
+    let run = rawr_import("run", &root);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), text(&native.stdout));
+    text(&native.stdout)
+}
+
+#[test]
+fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them() {
     assert_eq!(
-        text(&native.stdout),
+        runs_as_cargo("trait-objects"),
         "held 9 true\n\
          static 9\n\
          int 5\n\
@@ -66,13 +83,14 @@ fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them()
          tick tick back true\n\
          tick tick back true\n"
     );
+}
 
-    let run = rawr_import("run", &root);
-    assert!(
-        run.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        text(&run.stdout),
-        text(&run.stderr)
+#[test]
+fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
+    assert_eq!(
+        runs_as_cargo("trait-object-slices"),
+        "a=5 b=- c=(2, 3)\n\
+         event a=5 b=- c=(2, 3)\n\
+         event a=true b=- c=-\n"
     );
-    assert_eq!(text(&run.stdout), text(&native.stdout));
 }

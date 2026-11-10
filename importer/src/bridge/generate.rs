@@ -3678,6 +3678,27 @@ fn pin_slice<T: 'static>(lent: SliceLent<T>) -> &'static [T] {
     items
 }
 
+/// A crate trait's object a slice of them lends (#1591): a static's place
+/// or an object native code gave, a program's number made for the call,
+/// or a crate value its slot shares.
+#[allow(dead_code)]
+enum HeldObject<T: ?Sized + 'static> {
+    Lasting(&'static T),
+    Made(Box<T>),
+    Shared(std::rc::Rc<T>),
+}
+
+#[allow(dead_code)]
+impl<T: ?Sized + 'static> HeldObject<T> {
+    fn get(&self) -> &T {
+        match self {
+            Self::Lasting(object) => object,
+            Self::Made(object) => object,
+            Self::Shared(object) => object,
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn nest_lent(
     arguments: &mut Arguments<'_, '_, '_>,
@@ -11332,6 +11353,9 @@ fn render_adapter_body(
             {
                 return Ok(());
             }
+            if !opens && !pins && replay.is_none() && functions.is_empty() && mappers.is_empty() {
+                render_scoped_input(plan, signature, substitutions, crossed, output)?;
+            }
             if replay.is_some() {
                 render_function_arguments(
                     signature,
@@ -12757,6 +12781,18 @@ fn frame_copies(
     // aside: the frame borrows what it moves in.
     let mut set_aside = String::new();
     for (position, input) in signature.inputs().iter().enumerate() {
+        // The objects a slice lends move into the frame, which lends them
+        // again (#1591).
+        if let Some(element) =
+            object::lent_slice_element(&substituted(input, signature, substitutions)?)
+        {
+            set_aside.push_str(&format!("drop(argument_{position}_lent);\n    "));
+            rebound.push_str(&format!(
+                "\n        {}",
+                object::lent_slice(position, element)?
+            ));
+            continue;
+        }
         if lends_str(input, signature, substitutions) {
             set_aside.push_str(&format!("let _ = argument_{position};\n    "));
             rebound.push_str(&format!(
@@ -12926,10 +12962,20 @@ fn render_method_opening(
             ),
             None => "Some(scoped) => Err(runtime_error(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))),".to_owned(),
         };
-        let borrow = if matches!(receiver, Receiver::Shared) {
-            "&*"
+        // A `&self` receiver of the arena is shared with the frame, as two
+        // shared borrows of it coexist, and a `&mut self` one is leased.
+        let held = if matches!(receiver, Receiver::Shared) {
+            format!(
+                "let held: std::rc::Rc<{container}> = with_arena(|arena| arena.share(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                #[allow(unused_mut)]
+                let mut receiver = &*held;"
+            )
         } else {
-            ""
+            format!(
+                "let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                #[allow(unused_mut)]
+                let mut receiver = held.get_mut();"
+            )
         };
         let texts = signature
             .inputs()
@@ -12942,8 +12988,19 @@ fn render_method_opening(
             })
             .map(|(position, _)| position)
             .collect::<Vec<_>>();
+        // An output that borrows objects made for the call lives no longer
+        // than the frame that holds them, as rustc's borrow of the
+        // temporaries they are ends with the statement (#1591).
+        let holds = signature
+            .inputs()
+            .iter()
+            .map(|input| substituted(input, signature, substitutions))
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|input| object::lent_slice_element(input).is_some());
         let lent = lent_opening(
             receiver, signature, &container, &call, &converted, &frame, &kept, &texts, &reached,
+            holds,
         )?;
         return writeln!(
             output,
@@ -12960,9 +13017,7 @@ fn render_method_opening(
         match scoped {{
             {scoped}
             None => {{
-                let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
-                #[allow(unused_mut)]
-                let mut receiver = {borrow}held.get_mut();
+                {held}
                 {reached}
                 let made = {call};
                 {frame}
@@ -13012,7 +13067,8 @@ fn render_method_opening(
 /// of `keeps` (`kept_inputs`) is reached beside a kept receiver in its
 /// region, and by `reached` beside another. Each `&'a str` input at
 /// `texts` is pinned in a kept receiver's region, which outlives the
-/// frame's own copy of it.
+/// frame's own copy of it. A frame that `holds` objects made for the call
+/// is never kept past it.
 #[allow(clippy::too_many_arguments)]
 fn lent_opening(
     receiver: Receiver,
@@ -13024,6 +13080,7 @@ fn lent_opening(
     keeps: &[KeptInput],
     texts: &[usize],
     reached: &str,
+    holds: bool,
 ) -> Result<String, request::Error> {
     let mutable = matches!(receiver, Receiver::Mutable);
     let borrow = if mutable { "&mut " } else { "&" };
@@ -13055,7 +13112,7 @@ fn lent_opening(
             reach_kept(keeps, "")
         )
     };
-    let kept = if mutable {
+    let kept = if mutable || holds {
         String::new()
     } else {
         format!(
@@ -13312,6 +13369,121 @@ fn render_scoped_receiver(
     }}"
     )
     .map_err(encoding)
+}
+
+/// The call of a function that borrows a value a scope frame's region
+/// holds (D558 tier 1), as tracing-core's `Event::dispatch(meta,
+/// &value_set)` borrows the `ValueSet<'_>` that `value_set_all` made
+/// (#1591): the call runs in that value's region, which lends it, and its
+/// other arguments are taken there. Only the first such input is reached
+/// so, and a call that takes a callable, or whose output a frame opens,
+/// has no such branch. Nothing for another call.
+fn render_scoped_input(
+    plan: &Plan,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    crossed: Crossed<'_>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let Operation::Function {
+        constants,
+        container_parameters,
+        associated,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(());
+    };
+    if REGION_ARGUMENTS.get() {
+        return Ok(());
+    }
+    let mut scoped = None;
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if callable_parameter(declared, signature)
+            || matches!(declared, convert::Type::FunctionItem { .. })
+            || crossed.slot_at(position, declared).is_some()
+        {
+            return Ok(());
+        }
+        let regional = u32::try_from(position).is_ok_and(|at| signature.regional().contains(&at));
+        if scoped.is_some() || !regional {
+            continue;
+        }
+        if let convert::Type::Borrowed { mutable, ty } =
+            substituted(declared, signature, substitutions)?
+            && matches!(*ty, convert::Type::Nominal { .. })
+            && let Some(family) = family_of(&ty)
+        {
+            let reach = if mutable {
+                family::Reach::GetMut
+            } else {
+                family::Reach::Get
+            };
+            scoped = Some((position, family.call(reach, "scoped")));
+        }
+    }
+    let Some((position, reached)) = scoped else {
+        return Ok(());
+    };
+    let mut body = Vec::new();
+    {
+        let _arguments = RegionArguments::enter();
+        for (local, input) in signature.inputs().iter().enumerate() {
+            if local != position {
+                render_take_input(
+                    local,
+                    local,
+                    input,
+                    signature,
+                    substitutions,
+                    None,
+                    &mut body,
+                )?;
+            }
+        }
+    }
+    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    let mut call = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        *associated,
+        &mut call,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(").map_err(request::unwritable)?;
+    argument_list(signature.inputs().len(), 0, &mut call)?;
+    call.write_all(b")").map_err(request::unwritable)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        let returned = substituted(signature.output(), signature, substitutions)?;
+        render_to_dynamic(&returned, "output", 0, &mut converted)?;
+        converted
+    };
+    writeln!(
+        output,
+        "    if let Some(scoped) = scoped_value(arguments, {position}) {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+{body}            #[allow(unused_mut)]
+            let mut argument_{position} = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+            let output = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }}"
+    )
+    .map_err(request::unwritable)
 }
 
 /// The call `render_scoped_receiver` makes, of `receiver` and the
@@ -16386,6 +16558,14 @@ fn render_take_input(
     // does beside a `&T` native code lent (`LENT_ARGUMENTS`), whose values
     // a copy would take out of their slots for good.
     let lent = substituted(ty, signature, substitutions)?;
+    // `&[Option<&dyn Value>]`, as tracing-core's `value_set_all` takes:
+    // the objects native code makes of the program's values, each held for
+    // as long as the slice lends it (#1591).
+    if let Some(element) = object::lent_slice_element(&lent) {
+        object::render_held_slice(local, index, element, output)?;
+        return writeln!(output, "    {}", object::lent_slice(local, element)?)
+            .map_err(request::unwritable);
+    }
     if let Some(element) = lent_slice_element(ty, &lent) {
         let item =
             concrete_type(element).ok_or_else(|| request::drift("a lent slice's element type"))?;
@@ -19311,6 +19491,13 @@ fn is_copied(ty: &convert::Type) -> bool {
 /// Rawr's array, tuple or string for the call: `&[T]`, `&Vec<T>`, `&(A,
 /// B)` or `&String`.
 fn is_made_for_call(ty: &convert::Type) -> bool {
+    // A slice of trait objects lends what native code makes of its values
+    // (`object::lent_slice_element`).
+    if let convert::Type::Sequence { element, .. } = ty
+        && object::lends_objects(element)
+    {
+        return false;
+    }
     matches!(
         ty,
         convert::Type::Sequence { .. }

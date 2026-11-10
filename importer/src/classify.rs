@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 156;
+const CLASSIFIER_VERSION: u32 = 157;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -285,6 +285,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// its output's late-bound lifetimes are the frame's, as its early
     /// ones are `'static`, and are written by neither.
     scope_lifetimes: Cell<bool>,
+    /// The inputs of the function being classified that a region's value
+    /// may fill (`regional_inputs`), read before its late-bound lifetimes
+    /// are chosen.
+    regional: std::cell::RefCell<Box<[u32]>>,
     /// The crate type aliases that are the only name of the type they
     /// name, by definition index (`instance_aliases`).
     instance_aliases: std::cell::OnceCell<Box<[usize]>>,
@@ -640,6 +644,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
+            regional: std::cell::RefCell::new(Box::default()),
             instance_aliases: std::cell::OnceCell::new(),
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
@@ -8065,20 +8070,17 @@ impl<P: api::Phase> Context<'_, P> {
             });
         let normalized = self.self_projections(signature);
         let signature = normalized.as_ref().unwrap_or(signature);
+        let regional = self.regional.replace(regional_inputs(signature));
         let chosen = argument_binders_static(signature);
         let signature = chosen.as_ref().unwrap_or(signature);
         let opens_copies = self.late_binders_open_copies(signature);
-        let borrows_receiver = borrows_receiver(signature, |id| {
-            self.graph
-                .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
-                .is_some_and(|definition| std_binding::of(definition) == Some(Std::Option))
-        });
+        let borrows_receiver = borrows_receiver(signature, |id| self.is_option(id));
         let outer_scope = self
             .scope_lifetimes
             .replace(opens_copies || borrows_receiver);
         let classified = self.function_with(signature, generics, opens_copies, borrows_receiver);
         self.scope_lifetimes.set(outer_scope);
+        *self.regional.borrow_mut() = regional;
         // A plan's signature names only the type parameters it declares, so
         // the facade writes each by its name (#1032).
         match classified {
@@ -8399,7 +8401,11 @@ impl<P: api::Phase> Context<'_, P> {
                 lends = signature
                     .inputs()
                     .enumerate()
-                    .filter(|(_, input)| shares_at(input, lifetime) || text_at(input, lifetime))
+                    .filter(|(_, input)| {
+                        shares_at(input, lifetime)
+                            || text_at(input, lifetime)
+                            || objects_at(input, lifetime, |id| self.is_option(id))
+                    })
                     .filter_map(|(index, _)| u32::try_from(index).ok())
                     .collect();
             }
@@ -8764,6 +8770,7 @@ impl<P: api::Phase> Context<'_, P> {
         .with_scope(scope)
         .with_lends(lends.into_boxed_slice())
         .with_statics(static_inputs(signature))
+        .with_regional(self.regional.borrow().clone())
         .with_lasting_receiver(matches!(
             signature.receiver(),
             model::Receiver::Reference {
@@ -8946,6 +8953,47 @@ impl<P: api::Phase> Context<'_, P> {
                 auto,
             ),
         )))
+    }
+
+    /// Whether `id` is core's `Option`.
+    fn is_option(&self, id: &api::identity::Definition) -> bool {
+        self.graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .is_some_and(|definition| std_binding::of(definition) == Some(Std::Option))
+    }
+
+    /// A slice's element that lends a crate trait's object, a `&dyn
+    /// Trait` or an `Option` of one, as tracing-core's `&[Option<&'v (dyn
+    /// Value + 'v)>]` holds: the object behind a shared pointer, which
+    /// native code makes. `None` for another element.
+    fn lent_object(
+        &self,
+        element: &model::Type,
+    ) -> Option<Result<representability::convert::Type, Failure>> {
+        if let model::Type::Definition { id, arguments } = element
+            && let Some(inner) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| option_element(definition, arguments))
+        {
+            return self.lent_object(inner).map(|object| {
+                object.map(|object| representability::convert::Type::Option(Box::new(object)))
+            });
+        }
+        let model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty,
+            ..
+        } = element
+        else {
+            return None;
+        };
+        let model::Type::TraitObject { bounds, .. } = ty.as_ref() else {
+            return None;
+        };
+        Some(self.convert_object(representability::object::Pointer::Shared, bounds))
     }
 
     /// A struct's public field: as `convert`, and a shared slice of
@@ -10667,6 +10715,20 @@ impl<P: api::Phase> Context<'_, P> {
                         }),
                     });
                 }
+                // `&[Option<&dyn Value>]`, as tracing-core's
+                // `FieldSet::value_set_all` takes: a slice of objects native
+                // code makes from the program's values, each lent for as
+                // long as the slice is (#1591).
+                model::Type::Slice(element) if let Some(object) = self.lent_object(element) => {
+                    return Ok(representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(representability::convert::Type::Sequence {
+                            element: Box::new(object?),
+                            owned: false,
+                            length: None,
+                        }),
+                    });
+                }
                 model::Type::Slice(element) => {
                     return Ok(representability::convert::Type::Borrowed {
                         mutable: false,
@@ -11807,8 +11869,40 @@ fn borrows_receiver(
                 || naming(input, receiver) == Naming::Argument
                 || shares_at(input, receiver)
                 || text_at(input, receiver)
+                || objects_at(input, receiver, &is_option)
         })
         && !lends_option_reference(output, receiver, is_option)
+}
+
+/// Whether `ty` is a `&'r [E]` at `lifetime` of trait objects, each a
+/// `&dyn Trait` or an `Option` of one, as tracing-core's `value_set_all<'v>
+/// (&'v self, &'v [Option<&'v (dyn Value + 'v)>]) -> ValueSet<'v>` takes:
+/// the frame holds the objects native code made while its output lives
+/// (#1591).
+fn objects_at(
+    ty: &model::Type,
+    lifetime: &model::Lifetime,
+    is_option: impl Fn(&api::identity::Definition) -> bool,
+) -> bool {
+    fn object(ty: &model::Type, is_option: &dyn Fn(&api::identity::Definition) -> bool) -> bool {
+        match ty {
+            model::Type::Reference {
+                mutability: model::Mutability::Shared,
+                ty,
+                ..
+            } => matches!(**ty, model::Type::TraitObject { .. }),
+            model::Type::Definition { id, arguments } if is_option(id) => {
+                matches!(&arguments[..], [model::Argument::Type(inner)] if object(inner, is_option))
+            }
+            _ => false,
+        }
+    }
+    matches!(ty, model::Type::Reference {
+        lifetime: named,
+        mutability: model::Mutability::Shared,
+        ty,
+    } if named == lifetime
+        && matches!(&**ty, model::Type::Slice(element) if object(element, &is_option)))
 }
 
 /// Whether `ty` is a `&'r str` at `lifetime`, which a frame's output keeps
@@ -13098,6 +13192,33 @@ fn borrows_mutably_at_early_lifetime(ty: &model::Type) -> bool {
 /// at `'static`, as `State::new(blocks: &'static [Block])` takes one: Rust
 /// fills it only with a value that lives as long as the program
 /// (`Signature::statics`).
+/// The inputs of `signature`, by position, that borrow a crate value whose
+/// lifetime arguments are the call's own late-bound lifetimes, as
+/// `dispatch(.., fields: &ValueSet<'_>)` takes one, and none `'static`: a
+/// value a scope frame's region holds may fill one (#1591).
+fn regional_inputs(signature: &model::Signature) -> Box<[u32]> {
+    signature
+        .inputs()
+        .enumerate()
+        .filter(|(_, input)| {
+            let model::Type::Reference { ty, .. } = input else {
+                return false;
+            };
+            let model::Type::Definition { arguments, .. } = &**ty else {
+                return false;
+            };
+            let lifetimes = arguments.iter().filter_map(|argument| match argument {
+                model::Argument::Lifetime(lifetime) => Some(lifetime),
+                model::Argument::Type(_) | model::Argument::Const(_) => None,
+            });
+            let mut lifetimes = lifetimes.peekable();
+            lifetimes.peek().is_some()
+                && lifetimes.all(|lifetime| matches!(lifetime, model::Lifetime::Late { .. }))
+        })
+        .filter_map(|(index, _)| u32::try_from(index).ok())
+        .collect()
+}
+
 fn static_inputs(signature: &model::Signature) -> Box<[u32]> {
     signature
         .inputs()
