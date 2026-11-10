@@ -16,6 +16,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone. (#1584, #1587, #1588)
 - A method taking `self` or `mut self` can move a part below its fields out of the receiver, as in `let items = self.content.items;`, as rustc allows. Behind `&self` or `&mut self` the move is rustc's E0507, naming the place. (#1589)
 - A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc. (#1596)
+- `rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install. (#1610; part of #1604)
+- `rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking. (#1611; part of #1604)
 
 ## 0.3.175 (2026-11-09)
 
