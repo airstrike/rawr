@@ -26,6 +26,8 @@ pub struct Enabled {
     /// `None` for a source built outside any Cargo package, which has the
     /// host rustc's own (`Target::host`).
     target: Option<super::cfg::Target>,
+    /// The crate builds as `rustc --test` builds it: `cfg(test)` holds.
+    test: bool,
 }
 
 /// The variable that hands a selection to a `rawr` process `rawr` starts:
@@ -34,6 +36,9 @@ const VARIABLE: &str = "RAWR_CARGO_FEATURES";
 
 /// How a feature starts as a line of [`Enabled::lines`].
 const FEATURE: &str = "feature=\"";
+
+/// The line of [`Enabled::lines`] of a crate built for its tests.
+const TEST: &str = "test";
 
 /// The selection this process runs with; read from [`VARIABLE`] when
 /// nothing selected one.
@@ -152,6 +157,7 @@ impl Enabled {
         Self {
             names: names.into(),
             target: None,
+            test: false,
         }
     }
 
@@ -169,23 +175,47 @@ impl Enabled {
     /// runner's, handed on in its snapshot.
     #[must_use]
     pub fn of_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut test = false;
         let (features, options): (Vec<_>, Vec<_>) = lines
             .into_iter()
+            .filter(|line| {
+                let tests = *line == TEST;
+                test |= tests;
+                !tests
+            })
             .partition(|line| line.starts_with(FEATURE));
-        Self::of_names(features.into_iter().map(|line| {
-            let name = &line[FEATURE.len()..];
-            name.strip_suffix('"').unwrap_or(name)
-        }))
-        .with_target(super::cfg::Target::of_lines(options))
+        Self {
+            test,
+            ..Self::of_names(features.into_iter().map(|line| {
+                let name = &line[FEATURE.len()..];
+                name.strip_suffix('"').unwrap_or(name)
+            }))
+            .with_target(super::cfg::Target::of_lines(options))
+        }
+    }
+
+    /// The set of a crate built as `rustc --test` builds it, `cfg(test)`
+    /// holding: the crate `cargo test` tests.
+    #[must_use]
+    pub fn tested(self) -> Self {
+        Self { test: true, ..self }
+    }
+
+    /// Whether the crate builds as `rustc --test` builds it.
+    #[must_use]
+    pub const fn test(&self) -> bool {
+        self.test
     }
 
     /// The whole set as rustc's `--print cfg` writes it, one option to a
-    /// line, each feature as `feature="<name>"`.
+    /// line, each feature as `feature="<name>"`, and `test` last for a
+    /// crate built for its tests.
     pub fn lines(&self) -> impl Iterator<Item = String> + '_ {
         self.names
             .iter()
             .map(|name| format!("{FEATURE}{name}\""))
             .chain(self.target().lines().map(str::to_owned))
+            .chain(self.test.then(|| TEST.to_owned()))
     }
 
     /// Whether `cfg(<name>)`, or `cfg(<name> = "<value>")`, holds for an
@@ -313,5 +343,18 @@ mod tests {
         let back = Enabled::of_lines(lines.iter().map(String::as_str));
         assert_eq!(back, enabled);
         assert!(back.holds("x") && back.option("unix", None) && !back.holds("unix"));
+    }
+
+    /// A crate built for its tests hands `cfg(test)` on in its lines, as a
+    /// runner's snapshot carries them (#1653).
+    #[test]
+    fn a_tested_set_s_lines_give_cfg_test_back() {
+        let target = super::super::cfg::Target::of_lines(["unix"]);
+        let enabled = Enabled::of_names(["x"]).with_target(target).tested();
+        let lines = enabled.lines().collect::<Vec<_>>();
+        assert_eq!(lines, ["feature=\"x\"", "unix", "test"]);
+        let back = Enabled::of_lines(lines.iter().map(String::as_str));
+        assert_eq!(back, enabled);
+        assert!(back.test() && !back.option("test", None));
     }
 }

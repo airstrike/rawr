@@ -1011,6 +1011,58 @@ pub fn invoke(name: &str, arguments: &mut [Dynamic]) -> Option<Result<Dynamic, p
     current()?.bootstrap.invoke_root(name, arguments)
 }
 
+/// Run `tests`, the published generation's, as libtest runs those
+/// `options` selects, each called as a call from native code into script
+/// code. The status is libtest's.
+pub fn run_tests(
+    tests: &[crate::package::Test],
+    options: &crate::package::test::harness::Options,
+) -> u8 {
+    /// The tests of the generation published on this thread, whose files
+    /// are named from `root`, the package's.
+    struct Published {
+        root: std::path::PathBuf,
+    }
+
+    impl crate::package::test::harness::Tests for Published {
+        fn call(
+            &mut self,
+            test: &crate::package::Test,
+        ) -> Result<Dynamic, Box<crate::EvalAltResult>> {
+            let _entry = crate::future::entry();
+            current()
+                .and_then(|current| current.bootstrap.invoke_test(test))
+                .ok_or_else(|| crate::future::error(format!("no test `{}`", test.name())))?
+                .map_err(runtime_error)
+        }
+
+        fn located(&self, error: &crate::EvalAltResult) -> crate::diagnostic::Report {
+            crate::diagnostic::located(error).unwrap_or_else(|| {
+                crate::diagnostic::Report::error(
+                    crate::diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
+                    crate::future::message(error),
+                )
+                .finish()
+            })
+        }
+
+        fn named<'path>(&self, path: &'path std::path::Path) -> &'path std::path::Path {
+            path.strip_prefix(&self.root).unwrap_or(path)
+        }
+    }
+
+    let root = current().map_or_else(std::path::PathBuf::new, |current| {
+        current
+            .bootstrap
+            .generation()
+            .source()
+            .entry_package()
+            .root()
+            .to_path_buf()
+    });
+    crate::package::test::harness::run(tests, options, &mut Published { root })
+}
+
 /// Check `value`, which native code gave back where a script type was
 /// erased to [`crate::Value`] (D513.2), against the exact type `witness`
 /// proves, in the generation published on this thread.

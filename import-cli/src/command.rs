@@ -3,7 +3,8 @@
 //! program through its parse cells; rawr-import reads the cells and parses
 //! nothing again. `run` builds the program's runner and starts it, and
 //! `check` checks the program against the Rust it imports and runs
-//! `cargo check` beside it.
+//! `cargo check` beside it, and `test` runs its tests in its runner, as
+//! `cargo test` runs them.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ const HELP: &str = "rawr-import: runs Rawr programs that use Rust crates\n\n\
 frontmatter, or native modules. The program runs in a runner that links the\n\
 rawr crate and the program's own dependencies, built in the project's build\n\
 directory beside `cargo build`.\n\n\
-Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import cache warm               Build what a first run here builds once per toolchain\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
+Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import test [path] [filter] [-- options]\n                                       Run the program's `#[test]` functions, as `cargo test`\n  rawr-import cache warm               Build what a first run here builds once per toolchain\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
 Options:\n  -h, --help       Show this help\n  -V, --version    Show the version";
 
 /// Run `rawr-import` with `arguments`, the executable name excluded.
@@ -45,6 +46,19 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if arguments.first().is_some_and(|command| command == "test") {
+        return match rawr_cli::test_arguments(&arguments[1..]) {
+            Ok(Some(rawr_cli::TestArguments { path, libtest })) => tests(path.as_ref(), &libtest),
+            Ok(None) => {
+                println!("{HELP}");
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("error: {message}; run `rawr-import --help` for usage");
+                ExitCode::from(2)
+            }
+        };
+    }
     // What follows `--` is the program's.
     let (arguments, program_arguments) = rawr_cli::split_program_arguments(&arguments);
     let words: Vec<_> = arguments
@@ -157,7 +171,7 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
     if check {
         let cargo = cargo.map(owner::Checking::start);
         rawr_import::progress::begin_phases();
-        let checked = owner::check(&target, Some(graph), &Plain);
+        let checked = owner::check(&target, Some(graph), &Plain::PROGRAM);
         rawr_import::progress::phase("checking");
         let cargo = cargo.map(owner::Checking::finish);
         rawr_import::progress::finish(checked.is_ok());
@@ -171,7 +185,7 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
                 eprintln!("rawr-import: round {}: {round}", index + 1);
             }
         }
-        let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
+        let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain::PROGRAM);
         let checked = checked.as_deref().map_err(Option::as_ref);
         let cargo = cargo.map(|cargo| cargo.status);
         return if rawr_cli::cargo::concluded(checked, cargo) {
@@ -180,7 +194,7 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
             ExitCode::FAILURE
         };
     }
-    let ran = owner::run_program(&target, Some(graph), &Plain, arguments, cargo);
+    let ran = owner::run_program(&target, Some(graph), &Plain::PROGRAM, arguments, cargo);
     // What the run's preparation did: a warm start reads, classifies,
     // generates and compiles nothing (#1604).
     if rawr_cli::cells::verbose() {
@@ -195,6 +209,43 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
             eprintln!("rawr-import: round {}: {round}", index + 1);
         }
     }
+    ended(ran)
+}
+
+/// `rawr test`: the program built as `cargo test` builds it, its tests
+/// run in its runner with libtest's `arguments`, as `rawr run` runs its
+/// `main` there (#1653). A program that imports no Rust runs them on the
+/// base language.
+fn tests(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
+    let options = match rawr_cli::harness::Options::parse(arguments) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("error: {message}; run `rawr-import --help` for usage");
+            return ExitCode::from(2);
+        }
+    };
+    let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Test) {
+        Ok(loaded) => loaded,
+        Err(report) => return failure(&report),
+    };
+    rawr_cli::cells::keep("rawr-import", &loaded.cells, &loaded.graph);
+    if !loaded.graph.declares_rust_import() {
+        return rawr_cli::harness::run(loaded, &options);
+    }
+    let rawr_cli::base::Loaded { target, graph, .. } = loaded;
+    // rustc checks the tests while Rawr works.
+    let cargo = rawr_cli::cargo::begin_tests(&graph);
+    ended(owner::run_tests(
+        &target,
+        graph,
+        &Plain::TEST,
+        arguments,
+        cargo,
+    ))
+}
+
+/// The status of a program that ran, or the report of one that didn't.
+fn ended(ran: Result<i32, Option<rawr::diagnostic::Report>>) -> ExitCode {
     match ran {
         // The program printed its own error as it ran; its status stands.
         Ok(code) => ExitCode::from(u8::try_from(code & 0xff).unwrap_or(1)),

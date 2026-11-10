@@ -582,12 +582,11 @@ fn interface(program: &Program, models: &Models) -> Option<Interface> {
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
-        "{}|{:?}|{:?}|{:?}|{}",
+        "{}|{:?}|{:?}|{:?}",
         Engine::registered_facades(),
         models.access,
         models.features,
         models.std_traits,
-        models.test,
     )
     .ok()?;
     // Each source's text, its bodies blank: what a body's lowering reads

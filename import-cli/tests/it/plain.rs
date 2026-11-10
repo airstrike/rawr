@@ -1743,6 +1743,71 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     );
 }
 
+/// `rawr test` of a program with a Rust dependency runs its tests in its
+/// runner, built as `cargo test` builds them, and reports what `cargo
+/// test` reports: each test's result, a failure's output and panic, and
+/// libtest's status (#1653).
+#[test]
+fn rawr_test_of_a_program_with_a_dependency_reports_what_cargo_test_reports() {
+    let root = crate::support::scratch().join("plain-tests");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(FIXTURE), &root);
+    let main = root.join("src/main.rs");
+    let mut text_of_main = fs::read_to_string(&main).unwrap();
+    text_of_main.push_str(
+        "\n#[cfg(test)]\nmod tests {\n    use semver::Version;\n\n    #[test]\n    \
+         fn parses() {\n        assert_eq!(Version::parse(\"1.2.3\").unwrap().minor, 2);\n    \
+         }\n\n    #[test]\n    fn compares() {\n        println!(\"comparing\");\n        \
+         assert_eq!(Version::parse(\"2.0.0\").unwrap().major, 1);\n    }\n\n    #[test]\n    \
+         #[should_panic(expected = \"unexpected\")]\n    fn rejects() {\n        \
+         Version::parse(\"x\").expect(\"unexpected\");\n    }\n}\n",
+    );
+    fs::write(&main, text_of_main).unwrap();
+
+    let rawr = rawr_import(&root, &["test"]);
+    let cargo = Command::new("cargo")
+        .args(["test", "--", "--test-threads=1"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .output()
+        .unwrap();
+
+    // What differs between two runs of one build: the time taken, and
+    // the id a panicking thread's name is printed with.
+    let report = |output: &Output| {
+        text(&output.stdout)
+            .lines()
+            .map(|line| match line.split_once(" finished in ") {
+                Some((result, _)) => result.to_owned(),
+                None => match (line.split_once("' ("), line.split_once(") panicked at ")) {
+                    (Some((thread, _)), Some((_, place))) => {
+                        format!("{thread}' panicked at {place}")
+                    }
+                    _ => line.to_owned(),
+                },
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        report(&rawr).contains("test tests::compares ... FAILED"),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&rawr.stdout),
+        text(&rawr.stderr)
+    );
+    assert_eq!(report(&rawr), report(&cargo), "{}", text(&cargo.stderr));
+    assert_eq!(rawr.status.code(), Some(101));
+    assert_eq!(rawr.status.code(), cargo.status.code());
+    // rustc accepts the tests, so `cargo check` reports nothing.
+    assert!(
+        !text(&rawr.stderr).contains("cargo check found"),
+        "{}",
+        text(&rawr.stderr)
+    );
+}
+
 /// A crate's derive on a program type is expanded by rustc and its items
 /// are program code (D740, #593). A local proc-macro crate's derive,
 /// re-exported beside its trait as serde's is, runs on a top-level struct

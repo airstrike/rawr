@@ -32,6 +32,9 @@ pub struct Candidate {
     /// Where its steps are, for a debugger registered before it compiled.
     #[cfg(feature = "debugging")]
     located: Option<Arc<crate::inspect::Located>>,
+    /// A crate built for its tests: its `#[test]` functions, which run in
+    /// place of its `main`.
+    tests: Option<Box<[crate::package::Test]>>,
 }
 
 impl Candidate {
@@ -85,7 +88,20 @@ impl Candidate {
             catalog,
             #[cfg(feature = "debugging")]
             located: None,
+            tests: None,
         }
+    }
+
+    /// This candidate with `tests`, its crate's when it is built for them.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_tests(self, tests: Option<Box<[crate::package::Test]>>) -> Self {
+        Self { tests, ..self }
+    }
+
+    /// Take the crate's `#[test]` functions, sorted by name, when it is
+    /// built for its tests: they run in place of its `main`.
+    pub fn take_tests(&mut self) -> Option<Box<[crate::package::Test]>> {
+        self.tests.take()
     }
 
     #[cfg(feature = "rust-import")]

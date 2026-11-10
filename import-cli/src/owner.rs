@@ -356,6 +356,46 @@ pub fn run_program(
     }
 }
 
+/// `rawr test` of a program (#1653): its runner runs the tests built as
+/// `cargo test` builds them, with libtest's `arguments`, and reports as
+/// libtest does. It runs them once, as `cargo test` does: a save that
+/// restarts the runner runs them again from the program as it is then.
+/// The status is libtest's.
+///
+/// `cargo`'s errors are printed after the report. Tests whose copy fails
+/// to build as `cargo check` fails show cargo's errors alone, and fail
+/// with no report of their own (`Err(None)`).
+pub fn run_tests(
+    target: &rawr::project::Target,
+    graph: rawr::package::Graph,
+    profile: &dyn crate::Profile,
+    arguments: &[std::ffi::OsString],
+    cargo: Option<rawr_cli::cargo::Pending>,
+) -> Result<i32, Option<diagnostic::Report>> {
+    let program = rawr_import::process::Arguments {
+        name: rawr_cli::supervise::program_name(target),
+        arguments: arguments.to_vec(),
+        prepare: Some(crate::signals::unblocked),
+    };
+    let lifecycle = rawr_import::process::Lifecycle::Run;
+    let mut graph = Some(graph);
+    let ran = loop {
+        match session(target, graph.take(), lifecycle, profile, Some(&program)) {
+            Ok(Ended::Restart(_)) => {}
+            Ok(Ended::Exit(code)) => break Ok(code),
+            Err(unchecked) => break Err(unchecked),
+        }
+    };
+    let checked = cargo.map(rawr_cli::cargo::Pending::finish);
+    let checked = match (&ran, checked) {
+        (Err(unchecked), None) if unchecked.is_copy() => checked_now(&location(target)),
+        (_, checked) => checked,
+    };
+    let settled = ran.map_err(|unchecked| unchecked.report(checked.as_ref()));
+    rawr_cli::cargo::after_run(checked);
+    settled
+}
+
 /// What each runner's command gets before it spawns: no blocked signals,
 /// and the program's reload stream.
 fn prepare(command: &mut std::process::Command) {

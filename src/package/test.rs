@@ -1,6 +1,9 @@
 //! A crate's `#[test]` functions, as `rustc --test` collects them for its
 //! harness: each with its path from the crate root, what it must do to pass
-//! (`#[should_panic]`) and whether it is left out (`#[ignore]`).
+//! (`#[should_panic]`) and whether it is left out (`#[ignore]`), and the
+//! harness that runs them ([`harness`]).
+
+pub mod harness;
 
 use std::path::Path;
 
@@ -77,6 +80,21 @@ impl Test {
     pub fn ignored(&self) -> Option<Option<&str>> {
         self.ignored.as_ref().map(Option::as_deref)
     }
+
+    /// Whether `key` names this test's function: its path from the crate
+    /// root is the test's name.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn names(&self, key: &item::Key) -> bool {
+        let mut path = self.name.split("::");
+        key.kind() == item::Kind::Function
+            && key.owner().is_none()
+            && key
+                .modules()
+                .iter()
+                .all(|module| path.next() == Some(module.as_str()))
+            && path.next() == Some(key.name())
+            && path.next().is_none()
+    }
 }
 
 impl Location {
@@ -141,8 +159,28 @@ impl Declared {
         })
     }
 
+    /// The tests `declared` names, each at its function in `executable`,
+    /// sorted by name, as libtest runs them.
+    pub(crate) fn compiled_in(
+        declared: Vec<Self>,
+        executable: &crate::program::Executable,
+    ) -> Box<[Test]> {
+        let mut tests = declared
+            .into_iter()
+            .filter_map(|test| {
+                let item = executable.items().find(|item| {
+                    item.key().package() == executable.package() && test.is(item.key())
+                })?;
+                let function = crate::resolve::lower_nominal::private_function_name(item.key());
+                Some(test.compiled(function))
+            })
+            .collect::<Vec<_>>();
+        tests.sort_by(|left, right| left.name().cmp(right.name()));
+        tests.into_boxed_slice()
+    }
+
     /// Whether `key` names this test's function.
-    pub(crate) fn is(&self, key: &item::Key) -> bool {
+    fn is(&self, key: &item::Key) -> bool {
         key.kind() == item::Kind::Function
             && key.owner().is_none()
             && key.modules() == &*self.modules
@@ -150,7 +188,7 @@ impl Declared {
     }
 
     /// This test, at the compiled function `function`.
-    pub(crate) fn compiled(self, function: ImmutableString) -> Test {
+    fn compiled(self, function: ImmutableString) -> Test {
         let name = self
             .modules
             .iter()

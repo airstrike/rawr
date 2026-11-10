@@ -846,6 +846,14 @@ impl<'a> Builder<'a> {
             (None, Some(snapshot)) if self.packages.is_empty() => snapshot.features().clone(),
             (None, _) => project::cargo::features::Enabled::default(),
         };
+        // An engine set to build tests builds the entry crate as `rustc
+        // --test` builds the crate `cargo test` tests; its dependencies
+        // build as they always do.
+        let features = if self.engine.test() && self.packages.is_empty() {
+            features.tested()
+        } else {
+            features
+        };
         // The crate name rustc gives this target, so item paths read as
         // Rust's do. A file outside a Cargo package is `main`.
         let name: ImmutableString = match (&target, &cargo) {
