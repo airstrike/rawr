@@ -393,7 +393,7 @@ fn relative_header_types_preserve_private_module_boundaries() {
 }
 
 #[test]
-fn unknown_types_under_a_relative_module_are_positioned_import_errors() {
+fn unknown_types_under_a_relative_module_are_rustcs_e0425() {
     let project = Project::new("unknown-relative-header-type");
     project.write("src/main.rs", "pub mod controls;\npub struct Model { message: controls::Missing }\n");
     project.write("src/controls.rs", "pub enum Message { Tick }\n");
@@ -402,10 +402,12 @@ fn unknown_types_under_a_relative_module_are_positioned_import_errors() {
     let error = Engine::new().compile_package_executable(&target).unwrap_err();
     let report = error.report().unwrap();
 
+    // rustc: E0425 cannot find type `Missing` in module `controls`.
     assert_eq!(error.category(), Category::Resolution);
-    assert_eq!(report.code(), code::RESOLVE_UNKNOWN_IMPORT);
-    assert!(report.message().contains("controls::Missing"));
-    assert_eq!(report.labels()[0].span().start(), Position::new(3, 29));
+    assert_eq!(report.code().as_str(), "E0425");
+    assert_eq!(report.message(), "cannot find type `Missing` in module `controls`");
+    assert_eq!(report.labels()[0].span().start(), Position::new(3, 39));
+    assert_eq!(report.labels()[0].message(), Some("not found in `controls`"));
 }
 
 #[test]
