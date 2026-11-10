@@ -668,6 +668,8 @@ impl<'a> Parser<'a> {
             }
         };
         let o = self.temporary("option");
+        // `o.as_mut().unwrap()`'s place: the payload of `o`'s.
+        let mut payload_place = None;
         let is = |this: &mut Self| this.prelude_op(PreludeOp::IsSome, [o.as_str().into()]);
         let unwrap = |this: &mut Self| this.prelude_op(PreludeOp::Unwrap, [o.as_str().into()]);
         let mut source = origin::Fragment::plain(format!("{{ let {o} = "));
@@ -973,6 +975,9 @@ impl<'a> Parser<'a> {
             "as_ref" | "as_mut" => {
                 arity(0, &arguments)?;
                 source.push_text(o.as_str());
+                if member.as_str() == "as_mut" && self.unwrap_ahead() {
+                    payload_place = self.option_payload_place(&value, &element);
+                }
                 Ty::Option(Box::new(Ty::Reference {
                     mutable: member.as_str() == "as_mut",
                     target: Box::new(element),
@@ -1096,7 +1101,7 @@ impl<'a> Parser<'a> {
                 nested.steps.insert(0, PlaceStep::Setup(setup));
                 Some(Lvalue::Nested(Box::new(nested)))
             }
-            _ => None,
+            _ => payload_place,
         };
         if matches!(member.as_str(), "as_mut" | "as_deref_mut") {
             self.lend_place(&value, expression);
@@ -1106,6 +1111,42 @@ impl<'a> Parser<'a> {
             parsed.lvalue = place;
         }
         Ok(parsed)
+    }
+
+    /// Whether `.unwrap()` or `.expect(..)` comes next.
+    fn unwrap_ahead(&self) -> bool {
+        let mut ahead = self.input.clone();
+        let mut next = || ahead.next().map_or(Token::EOF, |(token, _)| token);
+        next() == Token::Period
+            && matches!(next(), Token::Identifier(name) if matches!(name.as_str(), "unwrap" | "expect"))
+            && matches!(next(), Token::Unit | Token::LeftParen)
+    }
+
+    /// The place of the payload of `value`, an `Option` of `element` that
+    /// is a place: read as its `Some`'s value, stored as `Some` of the
+    /// value stored, as `*o.as_mut().unwrap() += 1` changes it (#1001).
+    fn option_payload_place(&mut self, value: &ParsedExpr, element: &Ty) -> Option<Lvalue> {
+        let lvalue = value.lvalue.as_ref()?;
+        let place = self.temporary("place");
+        let stored = self.temporary("stored");
+        let read = self.prelude_op(PreludeOp::Unwrap, [origin::Fragment::plain(place.clone())]);
+        let store = self.prelude_op(PreludeOp::Some, [origin::Fragment::plain(stored.clone())]);
+        let step = PlaceStep::Accessor {
+            place,
+            stored,
+            read,
+            store,
+        };
+        Some(match lvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(lvalue::Nested {
+                binding: binding.clone(),
+                base: origin::Fragment::plain(binding.to_string()),
+                steps: vec![step],
+                ty: element.clone(),
+            })),
+            Lvalue::Slice(_) => return None,
+            lvalue => lvalue::nested_step(lvalue, step, element.clone()),
+        })
     }
 
     /// `b.then_some(v)` (`v` evaluated eagerly, as Rust does) and

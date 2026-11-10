@@ -288,6 +288,36 @@ main();
     assert!(!report.contains("doesn't run"), "{report}");
 }
 
+/// `o.as_mut().unwrap()` is the place of `o`'s payload, which `*..` and
+/// a `&mut self` call change, on a local, a field and an element (#1001).
+#[test]
+fn an_unwrapped_as_mut_is_the_payload_s_place() {
+    let source = r#"
+struct S {
+    n: Option<i32>,
+    v: Option<Vec<i32>>,
+}
+fn main() {
+    let mut o: Option<i32> = Some(4);
+    *o.as_mut().unwrap() += 1;
+    *o.as_mut().expect("some") *= 10;
+    let mut s = S { n: Some(1), v: Some(vec![]) };
+    *s.n.as_mut().unwrap() += 1;
+    s.v.as_mut().unwrap().push(7);
+    let mut all = vec![Some(1), Some(2)];
+    *all[1].as_mut().unwrap() = 20;
+    let r = o.as_mut().unwrap();
+    *r += 1;
+    println!("{:?} {:?} {:?} {:?}", o, s.n, s.v, all);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Some(51) Some(2) Some([7]) [Some(1), Some(20)]\n"
+    );
+}
+
 /// A `Mutex`'s `get_mut()` and `into_inner()`, unwrapped as `lock()` is,
 /// reach its value (#949).
 #[test]
