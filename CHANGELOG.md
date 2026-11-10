@@ -6,6 +6,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed. (#1634; part of #1618)
+- A demand round no longer resolves, builds or seals a new bundle when an earlier round built the same crates: it probes the new demand over that build and replays the grown tables. A cold check of a marked theme builds the nightly twice instead of four times. (#1636; part of #1618)
 
 ## 0.3.177 (2026-11-10)
 

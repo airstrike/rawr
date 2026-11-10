@@ -12,7 +12,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed.","issues":[1634],"refs":[1618]}
+        {"text":"A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed.","issues":[1634],"refs":[1618]},
+        {"text":"A demand round no longer resolves, builds or seals a new bundle when an earlier round built the same crates: it probes the new demand over that build and replays the grown tables. A cold check of a marked theme builds the nightly twice instead of four times.","issues":[1636],"refs":[1618]}
       ]
     },
     "releases": [
@@ -3561,7 +3562,8 @@
     {"issue":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"open","category":"Divergences from rustc"},
     {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open","category":"Divergences from rustc"},
     {"issue":1634,"title":"A check parsed every program source again in each demand round","state":"open","category":"No glue (D593)"},
-    {"issue":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"open","category":"No glue (D593)"}
+    {"issue":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"open","category":"No glue (D593)"},
+    {"issue":1636,"title":"A demand round built and sealed a new bundle even when an earlier round built the same crates","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
