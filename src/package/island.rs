@@ -935,15 +935,21 @@ impl<'a> Generator<'a> {
                 }
                 Ok(Held::Tuple(members))
             }
-            // A boxed trait object, as inboard's `Box<dyn Iterator<Item =
-            // Element<'a, Message>> + 'a>`, is one native part: the box.
+            // A boxed trait object is one native part: the box. One of
+            // std's `Iterator`, as inboard's `Box<dyn Iterator<Item =
+            // Element<'a, Message>> + 'a>`, may hold the program's own
+            // iterator, which native code pulls from (#1600).
             type_ref::Type::Path(path)
                 if let Some((Container::Box, inner)) = container(path)
                     && slice(file.text, inner.span())
                         .trim_start()
                         .starts_with("dyn ") =>
             {
-                Ok(Held::Native(slice(file.text, ty.span())))
+                let written = slice(file.text, ty.span());
+                Ok(match pulled_item(file.text, inner) {
+                    Some(item) => Held::Pulled { written, item },
+                    None => Held::Native(written),
+                })
             }
             type_ref::Type::Path(path) if let Some((name, inner)) = container(path) => {
                 let inner = self.held(file, inner, owner)?;
@@ -3433,6 +3439,11 @@ enum Held<'t> {
     /// A `Box` of what the inner one holds, which the interpreter holds as
     /// its value itself.
     Boxed(Box<Held<'t>>),
+    /// A `Box<dyn Iterator<Item = item>>`, written as `written`: a native
+    /// part, or the program's own iterator, which native code holds by
+    /// its handle (the support's `Pulled`) and pulls from one item at a
+    /// time (#1600).
+    Pulled { written: &'t str, item: &'t str },
     /// A tuple of what each member holds.
     Tuple(Vec<Held<'t>>),
 }
@@ -3455,6 +3466,38 @@ impl Held<'_> {
         };
         let inner = format!("__p{depth}");
         match self {
+            Self::Pulled { written, item } => {
+                let lasting = static_lifetimes(item);
+                let object = pulled_object(&lasting);
+                let native = Self::Native(written).code_in(binding, purpose, depth, generic);
+                match purpose {
+                    // The program's iterator is lent by its handle, so the
+                    // call pulls from the one native code holds.
+                    Use::Lend | Use::LendMut | Use::Put => format!(
+                        "match {island}::pulled_handle(&**{binding}) {{ \
+                         ::std::option::Option::Some(__h{depth}) => {out}.kept_lent(__h{depth}), \
+                         ::std::option::Option::None => {{ {native} }} }}"
+                    ),
+                    Use::Give => format!(
+                        "{{ // SAFETY: only its lifetimes change, which have no layout; the \
+                         interpreter keeps it no longer than rustc lets the marked value.\n\
+                         #[allow(unsafe_code)] let {inner} = unsafe {{ \
+                         {island}::at_lifetimes::<_, {object}>({binding}) }}; \
+                         match {island}::take_pulled({inner}) {{ \
+                         ::std::result::Result::Ok(__h{depth}) => out.kept(__h{depth}), \
+                         ::std::result::Result::Err({inner}) => {island}::give_part!(out, {inner}), \
+                         }} }}"
+                    ),
+                    Use::TakeInto => format!(
+                        "{{ // SAFETY: only its lifetimes change, which have no layout, and \
+                         what the call gives the place borrows what the marked value does.\n\
+                         #[allow(unsafe_code)] let {inner} = unsafe {{ \
+                         &mut *::std::ptr::from_mut({binding}).cast::<{object}>() }}; \
+                         input.pulled_into({inner}, |input| \
+                         (&{island}::Back::<{lasting}>::new()).take(input)); }}"
+                    ),
+                }
+            }
             Self::Native(written) if generic && matches!(purpose, Use::Lend | Use::LendMut) => {
                 let lasting = static_lifetimes(written);
                 let lend = if matches!(purpose, Use::Lend) {
@@ -3589,6 +3632,17 @@ impl Held<'_> {
                 static_lifetimes(written)
             ),
             Self::Native(written) => format!("(&{island}::Back::<{written}>::new()).take(input)"),
+            Self::Pulled { item, .. } => {
+                let lasting = static_lifetimes(item);
+                format!(
+                    "{{ // SAFETY: only its lifetimes change, which have no layout, and it \
+                     borrows what the marked value does.\n\
+                     #[allow(unsafe_code)] let __taken = unsafe {{ {island}::at_lifetimes::<{}, _>(\
+                     input.pulled(|input| (&{island}::Back::<{lasting}>::new()).take(input))) }}; \
+                     __taken }}",
+                    pulled_object(&lasting)
+                )
+            }
             Self::Text => "input.kept_text()".to_owned(),
             Self::Option(held) => format!("input.option(|input| {})", held.take()),
             Self::Vec(held) => format!("input.vec(|input| {})", held.take()),
@@ -3604,6 +3658,58 @@ impl Held<'_> {
             ),
         }
     }
+}
+
+/// The item type, as written, of `inner`, the trait object of a boxed
+/// field written in `text`, when it is std's `dyn Iterator<Item = T>` with
+/// at most a lifetime beside it, as inboard's `dyn Iterator<Item =
+/// Element<'a, Message>> + 'a`: what [`Held::Pulled`] stands in for.
+fn pulled_item<'t>(text: &'t str, inner: &type_ref::Type) -> Option<&'t str> {
+    let type_ref::Type::Path(path) = inner else {
+        return None;
+    };
+    let [segment] = &path.segments[..] else {
+        return None;
+    };
+    let [type_ref::Argument::Type(item)] = &segment.arguments[..] else {
+        return None;
+    };
+    if segment.name.text != type_ref::ITER_TYPE {
+        return None;
+    }
+    let written = slice(text, inner.span())
+        .trim_start()
+        .strip_prefix("dyn ")?;
+    let (trait_, _) = written.split_once('<')?;
+    let trait_ = trait_.trim();
+    if !(trait_ == "Iterator" || trait_.ends_with("::iter::Iterator")) {
+        return None;
+    }
+    // Each bound after the trait's, at the top level, is a lifetime.
+    let mut depth = 0_i32;
+    let mut bounds = Vec::new();
+    let mut start = 0;
+    for (at, character) in written.char_indices() {
+        match character {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            '+' if depth == 0 => {
+                bounds.push(&written[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    bounds.push(&written[start..]);
+    bounds[1..]
+        .iter()
+        .all(|bound| bound.trim().starts_with('\''))
+        .then(|| slice(text, item.span()))
+}
+
+/// The box of std's iterator of `item` a [`Held::Pulled`] crosses as.
+fn pulled_object(item: &str) -> String {
+    format!("::std::boxed::Box<dyn ::std::iter::Iterator<Item = {item}>>")
 }
 
 /// The std containers a marked type's field may hold native parts in
@@ -4622,6 +4728,10 @@ pub mod __rawr_island {
         fn __rawr_island_release_v1(handle: u64);
         fn __rawr_island_unanchor_v1(address: u64, ty: u64);
         fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8>;
+        fn __rawr_island_next_v1(
+            handle: u64,
+            natives: &mut ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
+        ) -> ::std::vec::Vec<u8>;
     }
 
     /// What makes a native trait's object of a program value: the
@@ -5429,6 +5539,8 @@ pub mod __rawr_island {
     const HASHED_SET: u8 = 26;
     const HASHED_MAP: u8 = 27;
     const KEPT_TEXT: u8 = 28;
+    const KEPT: u8 = 29;
+    const KEPT_LENT: u8 = 30;
 
     /// A value on its way to the interpreter, the native values it gives
     /// the interpreter, each taken once, and, when a call asks
@@ -5494,6 +5606,109 @@ pub mod __rawr_island {
             self.byte(ARRAY);
             self.count(members);
         }
+        /// The program value native code held under `handle` ([`Pulled`]),
+        /// given back to the interpreter, which lets go of the handle.
+        pub fn kept(&mut self, handle: u64) {
+            self.byte(KEPT);
+            self.0.extend_from_slice(&handle.to_le_bytes());
+        }
+        /// The program value native code holds under `handle`
+        /// ([`Pulled`]), lent where it is: the call shares it with native
+        /// code, which pulls on from where the call left it.
+        pub fn kept_lent(&mut self, handle: u64) {
+            self.byte(KEPT_LENT);
+            self.0.extend_from_slice(&handle.to_le_bytes());
+        }
+    }
+
+    /// The program's own iterator, which native code holds as std's `Box<dyn
+    /// Iterator<Item = T>>` by the handle the runner keeps it under, as
+    /// inboard's `Header` holds the `Box::new(actions.into_iter())` its
+    /// marked `new` made (#1600). Each `next` asks the interpreter for one
+    /// item, which `item` reads as `T` crosses, so the program's iterator
+    /// runs only as far as native code pulls.
+    pub struct Pulled<T> {
+        /// `0` once the value went back to the interpreter ([`take_pulled`]).
+        handle: u64,
+        item: fn(&mut In<'_>) -> T,
+    }
+
+    /// The address of each [`Pulled`], with its handle, by which a `dyn
+    /// Iterator` native code lends or gives back is found to be one.
+    static PULLED: ::std::sync::Mutex<::std::vec::Vec<(usize, u64)>> =
+        ::std::sync::Mutex::new(::std::vec::Vec::new());
+
+    fn pulled_at<R>(change: impl FnOnce(&mut ::std::vec::Vec<(usize, u64)>) -> R) -> R {
+        change(&mut PULLED.lock().unwrap_or_else(::std::sync::PoisonError::into_inner))
+    }
+
+    impl<T: 'static> Pulled<T> {
+        fn boxed(handle: u64, item: fn(&mut In<'_>) -> T) -> ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>> {
+            let pulled = ::std::boxed::Box::new(Self { handle, item });
+            let at = ::std::ptr::from_ref(&*pulled).addr();
+            pulled_at(|pulled| pulled.push((at, handle)));
+            pulled
+        }
+    }
+
+    impl<T> ::std::iter::Iterator for Pulled<T> {
+        type Item = T;
+
+        fn next(&mut self) -> ::std::option::Option<T> {
+            register();
+            let mut natives = ::std::vec::Vec::new();
+            // SAFETY: as for `register`.
+            let reply = unsafe { __rawr_island_next_v1(self.handle, &mut natives) };
+            match reply.first() {
+                Some(0) => {
+                    let mut reply = Reply {
+                        bytes: reply,
+                        at: 1,
+                        path: "Iterator::next",
+                        natives: natives.into_iter().map(Some).collect(),
+                        places: ::std::vec::Vec::new(),
+                        texts: ::std::vec::Vec::new(),
+                    };
+                    let item = self.item;
+                    reply.read(|input| input.option(item))
+                }
+                Some(_) => ::std::panic!("{}", ::std::string::String::from_utf8_lossy(&reply[1..])),
+                None => ::std::panic!("rawr: no answer to `Iterator::next`"),
+            }
+        }
+    }
+
+    impl<T> Drop for Pulled<T> {
+        fn drop(&mut self) {
+            let at = ::std::ptr::from_ref(self).addr();
+            pulled_at(|pulled| pulled.retain(|(known, _)| *known != at));
+            if self.handle != 0 {
+                // SAFETY: as for `register`.
+                unsafe { __rawr_island_release_v1(self.handle) }
+            }
+        }
+    }
+
+    /// The handle of the program value `object` holds, when it is a
+    /// [`Pulled`].
+    pub fn pulled_handle<T>(object: &(dyn ::std::iter::Iterator<Item = T> + '_)) -> ::std::option::Option<u64> {
+        let at = ::std::ptr::from_ref(object).cast::<()>().addr();
+        pulled_at(|pulled| pulled.iter().find(|(known, _)| *known == at).map(|(_, handle)| *handle))
+    }
+
+    /// The handle of the program value `object` holds, when it is a
+    /// [`Pulled`], which native code gives back to the interpreter; else
+    /// `object` itself, a native value.
+    pub fn take_pulled<T: 'static>(
+        object: ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>,
+    ) -> ::std::result::Result<u64, ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>> {
+        if pulled_handle(&*object).is_none() {
+            return Err(object);
+        }
+        // SAFETY: the box was made by `Pulled::boxed` at this address and
+        // is of std's iterator of `T`, which only a `Pulled<T>` is.
+        let mut pulled = unsafe { ::std::boxed::Box::from_raw(::std::boxed::Box::into_raw(object).cast::<Pulled<T>>()) };
+        Ok(::std::mem::replace(&mut pulled.handle, 0))
     }
 
     /// A value on its way back from the interpreter, and the native values
@@ -5714,6 +5929,45 @@ pub mod __rawr_island {
                 None => self.fail(&::std::format!("expected a `{}`", ::std::any::type_name::<T>())),
             }
         }
+        /// A `Box<dyn ::std::iter::Iterator<Item = T>>`: the program's own iterator, which
+        /// native code pulls from by its handle ([`Pulled`]), each item read
+        /// by `item`, or a native one the interpreter moved (#1600).
+        pub fn pulled<T: 'static>(
+            &mut self,
+            item: fn(&mut In<'_>) -> T,
+        ) -> ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>> {
+            if self.bytes.first() != Some(&KEPT) {
+                return self.native();
+            }
+            self.byte();
+            let handle = u64::from_le_bytes(self.eight());
+            Pulled::boxed(handle, item)
+        }
+        /// What a call made of the iterator `place` native code lent it:
+        /// the program's iterator it pulled from where it is, a new one,
+        /// or what a native one became ([`In::changed`]).
+        pub fn pulled_into<T: 'static>(
+            &mut self,
+            place: &mut ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>,
+            item: fn(&mut In<'_>) -> T,
+        ) {
+            if self.bytes.first() != Some(&KEPT) {
+                if let Some(new) = self.changed(&*place) {
+                    *place = new;
+                }
+                return;
+            }
+            let mut bytes = [0; 8];
+            match self.bytes.get(1..9) {
+                Some(handle) => bytes.copy_from_slice(handle),
+                None => self.fail("it ended early"),
+            }
+            if pulled_handle(&**place) == Some(u64::from_le_bytes(bytes)) {
+                self.take(9);
+                return;
+            }
+            *place = self.pulled(item);
+        }
         /// A native value the interpreter moved, as the `iced::Error` of an
         /// `iced::Result`.
         pub fn native<T: 'static>(&mut self) -> T {
@@ -5839,7 +6093,7 @@ pub mod __rawr_island {
         *bytes = rest;
         match tag {
             UNIT | FALSE | TRUE | NONE => {}
-            INT | FLOAT | HANDLE => skip(bytes, 8)?,
+            INT | FLOAT | HANDLE | KEPT | KEPT_LENT => skip(bytes, 8)?,
             CHAR => skip(bytes, 4)?,
             PINNED => skip(bytes, 16)?,
             KEPT_TEXT => {

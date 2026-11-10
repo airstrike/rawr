@@ -2584,6 +2584,16 @@ fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     )
 }
 
+/// The slot of the native value `value` holds, by its arena, index and
+/// generation, which every script value holding that native value shares
+/// (#1600).
+fn identity(value: &Dynamic) -> Option<[u64; 3]> {
+    let handle = value.read_lock::<NativeHandle>()?;
+    let mut epoch = [0; 8];
+    epoch.copy_from_slice(&handle.epoch[..8]);
+    Some([u64::from_le_bytes(epoch), u64::from(handle.slot), handle.generation])
+}
+
 /// The native value `value` holds and its type's witness, moved out of
 /// this thread's arena for a static declared in a body, which keeps it for
 /// the program's life (D862).
@@ -2663,6 +2673,7 @@ fn lodge(
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::moves(moved);
     __rawr_internal::island::settles(settled);
+    __rawr_internal::island::identifies(identity);
     __rawr_internal::island::lends(lent_in_place);
     __rawr_internal::island::lodges(lodge);
     __rawr_internal::island::arenas(|| Box::new(CallArena::enter()));
