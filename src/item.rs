@@ -111,6 +111,37 @@ impl Key {
         self.kind
     }
 
+    /// The path native code's call names this function by, and whether it
+    /// is owned: `widget::sidebar::Sidebar::content` for a method. A trait's
+    /// impl for a crate's or a builtin type, as `impl From<&Theme> for
+    /// markdown::Settings` (#1466), is owned by `std::` and the type's path:
+    /// it is named by `::` and the type's name, as rawr's copy of the crate
+    /// names it, which knows the type only as the impl writes it. `None`
+    /// for a function of a host type, which native code doesn't call.
+    pub(crate) fn island_path(&self) -> Option<(bool, String)> {
+        let join = |modules: &[ImmutableString], names: &[&str]| {
+            modules
+                .iter()
+                .map(ImmutableString::as_str)
+                .chain(names.iter().copied())
+                .collect::<Vec<_>>()
+                .join("::")
+        };
+        match self.owner() {
+            None => Some((false, join(self.modules(), &[self.name()]))),
+            Some(type_def::Identity::Script(owner))
+                if owner.package() == "std" && owner.modules().is_empty() =>
+            {
+                let name = owner.name().rsplit("::").next().unwrap_or_default();
+                Some((true, format!("::{name}::{}", self.name())))
+            }
+            Some(type_def::Identity::Script(owner)) => {
+                Some((true, join(owner.modules(), &[owner.name(), self.name()])))
+            }
+            Some(type_def::Identity::Host(_)) => None,
+        }
+    }
+
     /// This key with the declared name `name`, at the same owner and kind,
     /// as an instance of a generic method is keyed (D629).
     #[cfg(feature = "rust-import")]

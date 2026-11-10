@@ -146,10 +146,11 @@ pub(crate) struct Shadow {
     /// register.
     #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
     pub(crate) objects: Vec<(String, String)>,
-    /// The path of each generic function native code calls through an
-    /// instance entry (D869), for [`support`]'s table.
+    /// Each generic function native code calls through an instance entry
+    /// (D869), by the path its call names, with its entry's path from the
+    /// crate root, for [`support`]'s table.
     #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
-    pub(crate) generic: BTreeSet<String>,
+    pub(crate) generic: BTreeMap<String, String>,
 }
 
 /// What native code sees of a crate's marked modules: each item's path
@@ -474,9 +475,13 @@ struct Generator<'a> {
     /// borrow of one lends the interpreter its parts where they are, and a
     /// value moves them (#1469).
     holding: BTreeSet<String>,
-    /// The path of each generic function a trampoline stands for, which has
-    /// an instance entry ([`generic_trampoline`], D869).
-    generic: std::cell::RefCell<BTreeSet<String>>,
+    /// Each generic function a trampoline stands for, which has an
+    /// instance entry ([`generic_trampoline`], D869), by its call's path,
+    /// with the entry's path.
+    generic: std::cell::RefCell<BTreeMap<String, String>>,
+    /// The instance entries of the methods of the impl being written,
+    /// which go beside it.
+    entries: std::cell::RefCell<Vec<String>>,
 }
 
 /// A std trait a stand-in implements for the marked type it holds, as a
@@ -633,13 +638,11 @@ impl<'a> Generator<'a> {
             implemented,
             holding: BTreeSet::new(),
             generic: std::cell::RefCell::default(),
+            entries: std::cell::RefCell::default(),
         };
-        generator.crossing = generator
-            .types
-            .iter()
-            .filter(|(_, mirrored)| !mirrored.generic)
-            .map(|(path, _)| path.clone())
-            .collect();
+        // A generic one crosses too: each part of a type its parameters
+        // name is a native one, which only an instance entry moves (D869).
+        generator.crossing = generator.types.keys().cloned().collect();
         loop {
             let dropped = generator
                 .crossing
@@ -697,20 +700,18 @@ impl<'a> Generator<'a> {
         let Some(last) = path.segments.last() else {
             return false;
         };
-        if last
+        // A generic marked type's arguments are its parameters' types.
+        let typed = last
             .arguments
             .iter()
-            .any(|argument| matches!(argument, type_ref::Argument::Type(_)))
-        {
-            return false;
-        }
+            .any(|argument| matches!(argument, type_ref::Argument::Type(_)));
         match (last.name.text.as_str(), owner) {
-            ("Self", Owner::Marked(owner)) if path.segments.len() == 1 => {
+            ("Self", Owner::Marked(owner)) if path.segments.len() == 1 && !typed => {
                 self.holding.contains(owner)
             }
-            _ => self
-                .marked(file, path)
-                .is_some_and(|marked| self.holding.contains(marked)),
+            _ => self.marked(file, path).is_some_and(|marked| {
+                self.holding.contains(marked) && (!typed || self.types[marked].generic)
+            }),
         }
     }
 
@@ -809,6 +810,16 @@ impl<'a> Generator<'a> {
                 }
                 Ok(Held::Tuple(members))
             }
+            // A boxed trait object, as inboard's `Box<dyn Iterator<Item =
+            // Element<'a, Message>> + 'a>`, is one native part: the box.
+            type_ref::Type::Path(path)
+                if let Some((Container::Box, inner)) = container(path)
+                    && slice(file.text, inner.span())
+                        .trim_start()
+                        .starts_with("dyn ") =>
+            {
+                Ok(Held::Native(slice(file.text, ty.span())))
+            }
             type_ref::Type::Path(path) if let Some((name, inner)) = container(path) => {
                 let inner = self.held(file, inner, owner)?;
                 if matches!(inner, Held::Wire) && crossed.is_ok() {
@@ -906,7 +917,10 @@ impl<'a> Generator<'a> {
                         _ => Err("`Self` can't cross here".into()),
                     },
                     _ => match self.marked(file, path) {
-                        Some(marked) if arguments.is_empty() && self.crossing.contains(marked) => {
+                        Some(marked)
+                            if (arguments.is_empty() || self.types[marked].generic)
+                                && self.crossing.contains(marked) =>
+                        {
                             Ok(())
                         }
                         Some(_) => Err(format!("`{name}` has a field that can't cross yet")),
@@ -1149,8 +1163,6 @@ impl<'a> Generator<'a> {
                 .map(|part| self.back(file, part, owner))
                 .collect::<Result<Vec<_>, _>>()
         };
-        let generic = matches!(owner, Owner::Marked(owner)
-            if self.types.get(owner).is_some_and(|owner| owner.generic));
         match (name, types.len()) {
             ("Vec" | "Option", 1) => {
                 let inner = parts()?.concat();
@@ -1162,10 +1174,10 @@ impl<'a> Generator<'a> {
                 };
                 Ok(format!("input.result(|input| {ok}, |input| {err})"))
             }
+            // A generic impl's native part comes back by its move alone, as
+            // only an instance entry, whose types are `'static`, reads it
+            // (D869).
             _ if name != "Result" && !self.lendable(file, ty, owner) => Err(reason),
-            // Outside a generic impl, each native part's way back is decided
-            // by its type alone.
-            _ if generic => Err(format!("a `{name}` of a generic type can't cross yet")),
             ("Result", _) => {
                 let written = static_lifetimes(slice(file.text, ty.span()));
                 let part = |part: &str| {
@@ -1518,7 +1530,7 @@ impl<'a> Generator<'a> {
                         continue;
                     }
                     let path = path_of(file.modules, &declared.name.text);
-                    match self.stub(file, declared, Owner::None, false, &path) {
+                    match self.stub(file, declared, None, Owner::None, false, &path) {
                         Ok(text) => {
                             items.push_str(&text);
                             shape.insert(
@@ -1756,29 +1768,33 @@ impl<'a> Generator<'a> {
             );
         }
         let formats = trait_.is_some_and(formatting);
+        let mut beside = Vec::new();
         for function in functions {
             let member = format!("{prefix}::{}", function.name.text);
             let stub = match owner {
                 Owner::Marked(_) if formats && function.name.text == "fmt" => {
                     Ok(rendered_fmt(&member))
                 }
-                _ => self.stub(file, function, owner, false, &member),
+                _ => self.stub(file, function, Some(declared), owner, false, &member),
             };
             match stub {
                 Ok(stub) => {
                     for line in stub.lines() {
                         let _ = writeln!(text, "    {line}");
                     }
+                    // A generic method's instance entry goes beside the impl.
+                    let entries = self.entries.borrow().concat();
                     shape.insert(
                         member,
                         Entry {
                             kind: Kind::Function,
-                            text: format!("{header}\n{stub}"),
+                            text: format!("{header}\n{stub}{entries}"),
                         },
                     );
                 }
                 Err(reason) => refused.push(reason),
             }
+            beside.extend(self.entries.borrow_mut().drain(..));
         }
         if marked_trait.is_some()
             && let Some(given) = self.given_self(file, declared, generic, owner)
@@ -1795,6 +1811,7 @@ impl<'a> Generator<'a> {
             );
         }
         text.push_str("}\n");
+        text.extend(beside);
         items.push_str(&text);
     }
 
@@ -1932,7 +1949,7 @@ impl<'a> Generator<'a> {
         for function in &declared.functions {
             // The impl's function is the owner's member `Page::title`.
             let member = format!("{path}::{}::{}", last.name.text, function.name.text);
-            match self.stub(file, function, Owner::None, true, &member) {
+            match self.stub(file, function, None, Owner::None, true, &member) {
                 Ok(stub) => {
                     for line in stub.lines() {
                         let _ = writeln!(text, "    {line}");
@@ -1962,14 +1979,16 @@ impl<'a> Generator<'a> {
             .push((path, format!("crate::{}", path_of(file.modules, &maker))));
     }
 
-    /// One function's trampoline. `owner` is the type of an associated
-    /// function; `path` is what the interpreter finds it by. A stand-in's
-    /// function (`object`) has no `owner`: its `Self` is the stand-in, which
-    /// doesn't cross, and its receiver is the program value's handle.
+    /// One function's trampoline. `outer` is the impl of an associated
+    /// function, and `owner` its type; `path` is what the interpreter finds
+    /// it by. A stand-in's function (`object`) has no `owner`: its `Self` is
+    /// the stand-in, which doesn't cross, and its receiver is the program
+    /// value's handle.
     fn stub(
         &self,
         file: &Source<'_>,
         function: &item::Function,
+        outer: Option<&item::Impl>,
         owner: Owner<'_>,
         object: bool,
         path: &str,
@@ -2011,24 +2030,19 @@ impl<'a> Generator<'a> {
                     && slice(file.text, path.span).trim_start().starts_with("impl"))
             })
         };
-        // A function generic over named types has one trampoline for them
-        // all, which hands its call to the instance native code's types
-        // select (D869); an `impl Trait` beside them has no name an
-        // instance could be keyed by.
-        let named = function
-            .generics
-            .iter()
-            .filter(|generic| !lifted(generic))
+        // A function generic over named types, its impl's first, has one
+        // trampoline for them all, which hands its call to the instance
+        // native code's types select (D869). An `impl Trait` beside them
+        // has no name an instance could be keyed by: the trampoline makes
+        // its owned stand-in first, which the instance takes.
+        let named = outer
+            .into_iter()
+            .flat_map(|outer| outer.generics.iter())
+            .chain(function.generics.iter().filter(|generic| !lifted(generic)))
             .map(|generic| generic.name.text.as_str())
             .collect::<Vec<_>>();
         let generic = !named.is_empty();
-        if generic && named.len() != function.generics.len() {
-            reasons.push(
-                "a generic function with an `impl Trait` parameter can't cross yet".to_owned(),
-            );
-        } else if generic
-            && (!matches!(owner, Owner::None) || object || function.receiver.is_some())
-        {
+        if generic && object {
             reasons.push("a generic method can't cross yet".to_owned());
         }
         let tuple = format!(
@@ -2160,6 +2174,12 @@ impl<'a> Generator<'a> {
                 at.position().unwrap_or(1)
             ));
         }
+        // A marked trait's impl gives its value by the impl's own type, which
+        // no instance is keyed by.
+        if generic && passes.iter().any(|pass| matches!(pass, Pass::Trait { .. })) {
+            reasons
+                .push("a generic function's `impl` of a marked trait can't cross yet".to_owned());
+        }
         let island = format!("crate::{MODULE}");
         let mut text = format!("{signature} {{\n");
         if !reasons.is_empty() {
@@ -2174,11 +2194,14 @@ impl<'a> Generator<'a> {
             return Ok(text);
         }
         // Each `impl Trait`'s owned stand-in, made before the call starts,
-        // as making it may run native code that calls marked code too.
+        // as making it may run native code that calls marked code too; a
+        // generic function's trampoline makes it before it hands the call
+        // to its instance.
+        let mut prelude = String::new();
         for (index, stand) in stands.iter().enumerate() {
             if let Some(Stand { written, make, .. }) = stand {
                 let _ = writeln!(
-                    text,
+                    if generic { &mut prelude } else { &mut text },
                     "    let __a{index}: {written} = {{ let __value = __a{index}; {make} }};"
                 );
             }
@@ -2472,10 +2495,36 @@ impl<'a> Generator<'a> {
         }
         text.push_str("    __value\n}\n");
         if generic {
-            self.generic.borrow_mut().insert(path.to_owned());
-            return Ok(generic_trampoline(
-                file, function, path, &signature, &text, &tuple, &named,
-            ));
+            let stood = stands
+                .iter()
+                .map(|stand| stand.as_ref().map(|stand| stand.written.clone()))
+                .collect::<Vec<_>>();
+            let generic = Generic {
+                path,
+                signature: &signature,
+                concrete: &text,
+                prelude: &prelude,
+                tuple: &tuple,
+                named: &named,
+                stood: &stood,
+                outer,
+            };
+            let (public, entry, name) = generic_trampoline(file, function, &generic);
+            let mut modules = file
+                .modules
+                .iter()
+                .map(ImmutableString::as_str)
+                .collect::<Vec<_>>();
+            modules.push(&name);
+            self.generic
+                .borrow_mut()
+                .insert(path.to_owned(), format!("crate::{}", modules.join("::")));
+            // A method's entry is beside its impl, which can't hold it.
+            if outer.is_some() {
+                self.entries.borrow_mut().push(entry);
+                return Ok(public);
+            }
+            return Ok(format!("{public}{entry}"));
         }
         Ok(text)
     }
@@ -2520,20 +2569,37 @@ impl<'a> Generator<'a> {
         binding: &str,
         purpose: Use,
     ) -> String {
-        self.field_held(file, path, ty).code(binding, purpose, 0)
+        let generic = self
+            .types
+            .get(path)
+            .is_some_and(|mirrored| mirrored.generic);
+        self.field_held(file, path, ty)
+            .code_in(binding, purpose, 0, generic)
     }
 
     /// The `Parts` impl of the marked type `name` at `path`, which holds
     /// native parts (#1469), from each `Use`'s body: how a borrow of it
     /// lends its parts, a `&mut` one too, a value moves them, and a `&mut`
     /// one takes back what the call made of it.
-    fn parts(name: &str, bodies: [String; 4]) -> String {
+    fn parts(crossed: &Crossed, bodies: [String; 4]) -> String {
         let island = format!("crate::{MODULE}");
         let [lend, lend_mut, give, take_into] = bodies;
+        let Crossed {
+            generics,
+            ty: name,
+            lasting,
+        } = crossed;
+        // A generic impl names no item of its own: its lend is keyed by
+        // its type (`Accessors`).
+        let whole = if crossed.generic() {
+            format!("{island}::lend_whole_of!(call, self, {lasting});")
+        } else {
+            format!("{island}::lend_whole!(call, self, {name});")
+        };
         format!(
-            "impl {island}::Parts for {name} {{\n    \
+            "impl{generics} {island}::Parts for {name} {{\n    \
              fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n        \
-             {island}::lend_whole!(call, self, {name});\n{lend}    }}\n    \
+             {whole}\n{lend}    }}\n    \
              fn lend_mut<'c>(&'c mut self, call: &mut {island}::Call<'c>) {{\n{lend_mut}    }}\n    \
              fn give(self, out: &mut {island}::Out) {{\n{give}    }}\n    \
              fn take_into(&mut self, input: &mut {island}::In<'_>) {{\n        \
@@ -2601,7 +2667,12 @@ impl<'a> Generator<'a> {
             }
         }
         Self::parts(
-            &with_lifetimes(&declared.name.text, &declared.lifetimes),
+            &Crossed::new(
+                file,
+                &declared.name.text,
+                &declared.lifetimes,
+                &declared.generics,
+            ),
             bodies,
         )
     }
@@ -2671,7 +2742,12 @@ impl<'a> Generator<'a> {
              }};\n            }}\n        }}"
         );
         Self::parts(
-            &with_lifetimes(&declared.name.text, &declared.lifetimes),
+            &Crossed::new(
+                file,
+                &declared.name.text,
+                &declared.lifetimes,
+                &declared.generics,
+            ),
             bodies,
         )
     }
@@ -2721,7 +2797,8 @@ impl<'a> Generator<'a> {
 
     fn cross_struct(&self, file: &Source<'_>, declared: &item::Struct) -> String {
         let name = declared.name.text.as_str();
-        let ty = with_lifetimes(name, &declared.lifetimes);
+        let crossed = Crossed::new(file, name, &declared.lifetimes, &declared.generics);
+        let Crossed { generics, ty, .. } = &crossed;
         let path = path_of(file.modules, name);
         let island = format!("crate::{MODULE}");
         let count = declared.fields.len();
@@ -2752,22 +2829,23 @@ impl<'a> Generator<'a> {
             item::StructForm::Unit => take.push_str(name),
         }
         let mut text = format!(
-            "impl {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
+            "impl{generics} {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              out.structure({path:?}, {count});\n{put}    }}\n}}\n\
-             impl {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             impl{generics} {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              input.structure({path:?}, {count});\n        {take}\n    }}\n}}\n"
         );
         if self.holding.contains(&path) {
             text.push_str(&self.struct_parts(file, declared, &path));
         }
-        text.push_str(&self.mirror_impl(&ty, &path));
+        text.push_str(&self.mirror_impl(&crossed, &path));
         text
     }
 
     fn cross_enum(&self, file: &Source<'_>, declared: &item::Enum) -> String {
         let name = declared.name.text.as_str();
-        let ty = with_lifetimes(name, &declared.lifetimes);
+        let crossed = Crossed::new(file, name, &declared.lifetimes, &declared.generics);
+        let Crossed { generics, ty, .. } = &crossed;
         let path = path_of(file.modules, name);
         let island = format!("crate::{MODULE}");
         let mut put = String::new();
@@ -2794,31 +2872,32 @@ impl<'a> Generator<'a> {
             let _ = writeln!(take, "            ({variant_name:?}, {count}) => {built},");
         }
         let mut text = format!(
-            "impl {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
+            "impl{generics} {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              match self {{\n{put}        }}\n    }}\n}}\n\
-             impl {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             impl{generics} {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              match input.variant({path:?}) {{\n{take}            (variant, count) => input.unknown({path:?}, variant, count),\n        }}\n    }}\n}}\n"
         );
         if self.holding.contains(&path) {
             text.push_str(&self.enum_parts(file, declared, &path, &take));
         }
-        text.push_str(&self.mirror_impl(&ty, &path));
+        text.push_str(&self.mirror_impl(&crossed, &path));
         text
     }
 
-    /// The `Mirror` impl of the crossing type `name` at `path`, which the
-    /// runner holds a program value as where a crate's generic takes one
-    /// (#1249): a value moves its native parts, as Rust moves it.
-    fn mirror_impl(&self, name: &str, path: &str) -> String {
+    /// The `Mirror` impl of the crossing type `crossed` at `path`, which
+    /// the runner holds a program value as where a crate's generic takes
+    /// one (#1249): a value moves its native parts, as Rust moves it.
+    fn mirror_impl(&self, crossed: &Crossed, path: &str) -> String {
         let island = format!("crate::{MODULE}");
+        let Crossed { generics, ty, .. } = crossed;
         let give = if self.holding.contains(path) {
             format!("{island}::Parts::give(self, out);")
         } else {
             format!("{island}::Put::put(&self, out);")
         };
         format!(
-            "impl {island}::Mirror for {name} {{\n    fn give(self, out: &mut {island}::Out) {{\n        \
+            "impl{generics} {island}::Mirror for {ty} {{\n    fn give(self, out: &mut {island}::Out) {{\n        \
              {give}\n    }}\n}}\n"
         )
     }
@@ -2832,6 +2911,73 @@ fn with_lifetimes(name: &str, lifetimes: &item::Lifetimes) -> String {
     }
     let unnamed = vec!["'_"; lifetimes.params.len()];
     format!("{name}<{}>", unnamed.join(", "))
+}
+
+/// How the crossing impls of a marked type are written: the impl's
+/// generics, the type as it names it, each lifetime `'_`, and the type each
+/// lifetime `'static`, which a lend's accessors are keyed by. A generic
+/// type's parameters are each `'static` and keep their declared bounds,
+/// as only an instance entry moves its native parts (D869): `impl<Message:
+/// 'static>`, `Sidebar<'_, Message>` and `Sidebar<'static, Message>`.
+struct Crossed {
+    generics: String,
+    ty: String,
+    lasting: String,
+}
+
+impl Crossed {
+    fn new(
+        file: &Source<'_>,
+        name: &str,
+        lifetimes: &item::Lifetimes,
+        generics: &[item::GenericParam],
+    ) -> Self {
+        if generics.is_empty() {
+            let ty = with_lifetimes(name, lifetimes);
+            return Self {
+                generics: String::new(),
+                lasting: static_lifetimes(&ty),
+                ty,
+            };
+        }
+        let declared = generics
+            .iter()
+            .map(|generic| {
+                let bounds = generic
+                    .bounds
+                    .iter()
+                    .map(|bound| slice(file.text, bound.span).trim())
+                    .collect::<Vec<_>>();
+                if bounds.is_empty() {
+                    format!("{}: 'static", generic.name.text)
+                } else {
+                    format!("{}: 'static + {}", generic.name.text, bounds.join(" + "))
+                }
+            })
+            .collect::<Vec<_>>();
+        let names = generics
+            .iter()
+            .map(|generic| generic.name.text.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let arguments = |lifetime: &str| {
+            let mut arguments = vec![lifetime; lifetimes.params.len()].join(", ");
+            if !arguments.is_empty() {
+                arguments.push_str(", ");
+            }
+            format!("{name}<{arguments}{names}>")
+        };
+        Self {
+            generics: format!("<{}>", declared.join(", ")),
+            ty: arguments("'_"),
+            lasting: arguments("'static"),
+        }
+    }
+
+    /// Whether the type is generic over types, so its impls are too.
+    fn generic(&self) -> bool {
+        !self.generics.is_empty()
+    }
 }
 
 /// The pattern of `variant` of `Self` whose payload `parts` bind, or the
@@ -3043,6 +3189,13 @@ impl Held<'_> {
     /// One statement that does `purpose` with the field `binding` reaches,
     /// as [`Use`] says, its own bindings suffixed by `depth`.
     fn code(&self, binding: &str, purpose: Use, depth: usize) -> String {
+        self.code_in(binding, purpose, depth, false)
+    }
+
+    /// [`Held::code`] in a `generic` impl, which declares no item of its
+    /// own, so a part is lent by accessors keyed by its type, each lifetime
+    /// `'static` (`lend_part_of!`).
+    fn code_in(&self, binding: &str, purpose: Use, depth: usize, generic: bool) -> String {
         let island = format!("crate::{MODULE}");
         let out = match purpose {
             Use::Lend | Use::LendMut => "call.out()",
@@ -3050,6 +3203,15 @@ impl Held<'_> {
         };
         let inner = format!("__p{depth}");
         match self {
+            Self::Native(written) if generic && matches!(purpose, Use::Lend | Use::LendMut) => {
+                let lasting = static_lifetimes(written);
+                let lend = if matches!(purpose, Use::Lend) {
+                    "lend_part_of"
+                } else {
+                    "lend_part_mut_of"
+                };
+                format!("{island}::{lend}!(call, {binding}, {lasting});")
+            }
             Self::Wire => match purpose {
                 Use::Lend | Use::LendMut => format!("call.part(&*{binding});"),
                 Use::Give => format!("{island}::Put::put(&{binding}, out);"),
@@ -3109,26 +3271,26 @@ impl Held<'_> {
                  ::std::option::Option::Some({inner}) => {{ {} }} \
                  {inner} => *{inner} = ::std::option::Option::Some({}), }} }} \
                  else {{ *{binding} = ::std::option::Option::None; }}",
-                held.code(&inner, purpose, depth + 1),
+                held.code_in(&inner, purpose, depth + 1, generic),
                 held.take(),
             ),
             Self::Option(held) => format!(
                 "match {binding} {{ ::std::option::Option::None => {out}.none(), \
                  ::std::option::Option::Some({inner}) => {{ {out}.some(); {} }} }}",
-                held.code(&inner, purpose, depth + 1)
+                held.code_in(&inner, purpose, depth + 1, generic)
             ),
             // Each element still holding a part it was lent is taken back
             // into, and moves where the call put it; any other is new.
             Self::Vec(held) if matches!(purpose, Use::TakeInto) => format!(
                 "{island}::vec_into(input, {binding}, |input, {inner}| {{ {} }}, \
                  |input| {});",
-                held.code(&inner, purpose, depth + 1),
+                held.code_in(&inner, purpose, depth + 1, generic),
                 held.take(),
             ),
             Self::Vec(held) => format!(
                 "{{ let {inner} = {binding}; {out}.array({inner}.len()); \
                  for __e{depth} in {inner} {{ {} }} }}",
-                held.code(&format!("__e{depth}"), purpose, depth + 1)
+                held.code_in(&format!("__e{depth}"), purpose, depth + 1, generic)
             ),
             Self::Boxed(held) => {
                 let unboxed = match purpose {
@@ -3136,7 +3298,7 @@ impl Held<'_> {
                     Use::LendMut | Use::TakeInto => format!("&mut **{binding}"),
                     Use::Give => format!("*{binding}"),
                 };
-                held.code(&unboxed, purpose, depth + 1)
+                held.code_in(&unboxed, purpose, depth + 1, generic)
             }
             Self::Tuple(members) => {
                 let names = (0..members.len())
@@ -3149,7 +3311,7 @@ impl Held<'_> {
                 let each = members
                     .iter()
                     .zip(&names)
-                    .map(|(member, name)| member.code(name, purpose, depth + 1))
+                    .map(|(member, name)| member.code_in(name, purpose, depth + 1, generic))
                     .collect::<Vec<_>>()
                     .join(" ");
                 format!(
@@ -3432,42 +3594,97 @@ fn without_rawr_attributes(text: &str) -> String {
     kept
 }
 
-/// The statements that give the parameter `name` to the call by value,
-/// as `pass`, a by-value pass, says: `call` is the call as `give!` takes
-/// it, `__call` or, through a `&mut`, `*__call`.
-/// The trampoline of a function generic over the types `named`, from
-/// `concrete`, the trampoline its body would be at concrete types (D869):
-/// a public one with the signature as written, which adds no bound and
-/// hands its arguments and result place to the instance its types' names
-/// select, and that instance's entry, `concrete`'s body with each type
-/// `'static`, which only the support table instantiates, at the types
-/// native code calls the function with.
+/// What a generic function's trampoline is written from (D869): `named`
+/// are the types it is generic over, its impl's first, and `concrete` the
+/// trampoline its body would be at concrete types; `prelude` makes each
+/// `impl Trait`'s owned stand-in, whose type `stood` writes.
+struct Generic<'g> {
+    path: &'g str,
+    signature: &'g str,
+    concrete: &'g str,
+    prelude: &'g str,
+    tuple: &'g str,
+    named: &'g [&'g str],
+    stood: &'g [Option<String>],
+    /// The impl of an associated function.
+    outer: Option<&'g item::Impl>,
+}
+
+/// A generic function's trampoline: a public one with the signature as
+/// written, which adds no bound and hands its arguments and result place
+/// to the instance its types' names select, and that instance's entry,
+/// the concrete trampoline's body with each type `'static`, which only the
+/// support table instantiates, at the types native code calls the function
+/// with (D869). A method's entry is a function beside its impl, its
+/// receiver `__self` and its `Self` the impl's type as written; its name
+/// is the entry's.
 fn generic_trampoline(
     file: &Source<'_>,
     function: &item::Function,
-    path: &str,
-    signature: &str,
-    concrete: &str,
-    tuple: &str,
-    named: &[&str],
-) -> String {
+    generic: &Generic<'_>,
+) -> (String, String, String) {
     let island = format!("crate::{MODULE}");
-    let output = function
+    let Generic {
+        path,
+        signature,
+        concrete,
+        prelude,
+        tuple,
+        ..
+    } = generic;
+    let owner = generic
+        .outer
+        .map(|outer| slice(file.text, outer.owner.span()).trim());
+    // `Self` and `self` of a method, outside its impl.
+    let outside = |text: &str| match owner {
+        Some(owner) => replace_word(&replace_word(text, "self", "__self"), "Self", owner),
+        None => text.to_owned(),
+    };
+    let written_output = function
         .output
         .as_ref()
         .map_or("()", |ty| slice(file.text, ty.span()));
-    let names = (0..function.parameters.len())
-        .map(|index| format!("__a{index},"))
-        .collect::<String>();
-    let types = function
-        .parameters
-        .iter()
-        .map(|parameter| format!("{},", slice(file.text, parameter.ty.span())))
-        .collect::<String>();
-    let mut text = format!(
-        "{signature} {{\n    \
-         let mut __arguments = ::std::mem::ManuallyDrop::new(({names}));\n    \
-         let mut __value = ::std::mem::MaybeUninit::<{output}>::uninit();\n    \
+    let output = outside(written_output);
+    let receiver = function.receiver.as_ref().map(|receiver| {
+        let owner = owner.unwrap_or("Self");
+        let lifetime = function
+            .receiver_lifetime
+            .as_ref()
+            .map_or(String::new(), |lifetime| format!("'{} ", lifetime.text));
+        match receiver {
+            item::Receiver::Shared(_) => ("self", "__self", format!("&{lifetime}{owner}")),
+            item::Receiver::Mutable(_) => ("self", "__self", format!("&{lifetime}mut {owner}")),
+            item::Receiver::Owned(_) => ("self", "__self", owner.to_owned()),
+            item::Receiver::OwnedMutable(_) => ("self", "mut __self", owner.to_owned()),
+        }
+    });
+    let mut given = Vec::new();
+    let mut bound = Vec::new();
+    let mut types = Vec::new();
+    if let Some((name, binding, ty)) = &receiver {
+        given.push((*name).to_owned());
+        bound.push((*binding).to_owned());
+        types.push(ty.clone());
+    }
+    for (index, parameter) in function.parameters.iter().enumerate() {
+        given.push(format!("__a{index}"));
+        bound.push(format!("__a{index}"));
+        types.push(match generic.stood.get(index) {
+            Some(Some(stood)) => outside(stood),
+            _ => outside(slice(file.text, parameter.ty.span())),
+        });
+    }
+    let tuple_of = |items: &[String]| {
+        items
+            .iter()
+            .map(|item| format!("{item},"))
+            .collect::<String>()
+    };
+    let (given, bound, types) = (tuple_of(&given), tuple_of(&bound), tuple_of(&types));
+    let public = format!(
+        "{signature} {{\n{prelude}    \
+         let mut __arguments = ::std::mem::ManuallyDrop::new(({given}));\n    \
+         let mut __value = ::std::mem::MaybeUninit::<{written_output}>::uninit();\n    \
          // SAFETY: the instance reads the arguments once, as the values they\n    \
          // are, and writes the result in its place.\n    \
          #[allow(unsafe_code)]\n    \
@@ -3478,47 +3695,153 @@ fn generic_trampoline(
          __value.as_mut_ptr().cast(),\n        );\n        \
          __value.assume_init()\n    }}\n}}\n"
     );
-    let header = instance_header(function, file, signature, named);
-    let body = concrete[signature.len()..].trim();
-    let _ = write!(
-        text,
-        "#[doc(hidden)]\n#[allow(unsafe_code, non_snake_case)]\n{header} {{\n    \
+    let (name, header) = instance_header(function, file, generic, owner);
+    let body = outside(concrete[signature.len()..].trim());
+    let entry = format!(
+        "#[doc(hidden)]\n#[allow(unsafe_code, non_snake_case, unused_mut)]\n{} {{\n    \
          // SAFETY: the trampoline moved its arguments into the tuple this reads\n    \
          // once, and keeps them from dropping.\n    \
-         let ({names}): ({types}) = unsafe {{ ::std::ptr::read(__arguments.cast::<({types})>()) }};\n    \
+         let ({bound}): ({types}) = unsafe {{ ::std::ptr::read(__arguments.cast::<({types})>()) }};\n    \
          let __result: {output} = {body};\n    \
          // SAFETY: `__out` is the trampoline's place for a value of this type.\n    \
-         unsafe {{ ::std::ptr::write(__out.cast::<{output}>(), __result) }};\n}}\n"
+         unsafe {{ ::std::ptr::write(__out.cast::<{output}>(), __result) }};\n}}\n",
+        outside(&header)
     );
-    text
+    (public, entry, name)
 }
 
-/// The header of a generic function's instance entry: its generics as
-/// written, each named type `'static`, taking the trampoline's argument
-/// tuple and result place.
+/// The name and header of a generic function's instance entry: its
+/// generics as written, its impl's first, each lifetime before each type,
+/// each named type `'static`, taking the trampoline's argument tuple and
+/// result place. A method's is named by its impl's type and its own name,
+/// as `__rawr_instance_Sidebar_content`, a trait's by its trait too.
 fn instance_header(
     function: &item::Function,
     file: &Source<'_>,
-    signature: &str,
-    named: &[&str],
-) -> String {
-    let name = &function.name.text;
+    generic: &Generic<'_>,
+    owner: Option<&str>,
+) -> (String, String) {
     let after = slice(
         file.text,
         Span::new(function.name.span.end(), function.body_span.start()),
     );
-    let generics = generics_written(after);
-    // The `where` clause after the signature's parameters, as written.
-    let written = where_clause(signature).map(|clause| clause.trim_end_matches(',').to_owned());
-    let mut predicates = named
+    let mut written = Vec::new();
+    let mut predicates = generic
+        .named
         .iter()
         .map(|name| format!("{name}: 'static"))
         .collect::<Vec<_>>();
-    predicates.extend(written);
-    format!(
-        "pub(crate) unsafe fn {INSTANCE_PREFIX}{name}{generics}(__arguments: *mut (), __out: *mut ())\nwhere\n    {},",
+    let mut name = String::new();
+    if let (Some(outer), Some(owner)) = (generic.outer, owner) {
+        // The impl's header as written: `impl<..> Trait for Type where ..`.
+        let header = slice(
+            file.text,
+            Span::new(outer.span.start(), outer.header.span.end()),
+        );
+        let header = header.trim_end().trim_end_matches('{').trim_end();
+        let after_impl = header.trim_start().trim_start_matches("impl");
+        written.extend(parameters(generics_written(after_impl)));
+        predicates
+            .extend(where_clause(header).map(|clause| clause.trim_end_matches(',').to_owned()));
+        let trait_ = outer.trait_.as_ref().map_or(String::new(), |trait_| {
+            slice(file.text, trait_.span).to_owned()
+        });
+        name = identifier(&format!("{trait_} {owner} "));
+    }
+    written.extend(parameters(generics_written(after)));
+    predicates.extend(
+        where_clause(generic.signature).map(|clause| clause.trim_end_matches(',').to_owned()),
+    );
+    name.push_str(&function.name.text);
+    let name = format!("{INSTANCE_PREFIX}{name}");
+    // A lifetime parameter comes before every type parameter.
+    written.sort_by_key(|parameter| !parameter.starts_with('\''));
+    let generics = if written.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", written.join(", "))
+    };
+    let header = format!(
+        "pub(crate) unsafe fn {name}{generics}(__arguments: *mut (), __out: *mut ())\nwhere\n    {},",
         predicates.join(",\n    ")
-    )
+    );
+    (name, header)
+}
+
+/// Each parameter of the generic parameter list `list`, as written.
+fn parameters(list: &str) -> Vec<String> {
+    let Some(inner) = list
+        .strip_prefix('<')
+        .and_then(|inner| inner.strip_suffix('>'))
+    else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut depth = 0_i32;
+    let mut start = 0;
+    let mut previous = ' ';
+    for (index, character) in inner.char_indices() {
+        match character {
+            '<' | '(' | '[' => depth += 1,
+            '>' if previous != '-' => depth -= 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                found.push(inner[start..index].trim().to_owned());
+                start = index + 1;
+            }
+            _ => {}
+        }
+        previous = character;
+    }
+    found.push(inner[start..].trim().to_owned());
+    found.retain(|parameter| !parameter.is_empty());
+    found
+}
+
+/// `text` as a Rust identifier: each run of other characters one `_`,
+/// none at the start or end.
+fn identifier(text: &str) -> String {
+    let mut name = String::new();
+    for character in text.chars() {
+        if character.is_alphanumeric() || character == '_' {
+            name.push(character);
+        } else if !name.is_empty() && !name.ends_with('_') {
+            name.push('_');
+        }
+    }
+    name
+}
+
+/// `text` with each whole word `word`, outside string literals, `with`.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let mut replaced = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut quoted = false;
+    let mut previous = ' ';
+    while let Some(character) = rest.chars().next() {
+        let word_start = !(previous.is_alphanumeric() || previous == '_');
+        if !quoted
+            && word_start
+            && rest.starts_with(word)
+            && !rest[word.len()..].starts_with(|next: char| next.is_alphanumeric() || next == '_')
+        {
+            replaced.push_str(with);
+            rest = &rest[word.len()..];
+            previous = 'w';
+            continue;
+        }
+        if character == '"' && previous != '\\' {
+            quoted = !quoted;
+        }
+        replaced.push(character);
+        rest = &rest[character.len_utf8()..];
+        previous = if previous == '\\' && character == '\\' {
+            ' '
+        } else {
+            character
+        };
+    }
+    replaced
 }
 
 /// The generic parameter list `after`, the text after a function's name,
@@ -3573,6 +3896,9 @@ fn where_clause(signature: &str) -> Option<&str> {
 /// The prefix of a generic function's instance entry, beside it (D869).
 pub(crate) const INSTANCE_PREFIX: &str = "__rawr_instance_";
 
+/// The statements that give the parameter `name` to the call by value,
+/// as `pass`, a by-value pass, says: `call` is the call as `give!` takes
+/// it, `__call` or, through a `&mut`, `*__call`.
 fn give(pass: &Pass, name: &str, call: &str, island: &str, text: &mut String) {
     match pass {
         Pass::Value => {
@@ -3964,27 +4290,16 @@ pub(crate) fn support(
         .map(|(owner, maker)| format!("({owner:?}, {maker} as Maker)"))
         .collect::<Vec<_>>()
         .join(", ");
-    // Each instance native code calls a generic function at, by the
-    // function's path and the name of the tuple of its types (D869).
+    // Each instance native code calls a generic function at, by the path
+    // its call names and the name of the tuple of its types (D869).
     let instances = instances
         .iter()
         .map(|instance| {
-            let (module, name) = instance
-                .path
-                .rsplit_once("::")
-                .map_or(("", instance.path.as_str()), |(module, name)| {
-                    (module, name)
-                });
-            let module = if module.is_empty() {
-                "crate".to_owned()
-            } else {
-                format!("crate::{module}")
-            };
             let types = instance.types.join(", ");
             format!(
                 "({:?}, ::std::any::type_name::<({types},)> as fn() -> &'static str, \
-                 {module}::{INSTANCE_PREFIX}{name}::<{types}> as Instance)",
-                instance.path
+                 {}::<{types}> as Instance)",
+                instance.path, instance.function
             )
         })
         .collect::<Vec<_>>()
@@ -4582,6 +4897,100 @@ pub mod __rawr_island {
         }};
     }
     pub(crate) use lend_part_mut;
+
+    /// The accessors of a lent `T`, keyed by `T`, for a generic marked
+    /// type's `Parts` impl, in which no item can name the impl's parameters
+    /// as [`lend_part!`]'s do (D869).
+    pub struct Accessors<T>(::std::marker::PhantomData<T>);
+
+    impl<T: 'static> Accessors<T> {
+        const SHARED: fn(u64, &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8> = Self::shared_of;
+        const MUTABLE: fn(u64, &mut dyn FnMut(&mut T)) -> ::std::result::Result<(), u8> = Self::mutable_of;
+
+        fn key() -> ::std::any::TypeId {
+            ::std::any::TypeId::of::<Self>()
+        }
+
+        #[allow(unsafe_code)]
+        fn shared_of(nonce: u64, visit: &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8> {
+            reach(nonce, Self::key(), true, |place| {
+                // SAFETY: this key's lend is a `T`, claimed shared.
+                visit(unsafe { &*place.cast_const().cast::<T>() })
+            })
+        }
+
+        #[allow(unsafe_code)]
+        fn mutable_of(nonce: u64, visit: &mut dyn FnMut(&mut T)) -> ::std::result::Result<(), u8> {
+            reach(nonce, Self::key(), false, |place| {
+                // SAFETY: this key's lend is a `T`, claimed exclusively.
+                visit(unsafe { &mut *place.cast::<T>() })
+            })
+        }
+
+        /// A shared lend of a `T`.
+        pub fn shared() -> Lend {
+            Lend::new(Self::key(), ::std::option::Option::None, &Self::SHARED)
+        }
+
+        /// A mutable lend of a `T`.
+        pub fn mutable() -> Lend {
+            Lend::new(Self::key(), ::std::option::Option::Some(&Self::MUTABLE), &Self::SHARED)
+        }
+    }
+
+    /// [`lend_part!`] in a generic marked type's `Parts` impl: `$value`, a
+    /// `&` of the part, is lent as a `&$ty`, its type with each lifetime
+    /// `'static`, by [`Accessors`].
+    macro_rules! lend_part_of {
+        ($call:expr, $value:expr, $ty:ty) => {{
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
+            // SAFETY: only its lifetimes change, which have no layout; the
+            // lend ends before the marked value's borrow does.
+            #[allow(unsafe_code)]
+            let value: &$ty = unsafe { &*::std::ptr::from_ref($value).cast::<$ty>() };
+            let lend = crate::__rawr_island::Accessors::<$ty>::shared();
+            // SAFETY: the lend's accessor reads its key's place as `$ty`.
+            #[allow(unsafe_code)]
+            unsafe {
+                (&crate::__rawr_island::hand(value)).lend_part($call, value, lend, ::std::any::type_name::<$ty>())
+            };
+        }};
+    }
+    pub(crate) use lend_part_of;
+
+    /// [`lend_part_of!`] of a `&mut`, lent mutably.
+    macro_rules! lend_part_mut_of {
+        ($call:expr, $value:expr, $ty:ty) => {{
+            #[allow(unused_imports)]
+            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
+            // SAFETY: as `lend_part_of!`'s.
+            #[allow(unsafe_code)]
+            let value: &mut $ty = unsafe { &mut *::std::ptr::from_mut($value).cast::<$ty>() };
+            let lend = crate::__rawr_island::Accessors::<$ty>::mutable();
+            // SAFETY: the lend's accessors read its key's place as `$ty`.
+            #[allow(unsafe_code)]
+            unsafe {
+                (&crate::__rawr_island::hand(&*value)).lend_part_mut($call, value, lend, ::std::any::type_name::<$ty>())
+            };
+        }};
+    }
+    pub(crate) use lend_part_mut_of;
+
+    /// [`lend_whole!`] in a generic marked type's `Parts` impl, by
+    /// [`Accessors`] of `$ty`, its type with each lifetime `'static`.
+    macro_rules! lend_whole_of {
+        ($call:expr, $value:expr, $ty:ty) => {{
+            let lend = crate::__rawr_island::Accessors::<$ty>::shared();
+            // SAFETY: the lend's accessor reads its key's place as `$ty`,
+            // which differs from the value's type only in its lifetimes.
+            #[allow(unsafe_code)]
+            unsafe {
+                $call.lend_whole(::std::ptr::from_ref($value).cast_mut().cast(), lend, ::std::any::type_name::<$ty>())
+            };
+        }};
+    }
+    pub(crate) use lend_whole_of;
 
     /// Move `$value`, a native part of a marked value, to the interpreter
     /// by `$out` (#1469): by the wire format when its type crosses by it,
@@ -7132,5 +7541,58 @@ mod tests {
             text.contains("use iced::widget::markdown::Settings;"),
             "{text}"
         );
+    }
+
+    /// A marked type generic over the message crosses by impls whose
+    /// parameters are `'static`, and each method of its generic impl, and of
+    /// a native type's impl over it, hands its call to an instance entry
+    /// beside the impl, as a generic free function does (D869).
+    #[test]
+    fn a_generic_marked_types_methods_cross_through_instance_entries() {
+        let text = generate(
+            "// rawr\nuse ui::Element;\n\
+             pub struct Sidebar<'a, Message: 'a> { pub title: &'a str, pub items: Vec<Element<'a, Message>>, \
+             pub actions: Box<dyn Iterator<Item = Element<'a, Message>> + 'a> }\n\
+             impl<'a, Message: 'a> Sidebar<'a, Message> {\n    \
+             pub fn spacing(mut self, spacing: impl Into<ui::Pixels>) -> Self { self }\n    \
+             pub fn to_element(&mut self) -> Element<'a, Message> { ui::void() }\n}\n\
+             pub struct Group<'a, Message> { pub rows: Vec<Element<'a, Message>> }\n\
+             impl<'a, Message: 'a> From<Group<'a, Message>> for Element<'a, Message> {\n    \
+             fn from(group: Group<'a, Message>) -> Self { ui::void() }\n}\n",
+        );
+        assert!(text.refused.is_empty(), "{:?}", text.refused);
+        let text = &text.files[0].1;
+        for expected in [
+            "impl<Message: 'static> crate::__rawr_island::Parts for Sidebar<'_, Message> {",
+            "crate::__rawr_island::lend_whole_of!(call, self, Sidebar<'static, Message>);",
+            "crate::__rawr_island::lend_part_mut_of!(call, __e0, Element<'static, Message>);",
+            // A boxed trait object is one native part.
+            "crate::__rawr_island::lend_part_of!(call, &self.actions, \
+             Box<dyn Iterator<Item = Element<'static, Message>> + 'static>);",
+            "impl<Message: 'static> crate::__rawr_island::Mirror for Group<'_, Message> {",
+            // The stand-in for `impl Into<Pixels>` is made before the call
+            // goes to its instance, which takes it.
+            "let __a0: ui::Pixels = { let __value = __a0; \
+             ::std::convert::Into::<ui::Pixels>::into(__value) };\n        \
+             let mut __arguments = ::std::mem::ManuallyDrop::new((self,__a0,));",
+            "\"physics::Sidebar::spacing\",\n                \
+             ::std::any::type_name::<(Message,)>(),",
+            "pub(crate) unsafe fn __rawr_instance_Sidebar_a_Message_spacing<'a, Message: 'a>\
+             (__arguments: *mut (), __out: *mut ())\nwhere\n    Message: 'static, {",
+            "let (mut __self,__a0,): (Sidebar<'a, Message>,ui::Pixels,) = unsafe",
+            "let (__self,): (&mut Sidebar<'a, Message>,) = unsafe",
+            "fn __rawr_instance_From_Group_a_Message_Element_a_Message_from<'a, Message: 'a>",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        // Each entry is beside its impl, outside it.
+        let entry = text
+            .find("unsafe fn __rawr_instance_Sidebar_a_Message_spacing")
+            .unwrap();
+        let close = text
+            .find("impl<'a, Message: 'a> Sidebar<'a, Message> {")
+            .unwrap();
+        assert!(entry > close, "{text}");
+        assert!(!text.contains("can't call"), "{text}");
     }
 }

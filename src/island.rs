@@ -1518,14 +1518,6 @@ impl Calls {
         authority: &program::Authority,
         runtime: &crate::Shared<crate::host::runtime::Registry>,
     ) -> Self {
-        let join = |modules: &[ImmutableString], names: &[&str]| {
-            modules
-                .iter()
-                .map(ImmutableString::as_str)
-                .chain(names.iter().copied())
-                .collect::<Vec<_>>()
-                .join("::")
-        };
         let mut items = HashMap::new();
         let mut ambiguous = Vec::new();
         for item in authority.items() {
@@ -1535,30 +1527,14 @@ impl Calls {
             ) {
                 continue;
             }
-            let key = item.key();
-            let entry = match key.owner() {
-                None => (false, join(key.modules(), &[key.name()])),
-                // A trait's impl for a crate's or a builtin type, as `impl
-                // From<&Theme> for markdown::Settings` (#1466), owned by
-                // `std::` and the type's path: by `::` and the type's name,
-                // as rawr's copy of the crate names it, which knows the
-                // type only as the impl writes it.
-                Some(type_def::Identity::Script(owner))
-                    if owner.package() == "std" && owner.modules().is_empty() =>
-                {
-                    let name = owner.name().rsplit("::").next().unwrap_or_default();
-                    let entry = (true, format!("::{name}::{}", key.name()));
-                    if items.contains_key(&entry) {
-                        ambiguous.push(entry);
-                        continue;
-                    }
-                    entry
-                }
-                Some(type_def::Identity::Script(owner)) => {
-                    (true, join(owner.modules(), &[owner.name(), key.name()]))
-                }
-                Some(type_def::Identity::Host(_)) => continue,
+            let Some(entry) = item.key().island_path() else {
+                continue;
             };
+            // Two crate types of one name, each with an impl of one trait.
+            if entry.1.starts_with("::") && items.contains_key(&entry) {
+                ambiguous.push(entry);
+                continue;
+            }
             items.insert(entry, item.clone());
         }
         // Two types of one name with impls of one trait: native code's call

@@ -894,7 +894,13 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// calls and drawn, and its title is native code's own text (#1557). A
 /// marked `Sidebar<'a, Message>` bounds its generic impl's `content` by the
 /// crate's `IntoContent<'a, Message>` over the impl's own parameters, and a
-/// non-generic marked fn calls it. `rawr check` passes as `cargo check`
+/// non-generic marked fn calls it. A marked `Sidebar<'a, Message>` generic
+/// over the message, as inboard's, is made by a marked generic fn with an
+/// `impl IntoIterator` argument, built by its generic methods by value,
+/// with an `impl Into<Pixels>` and by `&mut self`, read by `&self` and
+/// turned into an element, at two of native code's message types, and a
+/// marked `From<Group<'a, Message>> for Element<'a, Message>` gives an
+/// element by `.into()` (D869). `rawr check` passes as `cargo check`
 /// does, and `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
@@ -955,6 +961,22 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
+    // A marked `Sidebar<'a, Message>` made by a marked generic fn with an
+    // `impl IntoIterator` argument and built by its generic methods, at two
+    // native message types, and a marked `From<Group<'a, Message>>` for the
+    // element (D869 for methods and generic marked types).
+    assert!(
+        printed.contains(
+            "sidebar tiles on native text true\n\
+             sidebar column Shrink by 0 [tiles sidebar styled 0, column Shrink by 3 \
+             [add row styled 0, first row styled 0, pushed row styled 0]] Some(Tile(8))\n\
+             sidebar column Shrink by 0 [home sidebar styled 0, column Shrink by 0 \
+             [inbox row styled 0]] Some(Home(Grid(Tile(10))))\n\
+             sidebar column Shrink by 0 [rows group styled 0, column Shrink by 0 \
+             [row row styled 0]] Some(Tile(11))\n"
+        ),
+        "{printed}"
+    );
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -1009,6 +1031,48 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
         "\"{label} item\"",
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
+    let told = run.told(&events, |text| text.contains("\"swapped\""));
+    assert!(!told.contains("\"preparing\""), "{told}");
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+}
+
+/// A generic method of a marked type generic over the message, which
+/// native code builds and keeps, as inboard's `Sidebar<'a, Message>`,
+/// swaps a body edit into the running program: native code calls the
+/// instance its check recorded (D869), and the edit needs no new native
+/// build.
+#[test]
+fn a_generic_marked_types_method_native_code_calls_swaps() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-method-swap");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| line.starts_with("tock ") && line.contains("[bar sidebar styled 0, "));
+    edit(
+        &root.join("src/widget/sidebar.rs"),
+        "\"{title} sidebar\"",
+        "\"{title} panel\"",
+    );
+    run.until(|line| line.starts_with("tock ") && line.contains("[bar panel styled 0, "));
     let told = run.told(&events, |text| text.contains("\"swapped\""));
     assert!(!told.contains("\"preparing\""), "{told}");
     assert!(

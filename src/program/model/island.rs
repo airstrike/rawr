@@ -141,27 +141,43 @@ pub(crate) enum Part {
     Each(Box<Part>),
     /// A tuple, by its members, `None` for one that holds no crate's type.
     Members(Box<[Option<Part>]>),
+    /// A value of a generic script type at the arguments its type gives,
+    /// as `Group<'a, grid::Message>` (D869): each member's part, by its
+    /// variant, none for a struct's, its parameters' types substituted.
+    Script(Variants),
 }
+
+/// [`Part::Script`]'s members, by variant.
+type Variants = BTreeMap<Option<ImmutableString>, Box<[Option<Part>]>>;
+
+/// How many generic script types deep [`Part::script`] follows a type.
+const SCRIPT_DEPTH: usize = 16;
 
 impl Part {
     /// The part of a value of `ty`, whose native values `witness` attests;
-    /// `None` when it holds no crate's type.
+    /// `None` when it holds no crate's type. `depth` counts the generic
+    /// script types it is inside of.
     fn of(
         ty: &crate::resolve::type_ref::Type,
         model: &Model,
         witness: &impl Fn(&crate::host::runtime::type_ref::Type) -> crate::host::runtime::Witness,
+        depth: usize,
     ) -> Option<Self> {
         if let Some(inner) = ty.box_element() {
-            return Self::of(inner, model, witness);
+            return Self::of(inner, model, witness, depth);
         }
-        if let Some(inner) = ty.option_element().or_else(|| ty.vec_element()) {
-            return Self::of(inner, model, witness).map(|inner| Self::Each(Box::new(inner)));
+        if let Some(inner) = ty
+            .option_element()
+            .or_else(|| ty.vec_element())
+            .or_else(|| ty.iterated_element())
+        {
+            return Self::of(inner, model, witness, depth).map(|inner| Self::Each(Box::new(inner)));
         }
         match ty {
             crate::resolve::type_ref::Type::Tuple { members, .. } => {
                 let members = members
                     .iter()
-                    .map(|member| Self::of(member, model, witness))
+                    .map(|member| Self::of(member, model, witness, depth))
                     .collect::<Box<[_]>>();
                 members
                     .iter()
@@ -175,15 +191,87 @@ impl Part {
                     .ok()
                     .map(|ty| Self::Native(witness(&ty)))
             }
+            crate::resolve::type_ref::Type::Path(crate::resolve::type_ref::Path {
+                target: crate::resolve::type_ref::Target::Script { identity, .. },
+                arguments,
+                ..
+            }) => Self::script(identity, arguments, model, witness, depth),
             _ => None,
         }
+    }
+
+    /// The part of a value of the generic script type `identity` at
+    /// `arguments`: each member's, its type's parameters those types.
+    /// `None` for a type that isn't generic, whose members' parts are its
+    /// own ([`Types::part`]), or that holds no crate's type. A type that
+    /// holds itself, as `Tree<T> { children: Vec<Tree<T>> }`, is followed
+    /// [`SCRIPT_DEPTH`] deep: a value nested deeper is attested by its
+    /// type's own parts.
+    fn script(
+        identity: &type_def::Identity,
+        arguments: &[crate::resolve::type_ref::Argument],
+        model: &Model,
+        witness: &impl Fn(&crate::host::runtime::type_ref::Type) -> crate::host::runtime::Witness,
+        depth: usize,
+    ) -> Option<Self> {
+        let definition = model.definitions.get(identity)?;
+        if definition.generics.is_empty() || depth >= SCRIPT_DEPTH {
+            return None;
+        }
+        let substituted = definition
+            .generics
+            .iter()
+            .cloned()
+            .zip(arguments.iter().filter_map(|argument| match argument {
+                crate::resolve::type_ref::Argument::Type(ty) => Some(ty.clone()),
+                crate::resolve::type_ref::Argument::Lifetime(_) => None,
+            }))
+            .collect::<Vec<_>>();
+        let members = |members: &[crate::resolve::type_ref::Type]| {
+            members
+                .iter()
+                .map(|member| {
+                    let member =
+                        crate::resolve::type_ref::substitute_parameters(member, &substituted);
+                    Self::of(&member, model, witness, depth + 1)
+                })
+                .collect::<Box<[_]>>()
+        };
+        let variants = match &definition.shape {
+            Shape::Struct(fields) => Variants::from([(None, members(fields))]),
+            Shape::Enum(variants) => variants
+                .iter()
+                .map(|(variant, payload)| (Some(variant.name().into()), members(payload)))
+                .collect(),
+        };
+        variants
+            .values()
+            .any(|members| members.iter().any(Option::is_some))
+            .then_some(Self::Script(variants))
+    }
+
+    /// The part of the `index`th member of a value `part` is, of its
+    /// `variant` for an enum, when `part` is a generic script type's.
+    fn script_member<'p>(
+        part: Option<&'p Self>,
+        variant: Option<&str>,
+        index: usize,
+    ) -> Option<Option<&'p Self>> {
+        let Self::Script(variants) = part? else {
+            return None;
+        };
+        Some(
+            variants
+                .get(&variant.map(ImmutableString::from))
+                .and_then(|members| members.get(index)?.as_ref()),
+        )
     }
 
     /// The witness of the native value `part` is.
     fn witness(part: Option<&Self>) -> Option<&crate::host::runtime::Witness> {
         match part? {
             Self::Native(witness) => Some(witness),
-            Self::Each(_) | Self::Members(_) => None,
+            Self::Each(_) | Self::Members(_) | Self::Script(_) => None,
         }
     }
 
@@ -193,7 +281,7 @@ impl Part {
         match part? {
             Self::Each(inner) => Some(inner),
             Self::Members(members) => members.get(index)?.as_ref(),
-            Self::Native(_) => None,
+            Self::Native(_) | Self::Script(_) => None,
         }
     }
 }
@@ -414,7 +502,7 @@ impl Model {
         let members = |members: &[crate::resolve::type_ref::Type]| {
             members
                 .iter()
-                .map(|ty| Part::of(ty, self, &witness))
+                .map(|ty| Part::of(ty, self, &witness, 0))
                 .collect::<Box<[_]>>()
         };
         let mut parts = Parts::new();
@@ -458,7 +546,7 @@ impl Model {
             .map(|(key, types)| {
                 let parts = types
                     .iter()
-                    .map(|ty| ty.as_ref().and_then(|ty| Part::of(ty, self, &witness)))
+                    .map(|ty| ty.as_ref().and_then(|ty| Part::of(ty, self, &witness, 0)))
                     .collect();
                 (key.clone(), parts)
             })
@@ -579,7 +667,8 @@ impl Model {
                 let length = reader.members()?;
                 let mut fields = Vec::with_capacity(length);
                 for index in 0..length {
-                    let part = types.part(identity, None, index);
+                    let part = Part::script_member(part, None, index)
+                        .unwrap_or_else(|| types.part(identity, None, index));
                     fields.push(self.island_read(types, lent, given, part, reader, depth)?);
                 }
                 let proof = self
@@ -608,7 +697,8 @@ impl Model {
                 let length = reader.members()?;
                 let mut payload = Vec::with_capacity(length);
                 for index in 0..length {
-                    let part = types.part(identity, Some(variant_name), index);
+                    let part = Part::script_member(part, Some(variant_name), index)
+                        .unwrap_or_else(|| types.part(identity, Some(variant_name), index));
                     payload.push(self.island_read(types, lent, given, part, reader, depth)?);
                 }
                 let proof = self

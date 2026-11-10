@@ -800,7 +800,7 @@ impl<'a> Resolver<'a> {
         }
 
         #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
-        let natives = self.resolve_natives(&shells, root_types.as_ref())?;
+        let natives = self.resolve_natives(root_types.as_ref())?;
         let definitions =
             finish_definitions(self.type_declarations, &shells, self.host, &self.expanded)
                 .map_err(Failure::from_located)?;
@@ -870,15 +870,15 @@ impl<'a> Resolver<'a> {
         Ok(program)
     }
 
-    /// Each recorded instance of a function the program declares, its
-    /// types read in the crate root's names (D869). One whose function is
-    /// gone, or whose types rawr can't write, has no instance: its
-    /// function was changed since the record, so native code is built
-    /// again and records it anew.
+    /// Each recorded instance, by the path native code's call names its
+    /// function or method by, its types read in the crate root's names
+    /// (D869); the template that path names is found where instances are
+    /// compiled. One whose function is gone, or whose types rawr can't
+    /// write, has no instance: its function was changed since the record,
+    /// so native code is built again and records it anew.
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     fn resolve_natives(
         &self,
-        shells: &[super::item::Shell],
         root: Option<&BTreeMap<ImmutableString, type_ref::Target>>,
     ) -> Result<Vec<super::record::Native>, Failure> {
         let Some(root) = root else {
@@ -895,30 +895,6 @@ impl<'a> Resolver<'a> {
         };
         let mut natives = Vec::new();
         for instance in &self.natives {
-            let (modules, name) = instance
-                .path
-                .rsplit_once("::")
-                .map_or(("", instance.path.as_str()), |(modules, name)| {
-                    (modules, name)
-                });
-            let Some(template) = shells
-                .iter()
-                .filter_map(|shell| shell.key.as_ref())
-                .find(|key| {
-                    key.owner().is_none()
-                        && key.package() == self.package.as_str()
-                        && key.name() == name
-                        && key
-                            .modules()
-                            .iter()
-                            .map(ImmutableString::as_str)
-                            .collect::<Vec<_>>()
-                            .join("::")
-                            == modules
-                })
-            else {
-                continue;
-            };
             let mut types = Vec::new();
             for written in &instance.types {
                 let Some(parsed) = super::record::written(written, krate) else {
@@ -939,7 +915,7 @@ impl<'a> Resolver<'a> {
             }
             if types.len() == instance.types.len() {
                 natives.push(super::record::Native {
-                    template: template.clone(),
+                    path: instance.path.as_str().into(),
                     types: types.into_boxed_slice(),
                     key: crate::package::instances::key(&instance.name).into(),
                 });

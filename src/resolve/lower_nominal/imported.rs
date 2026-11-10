@@ -729,53 +729,8 @@ pub(super) fn instance_names(types: &[Ty], models: &Models) -> Option<Vec<Immuta
         .collect()
 }
 
-/// `ty` with each generic parameter `types` names replaced by its type.
 #[cfg(feature = "rust-import")]
-pub(super) fn substitute_parameters(
-    ty: &type_ref::Type,
-    types: &[(ImmutableString, type_ref::Type)],
-) -> type_ref::Type {
-    match ty {
-        type_ref::Type::Path(path) if matches!(path.target, type_ref::Target::Parameter) => {
-            if let Some((_, replaced)) = types.iter().find(|(name, _)| *name == path.name) {
-                return replaced.clone();
-            }
-            ty.clone()
-        }
-        type_ref::Type::Path(path) => type_ref::Type::Path(type_ref::Path {
-            arguments: path
-                .arguments
-                .iter()
-                .map(|argument| match argument {
-                    type_ref::Argument::Type(ty) => {
-                        type_ref::Argument::Type(substitute_parameters(ty, types))
-                    }
-                    lifetime @ type_ref::Argument::Lifetime(_) => lifetime.clone(),
-                })
-                .collect(),
-            ..path.clone()
-        }),
-        type_ref::Type::Reference {
-            mutable,
-            lifetime,
-            target,
-            span,
-        } => type_ref::Type::Reference {
-            mutable: *mutable,
-            lifetime: *lifetime,
-            target: Box::new(substitute_parameters(target, types)),
-            span: *span,
-        },
-        type_ref::Type::Tuple { members, span } => type_ref::Type::Tuple {
-            members: members
-                .iter()
-                .map(|member| substitute_parameters(member, types))
-                .collect(),
-            span: *span,
-        },
-        type_ref::Type::Unit(span) => type_ref::Type::Unit(*span),
-    }
-}
+pub(super) use crate::resolve::type_ref::substitute_parameters;
 
 /// The calls of generic functions compiled per instantiation that a body
 /// makes, with the types each gives, resolved once the body is read, and
@@ -950,6 +905,44 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
         )
         .filter(|(key, _)| !program.instances.templates.contains_key(key))
         .collect::<Vec<_>>();
+    // One native code calls at the types its check recorded is compiled per
+    // instantiation whatever its body reaches, as `Sidebar::into_element`
+    // boxing a crate's widget into an `Element<'a, Message>`: its erased
+    // body can't give a crate's item the types it is called at (D869).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let called = program
+            .instances
+            .natives
+            .iter()
+            .map(|native| native.path.as_str())
+            .collect::<BTreeSet<_>>();
+        let native = program
+            .items
+            .iter()
+            .filter_map(|shell| match &shell.kind {
+                item::Kind::Function(definition) if !definition.generics.is_empty() => {
+                    shell.key.clone()
+                }
+                _ => None,
+            })
+            .chain(
+                program
+                    .methods
+                    .iter()
+                    .filter(|definition| !definition.generics().is_empty())
+                    .map(|definition| definition.key().clone()),
+            )
+            .filter(|key| {
+                key.island_path()
+                    .is_some_and(|(_, path)| called.contains(path.as_str()))
+            })
+            .collect::<Vec<_>>();
+        for key in native {
+            program.instances.templates.entry(key).or_default();
+        }
+        candidates.retain(|(key, _)| !program.instances.templates.contains_key(key));
+    }
     for _ in 0..MAX_INSTANCE_ROUNDS {
         if candidates.is_empty() {
             break;
@@ -1064,6 +1057,7 @@ pub(super) fn method_instance(
     names: Vec<ImmutableString>,
     types: &[Ty],
     id: method::Id,
+    keyed: Option<&ImmutableString>,
 ) -> method::Definition {
     let template = definition.key();
     let listed = instances
@@ -1071,8 +1065,12 @@ pub(super) fn method_instance(
         .get_mut(template)
         .expect("each template is listed");
     // A trait impl's function keeps its trait in its name, by which native
-    // code reaches it (`Widget<M, T, R>::draw#1`).
-    let name: ImmutableString = format!("{}#{}", template.name(), listed.len() + 1).into();
+    // code reaches it (`Widget<M, T, R>::draw#1`); one native code calls
+    // is named by the key its trampoline calls it by (D869).
+    let name: ImmutableString = match keyed {
+        Some(key) => format!("{}#{key}", template.name()).into(),
+        None => format!("{}#{}", template.name(), listed.len() + 1).into(),
+    };
     let key = template.renamed(name.clone());
     listed.push((names.into_boxed_slice(), key.clone()));
     let span = definition.name_span();
@@ -1091,6 +1089,45 @@ pub(super) fn method_instance(
     });
     instances.types.insert(key, substituted);
     instance
+}
+
+/// The types of `template`'s generic parameters after its first `named`,
+/// the lifted `impl Trait`s a native call's record leaves out (D869): each
+/// the owned stand-in the trampoline gives the call, the `T` of an `impl
+/// Into<T>`. `None` when one has no such stand-in.
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+fn stood_types(program: &Program, template: &crate::item::Key, named: usize) -> Option<Vec<Ty>> {
+    let generics = match program
+        .methods
+        .iter()
+        .chain(program.builtin_methods.iter())
+        .find(|definition| definition.key() == template)
+    {
+        Some(definition) => definition.generics(),
+        None => match &program
+            .items
+            .iter()
+            .find(|shell| shell.key.as_ref() == Some(template))?
+            .kind
+        {
+            item::Kind::Function(definition) => &definition.generics,
+            _ => return None,
+        },
+    };
+    generics
+        .get(named..)?
+        .iter()
+        .map(|generic| {
+            let (_, arguments) = generic
+                .trait_arguments
+                .iter()
+                .find(|(name, _)| name.as_str() == "Into")?;
+            match &arguments[..] {
+                [target] => Some(Ty::from_resolved(target)),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// Polymorphic recursion would make instances without end.
@@ -1222,14 +1259,32 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             BTreeMap::<(crate::item::Key, Vec<ImmutableString>), ImmutableString>::new();
         #[cfg(not(target_arch = "wasm32"))]
         for native in &program.instances.natives {
-            let Some(instances) = program.instances.templates.get(&native.template) else {
+            // The template native code's call names: a function, or a
+            // method, by the path the running program's calls find it by.
+            let Some(template) = program
+                .instances
+                .templates
+                .keys()
+                .find(|key| {
+                    key.island_path()
+                        .is_some_and(|(_, path)| *path == *native.path)
+                })
+                .cloned()
+            else {
                 continue;
             };
-            let types = native
+            let instances = &program.instances.templates[&template];
+            let mut types = native
                 .types
                 .iter()
                 .map(Ty::from_resolved)
                 .collect::<Vec<_>>();
+            // Each lifted `impl Trait` after the named parameters takes the
+            // type its trampoline's owned stand-in is (D869).
+            let Some(stood) = stood_types(program, &template, types.len()) else {
+                continue;
+            };
+            types.extend(stood);
             let Some(names) = instance_names(&types, &models) else {
                 continue;
             };
@@ -1238,10 +1293,10 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .any(|(written, _)| written.as_ref() == names.as_slice())
                 || added
                     .iter()
-                    .any(|(key, written, _)| *key == native.template && *written == names);
+                    .any(|(key, written, _)| *key == template && *written == names);
             if !known {
-                keyed.insert((native.template.clone(), names.clone()), native.key.clone());
-                added.push((native.template.clone(), names, types));
+                keyed.insert((template.clone(), names.clone()), native.key.clone());
+                added.push((template, names, types));
             }
         }
         // Two calls a macro gives one span may take two instances: neither
@@ -1349,6 +1404,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .clone();
             let id =
                 method::Id::from_index(crate::resolve::BUILTIN_METHOD_IDS + builtin_methods.len());
+            let key = keyed.get(&(template.clone(), names.clone())).cloned();
             builtin_methods.push(method_instance(
                 &mut program.instances,
                 &models,
@@ -1356,6 +1412,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 names,
                 &types,
                 id,
+                key.as_ref(),
             ));
         }
         program.builtin_methods = builtin_methods.into_boxed_slice();
@@ -1375,6 +1432,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .expect("a method template is a method")
                 .clone();
             let id = method::Id::from_index(methods.len());
+            let key = keyed.get(&(template.clone(), names.clone())).cloned();
             methods.push(method_instance(
                 &mut program.instances,
                 &models,
@@ -1382,6 +1440,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 names,
                 &types,
                 id,
+                key.as_ref(),
             ));
         }
         let added_methods = (first_method..methods.len()).map(Added::Method);

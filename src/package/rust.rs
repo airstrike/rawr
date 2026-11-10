@@ -325,7 +325,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
                 shape: super::island::Shape::default(),
                 refused: Vec::new(),
                 objects: Vec::new(),
-                generic: std::collections::BTreeSet::new(),
+                generic: std::collections::BTreeMap::new(),
             });
         if !shadow.refused.is_empty() {
             return Err(rawr_import::Error::Request {
