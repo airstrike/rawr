@@ -502,9 +502,11 @@ impl<'a> Parser<'a> {
     /// operator does not compare itself: a crate type's hand-written
     /// `partial_cmp`, a generic bounded by `PartialOrd` or `Ord`, or builtin
     /// values compared by value (`bool`, `Option`, tuples, `Vec`).
+    /// `operator_at` is the operator's span where the program wrote one.
     pub(super) fn partial_ord_operator(
         &mut self,
         symbol: &str,
+        operator_at: Option<Span>,
         lhs: &ParsedExpr,
         rhs: &mut ParsedExpr,
     ) -> Result<Option<ParsedExpr>, Error> {
@@ -542,17 +544,23 @@ impl<'a> Parser<'a> {
             _ => None,
         };
         let Some((definition, partial)) = partial_cmp else {
-            // A std type std doesn't order (rustc's E0369).
-            if self.std_declared(&peeled)
-                && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
+            // A crate type without `PartialOrd`, or a std type std doesn't
+            // order (rustc's E0369).
+            if matches!(peeled, Ty::Script(..))
+                || self.std_declared(&peeled)
+                    && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
             {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "binary operation `{symbol}` cannot be applied to type `{}` (E0369)",
+                return Err(Error::StdPath {
+                    code: "E0369",
+                    message: format!(
+                        "binary operation `{symbol}` cannot be applied to type `{}`",
                         self.inference.resolve(&lhs.ty).name(&self.models)
                     )
                     .into(),
-                    source: span(lhs.span.start(), rhs.span.end()),
+                    label: None,
+                    note: None,
+                    reference: operator_at
+                        .unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
                 });
             }
             return Ok(None);
@@ -683,6 +691,29 @@ impl<'a> Parser<'a> {
         self.inference.resolve(side).name(&self.models)
     }
 
+    /// rustc's E0369 for `lhs == rhs` (`!=` when `negate`) whose left
+    /// operand's type has no `PartialEq`, at the operator.
+    fn not_equatable(
+        &self,
+        negate: bool,
+        operator_at: Option<Span>,
+        lhs: &ParsedExpr,
+        rhs: &ParsedExpr,
+    ) -> Error {
+        Error::StdPath {
+            code: "E0369",
+            message: format!(
+                "binary operation `{}` cannot be applied to type `{}`",
+                if negate { "!=" } else { "==" },
+                self.compared_name(&lhs.ty)
+            )
+            .into(),
+            label: None,
+            note: None,
+            reference: operator_at.unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
+        }
+    }
+
     pub(super) fn equality(
         &mut self,
         operator: Token,
@@ -744,13 +775,7 @@ impl<'a> Parser<'a> {
             let expression = span(lhs.span.start(), rhs.span.end());
             let ty = peeled.clone();
             if !self.type_provides(&ty, capability::Kind::PartialEq) {
-                return Err(Error::MissingCapability {
-                    owner: ty.name(&self.models),
-                    capability: "PartialEq".into(),
-                    operation: expression,
-                    derive: matches!(ty, Ty::Script(..)),
-                    required_by: None,
-                });
+                return Err(self.not_equatable(negate, operator_at, &lhs, &rhs));
             }
             let equal = self.equal_source(
                 &ty,
@@ -785,8 +810,10 @@ impl<'a> Parser<'a> {
                 Ok(self.operator_expr(source, Ty::Bool, span(lhs.span.start(), rhs.span.end())))
             }
             Ty::Script(definition, ..) => {
+                if !self.type_provides(&peeled, capability::Kind::PartialEq) {
+                    return Err(self.not_equatable(negate, operator_at, &lhs, &rhs));
+                }
                 let model = self.models.definition(definition);
-                self.require_capability(model, capability::Kind::PartialEq, lhs.span)?;
                 let helper = self.push_op(Op::Equal {
                     definition: model.definition().clone(),
                 });
@@ -800,25 +827,13 @@ impl<'a> Parser<'a> {
                 Ok(self.operator_expr(source, Ty::Bool, span(lhs.span.start(), rhs.span.end())))
             }
             Ty::Unknown => Err(self.unsupported("equality of dynamic values")),
-            Ty::Dyn(..) => Err(Error::MissingCapability {
-                owner: peeled.name(&self.models),
-                capability: "PartialEq".into(),
-                operation: lhs.span,
-                derive: matches!(peeled, Ty::Script(..)),
-                required_by: None,
-            }),
+            Ty::Dyn(..) => Err(self.not_equatable(negate, operator_at, &lhs, &rhs)),
             // Tuples and arrays of crate types: element by element, each by
             // its type's own `eq` where it has one.
             ty if !self.plain_equality(&ty) => {
                 let expression = span(lhs.span.start(), rhs.span.end());
                 if !self.type_provides(&ty, capability::Kind::PartialEq) {
-                    return Err(Error::MissingCapability {
-                        owner: ty.name(&self.models),
-                        capability: "PartialEq".into(),
-                        operation: expression,
-                        derive: matches!(ty, Ty::Script(..)),
-                        required_by: None,
-                    });
+                    return Err(self.not_equatable(negate, operator_at, &lhs, &rhs));
                 }
                 let equal = self.prelude_op(
                     PreludeOp::GenericEqual,

@@ -964,7 +964,12 @@ fn an_imported_type_compares_and_keys_a_map_by_the_traits_its_crate_implements()
              pub fn run() -> bool { instant() == instant() }",
         )
         .unwrap_err();
-    assert!(error.to_string().contains("PartialEq"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("binary operation `==` cannot be applied to type `touch::Instant`"),
+        "{error}"
+    );
     let error = engine
         .compile_executable(
             "use std::collections::HashMap;

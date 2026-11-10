@@ -300,7 +300,7 @@ fn an_error_in_an_expansion_of_an_argument_and_the_macros_own_tokens_is_reported
     assert!(
         report
             .message()
-            .starts_with("binary operation `+` cannot be applied to type `Level`"),
+            .starts_with("cannot add `Level` to `Level`"),
         "{report:?}"
     );
 }

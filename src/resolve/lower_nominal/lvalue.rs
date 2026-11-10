@@ -410,7 +410,7 @@ impl<'a> Parser<'a> {
             Token::RightShift => ">>=",
             _ => "",
         };
-        if let Some(value) = self.operator_impl(symbol, &target, Some(&mut replacement))? {
+        if let Some(value) = self.operator_impl(symbol, None, &target, Some(&mut replacement))? {
             return Ok(value);
         }
         self.apply_binary(operator, None, target, replacement)

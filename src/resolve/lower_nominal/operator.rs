@@ -457,7 +457,7 @@ impl<'a> Parser<'a> {
                 Token::LeftShift => "<<",
                 _ => ">>",
             };
-            if let Some(value) = self.operator_impl(symbol, &lhs, Some(&mut rhs))? {
+            if let Some(value) = self.operator_impl(symbol, operator_at, &lhs, Some(&mut rhs))? {
                 return Ok(value);
             }
             let mut lhs = lhs;
@@ -595,12 +595,12 @@ impl<'a> Parser<'a> {
             return Ok(self.binary(lhs, symbol, rhs, Ty::String));
         }
         if matches!(symbol, "<" | ">" | "<=" | ">=")
-            && let Some(value) = self.partial_ord_operator(symbol, &lhs, &mut rhs)?
+            && let Some(value) = self.partial_ord_operator(symbol, operator_at, &lhs, &mut rhs)?
         {
             return Ok(value);
         }
         if output.is_none()
-            && let Some(value) = self.operator_impl(symbol, &lhs, Some(&mut rhs))?
+            && let Some(value) = self.operator_impl(symbol, operator_at, &lhs, Some(&mut rhs))?
         {
             return Ok(value);
         }
@@ -821,10 +821,12 @@ impl<'a> Parser<'a> {
     /// `Rhs` the right operand fits, its `Output` the value (for `+=`, the
     /// changed left operand). `None` for an operand of another type; a
     /// crate type without the impl is Rust's E0369 (E0600 unary, E0368
-    /// compound).
+    /// compound), at `operator_at`: a binary operator where the program
+    /// wrote one, the whole expression of a unary one.
     pub(super) fn operator_impl(
         &mut self,
         symbol: &str,
+        operator_at: Option<Span>,
         lhs: &ParsedExpr,
         rhs: Option<&mut ParsedExpr>,
     ) -> Result<Option<ParsedExpr>, Error> {
@@ -1033,6 +1035,10 @@ impl<'a> Parser<'a> {
             }
             None => candidates,
         };
+        // The one impl there is takes the right operand as its `Rhs`, which
+        // a right operand of another type mismatches (rustc's E0308).
+        let impls = candidates.len();
+        let only = (impls == 1).then(|| candidates[0].clone());
         let mut chosen = None;
         for candidate in candidates {
             let probe = candidate
@@ -1061,30 +1067,18 @@ impl<'a> Parser<'a> {
         {
             return Ok(None);
         }
-        let Some(definition) = chosen else {
-            let operation =
-                match (symbol, &operand_ty) {
-                    ("neg" | "!", _) => format!(
-                        "cannot apply unary operator `{}` to type `{}` (E0600)",
-                        if symbol == "!" { "!" } else { "-" },
-                        lhs_ty.name(&self.models)
-                    ),
-                    (_, Some(operand)) => {
-                        format!(
-                    "binary operation `{symbol}` cannot be applied to type `{}` with `{}`: \
-                     no `{trait_name}<{}>` impl ({})",
-                    lhs_ty.name(&self.models),
-                    operand.name(&self.models),
-                    operand.name(&self.models),
-                    if symbol.ends_with('=') { "E0368" } else { "E0369" }
-                )
-                    }
-                    _ => unreachable!("binary operators have a right operand"),
-                };
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: operation.into(),
-                source: expression,
-            });
+        let Some(definition) = chosen.or(only) else {
+            return Err(self.missing_operator_impl(
+                Operation {
+                    symbol,
+                    trait_name,
+                    impls,
+                },
+                &lhs_ty,
+                operand_ty.as_ref(),
+                operator_at.unwrap_or(expression),
+                expression,
+            ));
         };
         let substitution = self.method_substitution(&definition, Some(&lhs.ty), expression)?;
         let mut arguments = Vec::new();
@@ -1114,6 +1108,71 @@ impl<'a> Parser<'a> {
             instantiate(&Ty::from_resolved(definition.output()), &substitution)
         };
         Ok(Some(self.operator_expr(source, ty, expression)))
+    }
+
+    /// rustc's error for `operation` on `lhs`, a crate type with no impl of
+    /// its trait for `operand`, at `operator`: E0600 for a unary operator,
+    /// E0369 for a binary operator whose trait the type has no impl of, and
+    /// E0277 for one whose impls take other types. E0368 for a compound
+    /// assignment, at `expression`.
+    fn missing_operator_impl(
+        &self,
+        operation: Operation<'_>,
+        lhs: &Ty,
+        operand: Option<&Ty>,
+        operator: Span,
+        expression: Span,
+    ) -> Error {
+        let Operation {
+            symbol,
+            trait_name,
+            impls,
+        } = operation;
+        let left = lhs.name(&self.models);
+        let Some(operand) = operand else {
+            let symbol = if symbol == "neg" { "-" } else { symbol };
+            return Error::StdPath {
+                code: "E0600",
+                message: format!("cannot apply unary operator `{symbol}` to type `{left}`").into(),
+                label: Some(format!("cannot apply unary operator `{symbol}`").into()),
+                note: None,
+                reference: operator,
+            };
+        };
+        if symbol.ends_with('=') {
+            return Error::StdPath {
+                code: "E0368",
+                message: format!(
+                    "binary assignment operation `{symbol}` cannot be applied to type `{left}`"
+                )
+                .into(),
+                label: None,
+                note: None,
+                reference: expression,
+            };
+        }
+        let right = operand.name(&self.models);
+        let message = arithmetic_trait(symbol, &left, &right).map_or_else(
+            || format!("no implementation for `{left} {symbol} {right}`"),
+            |(message, _)| message,
+        );
+        if impls == 0 {
+            return Error::StdPath {
+                code: "E0369",
+                message: message.into(),
+                label: None,
+                note: None,
+                reference: operator,
+            };
+        }
+        Error::Unimplemented {
+            message: message.into(),
+            label: format!("no implementation for `{left} {symbol} {right}`").into(),
+            help: Some(
+                format!("the trait `{trait_name}<{right}>` is not implemented for `{left}`").into(),
+            ),
+            at: operator,
+        }
     }
 
     /// `value[index]` on a crate type whose `index_mut` is `&mut <place>`
@@ -1291,6 +1350,16 @@ pub(super) fn kind_code(ty: Ty) -> INT {
         Ty::String | Ty::Str => 16,
         _ => 11,
     }
+}
+
+/// An operator a crate type's impls of its trait don't cover.
+struct Operation<'a> {
+    /// The operator, `neg` for unary minus.
+    symbol: &'a str,
+    /// Its `std::ops` trait.
+    trait_name: &'a str,
+    /// How many impls of the trait the type has.
+    impls: usize,
 }
 
 /// rustc's message for arithmetic `symbol` of `left` and `right` that no
