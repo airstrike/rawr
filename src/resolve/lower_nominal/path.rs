@@ -251,6 +251,54 @@ impl<'a> Parser<'a> {
         let (member, member_span) = segments
             .pop()
             .expect("qualified paths retain a member after their owner");
+        // `Point::<u32> { x, y }`: a generic struct's literal at the
+        // turbofish's types, as screenshot's `Rectangle::<u32> { .. }`.
+        if segments.is_empty()
+            && matches!(self.peek(), Token::LeftBrace)
+            && !self.no_struct
+            && let Some(types) = self.pending_turbofish.take()
+        {
+            let mut value = self.parse_struct(member, member_span)?;
+            let written = |arguments: &[Ty]| -> Box<[Ty]> {
+                types
+                    .iter()
+                    .cloned()
+                    .chain(arguments.iter().skip(types.len()).cloned())
+                    .collect()
+            };
+            let (expected, taken) = match self.inference.resolve(&value.ty) {
+                Ty::Script(id, arguments) => (Ty::Script(id, written(&arguments)), arguments.len()),
+                Ty::Host { proof, arguments } => (
+                    Ty::Host {
+                        proof,
+                        arguments: written(&arguments),
+                    },
+                    arguments.len(),
+                ),
+                ty => (ty, 0),
+            };
+            if types.len() > taken {
+                let plural = |count: usize| match count {
+                    1 => "1 generic argument".to_string(),
+                    count => format!("{count} generic arguments"),
+                };
+                let supplied = if types.len() == 1 { "was" } else { "were" };
+                return Err(Error::StdPath {
+                    code: "E0107",
+                    message: format!(
+                        "struct takes {} but {} {supplied} supplied",
+                        plural(taken),
+                        plural(types.len())
+                    )
+                    .into(),
+                    label: Some(format!("expected {}", plural(taken)).into()),
+                    note: None,
+                    reference: member_span,
+                });
+            }
+            self.coerce_expr(&expected, &mut value)?;
+            return Ok(value);
+        }
         // `Nope::<i32>`: a turbofish on a name that is no value.
         if segments.is_empty() {
             if let Some(error) = self.module_value(&member, member_span) {
