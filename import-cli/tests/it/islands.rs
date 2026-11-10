@@ -1426,7 +1426,7 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
             .position(|text| text.contains(borrow))
             .expect("the added function holds the borrow")
             + 1;
-        let at = format!("badge.rs:{line}:{column}-");
+        let at = format!("badge.rs:{line}:{column}");
         let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .arg("check")
             .arg(&root)
@@ -1437,22 +1437,11 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&check.stderr);
-        // Cargo's lock notice comes first when another build holds the
-        // directory; the report under test follows it.
-        let stderr = stderr
-            .lines()
-            .skip_while(|line| {
-                line.trim_start()
-                    .starts_with("Blocking waiting for file lock")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        // rawr's own span, which runs to the borrow's end, before cargo
-        // check's report.
+        assert!(!check.status.success(), "{stderr}");
+        let cargo = crate::support::cargo_s_report(&stderr);
         assert!(
-            !check.status.success()
-                && stderr.starts_with(&format!("error[E0597]: {local} does not live long enough"))
-                && stderr.contains(&at),
+            cargo.contains(&format!("error[E0597]: {local} does not live long enough"))
+                && cargo.contains(&at),
             "{stderr}"
         );
     }

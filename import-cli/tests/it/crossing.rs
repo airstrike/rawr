@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::support::fixture::Lease;
-use crate::support::{start, Fixture};
+use crate::support::{cargo_s_report, start, Fixture};
 
 /// The fixture, whose lanes hold the program's own native modules, which
 /// only some variants declare, beside them, so that rustfmt finds them
@@ -1376,14 +1376,13 @@ fn a_literal_lent_for_the_program_lives_as_long_as_it() {
 #[test]
 fn a_borrowed_local_where_a_static_str_goes_does_not_live_long_enough() {
     for (variant, at) in [
-        ("lent_name.rs", "main.rs:10:37-"),
-        ("lent_heading.rs", "main.rs:10:28-"),
+        ("lent_name.rs", "main.rs:10:37"),
+        ("lent_heading.rs", "main.rs:10:28"),
     ] {
         let stderr = checked(variant);
-        // rawr's own span, which runs to the borrow's end.
+        let cargo = cargo_s_report(&stderr);
         assert!(
-            stderr.contains("error[E0597]: `name` does not live long enough")
-                && stderr.contains(at),
+            cargo.contains("error[E0597]: `name` does not live long enough") && cargo.contains(at),
             "{variant}: {stderr}"
         );
     }
@@ -2126,7 +2125,8 @@ fn an_opaque_result_borrows_its_slice_for_as_long_as_it_lives() {
 
 /// #846: pushing to the items while a result that borrows them lives, after
 /// its last use but before it drops, and moving them meanwhile, are rustc's
-/// E0502 and E0505, which rawr's checker reports before anything runs.
+/// E0502 and E0505, which stop the program before anything runs, with
+/// cargo's report alone.
 #[test]
 fn using_what_an_opaque_result_borrows_while_it_lives_is_rustcs_error() {
     let mutable = "cannot borrow `items` as mutable because it is also borrowed as immutable";
@@ -2141,10 +2141,9 @@ fn using_what_an_opaque_result_borrows_while_it_lives_is_rustcs_error() {
         ),
     ] {
         let stderr = checked(variant);
-        // rawr's own report, before cargo's.
-        let own = stderr.split("cargo check found").next().unwrap_or_default();
+        let cargo = cargo_s_report(&stderr);
         assert!(
-            own.contains(&format!("error[{code}]: {message}")) && own.contains(at),
+            cargo.contains(&format!("error[{code}]: {message}")) && cargo.contains(at),
             "{variant}: {stderr}"
         );
     }
@@ -2172,15 +2171,16 @@ fn an_opaque_result_of_a_trait_that_cant_be_an_object_runs_through_its_proxy() {
 
 /// #849: a result that `again(&self) -> Self` gives borrows the items the
 /// first borrowed, after the first drops: pushing to them while it lives is
-/// rustc's E0502, which rawr's checker reports before anything runs.
+/// rustc's E0502, which stops the program before anything runs, with
+/// cargo's report alone.
 #[test]
 fn a_result_a_method_gives_as_self_keeps_the_items_borrowed() {
     let stderr = checked("stock_again.rs");
-    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    let cargo = cargo_s_report(&stderr);
     assert!(
-        own.contains(
+        cargo.contains(
             "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
-        ) && own.contains("main.rs:10:5"),
+        ) && cargo.contains("main.rs:10:5"),
         "{stderr}"
     );
 }
@@ -2203,16 +2203,16 @@ fn a_crate_call_takes_a_borrowing_result_by_value() {
 }
 
 /// #856: pushing to the items while a wrapped result that borrows them
-/// lives is rustc's E0502, which rawr's checker reports before anything
-/// runs.
+/// lives is rustc's E0502, which stops the program before anything runs,
+/// with cargo's report alone.
 #[test]
 fn using_what_a_wrapped_result_borrows_while_it_lives_is_rustcs_error() {
     let stderr = checked("shelf_wrap_push.rs");
-    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    let cargo = cargo_s_report(&stderr);
     assert!(
-        own.contains(
+        cargo.contains(
             "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
-        ) && own.contains("main.rs:7:5"),
+        ) && cargo.contains("main.rs:7:5"),
         "{stderr}"
     );
 }
@@ -2396,9 +2396,8 @@ fn a_program_runs_as_it_would_fresh_after_another_ran_in_its_project() {
     assert_eq!(printed_in(&root), MATCHED);
     replace("stock_again.rs");
     let stderr = checked_in(&root);
-    let own = stderr.split("cargo check found").next().unwrap_or_default();
     assert!(
-        own.contains(
+        cargo_s_report(&stderr).contains(
             "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
         ),
         "{stderr}"

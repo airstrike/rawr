@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-use crate::support::Fixture;
+use crate::support::{cargo_s_report, Fixture};
 
 static SHAPES: Fixture = Fixture::new("crate-shapes");
 static OWN_LIBRARY: Fixture = Fixture::new("own-library");
@@ -562,16 +562,14 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     let stderr = text(&check.stderr);
     assert!(!check.status.success(), "{stderr}");
     assert!(!stderr.contains("unknown member"), "{stderr}");
-    let rawr = stderr.split("cargo check found").next().unwrap_or_default();
+    let cargo = cargo_s_report(&stderr);
     for expected in [
-        "error[E0277]: the trait bound `natives::compose::Slot<(), natives::compose::Theme, \
-         widgets::Plain>: From<natives::compose::TextLike<natives::compose::Theme>>` is not \
-         satisfied",
+        "error[E0277]: the trait bound `natives::compose::Slot<'_, _>: \
+         From<TextLike<'_, natives::compose::Theme>>` is not satisfied",
         "the following other types implement trait `From<T>`:",
-        "From<natives::compose::Label>",
-        "From<natives::compose::Text<natives::compose::Theme, widgets::Plain>>",
+        "`natives::compose::Slot<'_, Message>` implements `From<&str>`",
     ] {
-        assert!(rawr.contains(expected), "{stderr}");
+        assert!(cargo.contains(expected), "{stderr}");
     }
     // A component whose message nothing fixes is rustc's E0282 at its
     // `let`, never a runner whose `_` cargo refuses.
@@ -591,9 +589,9 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     let stderr = text(&check.stderr);
     assert!(!check.status.success(), "{stderr}");
     assert!(!stderr.contains("rawr_adapters"), "{stderr}");
-    let rawr = stderr.split("cargo check found").next().unwrap_or_default();
     assert!(
-        rawr.contains("error[E0282]: type annotations needed for `natives::badge::Composed<"),
+        cargo_s_report(&stderr)
+            .contains("error[E0282]: type annotations needed for `Composed<'_, _>`"),
         "{stderr}"
     );
 }

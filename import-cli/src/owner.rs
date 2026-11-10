@@ -72,15 +72,15 @@ pub enum Unchecked {
 impl Unchecked {
     /// The report, once `cargo` says how the program checks, or `None`
     /// when `cargo check` fails too: the program's error is cargo's to
-    /// show, at the program's own paths, and the copy's build shows
-    /// nothing. A failure only the copy has is rawr's bug, reported once
-    /// without the copy's paths or generated names.
+    /// show, at the program's own paths, and neither rawr's check nor the
+    /// copy's build shows its own. A failure cargo doesn't share is rawr's
+    /// to report, the copy's without its paths or generated names.
     #[must_use]
     pub fn report(self, cargo: Option<&rawr_cli::cargo::Status>) -> Option<diagnostic::Report> {
-        match self {
-            Self::Copy { .. } if failing(cargo).is_some() => None,
-            unchecked => Some(unchecked.into_report()),
+        if failing(cargo).is_some() {
+            return None;
         }
+        Some(self.into_report())
     }
 
     /// The report with no word from `cargo check`: a failed build of the
