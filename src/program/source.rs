@@ -97,6 +97,12 @@ impl Source {
         self.maps[id.index()].text()
     }
 
+    /// The identity of the source `id`, as its diagnostics name it.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn identity_at(&self, id: Id) -> &str {
+        self.table.0.sources[id.index()].identity()
+    }
+
     /// Each source's text.
     pub(crate) fn texts(&self) -> impl Iterator<Item = &str> {
         self.maps.iter().map(source::Map::text)

@@ -94,7 +94,7 @@ pub(super) fn impl_surface_type(
 }
 
 #[cfg(feature = "rust-import")]
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedUse {
     pub(crate) source: crate::program::source::Id,
     pub(crate) path: ImmutableString,
@@ -120,7 +120,7 @@ pub(crate) struct ImportedUse {
 }
 
 #[cfg(feature = "rust-import")]
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedFunctionUse {
     pub(crate) position: u32,
     /// A generic function's instance, in its declared parameter order.
@@ -131,7 +131,7 @@ pub(crate) struct ImportedFunctionUse {
 }
 
 #[cfg(feature = "rust-import")]
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedMapperUse {
     pub(crate) position: u32,
     pub(crate) seal: [u8; 16],

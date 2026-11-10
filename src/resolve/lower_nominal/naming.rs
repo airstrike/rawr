@@ -49,8 +49,10 @@ pub(super) fn private_method_name(definition: &method::Definition) -> String {
     definition.symbol().into()
 }
 
-pub(super) fn pattern_name(index: usize) -> String {
-    format!("{NOMINAL_MATCH_SENTINEL}{index}")
+/// The placeholder of the pattern numbered `index` after `numbering`, its
+/// source's part (`Parser::numbering`).
+pub(super) fn pattern_name(numbering: &str, index: usize) -> String {
+    format!("{NOMINAL_MATCH_SENTINEL}{numbering}{index}")
 }
 
 /// The placeholder of the `text.into()` numbered `index`.

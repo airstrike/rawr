@@ -91,6 +91,13 @@ impl Engine {
             .map_or(0, |cells| cells.counts().parsed)
     }
 
+    /// How many sources this runner's compiles lowered so far, rather than
+    /// reusing an earlier compile's lowering (#1646).
+    #[doc(hidden)]
+    pub fn resident_lowered(&self) -> usize {
+        lock(&self.resident_lowerings).lowered()
+    }
+
     /// The package graph of `snapshot`. A runner's compiler, which compiles
     /// the program again on each save, reads each source whose text its
     /// last compile parsed from that parse, and parses only the sources

@@ -1275,7 +1275,9 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 /// table or registers a facade. The owner keeps the native part of the
 /// watch from the running build, so a body edit stages no watcher root. A
 /// save costs the same however many dependencies the program has (#1604).
-/// `RAWR_VERBOSE` says what each save did, in the owner and in the runner.
+/// The runner lowers that file again and reuses every other file's
+/// lowering (#1646). `RAWR_VERBOSE` says what each save did, in the owner
+/// and in the runner.
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -1332,11 +1334,30 @@ fn a_save_parses_only_the_file_it_changed() {
         2,
         "{seen}"
     );
+    // The runner lowers again only the file the save changed: the edit is
+    // to a body, which nothing another file lowers reads (#1646).
+    let runner = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a save parsed "))
+        .map(|line| {
+            let (parsed, rest) = line.split_once(" sources, lowered ").unwrap();
+            let (lowered, rest) = rest.split_once(" files").unwrap();
+            assert_eq!(rest, ", registered 0 facades", "{seen}");
+            (
+                parsed.parse::<usize>().unwrap(),
+                lowered.parse::<usize>().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        runner
+            .iter()
+            .all(|(parsed, lowered)| *parsed <= 1 && lowered == parsed),
+        "{runner:?}\n{seen}"
+    );
     assert_eq!(
-        parsed(
-            "stderr: rawr runner: a save parsed ",
-            ", registered 0 facades"
-        ),
+        runner.iter().map(|(parsed, _)| parsed).sum::<usize>(),
         2,
         "{seen}"
     );

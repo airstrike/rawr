@@ -13,12 +13,12 @@ use super::naming::{
     trait_dispatcher_name, DEBUG_DISPATCHER, DEBUG_GENERIC, NATIVE_ONLY, SENTINEL,
 };
 use super::op::{register, ExecutableOp, PreludeOp};
-#[cfg(feature = "rust-import")]
-use super::ImportedContext;
 use super::{
     closure, lex_rust, location, rewrite_statements, source_full_span, source_span, this_parameter,
     Parser,
 };
+#[cfg(feature = "rust-import")]
+use super::{kept, ImportedContext};
 use crate::ast::NominalPattern;
 use crate::resolve::{item, LoweringFailure, Program};
 use crate::tokenizer::Token;
@@ -100,11 +100,13 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     ))
 }
 
-/// A function's or a method's body, which `lower_with_context` lowers.
+/// A function's or a method's body, or the root's statements outside its
+/// items, which `lower_with_context` lowers.
 #[derive(Clone, Copy)]
 pub(super) enum Body<'a> {
     Function(&'a item::Shell, &'a item::Function),
     Method(&'a method::Definition),
+    Script(&'a crate::resolve::Script),
 }
 
 impl Body<'_> {
@@ -115,6 +117,369 @@ impl Body<'_> {
                 (shell.source.index(), definition.body.span.start())
             }
             Self::Method(definition) => (definition.source().index(), definition.body().start()),
+            Self::Script(script) => (script.source.index(), Position::START),
+        }
+    }
+
+    /// The source the body is in.
+    fn source(&self) -> crate::program::source::Id {
+        match self {
+            Self::Function(shell, _) => shell.source,
+            Self::Method(definition) => definition.source(),
+            Self::Script(script) => script.source,
+        }
+    }
+
+    /// Whether the body is a template's, compiled per instantiation and
+    /// lowered as its instances only (D629).
+    fn is_template(&self, program: &Program) -> bool {
+        let key = match self {
+            Self::Function(shell, _) => shell.key.as_ref(),
+            Self::Method(definition) => Some(definition.key()),
+            Self::Script(_) => None,
+        };
+        key.is_some_and(|key| program.instances.templates.contains_key(key))
+    }
+
+    /// The text the body's lowering reads.
+    fn text(&self, program: &Program) -> String {
+        match self {
+            Self::Function(shell, definition) => body_source(
+                definition
+                    .body
+                    .text
+                    .as_deref()
+                    .unwrap_or_else(|| program.source.text_at(shell.source)),
+                &definition.body,
+            ),
+            Self::Method(definition) => source_span(
+                definition
+                    .body_text()
+                    .unwrap_or_else(|| program.source.text_at(definition.source())),
+                definition.body(),
+            ),
+            Self::Script(script) => script.text.clone(),
+        }
+    }
+}
+
+/// What the lowering writes as it goes: the generated text, and what each
+/// body adds to it.
+struct Assembly {
+    generated: location::Generated,
+    locations: Vec<location::Pending>,
+    /// Each body's ops and patterns, by the names its text calls them by.
+    ops: Vec<(ImmutableString, ExecutableOp)>,
+    patterns: Vec<(ImmutableString, NominalPattern)>,
+    closures: Vec<closure::Callable>,
+    symbol_rewrites: BTreeMap<ImmutableString, ImmutableString>,
+    /// The name the program gave each generated function's receiver, which
+    /// its body reads as `this`: a debugger reads it by that name (#534).
+    receivers: BTreeMap<ImmutableString, ImmutableString>,
+    /// Where each free function's `&mut` parameter, its receiver, is
+    /// written among its parameters, for a host call that passes it there.
+    written_receivers: BTreeMap<ImmutableString, usize>,
+}
+
+/// One source's part being lowered, and what its lowering reads.
+struct Unit<'a> {
+    engine: &'a Engine,
+    program: &'a Program,
+    models: &'a Models,
+    scope: Option<&'a Scope<'a>>,
+    source: crate::program::source::Id,
+    /// What its ops' and patterns' names say before their numbers
+    /// (`Parser::numbering`).
+    numbering: ImmutableString,
+}
+
+/// How many ops and patterns a part's bodies lowered so far, which number
+/// the next body's.
+#[derive(Default)]
+struct Counts {
+    ops: usize,
+    patterns: usize,
+}
+
+impl Assembly {
+    /// Write `lowered`, the lowering of `body`, into the generated text.
+    fn place(&mut self, unit: &Unit<'_>, counts: &mut Counts, body: Body<'_>, lowered: Lowered) {
+        match body {
+            Body::Function(shell, definition) => {
+                let generated_name = function_name(shell.id);
+                if let Some(index) = this_parameter(definition) {
+                    self.receivers.insert(
+                        generated_name.as_str().into(),
+                        definition.parameters[index].name.text.clone(),
+                    );
+                    self.written_receivers
+                        .insert(generated_name.as_str().into(), index);
+                }
+                let offset = write_function(
+                    &mut self.generated,
+                    shell.source,
+                    &generated_name,
+                    definition,
+                    &lowered,
+                    unit.models,
+                );
+                retain_locations(
+                    &mut self.locations,
+                    offset,
+                    Some(
+                        shell
+                            .key
+                            .as_ref()
+                            .expect("resolved functions retain stable item keys"),
+                    ),
+                    shell.source,
+                    lowered.locations,
+                );
+                self.number(unit, counts, lowered.ops, lowered.patterns);
+                write_closures(
+                    &mut self.generated,
+                    &mut self.locations,
+                    shell.source,
+                    lowered.closures,
+                    &mut self.closures,
+                    &mut self.symbol_rewrites,
+                );
+            }
+            Body::Method(definition) => {
+                if definition.receiver().is_some() {
+                    self.receivers
+                        .insert(method_name(definition.id()).into(), "self".into());
+                }
+                let offset = write_method(&mut self.generated, definition, &lowered, unit.models);
+                retain_locations(
+                    &mut self.locations,
+                    offset,
+                    Some(definition.key()),
+                    definition.source(),
+                    lowered.locations,
+                );
+                self.number(unit, counts, lowered.ops, lowered.patterns);
+                write_closures(
+                    &mut self.generated,
+                    &mut self.locations,
+                    definition.source(),
+                    lowered.closures,
+                    &mut self.closures,
+                    &mut self.symbol_rewrites,
+                );
+            }
+            Body::Script(script) => {
+                let offset = self.generated.body(
+                    script.source,
+                    source_full_span(unit.program.source.text_at(script.source)),
+                    &lowered.source,
+                    &lowered.locations,
+                );
+                // The script's statements: a runtime error in them is
+                // reported at the script's own text.
+                retain_locations(
+                    &mut self.locations,
+                    offset,
+                    None,
+                    script.source,
+                    lowered.locations,
+                );
+                self.number(unit, counts, lowered.ops, lowered.patterns);
+            }
+        }
+    }
+
+    /// Name a body's ops and patterns as its text calls them.
+    fn number(
+        &mut self,
+        unit: &Unit<'_>,
+        counts: &mut Counts,
+        ops: Vec<ExecutableOp>,
+        patterns: Vec<NominalPattern>,
+    ) {
+        for op in ops {
+            let name = format!("{SENTINEL}{}{}", unit.numbering, counts.ops);
+            self.ops.push((name.into(), op));
+            counts.ops += 1;
+        }
+        for pattern in patterns {
+            let name = pattern_name(&unit.numbering, counts.patterns);
+            self.patterns.push((name.into(), pattern));
+            counts.patterns += 1;
+        }
+    }
+}
+
+/// Lower `bodies`, a source's part, into `assembly`. A runner's compiler
+/// reuses what it lowered of the part before when nothing its lowering
+/// reads changed, and charges again what it charged then (#1646).
+fn lower_part(
+    unit: &Unit<'_>,
+    assembly: &mut Assembly,
+    bodies: &[(Body<'_>, String)],
+    #[cfg(feature = "rust-import")] imported: Option<&mut ImportedContext<'_>>,
+    #[cfg(feature = "rust-import")] session: Option<(&mut kept::Session<'_>, kept::Part)>,
+) -> Result<(), LoweringFailure> {
+    let mut counts = Counts::default();
+    #[cfg(feature = "rust-import")]
+    if let Some(imported) = imported {
+        let texts = bodies
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>();
+        let mut session = session;
+        let key = session
+            .as_ref()
+            .and_then(|(session, part)| session.key(*part, unit.source, unit.program, &texts));
+        if let (Some((session, part)), Some(key)) = (session.as_mut(), key)
+            && let Some(reused) = session.reuse(*part, unit.source, key)
+            && let Some(renewed) = reused
+                .lowered
+                .iter()
+                .map(|lowered| lowered.renewed(unit.models))
+                .collect::<Option<Vec<_>>>()
+        {
+            for &(items, bytes) in &reused.charges {
+                imported
+                    .retain_checked(items, bytes)
+                    .map_err(|error| LoweringFailure::original(unit.source, error.into()))?;
+            }
+            imported.uses.extend(reused.uses.iter().cloned());
+            imported
+                .dependencies
+                .extend(reused.dependencies.iter().cloned());
+            for ((body, _), lowered) in bodies.iter().zip(renewed) {
+                assembly.place(unit, &mut counts, *body, lowered);
+            }
+            return Ok(());
+        }
+        let mut recording = kept::Recording {
+            inner: &mut *imported.allocation,
+            charges: Vec::new(),
+        };
+        let mut uses = Vec::new();
+        let mut dependencies = BTreeSet::new();
+        let mut lowerings = Vec::new();
+        {
+            let mut context = ImportedContext {
+                native: imported.native,
+                allocation: &mut recording,
+                failure: &mut *imported.failure,
+                source: unit.source,
+                uses: &mut uses,
+                dependencies: &mut dependencies,
+            };
+            for (body, text) in bodies {
+                let lowered = lower_body(
+                    unit,
+                    &counts,
+                    *body,
+                    text,
+                    Some(context.for_source(unit.source)),
+                )?;
+                if key.is_some() {
+                    lowerings.push(lowered.clone());
+                }
+                assembly.place(unit, &mut counts, *body, lowered);
+            }
+        }
+        if let Some((session, part)) = session {
+            session.keep(
+                part,
+                unit.source,
+                key,
+                &lowerings,
+                &uses,
+                &dependencies,
+                recording.charges,
+            );
+        }
+        imported.uses.append(&mut uses);
+        imported.dependencies.append(&mut dependencies);
+        return Ok(());
+    }
+    for (body, text) in bodies {
+        let lowered = lower_body(
+            unit,
+            &counts,
+            *body,
+            text,
+            #[cfg(feature = "rust-import")]
+            None,
+        )?;
+        assembly.place(unit, &mut counts, *body, lowered);
+    }
+    Ok(())
+}
+
+/// Lower one body from `text`, its ops and patterns numbered after
+/// `counts`.
+// The parser reads `text` as long as it holds `imported`, which only a
+// rust-import build has.
+#[cfg_attr(not(feature = "rust-import"), allow(clippy::needless_lifetimes))]
+fn lower_body<'a>(
+    unit: &Unit<'_>,
+    counts: &Counts,
+    body: Body<'_>,
+    text: &'a str,
+    #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
+) -> Result<Lowered, LoweringFailure> {
+    let models = unit.models.for_source(unit.source);
+    match body {
+        Body::Function(shell, definition) => {
+            let mut parser = Parser::for_function(
+                unit.engine,
+                text,
+                models,
+                definition,
+                shell
+                    .key
+                    .clone()
+                    .expect("resolved functions retain stable item keys"),
+                counts.ops,
+                counts.patterns,
+                #[cfg(feature = "rust-import")]
+                imported,
+            );
+            parser.numbering = unit.numbering.clone();
+            parser
+                .parse_function_body(definition)
+                .map_err(|error| LoweringFailure::original(unit.source, error.into()))
+        }
+        Body::Method(definition) => {
+            let mut parser = Parser::for_method(
+                unit.engine,
+                text,
+                models,
+                definition,
+                counts.ops,
+                counts.patterns,
+                #[cfg(feature = "rust-import")]
+                imported,
+            )
+            .map_err(|error| LoweringFailure::original(unit.source, error.into()))?;
+            parser.numbering = unit.numbering.clone();
+            parser
+                .parse_method_body(definition)
+                .map_err(|error| LoweringFailure::original(unit.source, error.into()))
+        }
+        Body::Script(_) => {
+            let mut parser = Parser::new_with_offset(
+                unit.engine,
+                text,
+                models,
+                counts.ops,
+                counts.patterns,
+                #[cfg(feature = "rust-import")]
+                imported,
+            );
+            parser.numbering = unit.numbering.clone();
+            if let Some(scope) = unit.scope {
+                parser.bind_scope(scope);
+            }
+            parser
+                .parse()
+                .map_err(|error| LoweringFailure::original(unit.source, error.into()))
         }
     }
 }
@@ -127,12 +492,6 @@ pub(super) fn lower_with_context(
     optimization_level: crate::OptimizationLevel,
     #[cfg(feature = "rust-import")] mut imported: Option<ImportedContext<'_>>,
 ) -> Result<Output, LoweringFailure> {
-    // The name the program gave each generated function's receiver, which
-    // its body reads as `this`: a debugger reads it by that name (#534).
-    let mut receivers: BTreeMap<ImmutableString, ImmutableString> = BTreeMap::new();
-    // Where each free function's `&mut` parameter, its receiver, is written
-    // among its parameters, for a host call that passes it there.
-    let mut written_receivers: BTreeMap<ImmutableString, usize> = BTreeMap::new();
     let mut symbol_rewrites: BTreeMap<ImmutableString, ImmutableString> = program
         .methods
         .iter()
@@ -172,12 +531,6 @@ pub(super) fn lower_with_context(
             (function.name.text.clone(), NATIVE_ONLY.into()),
         ]
     }));
-    let mut generated = location::Generated::new();
-    let mut closures = Vec::new();
-    let mut locations = Vec::new();
-    let mut ops = Vec::new();
-    let mut patterns = Vec::new();
-
     // `type Output: Clone;`: each impl's associated type has its trait's
     // bounds, and its owner the trait's supertraits, as Rust checks at the
     // impl.
@@ -229,173 +582,102 @@ pub(super) fn lower_with_context(
         )
         .collect::<Vec<_>>();
     bodies.sort_by_key(Body::written_at);
-    for body in bodies {
-        match body {
-            Body::Function(shell, definition) => {
-                // A template compiled per instantiation is lowered as its
-                // instances only (D629).
-                if shell
-                    .key
-                    .as_ref()
-                    .is_some_and(|key| program.instances.templates.contains_key(key))
-                {
-                    continue;
-                }
-                let body_source = body_source(
-                    definition
-                        .body
-                        .text
-                        .as_deref()
-                        .unwrap_or_else(|| program.source.text_at(shell.source)),
-                    &definition.body,
-                );
-                let mut parser = Parser::for_function(
-                    engine,
-                    &body_source,
-                    models.for_source(shell.source),
-                    definition,
-                    shell
-                        .key
-                        .clone()
-                        .expect("resolved functions retain stable item keys"),
-                    ops.len(),
-                    patterns.len(),
-                    #[cfg(feature = "rust-import")]
-                    imported
-                        .as_mut()
-                        .map(|context| context.for_source(shell.source)),
-                );
-                let lowered = parser
-                    .parse_function_body(definition)
-                    .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
-                let generated_name = function_name(shell.id);
-                if let Some(index) = this_parameter(definition) {
-                    receivers.insert(
-                        generated_name.as_str().into(),
-                        definition.parameters[index].name.text.clone(),
-                    );
-                    written_receivers.insert(generated_name.as_str().into(), index);
-                }
-                let body = write_function(
-                    &mut generated,
-                    shell.source,
-                    &generated_name,
-                    definition,
-                    &lowered,
-                    &models,
-                );
-                retain_locations(
-                    &mut locations,
-                    body,
-                    Some(
-                        shell
-                            .key
-                            .as_ref()
-                            .expect("resolved functions retain stable item keys"),
-                    ),
-                    shell.source,
-                    lowered.locations,
-                );
-                ops.extend(lowered.ops);
-                patterns.extend(lowered.patterns);
-                write_closures(
-                    &mut generated,
-                    &mut locations,
-                    shell.source,
-                    lowered.closures,
-                    &mut closures,
-                    &mut symbol_rewrites,
-                );
-            }
-            Body::Method(definition) => {
-                // A method compiled per instantiation is lowered as its instances
-                // only (D629).
-                if program.instances.templates.contains_key(definition.key()) {
-                    continue;
-                }
-                let body_source = source_span(
-                    definition
-                        .body_text()
-                        .unwrap_or_else(|| program.source.text_at(definition.source())),
-                    definition.body(),
-                );
-                let mut parser = Parser::for_method(
-                    engine,
-                    &body_source,
-                    models.for_source(definition.source()),
-                    definition,
-                    ops.len(),
-                    patterns.len(),
-                    #[cfg(feature = "rust-import")]
-                    imported
-                        .as_mut()
-                        .map(|context| context.for_source(definition.source())),
-                )
-                .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
-                let lowered = parser.parse_method_body(definition).map_err(|error| {
-                    LoweringFailure::original(definition.source(), error.into())
-                })?;
-                if definition.receiver().is_some() {
-                    receivers.insert(method_name(definition.id()).into(), "self".into());
-                }
-                let body = write_method(&mut generated, definition, &lowered, &models);
-                retain_locations(
-                    &mut locations,
-                    body,
-                    Some(definition.key()),
-                    definition.source(),
-                    lowered.locations,
-                );
-                ops.extend(lowered.ops);
-                patterns.extend(lowered.patterns);
-                write_closures(
-                    &mut generated,
-                    &mut locations,
-                    definition.source(),
-                    lowered.closures,
-                    &mut closures,
-                    &mut symbol_rewrites,
-                );
-            }
-        }
+    let mut assembly = Assembly {
+        generated: location::Generated::new(),
+        locations: Vec::new(),
+        ops: Vec::new(),
+        patterns: Vec::new(),
+        closures: Vec::new(),
+        symbol_rewrites,
+        receivers: BTreeMap::new(),
+        written_receivers: BTreeMap::new(),
+    };
+    // A runner's compiler lowers again only the sources whose lowering
+    // reads something that changed (#1646).
+    #[cfg(feature = "rust-import")]
+    let mut session = imported
+        .as_ref()
+        .and_then(|_| kept::Session::open(engine, program, &models, scope, optimization_level));
+    // A source's bodies are lowered together, their ops and patterns
+    // numbered after the source.
+    for group in bodies.chunk_by(|body, next| body.source() == next.source()) {
+        let lowerable = group
+            .iter()
+            .filter(|body| !body.is_template(program))
+            .map(|body| (*body, body.text(program)))
+            .collect::<Vec<_>>();
+        let Some((first, _)) = lowerable.first() else {
+            continue;
+        };
+        let source = first.source();
+        lower_part(
+            &Unit {
+                engine,
+                program,
+                models: &models,
+                scope,
+                source,
+                numbering: format!("{}_", source.index()).into(),
+            },
+            &mut assembly,
+            &lowerable,
+            #[cfg(feature = "rust-import")]
+            imported.as_mut(),
+            #[cfg(feature = "rust-import")]
+            session
+                .as_mut()
+                .map(|session| (session, kept::Part::Bodies)),
+        )?;
     }
 
-    write_trait_dispatchers(&mut generated, &models, &mut ops);
-    write_default_dispatcher(&mut generated, program, &models, &mut ops);
+    let mut dispatch_ops = Vec::new();
+    write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops);
+    write_default_dispatcher(&mut assembly.generated, program, &models, &mut dispatch_ops);
 
     let script = program
         .scripts
         .iter()
         .find(|script| script.source == program.source.entry())
         .expect("resolved single-source programs retain their root script");
-    let mut parser = Parser::new_with_offset(
-        engine,
-        &script.text,
-        models.for_source(script.source),
-        ops.len(),
-        patterns.len(),
+    lower_part(
+        &Unit {
+            engine,
+            program,
+            models: &models,
+            scope,
+            source: script.source,
+            numbering: format!("{}s", script.source.index()).into(),
+        },
+        &mut assembly,
+        &[(Body::Script(script), script.text.clone())],
         #[cfg(feature = "rust-import")]
-        imported
+        imported.as_mut(),
+        #[cfg(feature = "rust-import")]
+        session
             .as_mut()
-            .map(|context| context.for_source(script.source)),
-    );
-    if let Some(scope) = scope {
-        parser.bind_scope(scope);
+            .map(|session| (session, kept::Part::Script)),
+    )?;
+    #[cfg(feature = "rust-import")]
+    if let Some(session) = &mut session {
+        session.succeeded();
     }
-    let lowered = parser
-        .parse()
-        .map_err(|error| LoweringFailure::original(script.source, error.into()))?;
-    let body = generated.body(
-        script.source,
-        source_full_span(program.source.text_at(script.source)),
-        &lowered.source,
-        &lowered.locations,
-    );
-    // The script's statements: a runtime error in them is reported at
-    // the script's own text.
-    retain_locations(&mut locations, body, None, script.source, lowered.locations);
-    ops.extend(lowered.ops);
-    patterns.extend(lowered.patterns);
+    let Assembly {
+        generated,
+        locations,
+        ops,
+        patterns,
+        closures,
+        symbol_rewrites,
+        receivers,
+        written_receivers,
+    } = assembly;
+    // The dispatchers' ops are numbered apart from every source's.
+    let ops = dispatch_ops
+        .into_iter()
+        .enumerate()
+        .map(|(index, op)| (ImmutableString::from(format!("{SENTINEL}{index}")), op))
+        .chain(ops)
+        .collect::<Vec<_>>();
 
     let mut ast = match engine.compile_legacy_script_with_scope_raw(
         scope,
@@ -421,30 +703,26 @@ pub(super) fn lower_with_context(
     let models = Shared::new(models);
     let dependencies = ops
         .iter()
-        .flat_map(ExecutableOp::dependencies)
+        .flat_map(|(_, op)| op.dependencies())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
     let runtime_requirements = ops
         .iter()
-        .filter_map(ExecutableOp::runtime_requirement)
+        .filter_map(|(_, op)| op.runtime_requirement())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
     let projection_requirements = ops
         .iter()
-        .filter_map(ExecutableOp::projection_requirement)
+        .filter_map(|(_, op)| op.projection_requirement())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let nominal_patterns: BTreeMap<ImmutableString, NominalPattern> = patterns
-        .into_iter()
-        .enumerate()
-        .map(|(index, pattern)| (pattern_name(index).into(), pattern))
-        .collect();
+    let nominal_patterns: BTreeMap<ImmutableString, NominalPattern> =
+        patterns.into_iter().collect();
 
-    for (index, op) in ops.into_iter().enumerate() {
-        let sentinel: ImmutableString = format!("{SENTINEL}{index}").into();
+    for (sentinel, op) in ops {
         let private: ImmutableString = op.private_name(support_id).into();
         rewrites.insert(sentinel, private.clone());
         register(&mut module, private, op, &models);
@@ -565,6 +843,7 @@ pub(super) fn trait_objects(engine: &Engine, source: &crate::program::Source) ->
     objects
 }
 
+#[derive(Clone)]
 pub(super) struct Lowered {
     pub(super) source: String,
     pub(super) locations: Vec<location::Output>,

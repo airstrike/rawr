@@ -2338,7 +2338,7 @@ impl<'a> Parser<'a> {
         bindings: &[PatternBinding],
         place: Option<&PlacePattern>,
     ) -> String {
-        let placeholder = pattern_name(self.pattern_offset + self.patterns.len());
+        let placeholder = pattern_name(&self.numbering, self.pattern_offset + self.patterns.len());
         self.patterns.push(proof);
         if bindings.is_empty() {
             format!("{placeholder}::Case")

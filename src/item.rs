@@ -849,7 +849,7 @@ pub struct Function {
     pub span: Span,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct BodySyntax(Box<[BodyToken]>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]

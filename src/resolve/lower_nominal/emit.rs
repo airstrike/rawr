@@ -73,6 +73,7 @@ impl<'a> Parser<'a> {
         }
         let index = helper
             .strip_prefix(SENTINEL)
+            .and_then(|index| index.strip_prefix(self.numbering.as_str()))
             .and_then(|index| index.parse::<usize>().ok())
             .and_then(|index| index.checked_sub(self.op_offset));
         if let Some(index) = index
@@ -146,7 +147,11 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn push_op(&mut self, op: Op) -> String {
-        let name = format!("{SENTINEL}{}", self.op_offset + self.ops.len());
+        let name = format!(
+            "{SENTINEL}{}{}",
+            self.numbering,
+            self.op_offset + self.ops.len()
+        );
         self.ops.push(op);
         name
     }

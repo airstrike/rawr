@@ -2094,6 +2094,7 @@ impl Parser<'_> {
     fn is_none_value(&self, value: &ParsedExpr) -> bool {
         let text = value.source.as_str();
         text.strip_prefix(SENTINEL)
+            .and_then(|rest| rest.strip_prefix(self.numbering.as_str()))
             .and_then(|rest| rest.strip_suffix("()"))
             .and_then(|index| index.parse::<usize>().ok())
             .and_then(|index| index.checked_sub(self.op_offset))

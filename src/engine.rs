@@ -151,6 +151,11 @@ pub struct Engine {
     /// one parses only the sources whose text changed (#1604).
     #[cfg(feature = "rust-import")]
     pub(crate) resident_parses: std::sync::Mutex<Option<crate::package::Cells>>,
+    /// Each source's lowering from the last resident compile, so the next
+    /// one lowers only the sources whose lowering reads something that
+    /// changed (#1646).
+    #[cfg(feature = "rust-import")]
+    pub(crate) resident_lowerings: std::sync::Mutex<crate::resolve::lower_nominal::Lowerings>,
 
     /// Callback closure for filtering variable definition.
     pub(crate) def_var_filter: Option<Box<OnDefVarCallback>>,
@@ -300,6 +305,8 @@ impl Engine {
         imported_native: None,
         #[cfg(feature = "rust-import")]
         resident_parses: std::sync::Mutex::new(None),
+        #[cfg(feature = "rust-import")]
+        resident_lowerings: std::sync::Mutex::new(crate::resolve::lower_nominal::Lowerings::new()),
 
         def_var_filter: None,
         resolve_var: None,
