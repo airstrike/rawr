@@ -2470,3 +2470,20 @@ fn a_marked_module_logs_through_a_crate_that_re_exports_tracing_s_macros() {
     );
     checks_and_prints(&root, &printed);
 }
+
+/// A marked module calls a workspace crate's method whose lifetimes are
+/// elided, as inboard's inbox calls `Organization::user(&self, id: &Id) ->
+/// Option<&User>`. rustc reads them as late-bound, `for<'a, 'b> fn(&'a
+/// Self, &'b Id) -> Option<&'a User>`, and they are the call's own
+/// lifetimes: the output borrows the receiver, and the id is lent for the
+/// call. `rawr check` passes and `rawr run` prints what `cargo run` prints.
+#[test]
+fn a_marked_module_calls_a_method_with_elided_lifetimes_whose_output_borrows_self() {
+    const ORG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-org");
+    let root = crate::support::scratch().join("islands-org");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(ORG), &root);
+    let printed = cargo_prints(&root);
+    assert_eq!(printed, "invited by Ada\ninvited by Someone\n");
+    checks_and_prints(&root, &printed);
+}

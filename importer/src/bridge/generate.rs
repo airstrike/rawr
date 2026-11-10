@@ -14941,10 +14941,11 @@ fn render_guard(
     }
     // A receiver native code lent (D558.3), as iced lends `draw` its
     // `&Theme`, whose `palette()` the program reads (#954): the method is
-    // called through its accessor, and the copy goes out of it.
-    if matches!(guard, Guard::Shared)
-        && matches!(receiver, Receiver::Shared)
-        && signature.inputs().is_empty()
+    // called through its accessor, and the copy goes out of it. So is one
+    // a native place names, as the field `config.org` of a lent `&Config`
+    // is, whose `user(&id) -> Option<&User>` inboard's inbox reads: the
+    // method is called where the place is, inside one claim of it.
+    if matches!(guard, Guard::Shared | Guard::OptionShared) && matches!(receiver, Receiver::Shared)
     {
         let mut container = Vec::new();
         render_container_path(
@@ -14966,15 +14967,41 @@ fn render_guard(
             &mut turbofish,
         )?;
         let turbofish = String::from_utf8(turbofish).map_err(request::unwritable)?;
+        let copied = if matches!(guard, Guard::Shared) {
+            format!("{copy}!(&*guard)")
+        } else {
+            format!("guard.map(|target| {copy}!(&*target)).transpose()")
+        };
+        let tuple = if taken.is_empty() {
+            String::from("()")
+        } else {
+            format!("({taken},)")
+        };
         writeln!(
             output,
             "    if let Some(lent) = lent_value(arguments, 0) {{
         let access: fn(u64, &mut dyn FnMut(&{container})) -> Result<(), u8> = lent
             .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut inputs = Some({tuple});
         let mut copied = None;
-        access(lent.nonce().bits(), &mut |receiver| {{ let mut guard = receiver.{name}{turbofish}(); let _ = &mut guard; copied = Some({copy}!(&*guard)); }})
+        access(lent.nonce().bits(), &mut |receiver| {{
+            #[allow(irrefutable_let_patterns, unused_parens)]
+            if let Some({tuple}) = inputs.take() {{ let mut guard = receiver.{name}{turbofish}({taken}); let _ = &mut guard; copied = Some({copied}); }}
+        }})
             .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
         let output = copied.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))??;
+        return {{",
+            name = plan.name()
+        )
+        .map_err(encoding)?;
+        render_give(&target, "output", output)?;
+        writeln!(
+            output,
+            "    }};
+    }}
+    if let Some(place) = arguments.values.first().and_then(|value| __rawr_internal::place::get(value)) {{
+        let output = lend(arguments.arena, || __rawr_internal::place::reach_as::<{container}, _>(&place, false, |receiver| {{ let receiver = receiver.read(); let mut guard = receiver.{name}{turbofish}({taken}); let _ = &mut guard; Ok({copied}) }}))
+            .map_err(|error| Error::Value(error.to_string()))??;
         return {{",
             name = plan.name()
         )

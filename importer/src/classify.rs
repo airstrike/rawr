@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 160;
+const CLASSIFIER_VERSION: u32 = 161;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8734,6 +8734,7 @@ impl<P: api::Phase> Context<'_, P> {
         use representability::{callable, function, method, ownership, Representability};
         let rebound;
         let signature = if receiver_binder_is_exact(signature)
+            || receiver_binder_lends_inputs(signature)
             || late_binders_lend_strings(signature)
             || late_binders_lend_inputs(signature)
             || self.async_lends_inputs(signature)
@@ -11781,6 +11782,47 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
     }
 }
 
+/// A method whose output may borrow its receiver and whose other own
+/// lifetimes only lend its inputs for the call, as `Organization::user(
+/// &self, id: &Id) -> Option<&User>`, which rustc reads as `for<'a, 'b>
+/// fn(&'a Self, &'b Id) -> Option<&'a User>`. Elided lifetimes are
+/// late-bound, and they are the call's own: the receiver's binder is the
+/// one the output names, as [`receiver_binder_is_exact`] reads it, and
+/// each input borrows as [`late_binders_lend_inputs`] reads them.
+fn receiver_binder_lends_inputs(signature: &model::Signature) -> bool {
+    let model::Receiver::Reference {
+        lifetime: model::Lifetime::Late { binder, index },
+        ty,
+        ..
+    } = signature.receiver()
+    else {
+        return false;
+    };
+    *index == binder.index()
+        && signature.binders().any(|declared| declared == binder)
+        && signature.binders().len() > 1
+        && output_names_only(signature, binder)
+        && signature.inputs().all(lends_late_borrows)
+        && !names_late_lifetime(ty)
+}
+
+/// Whether `signature`'s output names none of its own lifetimes but
+/// `kept`'s: each other one is the call's own, lent for the call alone.
+fn output_names_only(signature: &model::Signature, kept: &model::Binder) -> bool {
+    signature
+        .binders()
+        .filter(|declared| *declared != kept)
+        .all(|declared| {
+            !names_lifetime(
+                signature.output(),
+                &model::Lifetime::Late {
+                    binder: declared.clone(),
+                    index: declared.index(),
+                },
+            )
+        })
+}
+
 /// `ty`, an input type that holds borrows, when the call can lease each of
 /// them as the generator's `Lease` does: every borrow `convert_input` gives
 /// is one the call lends, alone or in an `Option`, a `Result` or a tuple,
@@ -12267,7 +12309,7 @@ fn borrows_receiver(
     is_option: impl Fn(&api::identity::Definition) -> bool,
 ) -> bool {
     let model::Receiver::Reference {
-        lifetime: receiver @ model::Lifetime::Late { .. },
+        lifetime: receiver @ model::Lifetime::Late { binder, .. },
         ..
     } = signature.receiver()
     else {
@@ -12282,19 +12324,22 @@ fn borrows_receiver(
     // takes a value of borrows by value (#1225): the frame's lifetime, as
     // the output's is. So may a shared reference at that lifetime, as its
     // `theme: &'a Theme` is, or a `&'a str`, as `titled(&'a self, title:
-    // &'a str)` takes (#1503).
+    // &'a str)` takes (#1503). Any other lifetime of the method's own is
+    // one the output doesn't name and an input borrows at for the call
+    // alone, as an elided `id: &Id`.
     matches!(output, model::Type::Definition { .. })
         && signature.guard().is_none()
         && !signature.async_function()
         && names_lifetime(output, receiver)
         && !names_opaque(output)
-        && signature.binders().len() == 1
+        && output_names_only(signature, binder)
         && signature.inputs().all(|input| {
             !names_late_lifetime(input)
                 || naming(input, receiver) == Naming::Argument
                 || shares_at(input, receiver)
                 || text_at(input, receiver)
                 || objects_at(input, receiver, &is_option)
+                || (!names_lifetime(input, receiver) && lends_late_borrows(input))
         })
         && !lends_option_reference(output, receiver, is_option)
 }
@@ -14813,6 +14858,78 @@ mod tests {
             model::Mutability::Mutable,
         );
         assert!(!super::receiver_binder_is_exact(&wrong_receiver));
+    }
+
+    /// inboard's `Organization::user(&self, id: &Id) -> Option<&User>`,
+    /// `for<'a, 'b> fn(&'a Self, &'b Id) -> Option<&'a User>`: its elided
+    /// lifetimes are the call's own, not a higher-ranked binder. An output
+    /// that names the id's lifetime, or an input that holds a borrow at it,
+    /// is still refused.
+    #[test]
+    fn elided_lifetimes_of_a_method_lend_its_inputs_beside_its_receiver() {
+        use crate::api::model;
+
+        let id = crate::test_fixture::graph()
+            .definitions()
+            .next()
+            .expect("fixture definition exists")
+            .id()
+            .clone();
+        let receiver = model::Binder::new(id.clone(), 0, 0, "'#0".into());
+        let input = model::Binder::new(id.clone(), 0, 1, "'#1".into());
+        let late = |binder: &model::Binder| model::Lifetime::Late {
+            binder: binder.clone(),
+            index: binder.index(),
+        };
+        let plain = model::Type::Definition {
+            id: id.clone(),
+            arguments: Box::default(),
+        };
+        let reference = |lifetime, ty| model::Type::Reference {
+            lifetime,
+            mutability: model::Mutability::Shared,
+            ty: Box::new(ty),
+        };
+        let option = |ty| model::Type::Definition {
+            id: id.clone(),
+            arguments: Box::from([model::Argument::Type(ty)]),
+        };
+        let signature = |input_type, output| {
+            model::Signature::new(
+                model::Safety::Safe,
+                false,
+                false,
+                "\"Rust\"".into(),
+                false,
+                Box::from([receiver.clone(), input.clone()]),
+                model::Receiver::Reference {
+                    lifetime: late(&receiver),
+                    mutability: model::Mutability::Shared,
+                    ty: model::Type::SelfType(id.clone()),
+                },
+                Box::from([input_type]),
+                output,
+            )
+        };
+
+        let user = signature(
+            reference(late(&input), plain.clone()),
+            option(reference(late(&receiver), plain.clone())),
+        );
+        assert!(!super::receiver_binder_is_exact(&user));
+        assert!(super::receiver_binder_lends_inputs(&user));
+
+        let named = signature(
+            reference(late(&input), plain.clone()),
+            option(reference(late(&input), plain.clone())),
+        );
+        assert!(!super::receiver_binder_lends_inputs(&named));
+
+        let held = signature(
+            reference(late(&input), reference(late(&input), plain.clone())),
+            option(reference(late(&receiver), plain.clone())),
+        );
+        assert!(!super::receiver_binder_lends_inputs(&held));
     }
 
     /// inboard's `wizard::State::view<'a>(&'a self, catalog: View<'a>,
