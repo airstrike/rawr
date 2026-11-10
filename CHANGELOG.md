@@ -8,6 +8,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too. (#1643)
 - A save of one marked file in `rawr run` reveals and lowers only that file again. That now holds when another marked file reads a file with `include_str!` or `include_bytes!`, or a variable with `env!`, as inboard's theme does, and when the edit is to a method's body. With `RAWR_VERBOSE`, the runner says how many files each save revealed. (#1654; part of #1646)
 - `rawr test` of a program whose package has Rust dependencies runs its tests in the program's runner, as `rawr run` runs its `main` there, and reports as `cargo test` does. That covers each test's result, a failure's output and panic, libtest's filters and options, the exit status, and `cargo check --profile test`'s errors after the report. (#1653)
+- A save that adds or removes a line in a marked file keeps every other marked file's lowering, as long as the line is in a function body or is a blank or comment line. The save lowers only its own file. (#1655; part of #1646)
+- A save reads each marked file's outline once per text and keeps it across passes and saves. Before, it blanked every file's text against every body on each pass. (#1656; part of #1646)
 
 ## 0.3.179 (2026-11-10)
 
