@@ -603,7 +603,7 @@ impl<'a> Parser<'a> {
             // `async |x| body` is `|x| async move { body }`.
             self.parse_async_block(start, true, None)
         } else if matches!(self.peek(), Token::LeftBrace) {
-            self.parse_match_action().map(|branch| branch.value)
+            self.parse_unexpected_block().map(|branch| branch.value)
         } else {
             let pending = self.field_entries.len();
             self.open_temporaries();

@@ -112,6 +112,26 @@ pub fn inbox<'a>(theme: &'a theme::Theme) -> Element<'a, Message> {
         .boxed()
 }
 
+/// An inbox item's padding, as inboard's `inbox::view` styles an item: a
+/// typed `let` expects its `if` to be a `Box<dyn Fn>`, so each arm's boxed
+/// closure, which gives a crate struct over a native function's, coerces
+/// to it.
+pub fn item_padding(theme: &theme::Theme, unread: bool, last: bool) -> ui::Padding {
+    let bottom = if last { 3.0 } else { 0.0 };
+    let style: Box<dyn Fn(&theme::Theme) -> ui::Padding> = if unread {
+        Box::new(move |theme: &theme::Theme| ui::Padding {
+            vertical: bottom,
+            ..theme::container::item_unread(theme)
+        })
+    } else {
+        Box::new(move |theme: &theme::Theme| ui::Padding {
+            vertical: bottom,
+            ..theme::container::item(theme)
+        })
+    };
+    style(theme)
+}
+
 /// The sidebar, as inboard's views: a marked fn gives the theme native
 /// code lends it on to the marked `inbox`, which gives it to the native
 /// `inbox::view`, so native code's own reference reaches the last call.

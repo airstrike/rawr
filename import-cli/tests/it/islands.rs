@@ -1086,6 +1086,15 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     // The trait's impl for `u64` gives it `to_u32` in scope and
     // `<u64 as NumCast>::from` (#1613, #1614).
     assert!(printed.contains("\nwidened Some(9)\n"), "{printed}");
+    // inboard's inbox item style: a typed `let` of a `Box<dyn Fn(&Theme)
+    // -> Padding>` reaches each `if` arm, whose boxed closure coerces to it.
+    assert!(
+        printed.contains(
+            "\nitem Padding { vertical: 3.0, horizontal: 120.5 } \
+             Padding { vertical: 0.0, horizontal: 250.0 }\n"
+        ),
+        "{printed}"
+    );
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     // A check from no kept state: its first build records the instances

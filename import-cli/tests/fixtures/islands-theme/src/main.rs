@@ -271,6 +271,11 @@ fn main() {
     );
     println!("narrowed {:?}", sidebar::narrowed(7));
     println!("widened {:?}", sidebar::widened(9));
+    println!(
+        "item {:?} {:?}",
+        home::item_padding(&theme, true, true),
+        home::item_padding(&dark, false, false)
+    );
     println!("clones {}", theme::clones());
     // Run on, as a running program does, till told to stop: each tick
     // calls the marked generic through the native helper.

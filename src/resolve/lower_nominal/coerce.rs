@@ -685,6 +685,63 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The type the expression being parsed is expected to have, as a
+    /// typed `let`, a call's parameter, a `return` or a block's tail
+    /// expects it, when no part of it is still to be inferred: what rustc
+    /// coerces each of its arms or `break` values to.
+    pub(super) fn coercion_target(&mut self) -> Option<Ty> {
+        let expected = self.inference.resolve(&self.block_expectation()?);
+        (!contains(&expected, &|ty| matches!(ty, Ty::Infer(_) | Ty::Unknown))).then_some(expected)
+    }
+
+    /// The coercion target of the branching expression just parsed, when
+    /// the expectation is the whole expression's: the token after it ends
+    /// it, where `match .. {}.len()` goes on to a method.
+    fn branch_expectation(&mut self) -> Option<Ty> {
+        let ended = matches!(
+            self.peek(),
+            Token::SemiColon | Token::Comma | Token::RightParen | Token::RightBrace | Token::EOF
+        );
+        self.coercion_target().filter(|_| ended)
+    }
+
+    /// Each branch coerced to `target`, rustc's coercion of every arm to
+    /// the expected type. Branches already of that type are left to the
+    /// least upper bound, which gives it, and so are branches one of which
+    /// does not coerce.
+    fn coerce_each(&mut self, target: &Ty, branches: &mut [&mut ParsedExpr]) -> Option<Ty> {
+        let sources = branches
+            .iter()
+            .map(|branch| self.inference.resolve(&branch.ty))
+            .filter(|source| *source != Ty::Never)
+            .collect::<Vec<_>>();
+        let checkpoint = self.inference.checkpoint();
+        let exact = sources
+            .iter()
+            .all(|source| self.unify_type(target, source) && self.unify_type(&sources[0], source));
+        self.inference.rollback(checkpoint);
+        if exact {
+            return None;
+        }
+        let checkpoint = self.inference.checkpoint();
+        let mut coerced = Vec::with_capacity(branches.len());
+        for branch in branches.iter() {
+            let mut value = (**branch).clone();
+            if self.inference.resolve(&value.ty) != Ty::Never
+                && self.coerce_expr(target, &mut value).is_err()
+            {
+                self.inference.rollback(checkpoint);
+                return None;
+            }
+            coerced.push(value);
+        }
+        self.inference.commit(checkpoint);
+        for (branch, value) in branches.iter_mut().zip(coerced) {
+            **branch = value;
+        }
+        Some(self.inference.resolve(target))
+    }
+
     pub(super) fn coerce_branches(
         &mut self,
         branches: &mut [&mut ParsedExpr],
@@ -701,6 +758,11 @@ impl<'a> Parser<'a> {
             for branch in branches {
                 self.coerce_expr(&target, branch)?;
             }
+            return Ok(target);
+        }
+        if let Some(target) = self.branch_expectation()
+            && let Some(target) = self.coerce_each(&target, branches)
+        {
             return Ok(target);
         }
 

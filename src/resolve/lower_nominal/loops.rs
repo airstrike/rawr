@@ -220,7 +220,7 @@ impl<'a> Parser<'a> {
             }
             self.push_loop(label, value, drop_depth);
         }
-        let body = self.parse_match_action();
+        let body = self.parse_unexpected_block();
         self.flow().loop_exit();
         let frame = self.loops.pop().expect("the loop pushed its frame");
         let mut body = body?;
@@ -335,11 +335,14 @@ impl<'a> Parser<'a> {
     ) {
         let jump = self.temporary("jump");
         let flow_depth = self.flow().loop_depth();
+        // A `loop` expected to be a type, as a typed `let` expects it, has
+        // each `break` value coerce to it.
+        let ty = if value { self.coercion_target() } else { None };
         self.loops.push(LoopFrame {
             label,
             jump,
             value,
-            ty: None,
+            ty,
             targeted: false,
             exits: BTreeSet::new(),
             drop_depth,
@@ -417,7 +420,8 @@ impl<'a> Parser<'a> {
                 Token::SemiColon | Token::RightBrace | Token::Comma
             )
         {
-            let mut parsed = self.parse_expr()?;
+            let expected = self.loops[target].ty.clone();
+            let mut parsed = self.parse_expr_expecting(expected.as_ref())?;
             end = parsed.span;
             if !self.loops[target].value {
                 return Err(self.unsupported("`break` with a value outside `loop`"));

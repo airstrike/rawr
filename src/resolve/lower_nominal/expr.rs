@@ -118,6 +118,58 @@ impl<'a> Parser<'a> {
         (!(referenced && vec) || kind == sequence::Kind::Vec).then_some(*element)
     }
 
+    /// The statement ahead, a block-like tail of its block expected to be
+    /// `expected` as rustc expects it: its arms coerce to that type.
+    pub(super) fn parse_tail_expecting(&mut self, expected: Option<&Ty>) -> Result<(), Error> {
+        let expected = expected.filter(|_| self.peek_block_like() && self.block_like_ends_block());
+        let Some(expected) = expected else {
+            return self.parse_statement();
+        };
+        let hint = Some((expected.clone(), self.expression_stack.len() + 1));
+        let outer = std::mem::replace(&mut self.collect_hint, hint);
+        let statement = self.parse_statement();
+        self.collect_hint = outer;
+        statement
+    }
+
+    /// Whether the block-like expression ahead (`if .. {} else {}`, `match
+    /// .. {}`, `loop {}`, `{}`) is its block's tail: the enclosing `}`
+    /// follows its last block.
+    pub(super) fn block_like_ends_block(&mut self) -> bool {
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        let mut depth = 0_usize;
+        while let Some(token) = ahead.next() {
+            match token {
+                Token::LeftBracket | Token::LeftParen | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                // A block at the expression's own level closes: an `else`
+                // goes on to the next one.
+                Token::RightBrace if depth == 1 => {
+                    depth = 0;
+                    match ahead.next() {
+                        Some(Token::Else) => {}
+                        next => return matches!(next, Some(Token::RightBrace)),
+                    }
+                }
+                Token::RightBracket | Token::RightParen | Token::RightBrace if depth > 0 => {
+                    depth -= 1;
+                }
+                Token::RightBracket
+                | Token::RightParen
+                | Token::RightBrace
+                | Token::SemiColon
+                | Token::EOF
+                    if depth == 0 =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Whether the expression ahead ends at the enclosing block's `}`: its
     /// first bracket's match is followed by it, as a body's tail literal
     /// `vec![..]` is.
