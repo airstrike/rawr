@@ -19,6 +19,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core. (#1627)
 - Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION. (#1625)
 - A program with marked generic instances keeps its extracted tables for the next demand round again, so a round whose items the tables already hold needs no nightly build or probe. A check no longer generates its bindings plan twice per round, and `rawr check` with `RAWR_VERBOSE=1` prints what each round's stages did. (#1629; part of #1618)
+- `std::env::current_dir()` runs, a generic function's type parameter is inferred through an `impl Trait` argument as rustc does, a borrowed crate field derefs at a call even when the program never names its type, and `Rectangle::<u32> { .. }` literals work. iced's screenshot passes `rawr check`, and todos and integration get further. (#1061, #1218, #1100, #1320)
+- A crate macro that includes a file relative to a native module, as `wgpu::include_wgsl!("shader/vert.wgsl")`, finds it: a native module's non-`.rs` files sit beside its copy. iced's integration gets past its shaders. (#1630; part of #314)
 
 ## 0.3.176 (2026-11-10)
 
