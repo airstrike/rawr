@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Native code can call a marked generic function at a type that sits below a private module, as inboard's `workspace::spreadsheet` uses its private `sidebar` module's `Message`.","issues":[1598]},
+        {"text":"Native code can call a generic marked method or function taking an impl of a marked trait, as inboard's `Sidebar::content(impl IntoContent<'a, Message>)`, with the trait's own type or any iterator of elements. A body edit swaps in place.","issues":[1586],"refs":[1539]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.175",
@@ -3461,7 +3467,7 @@
     {"issue":1583,"title":"A marked closure a crate calls with a lent &MarkedType doesn't build in the runner (E0609)","state":"open","category":"No glue (D593)"},
     {"issue":1584,"title":"Marked generic builders instantiated by marked code fail attestation at run time","state":"open","category":"No glue (D593)"},
     {"issue":1585,"title":"An islands run test waits forever when the program's check fails instead of failing","state":"open","category":"No glue (D593)"},
-    {"issue":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"open","category":"No glue (D593)"},
+    {"issue":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"closed","category":"No glue (D593)"},
     {"issue":1587,"title":"A marked &mut self method can't move a lent native part into a crate call by value","state":"open","category":"No glue (D593)"},
     {"issue":1588,"title":"A Vec mixing an element marked code built with one native code gave fails exact type attestation in a crate call","state":"open","category":"No glue (D593)"},
     {"issue":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"open","category":"No glue (D593)"},
@@ -3473,8 +3479,9 @@
     {"issue":1595,"title":"Two modules each declaring a trait of one name are refused as a duplicate item","state":"closed","category":"Divergences from rustc","release":"0.3.175"},
     {"issue":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open","category":"Divergences from rustc"},
-    {"issue":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"open","category":"No glue (D593)"},
-    {"issue":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open","category":"No glue (D593)"}
+    {"issue":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed","category":"No glue (D593)"},
+    {"issue":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open","category":"No glue (D593)"},
+    {"issue":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4478,7 +4485,7 @@
             {"number":1583,"title":"A marked closure a crate calls with a lent &MarkedType doesn't build in the runner (E0609)","state":"open"},
             {"number":1584,"title":"Marked generic builders instantiated by marked code fail attestation at run time","state":"open"},
             {"number":1585,"title":"An islands run test waits forever when the program's check fails instead of failing","state":"open"},
-            {"number":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"open"},
+            {"number":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"closed"},
             {"number":1587,"title":"A marked &mut self method can't move a lent native part into a crate call by value","state":"open"},
             {"number":1588,"title":"A Vec mixing an element marked code built with one native code gave fails exact type attestation in a crate call","state":"open"},
             {"number":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"open"},
@@ -4489,8 +4496,9 @@
             {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open"},
             {"number":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"open"},
             {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open"},
-            {"number":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"open"},
-            {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"}
+            {"number":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed"},
+            {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"},
+            {"number":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"open"}
           ]
         }
       ]
