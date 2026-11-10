@@ -123,3 +123,27 @@ impl Cursor {
 pub fn hover<T>(cursor: Cursor, update: impl Fn(Cursor) -> Option<T>) -> Option<T> {
     update(cursor)
 }
+
+/// What a canvas program's `update` gives, as iced's `canvas::Action`: a
+/// message to publish, which its derived `Debug` prints.
+#[derive(Debug, Clone)]
+pub struct Action<Message> {
+    message: Option<Message>,
+    captured: bool,
+}
+
+impl<Message> Action<Message> {
+    /// The action that publishes `message`, as iced's `Action::publish`.
+    pub fn publish(message: Message) -> Self {
+        Self {
+            message: Some(message),
+            captured: false,
+        }
+    }
+
+    /// The action, capturing its event, as iced's `Action::and_capture`.
+    pub fn and_capture(mut self) -> Self {
+        self.captured = true;
+        self
+    }
+}

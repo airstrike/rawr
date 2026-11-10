@@ -1455,6 +1455,53 @@ fn a_crate_method_whose_output_names_its_closure_type_runs() {
     );
 }
 
+/// iced's game_of_life (#1060): `grid(..).map(Message::Curve.with(version))`
+/// on the `impl Widget<Curve>` a program function returns. The crate's
+/// `Function::with` gives an `impl Fn(Curve) -> Message`, which fills
+/// `map`'s `F` as itself, as the `Box<dyn Fn(Curve) -> Message>` that
+/// `Map<Self, F, Message>` names. The output is `cargo run`'s.
+#[test]
+fn a_crate_callable_value_fills_a_callable_its_output_names() {
+    let (rawr, cargo) = both_printed("mapped_with.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Curve(0, Drawn(\"Increment\"))")
+            && rawr.ends_with("last view pad 0 map canvas[primary curves 4#1] pad 0 4 curves@16"),
+        "{rawr}"
+    );
+}
+
+/// iced's bezier_tool (#990): `{:?}` of the crate's `Action<Curve>` that
+/// publishes a program's curve. The crate's derived `Debug` prints the
+/// curve, whose own `Debug` prints the crate's points it holds while the
+/// outer value's is printing. The output is `cargo run`'s.
+#[test]
+fn a_crate_values_debug_prints_the_crate_values_a_program_value_holds() {
+    let (rawr, cargo) = both_printed("published.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.starts_with(
+            "Action { message: Some(Curve { from: Point { x: 5.0, y: 5.0 }, to: Point { x: \
+             45.0, y: 75.0 } }), captured: true }"
+        ),
+        "{rawr}"
+    );
+}
+
+/// iced's layout (#991): `container(pin("• (50, 50)").x(..))`, whose
+/// argument is a `Pin<&str>`, a crate value whose type has a lifetime only
+/// its elided `&str` names. The runner takes it as it takes any value
+/// whose type has lifetimes, and builds. The output is `cargo run`'s.
+#[test]
+fn a_crate_value_whose_type_elides_a_lifetime_fills_a_generic_argument() {
+    let (rawr, cargo) = both_printed("pinned.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 container 0 pin 30 '• (50, 50)' [Increment] 30@16"),
+        "{rawr}"
+    );
+}
+
 /// Opaque `impl Widget` outputs as cargo checks them (edition 2024): one
 /// made of its parameter (T462) and one of a `&'static str` (T428) take no
 /// input's lifetime, and a canvas behind one is mapped (T424) and boxed by
