@@ -1832,6 +1832,18 @@ fn a_closure_takes_the_output_of_an_async_block_a_future_parameter_binds() {
     );
 }
 
+/// iced's toast (#1073): `Task::perform(future, f)` takes a future and a
+/// closure over its output, as `Task::perform(tokio::time::sleep(..), move
+/// |_| Message::Close(id))` does. A crate's own future fills the future
+/// parameter, and so does an async block, each beside a capturing closure,
+/// whose input is the future's output. The output is `cargo run`'s.
+#[test]
+fn a_closure_beside_a_future_parameter_takes_the_futures_output() {
+    let (rawr, cargo) = both_printed("performed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Close(7))\nSome(Waited(8, 10))");
+}
+
 /// iced's gallery (#570): `card(image, preview, ..).boxed()` in a `map`
 /// closure over the program's own native images, where `card` is written
 /// after the view and borrows the image and an `Option<&String>` an `if`
