@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed.","issues":[1634],"refs":[1618]},
-        {"text":"A demand round no longer resolves, builds or seals a new bundle when an earlier round built the same crates: it probes the new demand over that build and replays the grown tables. A cold check of a marked theme builds the nightly twice instead of four times.","issues":[1636],"refs":[1618]}
+        {"text":"A demand round no longer resolves, builds or seals a new bundle when an earlier round built the same crates: it probes the new demand over that build and replays the grown tables. A cold check of a marked theme builds the nightly twice instead of four times.","issues":[1636],"refs":[1618]},
+        {"text":"`RAWR_VERBOSE=1 rawr run` says what preparing the run did: its rounds, Cargo resolutions, nightly builds, probes, runner builds and the units they compiled. A second run of an unchanged project shows all of them at zero.","issues":[1637],"refs":[1604]}
       ]
     },
     "releases": [
@@ -3563,7 +3564,9 @@
     {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open","category":"Divergences from rustc"},
     {"issue":1634,"title":"A check parsed every program source again in each demand round","state":"open","category":"No glue (D593)"},
     {"issue":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"open","category":"No glue (D593)"},
-    {"issue":1636,"title":"A demand round built and sealed a new bundle even when an earlier round built the same crates","state":"open","category":"No glue (D593)"}
+    {"issue":1636,"title":"A demand round built and sealed a new bundle even when an earlier round built the same crates","state":"open","category":"No glue (D593)"},
+    {"issue":1637,"title":"rawr run shows nothing about what preparing a run did","state":"open","category":"No glue (D593)"},
+    {"issue":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4602,7 +4605,8 @@
             {"number":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"open"},
             {"number":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open"},
             {"number":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open"},
-            {"number":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"open"}
+            {"number":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"open"},
+            {"number":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"open"}
           ]
         }
       ]
