@@ -147,6 +147,10 @@ pub struct Engine {
     /// borrowing this compiler. It does not attest a live runner by itself.
     #[cfg(feature = "rust-import")]
     pub(crate) imported_native: Option<crate::package::import::runner::account::Native>,
+    /// Each source's parse from the last resident compile, so the next
+    /// one parses only the sources whose text changed (#1604).
+    #[cfg(feature = "rust-import")]
+    pub(crate) resident_parses: std::sync::Mutex<Option<crate::package::Cells>>,
 
     /// Callback closure for filtering variable definition.
     pub(crate) def_var_filter: Option<Box<OnDefVarCallback>>,
@@ -294,6 +298,8 @@ impl Engine {
         exports_frozen: core::sync::atomic::AtomicBool::new(false),
         #[cfg(feature = "rust-import")]
         imported_native: None,
+        #[cfg(feature = "rust-import")]
+        resident_parses: std::sync::Mutex::new(None),
 
         def_var_filter: None,
         resolve_var: None,

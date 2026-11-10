@@ -426,6 +426,18 @@ impl Graph {
         Builder::from_snapshot(engine, snapshot).load_snapshot()
     }
 
+    /// [`Graph::load_snapshot`], reading each source's parse from its cell
+    /// in `cells` when one holds exactly its text, and parsing the rest.
+    pub(crate) fn load_snapshot_with_cells(
+        engine: &Engine,
+        snapshot: &super::snapshot::Snapshot,
+        cells: &super::Cells,
+    ) -> Result<Self, Error> {
+        let mut builder = Builder::from_snapshot(engine, snapshot);
+        builder.cells = Some(cells);
+        builder.load_snapshot()
+    }
+
     /// [`Graph::load_snapshot`] of one file the engine already parsed as
     /// `entry`, which the graph keeps rather than parsing its text again.
     pub(crate) fn load_parsed(

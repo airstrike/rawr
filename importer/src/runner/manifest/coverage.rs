@@ -87,6 +87,26 @@ pub(crate) struct Inventory {
     bytes: Box<[u8]>,
     rows: usize,
     digest: [u8; 32],
+    /// Each row by its facts, read once when the inventory is kept, so a
+    /// use finds the rows it matches by one search (#1604). `None` when
+    /// the inventory doesn't read, which covers no use.
+    index: Option<Box<[Row]>>,
+}
+
+/// One inventory row: where its facts lie in the inventory's bytes, and
+/// what it binds.
+struct Row {
+    facts: std::ops::Range<usize>,
+    binding: Bound,
+}
+
+/// What one inventory row binds.
+#[derive(Clone, Copy)]
+enum Bound {
+    /// A generated adapter, by its index among the carrier's entries.
+    Adapter(usize),
+    /// A profile endpoint, by where its digests begin in the inventory.
+    Endpoint(usize),
 }
 
 #[derive(Serialize)]
@@ -122,11 +142,6 @@ struct Measured {
     bytes: usize,
     limit: usize,
     overflow: Option<usize>,
-}
-
-struct Comparison<'a> {
-    remaining: &'a [u8],
-    matched: bool,
 }
 
 impl<I> Serialize for Sequence<I>
@@ -324,11 +339,28 @@ impl Inventory {
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.native-inventory/v1");
         digest.update(&bytes);
+        let index = index(&bytes);
         Self {
             bytes,
             rows,
             digest: digest.finalize().into(),
+            index,
         }
+    }
+
+    /// The rows whose facts are exactly `facts`, in inventory order: every
+    /// adapter before every endpoint. `None` when the inventory doesn't
+    /// read.
+    fn rows<'a>(&'a self, facts: &'a [u8]) -> Option<impl Iterator<Item = Bound> + 'a> {
+        let index = self.index.as_deref()?;
+        let at = |row: &Row| &self.bytes[row.facts.clone()];
+        let first = index.partition_point(|row| at(row) < facts);
+        Some(
+            index[first..]
+                .iter()
+                .take_while(move |row| at(row) == facts)
+                .map(|row| row.binding),
+        )
     }
 
     pub(crate) fn bytes(&self) -> &[u8] {
@@ -595,41 +627,37 @@ where
     if !facts.used.types.iter().all(|ty| concrete(ty, 0)) {
         return None;
     }
-    let mut bytes = carrier.coverage.bytes();
-    if super::take_u32(&mut bytes).ok()? != VERSION {
-        return None;
-    }
-    let native_count = super::take_length(&mut bytes).ok()?;
+    // The facts the inventory holds for this use, written once: a row
+    // matches when its facts are these bytes.
+    let encoded = serde_json::to_vec(&facts).ok()?;
     let mut found = None;
-    for _ in 0..native_count {
-        let index = super::take_length(&mut bytes).ok()?;
-        let encoded = fact_bytes(&mut bytes).ok()?;
-        // Two adapters with the same facts are one item at the same types,
-        // slots, functions and mappers: they differ only in the path the
-        // program named the item by (`canvas::Stroke` and
-        // `canvas::stroke::Stroke`) or in the closure class the item's
-        // signature gives, and either serves the use (#1000). Two calls
-        // that pass different script functions differ in their slots.
-        if found.is_none() && equal(&facts, encoded) {
-            found = Some((Binding::Adapter(carrier.entries.get(index)?), encoded));
-        }
-    }
-    let endpoint_count = super::take_length(&mut bytes).ok()?;
-    for _ in 0..endpoint_count {
-        let endpoint = endpoint(&mut bytes).ok()?;
-        let encoded = fact_bytes(&mut bytes).ok()?;
-        if equal(&facts, encoded) {
-            if found.is_some() {
-                return None;
+    for row in carrier.coverage.rows(&encoded)? {
+        match row {
+            // Two adapters with the same facts are one item at the same
+            // types, slots, functions and mappers: they differ only in the
+            // path the program named the item by (`canvas::Stroke` and
+            // `canvas::stroke::Stroke`) or in the closure class the item's
+            // signature gives, and either serves the use (#1000). Two calls
+            // that pass different script functions differ in their slots.
+            Bound::Adapter(index) => {
+                if found.is_none() {
+                    found = Some(Binding::Adapter(carrier.entries.get(index)?));
+                }
             }
-            found = Some((Binding::Endpoint(endpoint), encoded));
+            Bound::Endpoint(at) => {
+                if found.is_some() {
+                    return None;
+                }
+                let mut digests = carrier.coverage.bytes().get(at..)?;
+                found = Some(Binding::Endpoint(endpoint(&mut digests).ok()?));
+            }
         }
     }
-    let (binding, encoded) = found?;
+    let binding = found?;
     let mut digest = Sha256::new();
     digest.update(b"rawr.import.resident-coverage-match/v1");
     digest.update(carrier.identity());
-    digest.update(encoded);
+    digest.update(&encoded);
     match &binding {
         Binding::Adapter(entry) => {
             digest.update([0]);
@@ -696,6 +724,40 @@ fn scan(mut bytes: &[u8], entries: &[super::Entry]) -> Result<usize, super::Erro
     Ok(rows)
 }
 
+/// Each row of the inventory `bytes`, sorted by its facts' bytes, rows of
+/// equal facts in inventory order. `None` when the inventory doesn't read.
+fn index(bytes: &[u8]) -> Option<Box<[Row]>> {
+    let mut rest = bytes;
+    if super::take_u32(&mut rest).ok()? != VERSION {
+        return None;
+    }
+    let mut rows = Vec::new();
+    let native_count = super::take_length(&mut rest).ok()?;
+    for _ in 0..native_count {
+        let index = super::take_length(&mut rest).ok()?;
+        let facts = fact_bytes(&mut rest).ok()?.len();
+        let end = bytes.len() - rest.len();
+        rows.push(Row {
+            facts: end - facts..end,
+            binding: Bound::Adapter(index),
+        });
+    }
+    let endpoint_count = super::take_length(&mut rest).ok()?;
+    for _ in 0..endpoint_count {
+        let at = bytes.len() - rest.len();
+        endpoint(&mut rest).ok()?;
+        let facts = fact_bytes(&mut rest).ok()?.len();
+        let end = bytes.len() - rest.len();
+        rows.push(Row {
+            facts: end - facts..end,
+            binding: Bound::Endpoint(at),
+        });
+    }
+    // A stable sort: rows of equal facts keep their inventory order.
+    rows.sort_by(|left, right| bytes[left.facts.clone()].cmp(&bytes[right.facts.clone()]));
+    Some(rows.into_boxed_slice())
+}
+
 fn endpoint<'a>(bytes: &mut &'a [u8]) -> Result<Endpoint<'a>, super::Error> {
     fn digest<'a>(bytes: &mut &'a [u8]) -> Result<&'a [u8; 32], super::Error> {
         super::take(bytes, 32)?
@@ -736,16 +798,6 @@ fn endpoint_facts(
         mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
     };
     serde_json::to_writer(output, &facts).map_err(|_| crate::surface::Error::Encoding)
-}
-
-fn equal(facts: &impl Serialize, encoded: &[u8]) -> bool {
-    let mut comparison = Comparison {
-        remaining: encoded,
-        matched: true,
-    };
-    serde_json::to_writer(&mut comparison, facts).is_ok()
-        && comparison.matched
-        && comparison.remaining.is_empty()
 }
 
 fn concrete(ty: &convert::Type, depth: usize) -> bool {
@@ -796,21 +848,6 @@ impl Write for Measured {
             return Err(io::Error::other("resident inventory byte limit"));
         }
         self.bytes = actual;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Write for Comparison<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if self.matched {
-            match self.remaining.strip_prefix(bytes) {
-                Some(remaining) => self.remaining = remaining,
-                None => self.matched = false,
-            }
-        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {

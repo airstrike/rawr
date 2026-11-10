@@ -120,6 +120,17 @@ impl Run {
         )
     }
 
+    /// Keep the output the run printed since the last [`Run::until`] that
+    /// its pipes already gave, without waiting for more.
+    pub fn take_printed(&mut self) {
+        while let Ok(line) = self.lines.try_recv() {
+            self.seen.push(match line {
+                Line::Out(line) => line,
+                Line::Err(line) => format!("stderr: {line}"),
+            });
+        }
+    }
+
     /// Wait for the run to end, and keep the output it printed since the
     /// last [`Run::until`], to the end of its pipes.
     pub fn wait(&mut self) -> std::process::ExitStatus {
@@ -193,14 +204,15 @@ pub fn start_with(
         .arg("--")
         .args(arguments)
         .stdin(stdin)
-        .env("RAWR_HOME", runtime_home());
+        .env("RAWR_HOME", runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE");
+    // A test's own variables stand, `RAWR_VERBOSE` among them.
     for (name, value) in variables {
         child.env(name, value);
     }
     let mut child = child
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

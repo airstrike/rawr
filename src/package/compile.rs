@@ -67,7 +67,7 @@ pub(crate) fn snapshot(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::AST, Error> {
-    let graph = Graph::load_snapshot(engine, snapshot)?;
+    let graph = engine.load_snapshot_kept(snapshot)?;
     let sources = graph.diagnostic_sources();
     let program = resolve::package::resolve(graph, &engine.host_registry)
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
@@ -81,7 +81,7 @@ pub(crate) fn snapshot_generation_plain(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::reload::Candidate, Error> {
-    let graph = Graph::load_snapshot(engine, snapshot)?;
+    let graph = engine.load_snapshot_kept(snapshot)?;
     let sources = graph.diagnostic_sources();
     let source = crate::reload::source::Graph::from_package(&graph);
     let program = resolve::package::resolve(graph, &engine.host_registry)

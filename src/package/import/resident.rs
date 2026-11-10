@@ -82,6 +82,31 @@ impl Engine {
         })
     }
 
+    /// How many sources this runner's compiles parsed so far, rather than
+    /// reading them from an earlier compile's parse.
+    #[doc(hidden)]
+    pub fn resident_parsed(&self) -> usize {
+        lock(&self.resident_parses)
+            .as_ref()
+            .map_or(0, |cells| cells.counts().parsed)
+    }
+
+    /// The package graph of `snapshot`. A runner's compiler, which compiles
+    /// the program again on each save, reads each source whose text its
+    /// last compile parsed from that parse, and parses only the sources
+    /// whose text changed (#1604). Any other compiler parses them all.
+    pub(crate) fn load_snapshot_kept(
+        &self,
+        snapshot: &package::snapshot::Snapshot,
+    ) -> Result<package::Graph, package::Error> {
+        if self.imported_native.is_none() {
+            return package::Graph::load_snapshot(self, snapshot);
+        }
+        let mut parses = lock(&self.resident_parses);
+        let cells = parses.get_or_insert_with(package::Cells::in_memory);
+        package::Graph::load_snapshot_with_cells(self, snapshot, cells)
+    }
+
     /// Compile the snapshot against this compiler's retained carrier alone,
     /// as a universe runner compiles a snippet: it prepares nothing, so a
     /// native use the carrier doesn't cover is the program's own error,
@@ -126,6 +151,12 @@ impl Engine {
             coverage,
         }))
     }
+}
+
+/// The kept parses, whatever a compile that panicked holding them left.
+fn lock<T>(cell: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    cell.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Compiled {

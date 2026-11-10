@@ -207,6 +207,8 @@ pub(crate) fn say(line: &str) {
 static RESOLVED: AtomicUsize = AtomicUsize::new(0);
 static BUILT: AtomicUsize = AtomicUsize::new(0);
 static PROBED: AtomicUsize = AtomicUsize::new(0);
+/// How many API tables this process read from the store.
+static LOADED: AtomicUsize = AtomicUsize::new(0);
 
 /// Count one run of Cargo's resolution.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
@@ -260,12 +262,19 @@ pub fn runner_builds() -> usize {
     RUNNER_BUILDS.load(Ordering::Relaxed)
 }
 
+/// Count one API table read from the store.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn loaded() {
+    LOADED.fetch_add(1, Ordering::Relaxed);
+}
+
 /// What this process has done to read its dependencies' API so far.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Work {
     resolved: usize,
     built: usize,
     probed: usize,
+    loaded: usize,
 }
 
 impl Work {
@@ -286,6 +295,12 @@ impl Work {
     pub const fn probed(self) -> usize {
         self.probed
     }
+
+    /// How many API tables were read from the store.
+    #[must_use]
+    pub const fn loaded(self) -> usize {
+        self.loaded
+    }
 }
 
 impl std::fmt::Display for Work {
@@ -305,6 +320,7 @@ pub fn work() -> Work {
         resolved: RESOLVED.load(Ordering::Relaxed),
         built: BUILT.load(Ordering::Relaxed),
         probed: PROBED.load(Ordering::Relaxed),
+        loaded: LOADED.load(Ordering::Relaxed),
     }
 }
 
