@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.181 (2026-11-10)
+
 - A marked function that panics in a call from native `main` prints the panic cargo's build prints: its place in the marked file and Rust's message, with nothing of rawr's. (#1657)
 - An error a save's compile finds in a marked module of a native app names its own file, line and column in rustc's form, such as `error[E0425]` in `src/widget/sidebar.rs`. Before, it named the crate root, as a framework error. (#397)
 - A crate's callable value, such as the `impl Fn` that iced's `Function::with` gives, fills a generic callable that the call's output type names, as in `self.grid.view().map(Message::Grid.with(version))` in iced's game_of_life. (#1060)
