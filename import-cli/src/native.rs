@@ -30,6 +30,13 @@ impl<B> Lane<B> {
         self.slot.native_watch().map_err(Error::Process)
     }
 
+    /// The identity of the running native build's input proof.
+    pub(crate) fn native_fingerprint(
+        &self,
+    ) -> Result<rawr_import::input::fingerprint::Fingerprint, Error> {
+        self.slot.native_fingerprint().map_err(Error::Process)
+    }
+
     /// Why `miss` needs another runner than the running one, in one line.
     pub(crate) fn native_change(
         &self,

@@ -446,7 +446,7 @@ fn session(
     let mut refresh_required = false;
     // The preparation a restart was last announced for.
     let mut announced = None;
-    let mut native_inputs = None;
+    let mut watched = resident::Watched::default();
     // A save whose runner build found a cache entry stale is attempted
     // again, whose preparation rebuilds it (#613).
     let mut restarts = crate::Restarts::default();
@@ -553,7 +553,7 @@ fn session(
                     &manifests,
                     &native_baseline,
                     refresh_required,
-                    &mut native_inputs,
+                    &mut watched,
                     &scope,
                     &cells,
                     &source,
@@ -751,7 +751,7 @@ fn session(
                         }
                         manifests = next_manifests;
                         native_baseline = next_native_baseline;
-                        native_inputs = None;
+                        watched = resident::Watched::default();
                         refresh_required = false;
                         restarts = crate::Restarts::default();
                         for error in adapter

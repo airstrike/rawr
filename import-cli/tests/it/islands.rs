@@ -1263,9 +1263,10 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 /// A save of a marked file in a running program parses that file again and
 /// nothing else: the owner and the runner each keep every other source's
 /// parse across saves, and neither asks Cargo to resolve, reads an API
-/// table or registers a facade, so a save costs the same however many
-/// dependencies the program has (#1604). `RAWR_VERBOSE` says what each
-/// save did, in the owner and in the runner.
+/// table or registers a facade. The owner keeps the native part of the
+/// watch from the running build, so a body edit stages no watcher root. A
+/// save costs the same however many dependencies the program has (#1604).
+/// `RAWR_VERBOSE` says what each save did, in the owner and in the runner.
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -1317,7 +1318,7 @@ fn a_save_parses_only_the_file_it_changed() {
     assert_eq!(
         parsed(
             "stderr: rawr-import: a save parsed ",
-            ", Cargo resolutions 0, API tables loaded 0, facades registered 0"
+            ", Cargo resolutions 0, API tables loaded 0, facades registered 0, watch roots staged 0"
         ),
         2,
         "{seen}"

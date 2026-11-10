@@ -10,6 +10,6 @@ mod input;
 pub mod native;
 mod notice;
 
-pub use adapter::{Adapter, Control, Error, Notice, StagedInputs};
+pub use adapter::{derived_roots, Adapter, Control, Error, Notice, StagedInputs};
 
 pub use notice::Notices;

@@ -90,6 +90,18 @@ impl<B> Candidate<super::Admitted, B> {
             .watch())
     }
 
+    /// The identity of this runner's native input proof: two runners whose
+    /// proofs share it watch the same native inputs ([`Self::native_watch`]).
+    pub fn native_fingerprint(&self) -> Result<crate::input::fingerprint::Fingerprint, Error> {
+        Ok(self
+            .inner
+            .as_ref()
+            .ok_or(Error::Consumed)?
+            .manifest
+            .native
+            .fingerprint())
+    }
+
     /// Why `request` needs another runner than this one, in one line;
     /// `None` when this runner serves it.
     pub fn native_change(

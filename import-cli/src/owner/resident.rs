@@ -1,6 +1,7 @@
 //! The short Rawr edit path, before Cargo, extraction or symbolic compilation.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rawr::reload::source;
 use rawr_import::{process::resident, supervisor::snapshot::attempt::Scope};
@@ -164,17 +165,87 @@ impl Reason {
     }
 }
 
-/// One native generation's watched identities and their derived inputs.
-pub(super) type NativeInputs = (Box<[rawr_import::input::proof::Watch]>, source::Inputs);
+/// What a resident save watches: the running native build's inputs,
+/// derived once for its proof, joined with the marked sources of the last
+/// save. A save that changes only a marked source's text joins, encodes and
+/// stages nothing again (#1604).
+#[derive(Default)]
+pub(super) struct Watched(Option<Native>);
+
+/// One native generation's inputs and the last join with them.
+struct Native {
+    /// The running native build's input proof, which names its watch.
+    proof: rawr_import::input::fingerprint::Fingerprint,
+    inputs: source::Inputs,
+    joined: Option<Joined>,
+}
+
+/// The marked sources of one save joined with the native inputs, and the
+/// observation the runner checks them as.
+struct Joined {
+    marked: source::Inputs,
+    inputs: Arc<source::Inputs>,
+    observation: Arc<[u8]>,
+}
+
+impl Watched {
+    /// The native inputs of the build `proof` names, derived from `watch`
+    /// unless these are its own and no native event came since.
+    fn native<I>(
+        &mut self,
+        proof: rawr_import::input::fingerprint::Fingerprint,
+        current: bool,
+        project: &std::path::Path,
+        watch: impl FnOnce() -> Result<I, crate::native::Error>,
+    ) -> Result<&mut Native, crate::native::Error>
+    where
+        I: Iterator<Item = rawr_import::input::proof::Watch>,
+    {
+        if !current || self.0.as_ref().is_none_or(|native| native.proof != proof) {
+            let outputs = rawr_import::location::outputs_here(project);
+            let inputs = source::Inputs::imported(watch()?)
+                .outside(&outputs)
+                .with_checkouts(&rawr_import::location::checkouts_here());
+            self.0 = Some(Native {
+                proof,
+                inputs,
+                joined: None,
+            });
+        }
+        Ok(self.0.as_mut().expect("derived above"))
+    }
+}
+
+impl Native {
+    /// `marked` joined with these native inputs: the last save's join when
+    /// its marked sources are the same.
+    fn join(&mut self, marked: source::Inputs) -> Result<&Joined, source::observation::Error> {
+        if self
+            .joined
+            .as_ref()
+            .is_none_or(|joined| joined.marked != marked)
+        {
+            let inputs = marked.clone().with_native(&self.inputs);
+            let observation = inputs.encode_observation()?.into();
+            self.joined = Some(Joined {
+                marked,
+                inputs: Arc::new(inputs),
+                observation,
+            });
+        }
+        Ok(self.joined.as_ref().expect("joined above"))
+    }
+}
 
 /// What this process had done when a save began: the sources it parsed,
-/// Cargo's resolutions, the API tables it read and the facades it
-/// registered. A save of a marked file parses that file again and needs
-/// none of the rest (#1604).
+/// Cargo's resolutions, the API tables it read, the facades it registered
+/// and the watcher roots it derived. A save of a marked file parses that
+/// file again and needs none of the rest (#1604).
 pub(super) struct Work {
     parsed: usize,
     api: rawr_import::progress::Work,
     registered: usize,
+    roots: usize,
 }
 
 impl Work {
@@ -184,6 +255,7 @@ impl Work {
             parsed: cells.counts().parsed,
             api: rawr_import::progress::work(),
             registered: rawr::Engine::registered_facades(),
+            roots: rawr_watch::derived_roots(),
         }
     }
 
@@ -194,11 +266,12 @@ impl Work {
         }
         let now = Self::now(cells);
         eprintln!(
-            "rawr-import: a save parsed {} sources, Cargo resolutions {}, API tables loaded {}, facades registered {}",
+            "rawr-import: a save parsed {} sources, Cargo resolutions {}, API tables loaded {}, facades registered {}, watch roots staged {}",
             now.parsed - self.parsed,
             now.api.resolved() - self.api.resolved(),
             now.api.loaded() - self.api.loaded(),
             now.registered - self.registered,
+            now.roots - self.roots,
         );
     }
 }
@@ -222,7 +295,7 @@ pub(super) fn attempt(
     baseline: &Manifests,
     native_baseline: &rawr_watch::native::Baseline,
     refresh_required: bool,
-    native_inputs: &mut Option<NativeInputs>,
+    watched: &mut Watched,
     scope: &Scope,
     cells: &rawr::package::Cells,
     diagnostic: &rawr::diagnostic::Source,
@@ -259,28 +332,23 @@ pub(super) fn attempt(
         let bytes = snapshot
             .imported_transport(expected, &limits)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
-        let watch = lane
-            .native_watch()
-            .map_err(|error| super::framework(error, diagnostic.clone()))?
-            .collect::<Box<[_]>>();
         // No native event since the baseline: the native part derived for
-        // these exact identities still stands; a Rawr edit derives only its own.
-        if !native_current || native_inputs.as_ref().is_none_or(|(key, _)| *key != watch) {
-            let outputs = rawr_import::location::outputs_here(&project);
-            let derived = source::Inputs::imported(watch.iter().cloned())
-                .outside(&outputs)
-                .with_checkouts(&rawr_import::location::checkouts_here());
-            *native_inputs = Some((watch, derived));
-        }
-        let native = &native_inputs.as_ref().expect("derived above").1;
-        let inputs = source::Inputs::from_graph(&graph).with_native(native);
-        let observation = inputs
-            .encode_observation()
+        // the running build's proof still stands; a Rawr edit derives only
+        // its own, and one that keeps the marked sources' set reuses the
+        // last join whole.
+        let proof = lane
+            .native_fingerprint()
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        let joined = watched
+            .native(proof, native_current, &project, || lane.native_watch())
+            .map_err(|error| super::framework(error, diagnostic.clone()))?
+            .join(source::Inputs::from_graph(&graph))
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        let observation = Arc::clone(&joined.observation);
         // Register before the initial source check; this preserves complete
         // current+staged watch coverage throughout candidate work.
         let staged = adapter
-            .prepare_inputs(inputs)
+            .prepare_inputs(Arc::clone(&joined.inputs))
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
         let freshness = scope
             .observe(&bytes)
