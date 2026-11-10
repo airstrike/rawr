@@ -393,7 +393,7 @@ fn relative_header_types_preserve_private_module_boundaries() {
 }
 
 #[test]
-fn unknown_types_under_a_relative_module_are_positioned_import_errors() {
+fn unknown_types_under_a_relative_module_are_rustcs_e0425() {
     let project = Project::new("unknown-relative-header-type");
     project.write("src/main.rs", "pub mod controls;\npub struct Model { message: controls::Missing }\n");
     project.write("src/controls.rs", "pub enum Message { Tick }\n");
@@ -402,10 +402,12 @@ fn unknown_types_under_a_relative_module_are_positioned_import_errors() {
     let error = Engine::new().compile_package_executable(&target).unwrap_err();
     let report = error.report().unwrap();
 
+    // rustc: E0425 cannot find type `Missing` in module `controls`.
     assert_eq!(error.category(), Category::Resolution);
-    assert_eq!(report.code(), code::RESOLVE_UNKNOWN_IMPORT);
-    assert!(report.message().contains("controls::Missing"));
-    assert_eq!(report.labels()[0].span().start(), Position::new(3, 29));
+    assert_eq!(report.code().as_str(), "E0425");
+    assert_eq!(report.message(), "cannot find type `Missing` in module `controls`");
+    assert_eq!(report.labels()[0].span().start(), Position::new(3, 39));
+    assert_eq!(report.labels()[0].message(), Some("not found in `controls`"));
 }
 
 #[test]
@@ -682,6 +684,35 @@ fn two_modules_declare_their_own_trait_of_one_name() {
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
     assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 9 + 8 + 1 + 25 + 7 + 100);
+}
+
+/// A crate trait's function is called through the trait's module path, as
+/// `home::Shape::size(&x)` and `<T as home::Shape>::size(&x)`, as rustc
+/// resolves them (#1596): for a trait whose name is its own and for one
+/// another module's trait shares.
+#[test]
+fn a_crate_traits_function_is_called_through_its_module_path() {
+    let home = "pub struct Square(pub i64);\npub trait Shape { fn size(&self) -> i64; }\nimpl Shape for Square { fn size(&self) -> i64 { self.0 * self.0 } }\n";
+    let main = "mod home;\nmod sidebar;\npub fn answer() -> i64 {\n    home::Shape::size(&home::Square(3))\n        + <home::Square as home::Shape>::size(&home::Square(2))\n        + crate::home::Shape::size(&home::Square(1))\n        + sidebar::seven()\n}\n";
+    for (case, sidebar) in [
+        ("unique-trait-path", "pub fn seven() -> i64 { 7 }\n"),
+        (
+            "shared-trait-path",
+            "pub struct Line(pub i64);\npub trait Shape { fn size(&self) -> i64; }\nimpl Shape for Line { fn size(&self) -> i64 { self.0 } }\npub fn seven() -> i64 { self::Shape::size(&Line(7)) }\n",
+        ),
+    ] {
+        let project = Project::new(case);
+        project.write("src/main.rs", main);
+        project.write("src/home.rs", home);
+        project.write("src/sidebar.rs", sidebar);
+        let target = rawr::project::Target::discover(project.path()).unwrap();
+        let engine = Shared::new(Engine::new());
+
+        let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{case}: {error}"));
+        let authority = engine.authorize(executable).unwrap();
+        let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
+        assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 9 + 4 + 1 + 7, "{case}");
+    }
 }
 
 /// A crate trait one module imports by `use` is implemented and bounded

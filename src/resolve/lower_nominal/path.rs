@@ -42,6 +42,34 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let mut segments = vec![(first, first_span)];
         while matches!(self.peek(), Token::DoubleColon) {
+            // `home::Shape::size(&x)`, `home::Shape::<i64>::convert(&x)`: a
+            // crate trait's function through the trait's module path.
+            if let [_, .., (last, last_span)] = &segments[..]
+                && let Some(known) = self
+                    .models
+                    .qualified_trait(Span::new(
+                        first_span.start(),
+                        text_end(last_span.start(), last),
+                    ))
+                    .cloned()
+            {
+                let trait_span = *last_span;
+                self.next();
+                let explicit = if matches!(self.peek(), Token::LessThan) {
+                    let arguments = self.parse_trait_path_arguments()?;
+                    self.expect(Token::DoubleColon, "'::' after a trait's arguments")?;
+                    Some(arguments)
+                } else {
+                    None
+                };
+                return self.parse_trait_path_call(
+                    None,
+                    known,
+                    trait_span,
+                    explicit,
+                    first_span.start(),
+                );
+            }
             // `path::f::<T>(..)`: the called function's type arguments.
             if matches!(self.peek_second(), Token::LessThan) {
                 self.next();

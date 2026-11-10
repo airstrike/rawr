@@ -73,6 +73,7 @@ struct ResolvedQualifiedCalls {
     functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
     owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
     rust: BTreeMap<(program::source::Id, Span), Box<[ImmutableString]>>,
+    traits: BTreeMap<(program::source::Id, Span), ImmutableString>,
 }
 
 struct QualifiedCall {
@@ -627,10 +628,13 @@ impl<'a> Resolver<'a> {
                                 resolved.owners.insert((source, call.owner_span), identity);
                                 continue;
                             }
-                            Target::Module
-                            | Target::Trait(_)
-                            | Target::HostModuleItem { .. }
-                            | Target::Item(_) => {}
+                            // `home::Shape::size(&x)`: the trait's function.
+                            Target::Trait(address) => {
+                                let known = self.known_trait_name(address);
+                                resolved.traits.insert((source, call.owner_span), known);
+                                continue;
+                            }
+                            Target::Module | Target::HostModuleItem { .. } | Target::Item(_) => {}
                             Target::HostItem { .. }
                             | Target::Type(
                                 type_ref::Target::Builtin
@@ -654,6 +658,11 @@ impl<'a> Resolver<'a> {
                         // A qualified type, as in a `let` annotation.
                         Target::Type(type_ref::Target::Script { identity, .. }) => {
                             resolved.owners.insert((source, call.path_span), identity);
+                        }
+                        // `<T as home::Shape>::size(..)`'s trait.
+                        Target::Trait(address) => {
+                            let known = self.known_trait_name(address);
+                            resolved.traits.insert((source, call.path_span), known);
                         }
                         _ => {}
                     }
@@ -900,6 +909,7 @@ impl<'a> Resolver<'a> {
             qualified_owners: qualified_calls.owners,
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
+            qualified_traits: qualified_calls.traits,
             trait_names,
             entry_crate,
             #[cfg(feature = "rust-import")]
@@ -1944,6 +1954,16 @@ impl<'a> Resolver<'a> {
                 .collect();
         };
         each_signature_path(item, &path);
+    }
+
+    /// The name the lowering knows the crate trait at `address` by: the
+    /// path of [`Resolver::trait_names`] when another module's trait has its
+    /// name, else its own name.
+    fn known_trait_name(&self, address: Address) -> ImmutableString {
+        self.trait_names
+            .get(&address)
+            .cloned()
+            .unwrap_or(address.name)
     }
 
     /// The name each unit writes a trait of [`Resolver::trait_names`] by, its

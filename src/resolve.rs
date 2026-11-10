@@ -94,6 +94,10 @@ pub struct Program {
     /// Qualified expression paths into a `.rs` module, by path span,
     /// spelled through the app's crate name.
     qualified_rust: BTreeMap<(program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The crate trait a body's path names through a module, by the span
+    /// of the trait's path (`home::Shape` of `home::Shape::size(&x)` or
+    /// `<T as home::Shape>::size(..)`), as the name the trait is known by.
+    qualified_traits: BTreeMap<(program::source::Id, Span), ImmutableString>,
     /// The name each source writes a crate trait by, when another module's
     /// trait has that name too, with the path the trait is known by
     /// (`home::IntoContent`).
@@ -673,6 +677,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_owners: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
+        qualified_traits: BTreeMap::new(),
         trait_names: BTreeMap::new(),
         entry_crate: None,
         #[cfg(feature = "rust-import")]

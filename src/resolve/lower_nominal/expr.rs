@@ -655,6 +655,7 @@ impl<'a> Parser<'a> {
                 let (mut trait_name, mut trait_span) =
                     self.expect_name("trait in a qualified path")?;
                 let root = trait_name.clone();
+                let root_span = trait_span;
                 let mut segments = 1_usize;
                 // `<T as std::default::Default>`: the path's last segment.
                 while matches!(self.peek(), Token::DoubleColon)
@@ -670,6 +671,14 @@ impl<'a> Parser<'a> {
                     && let Some(known) = self.models.trait_name(&trait_name)
                 {
                     trait_name = known.clone();
+                }
+                // `<C as home::Shape>`: a crate trait through its module.
+                let path = Span::new(root_span.start(), text_end(trait_span.start(), &trait_name));
+                if segments > 1
+                    && let Some(known) = self.models.qualified_trait(path).cloned()
+                {
+                    trait_name = known;
+                    segments = 1;
                 }
                 // A path through a crate, as `serde::de::Error`, names the
                 // crate's trait, never std's of the same name.

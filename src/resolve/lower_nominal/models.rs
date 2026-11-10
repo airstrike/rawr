@@ -73,6 +73,9 @@ pub(super) struct Tables {
     pub(super) qualified_pattern_owners:
         BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     pub(super) qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The crate trait a body's path names through a module, by the span
+    /// of the trait's path, as the name the trait is known by.
+    qualified_traits: BTreeMap<(crate::program::source::Id, Span), ImmutableString>,
     /// The name each source writes a crate trait by, when another module's
     /// trait has that name too, with the path the trait is known by.
     trait_names: BTreeMap<(crate::program::source::Id, ImmutableString), ImmutableString>,
@@ -804,6 +807,7 @@ impl Models {
             qualified_owners: program.qualified_owners.clone(),
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
+            qualified_traits: program.qualified_traits.clone(),
             trait_names: program.trait_names.clone(),
             entry_crate: program.entry_crate.clone(),
             #[cfg(feature = "rust-import")]
@@ -1249,6 +1253,12 @@ impl Models {
     /// `Shape` in `mod sidebar`.
     pub(super) fn trait_name(&self, name: &str) -> Option<&ImmutableString> {
         self.trait_names.get(&(self.context, name.into()))
+    }
+
+    /// The crate trait the path at `span` names through a module, as
+    /// `home::Shape` of `home::Shape::size(&x)`, by the name it is known by.
+    pub(super) fn qualified_trait(&self, span: Span) -> Option<&ImmutableString> {
+        self.qualified_traits.get(&(self.context, span))
     }
 
     pub(super) fn import(&self, name: &str) -> Option<&crate::resolve::item::Binding> {
