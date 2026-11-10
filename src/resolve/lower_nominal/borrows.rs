@@ -731,16 +731,28 @@ impl Parser<'_> {
         // A string borrowed where only a `&'static str` goes, as iced's
         // `title(impl Title<State>)` takes one, or a sequence where only a
         // `&'static [T]` goes, as `State::new(blocks: &'static [Block])`
-        // takes one, or any other value where only a `&'static T` goes, as
-        // a `&'static dyn Trait` (#1594), is borrowed for `'static`: a
-        // literal or a `static` is, and a borrow of a local is rustc's
-        // E0597.
+        // takes one, is borrowed for `'static`: a literal or a `static` is,
+        // and a borrow of a local is rustc's E0597.
         if let Some(statics) = &mut summary.statics {
             for (index, ty) in arguments.iter().enumerate() {
-                let lent = matches!(
-                    self.inference.resolve(ty),
-                    Ty::Str | Ty::Reference { mutable: false, .. }
-                );
+                let lent = match self.inference.resolve(ty) {
+                    Ty::Str => true,
+                    Ty::Reference {
+                        mutable: false,
+                        target,
+                    } => matches!(
+                        *target,
+                        Ty::String
+                            | Ty::Str
+                            | Ty::Array {
+                                kind: sequence::Kind::Array(_)
+                                    | sequence::Kind::Slice
+                                    | sequence::Kind::Vec,
+                                ..
+                            }
+                    ),
+                    _ => false,
+                };
                 if lent && item.lent_static(index) {
                     statics.push((Input::Argument(index), Path::OWN));
                 }
