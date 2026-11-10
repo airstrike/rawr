@@ -84,12 +84,17 @@ pub(crate) fn snapshot_generation_plain(
     let graph = engine.load_snapshot_kept(snapshot)?;
     let sources = graph.diagnostic_sources();
     let source = crate::reload::source::Graph::from_package(&graph);
+    // A crate built for its tests runs them in place of its `main`.
+    let declared = graph
+        .entry_package()
+        .features()
+        .test()
+        .then(|| super::test::Declared::of(&graph));
     let program = resolve::package::resolve(graph, &engine.host_registry)
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     let executable = snapshot_executable(engine, program, &sources)?;
-    Ok(crate::reload::Candidate::from_package_plain(
-        executable, source,
-    ))
+    let tests = declared.map(|declared| super::test::Declared::compiled_in(declared, &executable));
+    Ok(crate::reload::Candidate::from_package_plain(executable, source).with_tests(tests))
 }
 
 #[cfg(feature = "rust-import")]

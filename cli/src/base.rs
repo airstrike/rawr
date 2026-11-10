@@ -49,7 +49,8 @@ impl Build {
     /// An engine that parses a program for this build. Its async code
     /// gives the core's future, as rustc's needs no runtime crate until a
     /// future is polled.
-    fn parser(self) -> Engine {
+    #[must_use]
+    pub fn parser(self) -> Engine {
         let mut engine = rawr::future::facade::engine();
         engine.set_test(self == Self::Test);
         engine
@@ -57,7 +58,8 @@ impl Build {
 
     /// The parse cells directory of `target` for this build: a test
     /// build's parse differs, so its cells are kept apart.
-    fn cells(self, target: &project::Target) -> PathBuf {
+    #[must_use]
+    pub fn cells(self, target: &project::Target) -> PathBuf {
         let directory = crate::cells::directory(target);
         match self {
             Self::Program => directory,
@@ -151,7 +153,8 @@ pub fn uses(claims: &Claims) -> String {
 
 /// An engine for a program `rawr run`, `rawr check` or `rawr test` reads:
 /// one that may reach everything, as a program Cargo builds may (D683.4).
-pub(crate) fn engine(build: Build) -> Engine {
+#[must_use]
+pub fn engine(build: Build) -> Engine {
     let mut engine = build.parser();
     engine.set_access(rawr::Access::all());
     engine

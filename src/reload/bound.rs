@@ -49,6 +49,24 @@ impl BoundCatalog {
         )
     }
 
+    /// Call the root package's `#[test]` function `test`. `None` when the
+    /// package has no such function.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn invoke_test(
+        &self,
+        test: &crate::package::Test,
+    ) -> Option<Result<crate::Dynamic, program::Error>> {
+        let package = self.authority.package();
+        let function = self
+            .authority
+            .items()
+            .find(|item| item.key().package() == package && test.names(item.key()))?;
+        Some(
+            self.authority
+                .invoke_bound(function, &mut [], self.runtime.clone()),
+        )
+    }
+
     /// The generation's items and runtime model, for native islands.
     #[cfg(feature = "rust-import")]
     pub(crate) const fn authority(&self) -> &program::Authority {

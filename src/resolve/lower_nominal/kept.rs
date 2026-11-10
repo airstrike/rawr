@@ -263,12 +263,11 @@ fn interface(
     // The compiler: its options and the facades its host registry holds.
     write!(
         written,
-        "{optimization_level:?}|{}|{:?}|{:?}|{:?}|{}",
+        "{optimization_level:?}|{}|{:?}|{:?}|{:?}",
         Engine::registered_facades(),
         models.access,
         models.features,
         models.std_traits,
-        models.test,
     )
     .ok()?;
     // Each source's text, its bodies blank: what a body's lowering reads

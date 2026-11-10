@@ -85,19 +85,9 @@ impl Engine {
         let declared = crate::package::test::Declared::of(&graph);
         let (executable, ..) =
             crate::package::compile::executable_from_graph(self, graph, None, false)?;
-        let mut tests = declared
-            .into_iter()
-            .filter_map(|test| {
-                let item = executable.items().find(|item| {
-                    item.key().package() == executable.package() && test.is(item.key())
-                })?;
-                let function = crate::resolve::lower_nominal::private_function_name(item.key());
-                Some(test.compiled(function))
-            })
-            .collect::<Vec<_>>();
-        tests.sort_by(|left, right| left.name().cmp(right.name()));
+        let tests = crate::package::test::Declared::compiled_in(declared, &executable);
         let (ast, positions) = executable.into_ast_with_positions();
-        Ok((ast, tests.into_boxed_slice(), positions))
+        Ok((ast, tests, positions))
     }
 
     /// Compile one in-memory source this Engine already parsed (with

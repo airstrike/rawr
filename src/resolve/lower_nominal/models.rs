@@ -41,9 +41,6 @@ pub(super) struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     pub(super) access: crate::Access,
-    /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
-    /// holds.
-    pub(super) test: bool,
     /// The features Cargo enables for the package: `cfg(feature = "..")`
     /// holds for each.
     pub(super) features: crate::project::cargo::features::Enabled,
@@ -792,7 +789,6 @@ impl Models {
             runtime,
             host,
             access: engine.access().clone(),
-            test: engine.test(),
             features: program.features().clone(),
             imports,
             lexical: program.lexical.clone(),

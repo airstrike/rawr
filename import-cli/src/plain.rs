@@ -101,9 +101,25 @@ fn adapter(
     .semantic_api()
 }
 
-/// The profile that adds nothing to the runner.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Plain;
+/// The profile that adds nothing to the runner, for a program built as
+/// `build`: `cargo build` builds it, or `cargo test` (#1653).
+#[derive(Clone, Copy, Debug)]
+pub struct Plain {
+    build: rawr_cli::base::Build,
+}
+
+impl Plain {
+    /// The profile of a program built as `cargo build` builds it.
+    pub const PROGRAM: Self = Self {
+        build: rawr_cli::base::Build::Program,
+    };
+
+    /// The profile of a program built for its tests, as `cargo test`
+    /// builds it: its runner runs them in place of its `main`.
+    pub const TEST: Self = Self {
+        build: rawr_cli::base::Build::Test,
+    };
+}
 
 impl crate::Profile for Plain {
     fn prepare(
@@ -113,7 +129,7 @@ impl crate::Profile for Plain {
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
     ) -> Result<crate::Prepared, crate::Error> {
-        crate::again_while_stale(|| prepare(target, graph.take(), revision, scope))
+        crate::again_while_stale(|| prepare(self.build, target, graph.take(), revision, scope))
     }
 }
 
@@ -456,6 +472,7 @@ fn keep_expansions(
 
 /// Resolve, extract, check and seal a program's runner with no host profile.
 fn prepare(
+    build: rawr_cli::base::Build,
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
@@ -465,13 +482,11 @@ fn prepare(
     // The program's parses, read from its cells and remembered: each round's
     // check loads the program again, and a demand changes none of its
     // sources, so no round parses one the check read already (#1618).
-    let cells = rawr::package::Cells::new(rawr_cli::cells::directory(target)).remember();
+    let cells = rawr::package::Cells::new(build.cells(target)).remember();
     let graph = match graph {
         Some(graph) => graph,
-        None => {
-            rawr::package::Graph::load_with_cells(&rawr::future::facade::engine(), target, &cells)
-                .map_err(Error::Rawr)?
-        }
+        None => rawr::package::Graph::load_with_cells(&build.parser(), target, &cells)
+            .map_err(Error::Rawr)?,
     };
     let limits = graph.rust_limits();
     let source = rawr::reload::source::Graph::from_package(&graph);
@@ -606,9 +621,9 @@ fn prepare(
                             // (D513.3), whose facade the runner installs
                             // too. `rawr run` and `rawr check` read the
                             // program as Cargo builds it: with everything
-                            // (D683.4).
-                            let mut engine = rawr::future::facade::engine();
-                            engine.set_access(rawr::Access::all());
+                            // (D683.4). `rawr test` reads it as `cargo
+                            // test` builds it.
+                            let engine = rawr_cli::base::engine(build);
                             let parsed = cells.counts().parsed;
                             let compiled = engine.compile_imported_with_applications(
                                 contract,
@@ -659,7 +674,7 @@ fn prepare(
                         if !expand(&graph, &error, basis, &limits)? {
                             return Err(Error::Rawr(error));
                         }
-                        return prepare(target, None, revision, scope);
+                        return prepare(build, target, None, revision, scope);
                     }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if error.rust_application().is_some() =>

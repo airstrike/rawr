@@ -39,6 +39,7 @@ impl reload::Candidate {
             catalog,
             #[cfg(feature = "debugging")]
             located,
+            ..
         } = self;
         let catalog = catalog.bind(engine, runtime)?;
         debug_assert_eq!(generation.id(), catalog.generation());
@@ -81,6 +82,16 @@ impl Bootstrap {
         args: &mut [Dynamic],
     ) -> Option<Result<Dynamic, program::Error>> {
         self.binding.invoke_root(name, args)
+    }
+
+    /// Call the root package's `#[test]` function `test`. `None` when the
+    /// package has no such function.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn invoke_test(
+        &self,
+        test: &crate::package::Test,
+    ) -> Option<Result<Dynamic, program::Error>> {
+        self.binding.invoke_test(test)
     }
 
     /// Evaluate the generation's top level with its runtime bound, as its

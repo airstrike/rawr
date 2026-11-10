@@ -257,12 +257,34 @@ fn parse_new(arguments: &[OsString]) -> Result<New, String> {
 /// `rawr test`'s arguments: the program's path, then a test name filter,
 /// and libtest's own after `--`, as `cargo test` takes them.
 fn parse_test(arguments: &[OsString]) -> Result<Request, String> {
-    let (ours, libtest) = split_program_arguments(arguments);
+    let Some(TestArguments { path, libtest }) = test_arguments(arguments)? else {
+        return Ok(Request::Help);
+    };
+    let options = harness::Options::parse(&libtest)?;
+    Ok(Request::Test { path, options })
+}
+
+/// The arguments after `rawr test`, as `cargo test` takes them.
+pub struct TestArguments {
+    /// The program's path.
+    pub path: Option<PathBuf>,
+    /// libtest's arguments, as a libtest binary takes them: a test name
+    /// filter, then what follows `--`.
+    pub libtest: Vec<OsString>,
+}
+
+/// Read the arguments after `rawr test`. `None` asks for help.
+///
+/// # Errors
+///
+/// An argument `rawr test` does not take.
+pub fn test_arguments(arguments: &[OsString]) -> Result<Option<TestArguments>, String> {
+    let (ours, mut libtest) = split_program_arguments(arguments);
     let mut path = None;
     let mut filter = None;
     for argument in ours {
         match argument.to_string_lossy().as_ref() {
-            "-h" | "--help" => return Ok(Request::Help),
+            "-h" | "--help" => return Ok(None),
             option if option.starts_with('-') => {
                 return Err(format!("unknown argument `{option}`"));
             }
@@ -273,8 +295,10 @@ fn parse_test(arguments: &[OsString]) -> Result<Request, String> {
             _ => filter = Some(argument.clone()),
         }
     }
-    let options = harness::Options::parse(filter.iter().chain(&libtest))?;
-    Ok(Request::Test { path, options })
+    if let Some(filter) = filter {
+        libtest.insert(0, filter);
+    }
+    Ok(Some(TestArguments { path, libtest }))
 }
 
 fn parse_init(arguments: &[OsString]) -> Result<Request, String> {

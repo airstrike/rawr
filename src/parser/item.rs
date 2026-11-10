@@ -43,14 +43,14 @@ std::thread_local! {
     static FEATURES: core::cell::RefCell<Enabled> = core::cell::RefCell::default();
 }
 
-/// The items of `source`, parsed for `engine`'s build with `features`
-/// enabled.
+/// The items of `source`, parsed for `engine` with `features` enabled,
+/// `cfg(test)` holding when they build the crate for its tests.
 pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseResult<ParsedFile> {
     let outer = NESTED.take();
     let outer_skipped = SKIPPED.take();
     let outer_inner = INNER.take();
     let outer_macros = MACROS.take();
-    let outer_test = TEST.replace(engine.test());
+    let outer_test = TEST.replace(features.test());
     let outer_features = FEATURES.replace(features.clone());
     let parsed = parse_items(engine, source);
     TEST.set(outer_test);

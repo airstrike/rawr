@@ -511,8 +511,9 @@ impl Engine {
         &self.access
     }
 
-    /// Build programs as `rustc --test` builds them, `cfg(test)` holding,
-    /// as `rawr test` does. An engine starts without it, as `rustc` does.
+    /// Load programs as `cargo test` builds them: the entry crate as
+    /// `rustc --test` builds it, `cfg(test)` holding, as `rawr test` does.
+    /// An engine starts without it, as `rustc` does.
     pub fn set_test(&mut self, test: bool) -> &mut Self {
         self.test = test;
         self

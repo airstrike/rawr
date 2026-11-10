@@ -4586,6 +4586,9 @@ struct Program {
     /// Whether `main` is Rawr code, which runs on the thread that owns the
     /// program while the protocol goes on beside it.
     marked_main: bool,
+    /// libtest's arguments of a crate built for its tests, which run in
+    /// place of its `main` (#1653).
+    tests: Option<__rawr_internal::package::test::harness::Options>,
 }
 
 fn snapshot_bytes<'a>(input: &mut &'a [u8], limit: usize) -> std::io::Result<&'a [u8]> {
@@ -4689,6 +4692,7 @@ enum Compilation<'a> {
 fn prepare_engine(
     mut native: __rawr_internal::package::import::runner::account::Native,
     access: __rawr_internal::Access,
+    tests: Option<&__rawr_internal::package::test::harness::Options>,
     progress: &mut impl FnMut(u8) -> std::io::Result<()>,
 ) -> std::io::Result<(
     __rawr_internal::Shared<__rawr_internal::Engine>,
@@ -4697,6 +4701,10 @@ fn prepare_engine(
 )> {
     let mut engine = __rawr_internal::Engine::new();
     engine.set_access(access);
+    // What a test prints shows with its failure, as libtest shows it.
+    if tests.is_some_and(__rawr_internal::package::test::harness::Options::captures) {
+        __rawr_internal::package::test::harness::capture(&mut engine);
+    }
     // Under `rawr mcp`, before the program compiles (#526).
     if let Some(inspector) = inspector() {
         inspector.attach(&mut engine);
@@ -4742,9 +4750,18 @@ fn compile_program(
         Compilation::Live(engine) => engine.reconstruct_imported_native(GENERATED_MANIFEST),
     };
     let native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
+    // A crate built for its tests runs them in place of its `main`, with
+    // the arguments a libtest binary takes (#1653).
+    let tests = if snapshot.features().test() {
+        let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+        Some(__rawr_internal::package::test::harness::Options::parse(&arguments)
+            .map_err(std::io::Error::other)?)
+    } else {
+        None
+    };
     // `rawr run` runs the program as Cargo builds it: with everything.
     let (engine, bindings, application_contract) =
-        prepare_engine(native, __rawr_internal::Access::all(), &mut *progress)?;
+        prepare_engine(native, __rawr_internal::Access::all(), tests.as_ref(), &mut *progress)?;
     let (candidate, ast) = __rawr_profile::compile_initial(
         &engine,
         &snapshot,
@@ -4755,7 +4772,7 @@ fn compile_program(
     progress(5)?;
     let marked_main = snapshot.marked_root();
     Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract,
-        _bindings: bindings.into(), marked_main }))
+        _bindings: bindings.into(), marked_main, tests }))
 }
 
 fn compile_live(
@@ -5053,6 +5070,10 @@ mod __rawr_profile {
     /// `main` from its Rawr one, for this thread to run: its calls into
     /// marked code run here, as cargo's build runs them (#1119).
     pub fn run(program: &mut super::Program) -> super::Started {
+        let tests = program
+            .candidate
+            .as_mut()
+            .and_then(__rawr_internal::reload::Candidate::take_tests);
         let bootstrap = match bind(program) {
             Ok(bootstrap) => bootstrap,
             Err(error) => {
@@ -5061,6 +5082,11 @@ mod __rawr_profile {
             }
         };
         __rawr_internal::island::publish(bootstrap);
+        // A crate built for its tests runs them in place of its `main`, as
+        // the libtest binary `cargo test` builds runs them (#1653).
+        if let (Some(tests), Some(options)) = (tests, &program.tests) {
+            return super::Started::Exit(i32::from(__rawr_internal::island::run_tests(&tests, options)));
+        }
         let mut result = __rawr_internal::island::invoke_main();
         // An async `main` gives its future, which the native entry its
         // runtime's attribute carries awaits (D513.4); its `main` registered
@@ -5305,6 +5331,8 @@ fn compile_resident(
         application_contract: resident.contract.clone(),
         _bindings: resident.bindings.clone(),
         marked_main: snapshot.marked_root(),
+        // A save reloads a running program; tests run once.
+        tests: None,
     };
     Ok(ResidentResult::Compiled(program, None, carrier, coverage))
 }
@@ -5864,7 +5892,7 @@ impl __rawr_internal::universe::Bindings for __RawrBindings {
         install_arena([0; 32]);
         let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let (engine, bindings, _) = prepare_engine(native, access, &mut |_| Ok(()))?;
+        let (engine, bindings, _) = prepare_engine(native, access, None, &mut |_| Ok(()))?;
         Ok((engine, bindings))
     }
 
@@ -24672,7 +24700,7 @@ mod tests {
             &[
                 "if !COMPILE_SNAPSHOT { return Ok(None); }",
                 "account::Native::decode(GENERATED_MANIFEST)",
-                "prepare_engine(native, __rawr_internal::Access::all(), &mut *progress)?",
+                "prepare_engine(native, __rawr_internal::Access::all(), tests.as_ref(), &mut *progress)?",
                 "__rawr_profile::compile_initial(",
                 "Ok(Some(Program { engine,",
             ],

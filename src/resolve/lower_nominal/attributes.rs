@@ -341,9 +341,12 @@ impl<'a> Parser<'a> {
                 Ok(self
                     .models
                     .features
-                    .cfg(&name, Some(&value), self.models.test))
+                    .cfg(&name, Some(&value), self.models.features.test()))
             }
-            _ => Ok(self.models.features.cfg(&name, None, self.models.test)),
+            _ => Ok(self
+                .models
+                .features
+                .cfg(&name, None, self.models.features.test())),
         }
     }
 
