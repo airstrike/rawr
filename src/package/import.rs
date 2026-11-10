@@ -676,7 +676,7 @@ pub(crate) fn admit_applications(
 
 /// The impls in `impls` for the script types `types` name at any depth,
 /// each once.
-fn crossing_impls(
+pub(crate) fn crossing_impls(
     types: &[representability::convert::Type],
     impls: &[(Box<str>, rawr_import::surface::instance::ScriptImpl)],
 ) -> Box<[rawr_import::surface::instance::ScriptImpl]> {

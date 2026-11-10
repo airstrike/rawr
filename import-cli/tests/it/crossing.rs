@@ -705,12 +705,28 @@ fn methods_of_a_generic_target_are_callable_through_its_opaque_alias() {
     assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3), quad 4r1 rgb(4, 5, 6) at 3");
 }
 
+/// A provided method reaches the script's `labels`, and what it pushes
+/// onto the `&mut Vec<String>` native code lends it is in native code's
+/// vector after the callback returns (#365). The output is `cargo run`'s.
 #[test]
 fn a_provided_method_reaches_a_script_impl_through_a_blanket_trait() {
     let (rawr, cargo) = both_printed("provided.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr.matches("script widget").count(), 5, "{rawr}");
-    assert!(rawr.contains("last view pad 0"), "{rawr}");
+    assert!(rawr.contains("last view pad 0 script widget"), "{rawr}");
+}
+
+/// A widget whose only name is an alias, the fixture's `Caption`, sits in
+/// one `column!` beside another widget of the same shape (#339). The
+/// output is `cargo run`'s.
+#[test]
+fn a_sole_alias_widget_sits_beside_a_widget_of_its_shape() {
+    let (rawr, cargo) = both_printed("caption_beside.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 \"0\"/mono0 'beside'@12 \"last\""),
+        "{rawr}"
+    );
 }
 
 /// A crate struct's `String` field is read in place, as Rust reads it:
@@ -2664,6 +2680,45 @@ fn an_edit_to_a_script_impl_takes_effect_at_its_next_call() {
         "{seen}"
     );
     assert!(run.seen.contains(&pid));
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
+/// A save that changes a script impl's shape, here a function it adds to
+/// override the trait's provided `update` with no native use of its own,
+/// reaches native code: it calls the new function, not the provided one
+/// the running build was written with (#326).
+#[test]
+fn an_edit_to_a_script_impls_shape_reaches_native_code() {
+    let program = CROSSING.read("variants/program.rs");
+    let update = "    fn update(&self, state: &mut Self::State, event: &Event, bounds: Bounds) -> Option<Message> {\n        state.count += 1;\n        match event {\n            Event::Pressed(label) if bounds.area() > 0 => Some(Message::Pressed(label.clone())),\n            Event::Pressed(_) => None,\n        }\n    }\n\n";
+    assert!(program.contains(update), "{program}");
+    let root = CROSSING.lease(&[("src/main.rs", &program.replace(update, ""))]);
+    let main = root.join("src/main.rs");
+    let mut run = start(
+        &root,
+        &[
+            ("EVENTS_COUNT", PathBuf::from("600")),
+            ("EVENTS_STOP", root.join("stop")),
+        ],
+    );
+    // The presses a `N view canvas[primary plain P#..` line shows.
+    let presses = |line: &str| {
+        line.split_once(" view canvas[primary plain ")
+            .and_then(|(_, rest)| rest.split(['#', ' ']).next())
+            .and_then(|presses| presses.parse::<i64>().ok())
+    };
+    let before = run.until(|line| line.starts_with("3 view canvas["));
+    assert_eq!(presses(&before), Some(0), "{}", run.seen.join("\n"));
+
+    // Each press now gives a message of five letters, through no native
+    // use the running build lacks.
+    let pressing = "    fn update(&self, state: &mut Self::State, _event: &Event, _bounds: Bounds) -> Option<Message> {\n        state.count += 1;\n        Some(Message::Pressed(\"press\".to_owned()))\n    }\n\n";
+    fs::write(&main, program.replace(update, pressing)).unwrap();
+    let pressed = run.until(|line| presses(line).is_some_and(|presses| presses > 0));
+    assert!(presses(&pressed) > Some(0), "{}", run.seen.join("\n"));
 
     fs::write(root.join("stop"), "").unwrap();
     let status = run.child.wait().unwrap();
