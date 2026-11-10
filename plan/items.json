@@ -1641,6 +1641,7 @@
     {"t":"T1638","issue":1638,"title":"T1638: Keep the runner's first compile of marked code and its installed bindings across starts","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1639","issue":1639,"title":"T1639: The project's Cargo.lock is read with the 1 MiB manifest limit, so a larger lock fails the resolution","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":"5b17b14d5","release":null},
     {"t":"T1640","issue":1640,"title":"T1640: A deeply nested crate type fails rawr check with a sidecar recursion-limit error","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1641","issue":1641,"title":"T1641: A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
+    {"t":"T1641","issue":1641,"title":"T1641: A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
+    {"t":"T1642","issue":1642,"title":"T1642: An anonymous import of anything but a trait fails the extraction (anonymous-import-kind)","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

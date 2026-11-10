@@ -11,6 +11,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - rawr compiles the dependency versions your Cargo.lock pins. A project without a resolution universe was resolved without its lock and could get newer compatible versions than cargo builds. The runner also no longer warns about a `[patch]` only the rest of your workspace uses. (#1635)
 - A project whose Cargo.lock is over 1 MiB resolves from its lock. A crate type's `&'static [&'static str]` const can be read. `Some(&value)` where an `Option<&dyn Trait>` is expected coerces to the trait object, as rustc does. Borrowing a local for a crate's `&'static dyn` field is rustc's E0597 before the run. (#1639, #1626, #1623, #1620)
 - A crate whose types nest deeply, such as a long combinator chain, no longer fails `rawr check` with "rawr misread rustc's output (`sidecar-schema`): recursion limit exceeded". The compiler's output also writes each definition id once, which cuts its definitions to about 57% of their former size. (#1640)
+- A crate's `use Item as _` of anything but a trait no longer fails the extraction with "rawr misread rustc's output (`anonymous-import-kind`)". As in rustc, it brings nothing into scope. (#1642)
 
 ## 0.3.177 (2026-11-10)
 

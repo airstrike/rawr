@@ -17,7 +17,8 @@
         {"text":"`RAWR_VERBOSE=1 rawr run` says what preparing the run did: its rounds, Cargo resolutions, nightly builds, probes, runner builds and the units they compiled. A second run of an unchanged project shows all of them at zero.","issues":[1637],"refs":[1604]},
         {"text":"rawr compiles the dependency versions your Cargo.lock pins. A project without a resolution universe was resolved without its lock and could get newer compatible versions than cargo builds. The runner also no longer warns about a `[patch]` only the rest of your workspace uses.","issues":[1635]},
         {"text":"A project whose Cargo.lock is over 1 MiB resolves from its lock. A crate type's `&'static [&'static str]` const can be read. `Some(&value)` where an `Option<&dyn Trait>` is expected coerces to the trait object, as rustc does. Borrowing a local for a crate's `&'static dyn` field is rustc's E0597 before the run.","issues":[1639,1626,1623,1620]},
-        {"text":"A crate whose types nest deeply, such as a long combinator chain, no longer fails `rawr check` with \"rawr misread rustc's output (`sidecar-schema`): recursion limit exceeded\". The compiler's output also writes each definition id once, which cuts its definitions to about 57% of their former size.","issues":[1640]}
+        {"text":"A crate whose types nest deeply, such as a long combinator chain, no longer fails `rawr check` with \"rawr misread rustc's output (`sidecar-schema`): recursion limit exceeded\". The compiler's output also writes each definition id once, which cuts its definitions to about 57% of their former size.","issues":[1640]},
+        {"text":"A crate's `use Item as _` of anything but a trait no longer fails the extraction with \"rawr misread rustc's output (`anonymous-import-kind`)\". As in rustc, it brings nothing into scope.","issues":[1642]}
       ]
     },
     "releases": [
@@ -3572,7 +3573,8 @@
     {"issue":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"open","category":"No glue (D593)"},
     {"issue":1639,"title":"The project's Cargo.lock is read with the 1 MiB manifest limit, so a larger lock fails the resolution","state":"closed","category":"No glue (D593)"},
     {"issue":1640,"title":"A deeply nested crate type fails rawr check with a sidecar recursion-limit error","state":"open","category":"No glue (D593)"},
-    {"issue":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)"}
+    {"issue":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)"},
+    {"issue":1642,"title":"An anonymous import of anything but a trait fails the extraction (anonymous-import-kind)","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
