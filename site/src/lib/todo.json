@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr-import's driver builds again on nightly-2026-11-10 and every other nightly in its window. CI now builds it on the window's newest nightly too.","issues":[1643]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.179",
@@ -3597,6 +3602,7 @@
     {"issue":1640,"title":"A deeply nested crate type fails rawr check with a sidecar recursion-limit error","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)"},
     {"issue":1642,"title":"An anonymous import of anything but a trait fails the extraction (anonymous-import-kind)","state":"closed","category":"No glue (D593)","release":"0.3.178"},
+    {"issue":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1644,"title":"A save's work grew with the program's dependencies: each native use was matched against every inventory row","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1646,"title":"A save resolves and lowers every marked file again","state":"open","category":"No glue (D593)"},
@@ -3606,8 +3612,7 @@
     {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
-    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open","category":"Divergences from rustc"},
-    {"issue":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4359,12 +4364,12 @@
           "name": "Any nightly",
           "start": 72,
           "size": 2,
-          "state": "now",
+          "state": "done",
           "note": "The project's nightly reads crate APIs; a daily job moves the window",
           "issues": [
             {"number":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"closed"},
             {"number":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed"},
-            {"number":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"open"}
+            {"number":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"closed"}
           ],
           "milestone": "0.3"
         },
