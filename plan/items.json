@@ -1644,7 +1644,7 @@
     {"t":"T1641","issue":1641,"title":"T1641: A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1642","issue":1642,"title":"T1642: An anonymous import of anything but a trait fails the extraction (anonymous-import-kind)","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T1643","issue":1644,"title":"T1643: A save's work grew with the program's dependencies: each native use was matched against every inventory row","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T1644","issue":1645,"title":"T1644: A save rebuilds the watch inputs from the whole native watch list","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
+    {"t":"T1644","issue":1645,"title":"T1644: A save rebuilds the watch inputs from the whole native watch list","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":"8b5a99fac","release":null},
     {"t":"T1645","issue":1646,"title":"T1645: A save resolves and lowers every marked file again","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null}
   ]
 }
