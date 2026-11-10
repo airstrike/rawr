@@ -2606,7 +2606,7 @@ fn nameable_collision_is_still_rejected() {
 }
 
 #[test]
-fn anonymous_import_nontrait_variant_fails_closed() {
+fn anonymous_import_of_a_nontrait_adds_nothing() {
     let mut root = anonymous_fixture(false);
     root["definitions"] = json!([struct_definition(
         "root 0.1.0 (path+root)",
@@ -2616,7 +2616,8 @@ fn anonymous_import_nontrait_variant_fails_closed() {
         [],
     )]);
     root["reachable"] = json!([root["reachable"][0].clone()]);
-    assert_anonymous_code(root, "anonymous-import-kind");
+    // `use Struct as _` brings nothing into scope, as in rustc.
+    assert_eq!(graph(&[root], Policy::empty()).anonymous_imports().len(), 0);
 }
 
 #[test]

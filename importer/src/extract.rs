@@ -3608,7 +3608,11 @@ impl Candidate {
             .map(|(id, sourced)| (id, sourced.value))
             .collect();
         for export in imports {
-            let import = anonymous_import(export, &definitions, &spellings)?;
+            // `use Item as _` of anything but a trait brings nothing into
+            // scope, as in rustc, so it adds no anonymous import.
+            let Some(import) = anonymous_import(export, &definitions, &spellings)? else {
+                continue;
+            };
             if !anonymous.contains(&import) {
                 anonymous.insert(import);
             }
@@ -5927,7 +5931,7 @@ fn anonymous_import(
     export: Export,
     definitions: &BTreeMap<identity::Definition, model::Definition>,
     spellings: &BTreeMap<identity::Definition, Box<[Box<str>]>>,
-) -> Result<ledger::AnonymousImport> {
+) -> Result<Option<ledger::AnonymousImport>> {
     if export.key.namespace() != identity::Namespace::Type {
         return Err(extraction(
             "anonymous-import-namespace",
@@ -5947,7 +5951,7 @@ fn anonymous_import(
         ));
     };
     if !matches!(definition.kind(), model::Kind::Trait { .. }) {
-        return Err(extraction("anonymous-import-kind", target.def_path_hash()));
+        return Ok(None);
     }
     if export.aliases.is_empty() {
         return Err(extraction("anonymous-import-alias", target.def_path_hash()));
@@ -5980,9 +5984,9 @@ fn anonymous_import(
         ));
     };
     let (root_alias, path, _) = key.into_parts();
-    Ok(ledger::AnonymousImport::new(
+    Ok(Some(ledger::AnonymousImport::new(
         root_alias, path, target, aliases, reexports, span,
-    ))
+    )))
 }
 
 fn visibility(
