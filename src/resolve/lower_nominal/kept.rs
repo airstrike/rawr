@@ -5,10 +5,13 @@
 //! reads changed: the source's own text, the instances its own bodies'
 //! calls take, or what the program holds of the other sources. That is
 //! everything the resolved program holds but the other sources' function
-//! and method bodies and the instances their calls take: their
-//! declarations with their spans, the outputs reveal gave opaque types,
-//! the instance tables, constants' bodies, `IndexMut` bodies and the trait
-//! objects the sources name, and the program's item numbering. What a
+//! and method bodies, the instances their calls take and the paths they
+//! resolve: their declarations, the outputs reveal gave opaque types, the
+//! instance tables, constants' bodies, `IndexMut` bodies and the trait
+//! objects the sources name, and the program's item numbering. A
+//! declaration's place is read by its line among the lines that hold its
+//! source's declarations (`Outline`), so a line a save adds to a body, or
+//! a blank or comment line, keeps every other source's lowering. What a
 //! source's lowering read outside the program while it compiled (a file
 //! `include_str!` reads, a variable `env!` reads) is kept with it, and the
 //! lowering is reused only while each reads the same.
@@ -25,6 +28,7 @@ use super::surface::ImportedUse;
 use super::ty::Ty;
 use crate::program::source;
 use crate::resolve::{item, Program};
+use crate::types::position::Lines;
 use crate::{host, Engine, Position, Scope, Span};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -178,6 +182,9 @@ pub(crate) struct Lowerings {
     kept: BTreeMap<(source::Id, Part), Kept>,
     /// Reveal's readings, by their keys.
     scanned: BTreeMap<[u8; 32], Scanned>,
+    /// The outlines of the sources the last interface read, by their texts
+    /// and bodies (`outlines`).
+    outlines: BTreeMap<[u8; 32], Outline>,
     /// How many sources this compiler's compiles lowered rather than
     /// reusing what an earlier compile lowered.
     lowered: usize,
@@ -192,6 +199,7 @@ impl Lowerings {
         Self {
             kept: BTreeMap::new(),
             scanned: BTreeMap::new(),
+            outlines: BTreeMap::new(),
             lowered: 0,
             revealed: 0,
         }
@@ -255,7 +263,7 @@ impl<'e> Readings<'e> {
     /// Begin a pass over `program` as it is now, whose bodies' readings
     /// read `models`.
     pub(super) fn begin(&mut self, program: &Program, models: &Models) {
-        self.pass = interface(program, models).map(|interface| Pass {
+        self.pass = interface(self.engine, program, models).map(|interface| Pass {
             interface,
             sources: BTreeMap::new(),
         });
@@ -344,10 +352,10 @@ impl Pass {
         let interface = &self.interface;
         let of_source = *self.sources.entry(source).or_insert_with(|| {
             let mut digest = Sha256::new();
-            digest.update(b"rawr.reveal.source/v1");
+            digest.update(b"rawr.reveal.source/v2");
             digest.update(interface.program);
             for source in [None, Some(source)] {
-                digest.update(interface.calls.get(&source).unwrap_or(&[0; 32]));
+                digest.update(interface.own.get(&source).unwrap_or(&[0; 32]));
             }
             digest.update(source.index().to_le_bytes());
             framed(&mut digest, program.source.text_at(source));
@@ -392,7 +400,7 @@ impl<'e> Session<'e> {
         let earlier = std::mem::take(&mut lock(engine).kept);
         let interface = scope
             .is_none_or(Scope::is_empty)
-            .then(|| interface(program, models))
+            .then(|| interface(engine, program, models))
             .flatten()
             .map(|interface| interface.compiled_at(optimization_level));
         Some(Self {
@@ -415,10 +423,10 @@ impl<'e> Session<'e> {
     ) -> Option<[u8; 32]> {
         let interface = self.interface.as_ref()?;
         let mut digest = Sha256::new();
-        digest.update(b"rawr.lowering.source/v2");
+        digest.update(b"rawr.lowering.source/v3");
         digest.update(interface.program);
         for source in [None, Some(source)] {
-            digest.update(interface.calls.get(&source).unwrap_or(&[0; 32]));
+            digest.update(interface.own.get(&source).unwrap_or(&[0; 32]));
         }
         digest.update([u8::from(part == Part::Script)]);
         digest.update(source.index().to_le_bytes());
@@ -555,9 +563,9 @@ impl std::fmt::Write for Written {
 struct Interface {
     /// What every source's lowering reads.
     program: [u8; 32],
-    /// The instances each source's bodies' calls take, by the source; those
-    /// of the calls `None` holds are every source's.
-    calls: BTreeMap<Option<source::Id>, [u8; 32]>,
+    /// What only one source's bodies read, by the source (`own`); what
+    /// `None` holds is every source's.
+    own: BTreeMap<Option<source::Id>, [u8; 32]>,
 }
 
 impl Interface {
@@ -569,16 +577,22 @@ impl Interface {
         let _ = write!(written, "{level:?}");
         Self {
             program: written.0.finalize().into(),
-            calls: self.calls,
+            own: self.own,
         }
     }
 }
 
 /// What each source's lowering reads of the program; `None` when it can't
 /// be written.
-fn interface(program: &Program, models: &Models) -> Option<Interface> {
+///
+/// Every position of a source is written at its line's number among the
+/// lines that hold the source's tokens outside its bodies (`Outline`): a
+/// save that adds or removes a line in a body, or a blank or comment line,
+/// moves the source's later declarations without changing what another
+/// source's lowering reads of them, which is never their place.
+fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Interface> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v2");
+    written.0.update(b"rawr.lowering.interface/v3");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
@@ -589,8 +603,267 @@ fn interface(program: &Program, models: &Models) -> Option<Interface> {
         models.std_traits,
     )
     .ok()?;
-    // Each source's text, its bodies blank: what a body's lowering reads
-    // of another source is never its bodies, but their constants'.
+    // Each source's tokens, its bodies' aside: what a body's lowering
+    // reads of another source is never its bodies, but their constants'.
+    let outlines = outlines(engine, program);
+    for (index, outline) in outlines.sources.iter().enumerate() {
+        framed(
+            &mut written.0,
+            program.source.identity_at(source::Id::from_index(index)),
+        );
+        written.0.update(outline.tokens);
+    }
+    let lines = |source: source::Id| {
+        outlines
+            .sources
+            .get(source.index())
+            .map(|outline| outline.lines.clone())
+            .unwrap_or_default()
+    };
+    let sources = program
+        .items
+        .iter()
+        .map(|shell| (shell.id, shell.source))
+        .collect::<BTreeMap<_, _>>();
+    // The program, its functions' and its impls' methods' bodies' tokens
+    // aside: a body's spans and its text when Rawr wrote it stay. A
+    // trait's provided bodies stay, as each impl that doesn't override one
+    // receives it.
+    for shell in program.items.iter() {
+        let cleared;
+        let kind = match &shell.kind {
+            item::Kind::Function(function) if !function.body.constant => {
+                let mut function = function.clone();
+                function.body.syntax = crate::item::BodySyntax::default();
+                cleared = item::Kind::Function(function);
+                &cleared
+            }
+            item::Kind::Impl(implementation) => {
+                let mut implementation = implementation.clone();
+                for function in &mut implementation.functions {
+                    if !function.body.constant {
+                        function.body.syntax = crate::item::BodySyntax::default();
+                    }
+                }
+                cleared = item::Kind::Impl(implementation);
+                &cleared
+            }
+            kind => kind,
+        };
+        lines(shell.source)
+            .writing(|| {
+                write!(
+                    written,
+                    "{:?}|{:?}|{:?}|{:?}|{:?}|{kind:?}",
+                    shell.id, shell.source, shell.key, shell.span, shell.facades,
+                )
+            })
+            .ok()?;
+    }
+    for definition in program.types.iter() {
+        let lines = sources
+            .get(&definition.item())
+            .map(|source| lines(*source))
+            .unwrap_or_default();
+        lines.writing(|| write!(written, "{definition:?}|")).ok()?;
+    }
+    for definition in program.methods.iter().chain(&program.builtin_methods) {
+        lines(definition.source())
+            .writing(|| write!(written, "{definition:?}|"))
+            .ok()?;
+    }
+    for ((source, name), alias) in &program.aliases {
+        lines(*source)
+            .writing(|| write!(written, "{source:?}|{name:?}|{alias:?}|"))
+            .ok()?;
+    }
+    write!(
+        written,
+        "{:?}|{:?}|{:?}|{:?}|{:?}",
+        program.package,
+        program.std_traits,
+        program.trait_names,
+        program.entry_crate,
+        program.crates,
+    )
+    .ok()?;
+    #[cfg(feature = "rust-import")]
+    write!(written, "{:?}", program.mirrors).ok()?;
+    // Each source's statements outside its items, its items blank: by its
+    // tokens, as a body's length changes how many blanks it is, and a
+    // comment is none.
+    for (script, outline) in program.scripts.iter().zip(&outlines.scripts) {
+        write!(written, "{:?}|{:?}|", script.source, script.namespace).ok()?;
+        written.0.update(outline.tokens);
+    }
+    // The instance tables, each call's instance aside: a body reads only
+    // its own calls' (`Interface::own`).
+    let callers = callers(program);
+    let instances = &program.instances;
+    write!(written, "{:?}|", instances.templates).ok()?;
+    for (key, types) in &instances.types {
+        let lines = callers
+            .get(key)
+            .map(|source| lines(*source))
+            .unwrap_or_default();
+        lines
+            .writing(|| write!(written, "{key:?}|{types:?}|"))
+            .ok()?;
+    }
+    for (index, instances) in &instances.impls {
+        let lines = program
+            .items
+            .get(*index)
+            .map(|shell| lines(shell.source))
+            .unwrap_or_default();
+        lines
+            .writing(|| write!(written, "{index}|{instances:?}|"))
+            .ok()?;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    write!(written, "{:?}|", instances.natives).ok()?;
+    // The program's macros and `IndexMut` bodies, which a body's lowering
+    // reads with their places: at those places.
+    write!(written, "{:?}|{:?}", program.macros, models.index_mut).ok()?;
+    Some(Interface {
+        program: written.0.finalize().into(),
+        own: own(program, &callers)?,
+    })
+}
+
+/// The source of each function's and method's body, by its key.
+fn callers(program: &Program) -> BTreeMap<&crate::item::Key, source::Id> {
+    program
+        .items
+        .iter()
+        .filter_map(|shell| Some((shell.key.as_ref()?, shell.source)))
+        .chain(
+            program
+                .methods
+                .iter()
+                .chain(&program.builtin_methods)
+                .map(|definition| (definition.key(), definition.source())),
+        )
+        .collect()
+}
+
+/// What only one source's bodies read, by the source: the instance each
+/// call of a template takes, by the source of the body that makes it, and
+/// the paths and imports its bodies resolve. A call whose body isn't one
+/// of the program's is every source's, under `None`.
+fn own(
+    program: &Program,
+    callers: &BTreeMap<&crate::item::Key, source::Id>,
+) -> Option<BTreeMap<Option<source::Id>, [u8; 32]>> {
+    let mut written = BTreeMap::<Option<source::Id>, Written>::new();
+    for ((caller, span), names) in &program.instances.calls {
+        write!(
+            of(&mut written, callers.get(caller).copied()),
+            "{caller:?}|{span:?}|{names:?}|"
+        )
+        .ok()?;
+    }
+    for ((source, span), key) in &program.qualified_functions {
+        write!(of(&mut written, Some(*source)), "f{span:?}|{key:?}|").ok()?;
+    }
+    for ((source, span), owner) in &program.qualified_owners {
+        write!(of(&mut written, Some(*source)), "o{span:?}|{owner:?}|").ok()?;
+    }
+    for ((source, span), owner) in &program.qualified_pattern_owners {
+        write!(of(&mut written, Some(*source)), "p{span:?}|{owner:?}|").ok()?;
+    }
+    for ((source, span), path) in &program.qualified_rust {
+        write!(of(&mut written, Some(*source)), "r{span:?}|{path:?}|").ok()?;
+    }
+    for ((source, span), name) in &program.qualified_traits {
+        write!(of(&mut written, Some(*source)), "t{span:?}|{name:?}|").ok()?;
+    }
+    for (source, imports) in &program.lexical {
+        write!(of(&mut written, Some(*source)), "l{imports:?}|").ok()?;
+    }
+    Some(
+        written
+            .into_iter()
+            .map(|(source, written)| (source, written.0.finalize().into()))
+            .collect(),
+    )
+}
+
+/// The digest among `written` of what only `source`'s bodies read.
+fn of(
+    written: &mut BTreeMap<Option<source::Id>, Written>,
+    source: Option<source::Id>,
+) -> &mut Written {
+    written
+        .entry(source)
+        .or_insert_with(|| Written(Sha256::new()))
+}
+
+/// What another source's lowering reads of one source's text (#1646): its
+/// tokens outside its function and method bodies, and its lines, each
+/// numbered among the lines that hold one of those tokens.
+#[derive(Clone)]
+struct Outline {
+    tokens: [u8; 32],
+    lines: Lines,
+}
+
+impl Outline {
+    /// The outline of `text`, whose function and method bodies are
+    /// `bodies`, in order.
+    fn new(engine: &Engine, text: &str, bodies: &[Span]) -> Self {
+        // A body within another body is the outer body's.
+        let mut merged = Vec::<(Position, Position)>::with_capacity(bodies.len());
+        for (start, end) in bodies
+            .iter()
+            .filter(|span| !span.is_none())
+            .map(|span| (span.start(), span.end()))
+        {
+            match merged.last_mut() {
+                Some((_, last)) if start <= *last => *last = (*last).max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        let mut held = vec![false; text.matches('\n').count() + 1];
+        let mut written = Written(Sha256::new());
+        let mut next = 0;
+        for (token, position) in super::lex_rust(engine, text) {
+            if token == crate::tokenizer::Token::EOF {
+                break;
+            }
+            while merged.get(next).is_some_and(|(_, end)| *end <= position) {
+                next += 1;
+            }
+            if merged
+                .get(next)
+                .is_some_and(|(start, _)| *start <= position)
+            {
+                continue;
+            }
+            // A token's `Debug` can't fail to write.
+            let _ = write!(written, "{token:?}|");
+            if let Some(line) = position.line().and_then(|line| held.get_mut(line - 1)) {
+                *line = true;
+            }
+        }
+        let mut number = 0_u16;
+        let numbers = held
+            .into_iter()
+            .map(|held| {
+                number = number.saturating_add(u16::from(held));
+                number
+            })
+            .collect();
+        Self {
+            tokens: written.0.finalize().into(),
+            lines: Lines::new(numbers),
+        }
+    }
+}
+
+/// The outlines of the program's sources and scripts. A compiler keeps the
+/// outlines it wrote, and writes again only a text or bodies that changed.
+fn outlines(engine: &Engine, program: &Program) -> Outlines {
     let mut bodies = BTreeMap::<source::Id, Vec<Span>>::new();
     for shell in program.items.iter() {
         if let item::Kind::Function(function) = &shell.kind
@@ -611,149 +884,51 @@ fn interface(program: &Program, models: &Models) -> Option<Interface> {
                 .push(definition.body());
         }
     }
-    for (index, text) in program.source.texts().enumerate() {
-        let id = source::Id::from_index(index);
-        framed(&mut written.0, program.source.identity_at(id));
-        let spans = bodies.get(&id).map_or(&[][..], Vec::as_slice);
-        framed(&mut written.0, &blank(text, spans));
+    // An instance's body is its template's, in its template's source.
+    for spans in bodies.values_mut() {
+        spans.sort_unstable();
+        spans.dedup();
     }
-    // The program, its functions' and its impls' methods' bodies' tokens
-    // aside: a body's spans and its text when Rawr wrote it stay. A
-    // trait's provided bodies stay, as each impl that doesn't override one
-    // receives it.
-    for shell in program.items.iter() {
-        let kind = match &shell.kind {
-            item::Kind::Function(function) if !function.body.constant => {
-                let mut function = function.clone();
-                function.body.syntax = crate::item::BodySyntax::default();
-                item::Kind::Function(function)
-            }
-            item::Kind::Impl(implementation) => {
-                let mut implementation = implementation.clone();
-                for function in &mut implementation.functions {
-                    if !function.body.constant {
-                        function.body.syntax = crate::item::BodySyntax::default();
-                    }
-                }
-                item::Kind::Impl(implementation)
-            }
-            _ => {
-                write!(written, "{shell:?}").ok()?;
-                continue;
-            }
-        };
-        write!(
-            written,
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{kind:?}",
-            shell.id, shell.source, shell.key, shell.span, shell.facades,
-        )
-        .ok()?;
-    }
-    write!(
-        written,
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-        program.package,
-        program.types,
-        program.methods,
-        program.builtin_methods,
-        program.std_traits,
-        program.qualified_functions,
-        program.qualified_owners,
-        program.qualified_pattern_owners,
-        program.qualified_rust,
-        program.qualified_traits,
-        program.trait_names,
-        program.entry_crate,
-        program.crates,
-        program.aliases,
-    )
-    .ok()?;
-    #[cfg(feature = "rust-import")]
-    write!(written, "{:?}", program.mirrors).ok()?;
-    // Each source's statements outside its items, its items blank: by its
-    // words, as a body's length changes how many blanks it is.
-    for script in program.scripts.iter() {
-        write!(written, "{:?}|{:?}|", script.source, script.namespace).ok()?;
-        let words = script.text.split_whitespace().collect::<Vec<_>>();
-        framed(&mut written.0, &words.join(" "));
-    }
-    // The instance tables, each call's instance aside: a body reads only
-    // its own calls' (`Interface::calls`).
-    let instances = &program.instances;
-    write!(
-        written,
-        "{:?}|{:?}|{:?}|",
-        instances.templates, instances.types, instances.impls,
-    )
-    .ok()?;
-    #[cfg(not(target_arch = "wasm32"))]
-    write!(written, "{:?}|", instances.natives).ok()?;
-    write!(
-        written,
-        "{:?}|{:?}|{:?}",
-        program.lexical, program.macros, models.index_mut,
-    )
-    .ok()?;
-    Some(Interface {
-        program: written.0.finalize().into(),
-        calls: calls(program)?,
-    })
-}
-
-/// The instance each call of a template takes, by the source of the body
-/// that makes it; a call whose body isn't one of the program's is every
-/// source's.
-fn calls(program: &Program) -> Option<BTreeMap<Option<source::Id>, [u8; 32]>> {
-    let callers = program
-        .items
+    let mut earlier = std::mem::take(&mut lock(engine).outlines);
+    let mut kept = BTreeMap::new();
+    let mut outline = |text: &str, spans: &[Span]| {
+        let mut written = Written(Sha256::new());
+        framed(&mut written.0, text);
+        // A span's `Debug` can't fail to write.
+        let _ = write!(written, "{spans:?}");
+        let key: [u8; 32] = written.0.finalize().into();
+        let outline = earlier
+            .remove(&key)
+            .or_else(|| kept.get(&key).cloned())
+            .unwrap_or_else(|| Outline::new(engine, text, spans));
+        kept.insert(key, outline.clone());
+        outline
+    };
+    let sources = program
+        .source
+        .texts()
+        .enumerate()
+        .map(|(index, text)| {
+            let spans = bodies
+                .get(&source::Id::from_index(index))
+                .map_or(&[][..], Vec::as_slice);
+            outline(text, spans)
+        })
+        .collect();
+    let scripts = program
+        .scripts
         .iter()
-        .filter_map(|shell| Some((shell.key.as_ref()?, shell.source)))
-        .chain(
-            program
-                .methods
-                .iter()
-                .chain(&program.builtin_methods)
-                .map(|definition| (definition.key(), definition.source())),
-        )
-        .collect::<BTreeMap<_, _>>();
-    let mut written = BTreeMap::<Option<source::Id>, Written>::new();
-    for ((caller, span), names) in &program.instances.calls {
-        let digest = written
-            .entry(callers.get(caller).copied())
-            .or_insert_with(|| Written(Sha256::new()));
-        write!(digest, "{caller:?}|{span:?}|{names:?}|").ok()?;
-    }
-    Some(
-        written
-            .into_iter()
-            .map(|(source, written)| (source, written.0.finalize().into()))
-            .collect(),
-    )
+        .map(|script| outline(&script.text, &[]))
+        .collect();
+    lock(engine).outlines = kept;
+    Outlines { sources, scripts }
 }
 
-/// `text` without each of `spans`, its line breaks kept: a body's length
-/// changes nothing else.
-fn blank(text: &str, spans: &[Span]) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut line = 1_u16;
-    let mut column = 0_u16;
-    for character in text.chars() {
-        if character == '\n' {
-            output.push(character);
-            line = line.saturating_add(1);
-            column = 0;
-            continue;
-        }
-        column = column.saturating_add(1);
-        let position = Position::new(line, column);
-        let inside = spans
-            .iter()
-            .any(|span| position >= span.start() && position < span.end());
-        if !inside {
-            output.push(character);
-        }
-    }
-    output
+/// The outlines of a program's sources and of their scripts, each by its
+/// index.
+struct Outlines {
+    sources: Vec<Outline>,
+    scripts: Vec<Outline>,
 }
 
 impl ExecutableOp {
