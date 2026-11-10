@@ -113,3 +113,31 @@ fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
          event a=n 5 b=5 c=x 5 y\n"
     );
 }
+
+/// A borrow of a local number given for a crate's `&'static dyn Trait`
+/// field, as `Held(&side)` of `Held(pub &'static dyn Shape)`, is rustc's
+/// E0597 at the borrow, before any run: `rawr run` refuses the program as
+/// `cargo build` does, and never builds the runner it would fail in
+/// (#1620).
+#[test]
+fn a_borrowed_local_for_a_static_object_field_does_not_live_long_enough() {
+    let root = crate::support::scratch().join("trait-objects-field");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(&Path::new(FIXTURES).join("trait-objects"), &root);
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\n\nfn main() {\n    let side = 3i64;\n    \
+         let held = shapes::Held(&side);\n    println!(\"held {}\", held.area());\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import("run", &root);
+    let stderr = text(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("error[E0597]: `side` does not live long enough")
+            && stderr.contains("main.rs:5:29")
+            && !stderr.contains("building runner")
+            && !stderr.contains("Runtime error"),
+        "{stderr}"
+    );
+}
