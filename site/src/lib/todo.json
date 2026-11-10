@@ -20,7 +20,9 @@
         {"text":"When `cargo check` also fails, `rawr check` and `rawr run` show cargo's errors alone, with rustc's own text and positions. A supervised run's `failed` event carries rustc's diagnostics.","issues":[1605]},
         {"text":"A marked type boxed as a native trait object works again when the crate's root imports the trait, as with `use page::Page;`. The trait is now compared by the one path it's known by.","issues":[1607],"refs":[1578]},
         {"text":"A crate's re-exported enum variant reads by its path in marked code, as in `.align_y(iced::Center)` with iced's `pub use Alignment::Center;`.","issues":[1608]},
-        {"text":"inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone.","issues":[1584,1587,1588]}
+        {"text":"inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone.","issues":[1584,1587,1588]},
+        {"text":"A method taking `self` or `mut self` can move a part below its fields out of the receiver, as in `let items = self.content.items;`, as rustc allows. Behind `&self` or `&mut self` the move is rustc's E0507, naming the place.","issues":[1589]},
+        {"text":"A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc.","issues":[1596]}
       ]
     },
     "releases": [
@@ -3477,15 +3479,15 @@
     {"issue":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"closed","category":"No glue (D593)"},
     {"issue":1587,"title":"A marked &mut self method can't move a lent native part into a crate call by value","state":"closed","category":"No glue (D593)"},
     {"issue":1588,"title":"A Vec mixing an element marked code built with one native code gave fails exact type attestation in a crate call","state":"closed","category":"No glue (D593)"},
-    {"issue":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"open","category":"No glue (D593)"},
-    {"issue":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"open","category":"No glue (D593)"},
+    {"issue":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"closed","category":"No glue (D593)"},
+    {"issue":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"closed","category":"No glue (D593)"},
     {"issue":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed","category":"No glue (D593)"},
     {"issue":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open","category":"No glue (D593)"},
     {"issue":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open","category":"No glue (D593)"},
     {"issue":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open","category":"No glue (D593)"},
     {"issue":1595,"title":"Two modules each declaring a trait of one name are refused as a duplicate item","state":"closed","category":"Divergences from rustc","release":"0.3.175"},
-    {"issue":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open","category":"Divergences from rustc"},
+    {"issue":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"closed","category":"Divergences from rustc"},
+    {"issue":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed","category":"Divergences from rustc"},
     {"issue":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed","category":"No glue (D593)"},
     {"issue":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open","category":"No glue (D593)"},
     {"issue":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"closed","category":"No glue (D593)"},
@@ -3496,7 +3498,8 @@
     {"issue":1605,"title":"When cargo check fails too, rawr printed its own copy of the same error after cargo's","state":"open","category":"Divergences from rustc"},
     {"issue":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open","category":"No glue (D593)"},
     {"issue":1607,"title":"A marked type boxed as a native trait object is refused when the crate root imports the trait","state":"open","category":"No glue (D593)"},
-    {"issue":1608,"title":"A crate's re-exported enum variant named by its qualified path in an expression is E0425","state":"open","category":"No glue (D593)"}
+    {"issue":1608,"title":"A crate's re-exported enum variant named by its qualified path in an expression is E0425","state":"open","category":"No glue (D593)"},
+    {"issue":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4503,14 +4506,14 @@
             {"number":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"closed"},
             {"number":1587,"title":"A marked &mut self method can't move a lent native part into a crate call by value","state":"closed"},
             {"number":1588,"title":"A Vec mixing an element marked code built with one native code gave fails exact type attestation in a crate call","state":"closed"},
-            {"number":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"open"},
-            {"number":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"open"},
+            {"number":1589,"title":"Moving a field out of an owned mut self in a marked method is refused with E0507","state":"closed"},
+            {"number":1590,"title":"Three package::island generator unit tests expect output from before D867 and D868","state":"closed"},
             {"number":1591,"title":"A crate fn taking trait objects inside a slice or Option, whose result borrows them, can't be called from marked code","state":"closed"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
             {"number":1593,"title":"Marked code can't call a crate trait's methods on a trait object it holds","state":"open"},
             {"number":1594,"title":"A borrow of a local given for a crate's &'static dyn Trait field fails at run time, not at rawr check","state":"open"},
-            {"number":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"open"},
-            {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"open"},
+            {"number":1596,"title":"A crate trait's function called through a module path, as home::Shape::size(&x), is refused","state":"closed"},
+            {"number":1597,"title":"package_graph::unknown_types_under_a_relative_module_are_positioned_import_errors fails on main","state":"closed"},
             {"number":1598,"title":"Generated instance code names a recorded type through a private module (E0603)","state":"closed"},
             {"number":1599,"title":"CARGO_LOG and other diagnostics variables don't reach the cargo that rawr runs","state":"open"},
             {"number":1600,"title":"A Box<dyn Iterator> that marked code makes can't cross back to native code","state":"closed"},
@@ -4518,7 +4521,8 @@
             {"number":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"open"},
             {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"open"},
             {"number":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open"},
-            {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open"}
+            {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open"},
+            {"number":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"open"}
           ]
         }
       ]
