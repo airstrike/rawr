@@ -1,7 +1,9 @@
-//! std's `env::args()` for Rawr code: the process's own arguments, which
-//! `rawr run` sets to the program's name and the arguments after `--`, as
-//! `cargo run` does. A program its engine grants no environment
-//! (`Access::env`) has none.
+//! std's `env` functions for Rawr code. `env::args()` gives the process's
+//! own arguments, which `rawr run` sets to the program's name and the
+//! arguments after `--`, as `cargo run` does. `env::current_dir()` gives
+//! the process's working directory as Rust's `io::Result<PathBuf>`. A
+//! program its engine grants no environment (`Access::env`) has no
+//! arguments, and its `current_dir()` fails with `PermissionDenied`.
 
 use crate::{Dynamic, ImmutableString};
 
@@ -20,5 +22,15 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
                 })
                 .collect::<crate::Array>(),
         ))
+    });
+    binds.with_context("env::current_dir", |call, _| {
+        let directory = match call.access().env() {
+            true => std::env::current_dir(),
+            false => Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        };
+        Ok(match directory {
+            Ok(directory) => crate::result::ok(Dynamic::from(directory)),
+            Err(failure) => crate::result::err(super::io::made(failure)),
+        })
     });
 }

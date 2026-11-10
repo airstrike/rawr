@@ -92,6 +92,13 @@ fn a_borrowed_crate_field_derefs_without_moving_its_owner() {
     runs_as_cargo_does("deref_field", "7\n4 2\n4 Some(1)\n4\n");
 }
 
+/// The same field's deref where the program names no path to its type,
+/// as iced's screenshot reaches `Bytes` only as a field's (#1100).
+#[test]
+fn a_crate_field_of_a_type_no_path_names_derefs() {
+    runs_as_cargo_does("deref_unnamed", "7\n");
+}
+
 /// A crate type's methods are function values, as iced's
 /// `pick_list(.., Theme::ALL, Theme::to_string)` names one (#319): its
 /// own `&self`, `self` and `&mut self` methods, its `Display`'s

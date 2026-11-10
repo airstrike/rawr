@@ -10999,6 +10999,67 @@ main();
     );
 }
 
+/// A generic struct's literal takes a turbofish's types, as iced's
+/// screenshot writes `Rectangle::<u32> { .. }`: its fields are typed at
+/// them, a field of another type is rustc's E0308, and more arguments than
+/// the struct takes are its E0107.
+#[test]
+fn language_a_struct_literal_takes_a_turbofish() {
+    let structs = "#[derive(Debug)] struct Point<T> { x: T, y: T }";
+    assert_eq!(
+        printed(&format!(
+            "{structs} fn main() {{ let point = Point::<u8> {{ x: 1, y: 2 }}; \
+             let other = Point::<f32> {{ x: 1.5, y: 2.0 }}; println!(\"{{point:?}} {{other:?}}\"); }} main();"
+        )),
+        "Point { x: 1, y: 2 } Point { x: 1.5, y: 2.0 }\n"
+    );
+    let mismatched = rejected(&format!(
+        "{structs} fn main() {{ let point = Point::<u8> {{ x: 1, y: \"two\" }}; }} main();"
+    ));
+    assert!(mismatched.contains("mismatched types"), "{mismatched}");
+    let arity = rejected(&format!(
+        "{structs} fn main() {{ let point = Point::<u8, u8> {{ x: 1, y: 2 }}; }} main();"
+    ));
+    assert!(
+        arity.contains("struct takes 1 generic argument but 2 generic arguments were supplied"),
+        "{arity}"
+    );
+}
+
+/// `env::current_dir()` gives the working directory as an
+/// `io::Result<PathBuf>`, as iced's todos joins its save path onto it, and
+/// a program its engine grants no environment fails with
+/// `PermissionDenied`.
+#[test]
+fn language_std_env_current_dir_is_the_working_directory() {
+    let program = r#"
+fn main() {
+    let directory = std::env::current_dir().unwrap_or_default();
+    let path = directory.join("todos.json");
+    let shown = path.display().to_string();
+    println!("{} {}", shown.ends_with("/todos.json"), shown.len() > "/todos.json".len());
+    println!("{:?}", std::env::current_dir().map_err(|error| error.kind()).is_ok());
+}
+main();
+"#;
+    assert_eq!(
+        printed_with(program, crate::Access::all()),
+        "true true\ntrue\n"
+    );
+    assert_eq!(
+        printed_with(
+            r#"
+fn main() {
+    println!("{:?}", std::env::current_dir().map_err(|error| error.kind()));
+}
+main();
+"#,
+            crate::Access::none(),
+        ),
+        "Err(PermissionDenied)\n"
+    );
+}
+
 /// `std::fs::read` gives a file's bytes as a `Vec<u8>` in an `io::Result`,
 /// as a program reads a font file to load it, and a missing file's error
 /// kind, as rustc gives them.

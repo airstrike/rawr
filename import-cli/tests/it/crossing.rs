@@ -1608,6 +1608,19 @@ fn a_program_impl_at_a_crates_opaque_type_runs() {
     assert!(rawr.contains("zoom 3 explain #000000 rule 4"), "{rawr}");
 }
 
+/// As `zoomed_rule.rs`, with `zoomed` generic over its message (#1218):
+/// a call takes the message from its `impl Widget<Message>` argument's
+/// impl, or from a turbofish. The output is `cargo run`'s.
+#[test]
+fn a_generic_functions_parameter_is_inferred_through_an_impl_trait_arguments_bound() {
+    let (rawr, cargo) = both_printed("zoomed_generic.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("zoom 3 explain #000000 rule 4 zoom 2 explain #000000 rule 5"),
+        "{rawr}"
+    );
+}
+
 /// iced's loupe itself (#913): as `zoomed_rule.rs`, but the button that
 /// `explain` takes borrows the view, so what it gives is a value of the
 /// view's region, which the program's `Zoomed` holds and the crate reaches
