@@ -95,6 +95,23 @@ impl Graph {
 }
 
 impl Graph {
+    /// Whether `alias` names a crate the Rust import selects: a Cargo
+    /// dependency of the entry package, its own crate or its binary's.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_declares(&self, alias: &str) -> bool {
+        let entry = self.entry_package();
+        let Some(config) = entry.rust.as_ref() else {
+            return false;
+        };
+        config
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.alias.as_str() == alias)
+            || entry.rust_crate() == Some(alias)
+            || (entry.bin().is_some() && alias == super::island::BIN)
+    }
+
     /// The Rust paths the Rawr source names, found by a cheap
     /// syntactic pass (`use` items and qualified paths, with `use` bindings
     /// expanded). Only paths below a Cargo dependency alias or the package's
@@ -105,20 +122,12 @@ impl Graph {
     #[doc(hidden)]
     #[must_use]
     pub fn rust_demand_seed(&self) -> Vec<Box<str>> {
-        let Some(config) = self.entry_package().rust.as_ref() else {
+        if self.entry_package().rust.is_none() {
             return Vec::new();
-        };
+        }
         let entry = self.entry_package();
         let app = entry.rust_crate();
-        let declared = |path: &[&str]| {
-            path.len() >= 2
-                && (config
-                    .dependencies
-                    .iter()
-                    .any(|dependency| dependency.alias.as_str() == path[0])
-                    || app == Some(path[0])
-                    || (entry.bin().is_some() && path[0] == super::island::BIN))
-        };
+        let declared = |path: &[&str]| path.len() >= 2 && self.rust_declares(path[0]);
         let mut paths = Vec::new();
         for source in self.sources() {
             for path in seed::paths(source.text()) {

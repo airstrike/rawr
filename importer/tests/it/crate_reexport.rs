@@ -128,11 +128,13 @@ fn a_path_named_through_the_alias_selects_that_item() {
         "the type its signature needs is named through the alias too"
     );
 
+    // A request that demands anything extracts each crate from its own
+    // demand, so the selected crate's own path is named too.
     let project = Project::new();
     let graph = extract_demanding(
         &project,
         &[("outer", "outer-api"), ("inner", "inner-api")],
-        demand,
+        &[demand[0], &["inner", "nested", "deeper"]],
     );
     let through_alias = imported(&graph, "outer", &["inner_api", "nested", "deeper"])
         .expect("the demanded function is named through the alias");

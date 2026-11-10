@@ -73,7 +73,7 @@ mod attempt_protocol;
 const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
-const PROTOCOL_SCHEMA: u32 = 68;
+const PROTOCOL_SCHEMA: u32 = 69;
 /// The commit of the nightly this driver was built with, which it reads
 /// metadata of and names in its version.
 const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
@@ -261,11 +261,18 @@ fn execute() -> Result<ExitCode, String> {
             entry.artifact.path
         ))?);
         let Root::Selected { aliases } = entry.root;
-        let mut demand = Vec::new();
-        for path in plan.demand.iter().filter(|path| aliases.contains(&path[0])) {
-            budget.items(path.len())?;
-            demand.push(path.clone());
-        }
+        // A plan that demands anything extracts each crate from its own
+        // paths alone, and nothing of one it names nothing of.
+        let demand = if plan.demand.is_empty() {
+            None
+        } else {
+            let mut demand = Vec::new();
+            for path in plan.demand.iter().filter(|path| aliases.contains(&path[0])) {
+                budget.items(path.len())?;
+                demand.push(path.clone());
+            }
+            Some(demand)
+        };
         invocations.push(compiler::Invocation {
             inventory: plan.inventory,
             package: compiler::Package {
@@ -373,7 +380,7 @@ fn std_catalog(arguments: &[String]) -> Result<ExitCode, String> {
                 root: compiler::Root::Selected {
                     aliases: vec!["std".to_owned()],
                 },
-                demand: Vec::new(),
+                demand: None,
                 unit_key: String::new(),
                 dependencies: Vec::new(),
                 closure: Vec::new(),

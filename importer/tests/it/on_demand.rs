@@ -215,6 +215,59 @@ fn the_name_index_covers_every_public_path_and_a_glob_selects_children() {
     }
 }
 
+/// A request that demands anything extracts each selected crate from its
+/// own demand alone. With `app::Element` demanded, `leaf`, selected and never
+/// named, gives no definition, where a request that demands nothing
+/// extracts it whole. `inner`, selected and never named either, gives
+/// `Deep` alone, which `Element`'s `From<inner_api::Deep>` reaches, and none
+/// of the items no signature reaches.
+#[test]
+fn a_selected_crate_nothing_names_is_not_extracted() {
+    let selected: &[(&str, &str)] = &[
+        ("app", "demand-api"),
+        ("inner", "inner-api"),
+        ("leaf", "leaf-api"),
+    ];
+    let whole = extract_selecting(&Project::new(), selected, &[]);
+    assert_eq!(
+        extracted_crates(&whole),
+        ["demand_api", "inner_api", "leaf_api"],
+        "a request that demands nothing extracts every selected crate"
+    );
+
+    let graph = extract_selecting(&Project::new(), selected, &[&["app", "Element"]]);
+    assert_eq!(
+        extracted_crates(&graph),
+        ["demand_api", "inner_api"],
+        "the crate nothing names or reaches gives no definition"
+    );
+    assert!(
+        graph.definitions().any(|definition| {
+            definition.display_path().last() == Some("Deep")
+                && definition.id().unit().crate_name() == "inner_api"
+        }),
+        "the type only a demanded impl's signature reaches is extracted"
+    );
+    for unreached in ["Leaf", "Deeper", "deeper"] {
+        assert!(
+            !named(&graph, unreached),
+            "`{unreached}` is reached by no demanded signature"
+        );
+    }
+}
+
+/// The fixture crates that gave any definition, by crate name.
+fn extracted_crates(graph: &Graph) -> Vec<&str> {
+    let mut crates = graph
+        .definitions()
+        .map(|definition| definition.id().unit().crate_name())
+        .filter(|name| name.ends_with("_api"))
+        .collect::<Vec<_>>();
+    crates.sort_unstable();
+    crates.dedup();
+    crates
+}
+
 fn named(graph: &Graph, name: &str) -> bool {
     graph
         .definitions()
@@ -278,16 +331,17 @@ fn button() -> &'static Graph {
 }
 
 fn extract(project: &Project, demand: &[&[&str]]) -> Graph {
+    extract_selecting(project, &[("app", "demand-api")], demand)
+}
+
+/// Extract the fixture packages `selected` names by alias, for `demand`.
+fn extract_selecting(project: &Project, selected: &[(&str, &str)], demand: &[&[&str]]) -> Graph {
     rawr_import::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the test environment is sealable");
-    let fixture = fs::canonicalize(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demand-api"),
-    )
-    .expect("the immutable on-demand fixture exists");
     let mut request = Request::builder(
         &project.root,
         &project.root.join("target/rawr/cache"),
@@ -295,12 +349,20 @@ fn extract(project: &Project, demand: &[&[&str]]) -> Graph {
     )
     .expect("the limits-bound request builder seals")
     .environment(environment)
-    .policy(Policy::manifest().seal())
-    .dependency(
-        Dependency::path("app", &fixture)
-            .and_then(|dependency| dependency.package("demand-api"))
-            .expect("the fixture selection is exact"),
-    );
+    .policy(Policy::manifest().seal());
+    for (alias, package) in selected {
+        let fixture = fs::canonicalize(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(package),
+        )
+        .expect("the immutable on-demand fixture exists");
+        request = request.dependency(
+            Dependency::path(alias, &fixture)
+                .and_then(|dependency| dependency.package(package))
+                .expect("the fixture selection is exact"),
+        );
+    }
     for path in demand {
         request = request.demand(path.iter().copied());
     }

@@ -2296,9 +2296,11 @@ impl Builder {
         self
     }
 
-    /// Demand one Rust path Rawr names, root alias first. A
-    /// dependency with no demanded path is extracted whole; one with
-    /// demand is seeded from its demanded paths only: each item a path names
+    /// Demand one Rust path Rawr names, root alias first. A request
+    /// that demands nothing extracts each dependency whole; one that
+    /// demands anything extracts each from its own demanded paths alone,
+    /// and of a dependency it names nothing of only the names (the crate
+    /// is still built, as Cargo builds it). Each item a path names
     /// brings its closure (signatures, public fields, inherent and trait impl
     /// tables), by the same probe against the existing metadata. Paths
     /// through wholesale crate re-exports (`pub use other_crate;`) resolve

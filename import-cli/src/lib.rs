@@ -281,20 +281,22 @@ mod stale {
 }
 
 /// The Rust path a failed compilation missed that a new preparation may
-/// resolve: one below a wholesale crate re-export, or one below a
-/// dependency extracted from demand, when not yet demanded.
-/// A dependency nothing demands is extracted whole and has no more to give.
+/// resolve, when not yet demanded: one below a wholesale crate re-export,
+/// or one below a crate of `graph`'s import while anything is demanded,
+/// since each crate is then extracted from its own demand alone. A request
+/// that demands nothing extracts each crate whole, with no more to give.
 /// The compilation's own miss comes first, then what the same pass missed
 /// elsewhere (#662).
 #[must_use]
 pub fn new_demand<'error>(
     error: &'error rawr::package::Error,
     demand: &[Box<str>],
+    graph: &rawr::package::Graph,
 ) -> Option<&'error str> {
     error
         .rust_misses()
         .into_iter()
-        .find_map(|(path, through_alias, _)| demandable(path, through_alias, demand))
+        .find_map(|(path, through_alias, _)| demandable(path, through_alias, demand, graph))
 }
 
 /// `path`, missed below a wholesale crate re-export when `through_alias`,
@@ -303,10 +305,28 @@ pub(crate) fn demandable<'path>(
     path: &'path str,
     through_alias: bool,
     demand: &[Box<str>],
+    graph: &rawr::package::Graph,
 ) -> Option<&'path str> {
-    let root = |path: &str| path.split("::").next().map(str::to_owned);
-    let below = through_alias || demand.iter().any(|known| root(known) == root(path));
-    (below && !demand.iter().any(|known| **known == *path)).then_some(path)
+    (from_demand(path, through_alias, demand, graph)
+        && !demand.iter().any(|known| **known == *path))
+    .then_some(path)
+}
+
+/// Whether `path` lies where extraction follows demand: below a wholesale
+/// crate re-export when `through_alias`, or below a crate of `graph`'s
+/// import while `demand` names anything.
+pub(crate) fn from_demand(
+    path: &str,
+    through_alias: bool,
+    demand: &[Box<str>],
+    graph: &rawr::package::Graph,
+) -> bool {
+    through_alias
+        || !demand.is_empty()
+            && path
+                .split("::")
+                .next()
+                .is_some_and(|root| graph.rust_declares(root))
 }
 
 #[cfg(test)]

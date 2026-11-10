@@ -116,18 +116,20 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // `dyn Trait` its trait's impls for numbers and std types (#1561). Schema
 // 65 leaves out a std trait's impls for scalars. Schema 67 writes each id
 // of a body once, in its leading `ids`, and names it by index elsewhere.
-// `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
-// number and move with it.
-const PROTOCOL_SCHEMA: u32 = 68;
+// Schema 69 extracts only the names of a crate a plan that demands anything
+// names nothing of. `driver.rs`, `cargo/toolchain.rs` and
+// `extract/protocol.rs` hold the same number and move with it.
+const PROTOCOL_SCHEMA: u32 = 69;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
     pub(super) package: Package,
     pub(super) root: Root,
-    /// Paths, root alias first, that Rawr names in this unit. Empty seeds
-    /// extraction from every public path; otherwise only these seed it
-    /// (demand also covers crate re-exports).
-    pub(super) demand: Vec<Vec<String>>,
+    /// Paths, root alias first, that Rawr names in this unit (crate
+    /// re-exports too), which alone seed its extraction: none when Rawr
+    /// names nothing of it, so only its names are extracted. `None` when the
+    /// request demands nothing, so every public path seeds it.
+    pub(super) demand: Option<Vec<Vec<String>>>,
     pub(super) unit_key: String,
     pub(super) dependencies: Vec<String>,
     /// The artifacts of every crate the unit reaches through its
@@ -149,6 +151,15 @@ pub(super) struct Invocation {
     pub(super) compiler_commit: String,
     pub(super) protocol_directory: PathBuf,
     pub(super) artifact: Artifact,
+}
+
+impl Invocation {
+    /// What this unit's extraction starts from.
+    fn seed(&self) -> engine::Seed<'_> {
+        self.demand
+            .as_deref()
+            .map_or(engine::Seed::Whole, engine::Seed::Paths)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -1200,7 +1211,7 @@ fn extract<'tcx>(
     // a first run's demand does, cannot replay: neither read nor merge it.
     let outgrown = tables
         .zip(key.as_deref())
-        .and_then(|(tables, key)| tables.outgrown(key, session, &invocation.demand, used));
+        .and_then(|(tables, key)| tables.outgrown(key, session, invocation.seed().paths(), used));
     let served = match &outgrown {
         Some(_) => None,
         None => tables
@@ -1221,7 +1232,7 @@ fn extract<'tcx>(
             aliases.clone(),
             session.to_owned(),
         )
-        .run(&invocation.demand)
+        .run(invocation.seed())
         {
             let body = extracted.body()?;
             let (sysroot, external) = units::registered(
@@ -1251,7 +1262,7 @@ fn extract<'tcx>(
             session.to_owned(),
         )
         .own_segment(crate_segment(tcx, selected))
-        .run(&invocation.demand)
+        .run(invocation.seed())
         .map_err(units::fault)?
     };
     if let (Some(tables), Some(key)) = (tables, &key) {
@@ -1261,13 +1272,16 @@ fn extract<'tcx>(
         if let Some(outgrown) = &outgrown {
             kept.large = outgrown.large();
         }
-        if invocation.demand.is_empty() {
+        let seed = invocation.seed();
+        if let engine::Seed::Whole = seed {
             memo.whole = true;
-        } else if !kept.whole && !kept.large {
+        } else if !seed.paths().is_empty() && !kept.whole && !kept.large {
             // The whole crate, so a later program's other items replay
             // with no nightly (#281): iced's whole walk is about 36,000
             // units. A walk that fails is dropped, and marked so that it is
-            // not tried again: its crate's table grows with each demand.
+            // not tried again: its crate's table grows with each demand. A
+            // crate the program names nothing of is not walked: that walk is
+            // the work its seed saves.
             let mut whole = engine::Memo::default();
             whole.absorb(&kept);
             whole.absorb(&memo);
@@ -1283,7 +1297,7 @@ fn extract<'tcx>(
                     session.to_owned(),
                 )
                 .own_segment(crate_segment(tcx, selected))
-                .run(&[])
+                .run(engine::Seed::Whole)
                 .is_ok()
             };
             if complete {
@@ -1294,7 +1308,7 @@ fn extract<'tcx>(
             }
         }
         kept.absorb(&memo);
-        let made = table::Served::new(session, &invocation.demand, &kept);
+        let made = table::Served::new(session, seed.paths(), &kept);
         let served = if read {
             served.and_then(|served| made.merged(&served))
         } else {
@@ -6202,7 +6216,7 @@ mod tests {
             root: Root::Selected {
                 aliases: aliases.iter().map(|alias| (*alias).to_owned()).collect(),
             },
-            demand: Vec::new(),
+            demand: None,
             unit_key: "unit".to_owned(),
             dependencies: Vec::new(),
             closure: Vec::new(),
