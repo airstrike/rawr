@@ -1352,6 +1352,19 @@ pub(super) fn kind_code(ty: Ty) -> INT {
     }
 }
 
+/// rustc's E0600 for `-` of the unsigned integer type `ty` at
+/// `expression`, the minus and its operand: unsigned integers have no
+/// `Neg` impl.
+pub(super) fn unsigned_negation(ty: Int, expression: Span) -> Error {
+    Error::StdPath {
+        code: "E0600",
+        message: format!("cannot apply unary operator `-` to type `{}`", ty.name()).into(),
+        label: Some("cannot apply unary operator `-`".into()),
+        note: Some("unsigned values cannot be negated".into()),
+        reference: expression,
+    }
+}
+
 /// An operator a crate type's impls of its trait don't cover.
 struct Operation<'a> {
     /// The operator, `neg` for unary minus.

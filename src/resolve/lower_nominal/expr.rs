@@ -511,9 +511,17 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(source, ty, expression));
         }
         // `-x` on an unsigned integer is E0600.
-        if !allowed_type(&allowed, &ty)
-            || operator == "-" && matches!(ty, Ty::Int(kind) if !kind.signed())
+        if operator == "-"
+            && let Ty::Int(kind) = ty
+            && !kind.signed()
         {
+            let operand_span = match &operand.lvalue {
+                Some(Lvalue::Binding { binding, .. }) => self.name_span(operand.span, binding),
+                _ => operand.span,
+            };
+            return Err(unsigned_negation(kind, span(start, operand_span.end())));
+        }
+        if !allowed_type(&allowed, &ty) {
             return Err(Error::TypeMismatch {
                 expected: allowed[0].name(&self.models),
                 actual: ty.name(&self.models),

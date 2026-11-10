@@ -3,13 +3,13 @@
 
 use super::ty::Int;
 use super::wide::Wide;
-use super::{span, text_end, Parser};
+use super::{span, text_end, unsigned_negation, Parser};
 use crate::resolve::Error;
 use crate::Span;
 
 /// The lint's error for the literal `written`, whose number is `value`, of
 /// the type `kind`, at `at`.
-pub(super) fn error(kind: Int, value: Wide, written: &str, at: Span) -> Error {
+fn error(kind: Int, value: Wide, written: &str, at: Span) -> Error {
     let ty = kind.name();
     let radix = matches!(
         written.trim_start_matches('-').get(..2),
@@ -108,6 +108,11 @@ impl<'a> Parser<'a> {
             })
             .unwrap_or_else(|| value.to_string());
         let literal = span(at.start(), text_end(at.start(), &written));
+        // `-1` of an unsigned type is a negation the type has no impl of
+        // before it is a literal out of range.
+        if written.starts_with('-') && !kind.signed() {
+            return unsigned_negation(kind, literal);
+        }
         error(kind, value, &written, literal)
     }
 }
