@@ -20,7 +20,9 @@
       {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
       {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]},
       {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]},
-      {"text":"`rawr check` classifies a crate's API without re-reading a trait's implementations for every implementation and function that bounds one of its associated types, and finds a type's definition through an index instead of hashing every definition. In inboard's post-bump check this work was about 40% of rawr-import's single-threaded time.","issues":[1616],"refs":[1604]}
+      {"text":"`rawr check` classifies a crate's API without re-reading a trait's implementations for every implementation and function that bounds one of its associated types, and finds a type's definition through an index instead of hashing every definition. In inboard's post-bump check this work was about 40% of rawr-import's single-threaded time.","issues":[1616],"refs":[1604]},
+      {"text":"A use of an owned `self`'s field, or of `self`, after a field moved out of it is rustc's E0382. A use after only part of a value moved says \"partially moved\", as rustc does.","issues":[1609]},
+      {"text":"A crate trait's methods work on a std number, `bool` or `char` with the trait in scope, as `count.to_u32()` with num-traits' `NumCast`, and through a qualified path, as `<u64 as NumCast>::from(n)`.","issues":[1614,1613]}
     ]
   },
   "releases": [
