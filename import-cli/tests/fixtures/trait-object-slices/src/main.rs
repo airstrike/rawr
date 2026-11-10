@@ -27,6 +27,18 @@ fn main() {
         "{}",
         fields::one(&format_args!("one {}", n) as &dyn fields::Value)
     );
+    // And given uncoerced, which rustc coerces at the call, and a slice
+    // lent to a call at a lifetime of its own that its result doesn't
+    // keep (#1592).
+    println!("{}", fields::one(&format_args!("uncoerced {}", n)));
+    println!(
+        "{}",
+        fields.count(&[
+            Some(&n as &dyn fields::Value),
+            None,
+            Some(&point as &dyn fields::Value)
+        ])
+    );
     (|set: fields::ValueSet| println!("{}", fields::dispatch("event", &set)))(fields::values!(
         fields,
         [format_args!("n {}", n), n, format_args!("x {n} y")]

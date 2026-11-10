@@ -16698,6 +16698,21 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&fmt::Arguments`, as `&format_args!(..)` fills a `&dyn Trait` input
+    // whose trait the crate implements for `fmt::Arguments` (#1592): made
+    // in a `let` of its own, which rustc keeps to the statement's end.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: borrowed,
+    } = substituted(ty, signature, substitutions)?
+        && *borrowed == convert::Type::Builtin(convert::Builtin::Arguments)
+    {
+        return writeln!(
+            output,
+            "    let argument_{local}_text = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local}_arguments = ::core::format_args!(\"{{}}\", argument_{local}_text);\n    let argument_{local} = &argument_{local}_arguments;"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
     // each value moved out of its slot into one slice, and back once nothing
     // borrows it (`SliceLent`). An output that may borrow it keeps it

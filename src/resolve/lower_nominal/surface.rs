@@ -181,6 +181,9 @@ pub(super) fn imported_surface_type(
         Ty::Unit => Type::Unit,
         Ty::Bool => Type::Builtin(Builtin::Bool),
         Ty::Char => Type::Builtin(Builtin::Char),
+        // `format_args!`, as `&format_args!(..)` fills a `&dyn Trait` input
+        // read as `&impl Trait` (#1592).
+        Ty::Arguments => Type::Builtin(Builtin::Arguments),
         // An unbound literal is `i32` or `f64`, as in Rust.
         Ty::Float(Float::F32) => Type::Builtin(Builtin::F32),
         Ty::Float(_) => Type::Builtin(Builtin::F64),
@@ -888,6 +891,7 @@ pub(super) fn instance_surface_type(
         Ty::Unit => Type::Unit,
         Ty::Bool => Type::Builtin(Builtin::Bool),
         Ty::Char => Type::Builtin(Builtin::Char),
+        Ty::Arguments => Type::Builtin(Builtin::Arguments),
         Ty::Float(Float::F32) => Type::Builtin(Builtin::F32),
         Ty::Float(_) => Type::Builtin(Builtin::F64),
         Ty::Int(kind) => Type::Builtin(match kind {

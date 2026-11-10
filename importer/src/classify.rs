@@ -11969,7 +11969,7 @@ fn lends_late_borrows(ty: &model::Type) -> bool {
         model::Argument::Const(_) => true,
     };
     match ty {
-        model::Type::Reference { ty, .. } => !names_late_lifetime(ty),
+        model::Type::Reference { ty, .. } => !names_late_lifetime(ty) || lends_late_objects(ty),
         model::Type::Definition { arguments, .. } => arguments.iter().all(argument),
         model::Type::Tuple(types) => types.iter().all(lends_late_borrows),
         model::Type::Slice(ty) => lends_late_borrows(ty),
@@ -11978,6 +11978,28 @@ fn lends_late_borrows(ty: &model::Type) -> bool {
         }
         ty => !names_late_lifetime(ty),
     }
+}
+
+/// Whether `ty` is a slice of objects the call lends at its own lifetime,
+/// as tracing-core's `&'v [Option<&'v (dyn Value + 'v)>]` is: each a
+/// shared `&dyn Trait`, alone or as an `Option`'s one argument, which
+/// native code makes for the call (D877, `lent_object`) and whose borrow
+/// ends with it.
+fn lends_late_objects(ty: &model::Type) -> bool {
+    fn object(ty: &model::Type) -> bool {
+        match ty {
+            model::Type::Reference {
+                mutability: model::Mutability::Shared,
+                ty,
+                ..
+            } => matches!(**ty, model::Type::TraitObject { .. }),
+            model::Type::Definition { arguments, .. } => {
+                matches!(&**arguments, [model::Argument::Type(inner)] if object(inner))
+            }
+            _ => false,
+        }
+    }
+    matches!(ty, model::Type::Slice(element) if object(element))
 }
 
 /// `signature`, of a function that borrows no receiver, with each of its

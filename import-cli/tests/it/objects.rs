@@ -9,7 +9,12 @@
 //! them borrows, as tracing-core's `value_set_all` gives its `ValueSet`,
 //! with `format_args!` among them, made in the frame that lends them, and
 //! in a block an older edition's macro makes, whose frame is its caller
-//! statement's (#1561).
+//! statement's (#1561). Marked code calls an object's methods, of one it
+//! holds, one native code boxed and one it coerced (#1593), and gives
+//! `&format_args!(..)` where a call takes `&dyn Value`, as rustc coerces
+//! it, and a slice of objects to a call that doesn't keep them (#1592).
+//! An `Rc<dyn Trait>` and an `Arc<dyn Trait>` the program makes cross as
+//! native code's own (#1304).
 //! Build the driver first, as for `islands`.
 
 use std::fs;
@@ -102,6 +107,8 @@ fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
          event a=5 b=- c=(2, 3)\n\
          event a=true b=- c=-\n\
          one 5\n\
+         uncoerced 5\n\
+         5,-,(2, 3)\n\
          event a=n 5 b=5 c=x 5 y\n"
     );
 }

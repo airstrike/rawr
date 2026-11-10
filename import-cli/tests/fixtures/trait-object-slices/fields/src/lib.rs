@@ -53,6 +53,16 @@ impl FieldSet {
             fields: self,
         }
     }
+
+    /// What `values` record, one for each field, which the result
+    /// doesn't keep, as a span's `record_all` reads them.
+    pub fn count<'v>(&self, values: &'v [Option<&'v (dyn Value + 'v)>]) -> String {
+        values
+            .iter()
+            .map(|value| value.map_or_else(|| "-".to_owned(), Value::record))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 pub struct ValueSet<'a> {
