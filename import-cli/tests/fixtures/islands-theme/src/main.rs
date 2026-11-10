@@ -261,6 +261,15 @@ fn main() {
     println!("panel {} {:?}", panel.draw(&theme), sidebar::typed());
     let mixed = sidebar::mixed(ui::Widget::boxed(ui::label("given")));
     println!("mixed {}", mixed.draw(&theme));
+    // The crate calls the marked style closures with the `&Theme` it lends,
+    // and the opaque `impl Fn` styles native functions give (#766, #1583).
+    let navigation = sidebar::navigation();
+    println!(
+        "navigation {} {:?}",
+        navigation.draw(&theme),
+        navigation.message()
+    );
+    println!("narrowed {:?}", sidebar::narrowed(7));
     println!("clones {}", theme::clones());
     // Run on, as a running program does, till told to stop: each tick
     // calls the marked generic through the native helper.

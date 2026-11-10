@@ -2610,7 +2610,7 @@ fn identity(value: &Dynamic) -> Option<[u64; 3]> {
     let handle = value.read_lock::<NativeHandle>()?;
     let mut epoch = [0; 8];
     epoch.copy_from_slice(&handle.epoch[..8]);
-    Some([u64::from_le_bytes(epoch), u64::from(handle.slot), handle.generation])
+    Some([u64::from_le_bytes(epoch), <u64 as std::convert::From<u32>>::from(handle.slot), handle.generation])
 }
 
 /// The native value `value` holds and its type's witness, moved out of
@@ -15882,6 +15882,7 @@ fn render_slot(
     let mut native = false;
     let mut lends = Vec::new();
     let mut places = Vec::new();
+    let mut held = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
         let name = format!("input_{position}");
         match input {
@@ -15895,6 +15896,15 @@ fn render_slot(
                 restores.push_str(&format!(
                     "\n        {name}.0.restore(std::mem::take(&mut values[{position}]));"
                 ));
+            }
+            // A mirror native code lends, as a crate lends a style closure
+            // its `&Theme`, lent as a marked function's `&` argument is
+            // (#1583); its texts are pinned with the slot's constants.
+            convert::Type::Borrowed { mutable: false, ty } if mirrored(ty) => {
+                let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
+                parameters.push(format!("{name}: &{lifetime}{rust}"));
+                values.push(format!("lent_{position}"));
+                held.push(position);
             }
             convert::Type::Borrowed { mutable: false, ty }
                 if matches!(**ty, convert::Type::Script { .. }) =>
@@ -16060,10 +16070,8 @@ fn render_slot(
                 );
                 format!("&PINS_{local}")
             });
-            let (items, body) = lent_around(
-                &lends,
-                format!(
-                    "let mut values = {values};
+            let invoked = format!(
+                "let mut values = {values};
         let mut region = __rawr_internal::scope::Region::anchored({pins});
         let value = __rawr_internal::scope::open_anchored(&mut region, || SLOT_{local}.invoke(&mut values, &[{mutable}]));{restores}
         let scoped = value
@@ -16076,8 +16084,8 @@ fn render_slot(
         static SITE: __rawr_internal::scope::Site = __rawr_internal::scope::Site::new();
         region.keep(&SITE);
         output"
-                ),
             );
+            let (items, body) = lent_around(&lends, held_around(&held, invoked));
             (
                 "<'x>",
                 format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
@@ -16140,7 +16148,7 @@ fn render_slot(
         let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
         value"
             );
-            let (items, invoked) = lent_around(&lends, invoked);
+            let (items, invoked) = lent_around(&lends, held_around(&held, invoked));
             (
                 "",
                 rust,
@@ -17758,6 +17766,7 @@ fn render_callable_closure(
     let mut places = Vec::new();
     let mut lent = Vec::new();
     let mut lends = Vec::new();
+    let mut held = Vec::new();
     let mut restores = String::new();
     // Whether an input takes its parameter's witness, which a lent one
     // doesn't.
@@ -17777,6 +17786,12 @@ fn render_callable_closure(
                 restores.push_str(&format!(
                     "\n            input_{position}.0.restore(std::mem::take(&mut values[{position}]));"
                 ));
+            } else if mirrored(ty) {
+                // A mirror, lent as a marked function's `&` argument is
+                // (#1583).
+                parameters.push(format!("input_{position}: &{rust}"));
+                values.push(format!("lent_{position}"));
+                held.push(position);
             } else {
                 parameters.push(format!("input_{position}: &{rust}"));
                 values.push(format!("input_{position}.0.lend()"));
@@ -17939,7 +17954,7 @@ fn render_callable_closure(
     } else {
         body
     };
-    let body = place::around(&places, "witnesses.clone()", body);
+    let body = place::around(&places, "witnesses.clone()", held_around(&held, body));
     let (items, body) = lent_around(&lends, body);
     let body = format!("{items}{body}");
     // A regional output is at the lifetime of the pins, which rustc infers
@@ -21144,6 +21159,22 @@ fn carries_lifetime(ty: &convert::Type) -> bool {
                 if **ty == convert::Type::Builtin(convert::Builtin::Str))
                 && carries_lifetime(argument)
         }),
+        // An opaque `impl Fn` is held as its box (`boxed_callable_type`),
+        // whose borrowed inputs are higher-ranked, as `dyn Fn(&Theme,
+        // Status) -> Style` borrows at each call: it borrows only what a
+        // type it names by value borrows (#766).
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if let Some((inputs, output)) = OPAQUE_CALLABLES
+            .with_borrow(|callables| callables.get(definition.as_bytes()).cloned()) =>
+        {
+            let at = |position: &u32| arguments.get(usize::try_from(*position).ok()?);
+            inputs.iter().filter_map(at).any(|input| match input {
+                convert::Type::Borrowed { ty, .. } => carries_lifetime(ty),
+                input => carries_lifetime(input),
+            }) || at(&output).is_some_and(carries_lifetime)
+        }
         convert::Type::Nominal {
             definition,
             arguments,
@@ -21567,6 +21598,10 @@ impl{bounds} crate::__RawrHeld for {name}{generics} {{
     fn into_proxy(self) -> __rawr_internal::crossing::Proxy {{
         self.0
     }}
+
+    fn lent<R>(&self, body: impl FnOnce(__rawr_internal::Dynamic) -> R) -> R {{
+        body(self.0.lend())
+    }}
 }}
 "
             )
@@ -21589,6 +21624,9 @@ const HELD_SOURCE: &str =
 pub(crate) trait __RawrHeld: Sized {
     fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self;
     fn into_proxy(self) -> __rawr_internal::crossing::Proxy;
+    /// `body` of the value lent shared to a program function, as a crate
+    /// calls a style closure with its `&Theme` (#1583).
+    fn lent<R>(&self, body: impl FnOnce(__rawr_internal::Dynamic) -> R) -> R;
 }
 ";
 
@@ -21620,6 +21658,13 @@ impl crate::__RawrHeld for {name} {{
             __rawr_internal::island::mirror_in(&bytes, &mut given)
                 .unwrap_or_else(|error| panic!(\"rawr: a `{path}` can't cross from native code: {{error}}\")),
         )
+    }}
+
+    fn lent<R>(&self, body: impl FnOnce(__rawr_internal::Dynamic) -> R) -> R {{
+        ::{krate}::__rawr_island::lent_mirror(self, |bytes, given, lent| {{
+            __rawr_internal::island::mirror_lent(bytes, given, lent, body)
+        }})
+        .unwrap_or_else(|error| panic!(\"rawr: a `{path}` can't be lent from native code: {{error}}\"))
     }}
 }}
 "
@@ -21856,6 +21901,7 @@ fn render_impl_function(
     let mut lends = Vec::new();
     let mut places = Vec::new();
     let mut slices = Vec::new();
+    let mut held = Vec::new();
     match function.receiver() {
         ImplReceiver::None => {}
         ImplReceiver::Shared => {
@@ -21915,6 +21961,11 @@ fn render_impl_function(
                 restores.push_str(&format!(
                     "\n        {name}.0.restore(std::mem::take(&mut values[{at}]));"
                 ));
+            }
+            // A mirror, lent as a marked function's `&` argument is (#1583).
+            convert::Type::Borrowed { mutable: false, ty } if mirrored(ty) => {
+                values.push(format!("lent_{position}"));
+                held.push(position);
             }
             convert::Type::Borrowed { mutable: false, ty }
                 if matches!(**ty, convert::Type::Script { .. }) =>
@@ -22116,7 +22167,7 @@ fn render_impl_function(
             made = frame.made(),
             keys = frame.keys(),
         );
-        let (items, call) = lent_around(&lends, call);
+        let (items, call) = lent_around(&lends, held_around(&held, call));
         let call = place::around(&places, "member.witnesses()", call);
         let call = place::around_slices(&slices, "member.witnesses()", call);
         return Ok(format!(
@@ -22184,7 +22235,7 @@ fn render_impl_function(
         }
     };
     // Each borrowed native value is lent around the call, innermost last.
-    let (items, wrapped) = lent_around(&lends, call);
+    let (items, wrapped) = lent_around(&lends, held_around(&held, call));
     call = wrapped;
     call = place::around(&places, "member.witnesses()", call);
     call = place::around_slices(&slices, "member.witnesses()", call);
@@ -22262,6 +22313,19 @@ impl LentInput {
             "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {rust:?}, {writer}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)){reads})"
         )
     }
+}
+
+/// The call `call` with the mirror native code lends at each of `held`,
+/// `input_{position}`, lent to it as `lent_{position}` (`__RawrHeld::lent`,
+/// #1583), innermost last.
+fn held_around(held: &[usize], call: String) -> String {
+    held.iter().rev().fold(call, |call, position| {
+        format!(
+            "crate::__RawrHeld::lent(input_{position}, |lent_{position}| {{
+        {call}
+        }})"
+        )
+    })
 }
 
 /// The call `call` with each borrowed native value of `lends` lent around

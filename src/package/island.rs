@@ -3188,14 +3188,21 @@ impl<'a> Generator<'a> {
     fn mirror_impl(&self, crossed: &Crossed, path: &str) -> String {
         let island = format!("crate::{MODULE}");
         let Crossed { generics, ty, .. } = crossed;
-        let give = if self.holding.contains(path) {
-            format!("{island}::Parts::give(self, out);")
+        let (give, lend) = if self.holding.contains(path) {
+            (
+                format!("{island}::Parts::give(self, out);"),
+                "call.lent(self);",
+            )
         } else {
-            format!("{island}::Put::put(&self, out);")
+            (
+                format!("{island}::Put::put(&self, out);"),
+                "call.argument(self);",
+            )
         };
         format!(
             "impl{generics} {island}::Mirror for {ty} {{\n    fn give(self, out: &mut {island}::Out) {{\n        \
-             {give}\n    }}\n}}\n"
+             {give}\n    }}\n    \
+             fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n        {lend}\n    }}\n}}\n"
         )
     }
 }
@@ -6357,6 +6364,10 @@ pub mod __rawr_island {
     /// parts moved, and comes back by [`Take`].
     pub trait Mirror: Take {
         fn give(self, out: &mut Out);
+        /// A borrow of the value lent to the interpreter as a marked
+        /// function's `&` argument is (#1583): its native parts and the
+        /// value whole where they are, its other fields by the wire format.
+        fn lend<'c>(&'c self, call: &mut Call<'c>);
     }
 
     /// The mirror of the program value the runner wrote as `bytes`, its
@@ -6389,6 +6400,25 @@ pub mod __rawr_island {
         let mut out = Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None);
         value.give(&mut out);
         (out.0, out.1)
+    }
+
+    /// `visit` of a mirror native code lends a program function by `&`,
+    /// as a crate calls a style closure with its `&Theme` (#1583): the
+    /// value written as a marked function's `&` argument is
+    /// ([`Mirror::lend`]), the native values it gives, and what it lends,
+    /// for the runner to make the program value of while they are lent
+    /// (`rawr::island::mirror_lent`).
+    pub fn lent_mirror<T: Mirror, R>(
+        value: &T,
+        visit: impl FnOnce(
+            &[u8],
+            &mut [::std::option::Option<Given>],
+            &[(::std::any::TypeId, &'static str, *mut (), ::std::option::Option<Accessor>, Accessor)],
+        ) -> R,
+    ) -> R {
+        let mut call = Call::new("", false);
+        value.lend(&mut call);
+        visit(&call.values.0, &mut call.values.1, &call.lent)
     }
 
     impl Put for () {

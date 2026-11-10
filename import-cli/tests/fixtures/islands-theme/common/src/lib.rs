@@ -58,3 +58,37 @@ pub mod function {
         }
     }
 }
+
+/// A numeric conversion named as `From`'s, as num-traits' `NumCast` is:
+/// with it in scope, `u64::from(..)` is ambiguous, so a runner names
+/// `From` for itself.
+pub mod cast {
+    pub trait NumCast: Sized {
+        fn from(value: u32) -> Option<Self>;
+        fn to_u32(&self) -> Option<u32>;
+    }
+
+    impl NumCast for u64 {
+        fn from(value: u32) -> Option<Self> {
+            Some(value.into())
+        }
+
+        fn to_u32(&self) -> Option<u32> {
+            u32::try_from(*self).ok()
+        }
+    }
+
+    /// A count of the crate's own, which the trait converts too.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Count(pub u64);
+
+    impl NumCast for Count {
+        fn from(value: u32) -> Option<Self> {
+            Some(Self(value.into()))
+        }
+
+        fn to_u32(&self) -> Option<u32> {
+            self.0.to_u32()
+        }
+    }
+}
