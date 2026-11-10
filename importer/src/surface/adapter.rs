@@ -1161,6 +1161,11 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
         },
         convert::Type::Inferred => convert::Type::Inferred,
         convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
+        convert::Type::Object(object) => convert::Type::Object(Box::new(
+            object
+                .try_map(|ty| defaulted(ty, parameters).ok_or(()))
+                .ok()?,
+        )),
     })
 }
 
@@ -1298,6 +1303,9 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
             holder: *holder,
         },
         convert::Type::Parameter(index) => convert::Type::Parameter(*index),
+        convert::Type::Object(object) => {
+            convert::Type::Object(Box::new(object.try_map(clone_type)?))
+        }
     })
 }
 
@@ -1447,6 +1455,14 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
         | convert::Type::Never
         | convert::Type::Builtin(_)
         | convert::Type::Parameter(_) => Some(0),
+        convert::Type::Object(object) => object.types().try_fold(
+            mem::size_of::<crate::classify::representability::object::Object>(),
+            |bytes, ty| {
+                bytes
+                    .checked_add(mem::size_of::<convert::Type>())?
+                    .checked_add(type_dynamic_bytes(ty)?)
+            },
+        ),
     }
 }
 

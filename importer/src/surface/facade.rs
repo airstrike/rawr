@@ -971,6 +971,14 @@ pub enum Type {
     /// A script closure a generic item's `F: FnOnce` parameter takes, of
     /// one input (a tuple of several, or unit) and one output (D513.7 b).
     Callable { input: Box<Type>, output: Box<Type> },
+    /// A crate's trait object behind a pointer, of the trait `identity` at
+    /// its type `arguments` (D872).
+    Object {
+        pointer: crate::classify::representability::object::Pointer,
+        #[serde(with = "digest")]
+        identity: [u8; 32],
+        arguments: Box<[Type]>,
+    },
     /// An input `&T` or `&mut T` the call leases from the value's slot
     /// (D558.5).
     Reference { mutable: bool, target: Box<Type> },
@@ -1041,7 +1049,10 @@ impl Type {
             | Self::Range(element) => {
                 element.opaque(opaque, found);
             }
-            Self::Tuple(members) => {
+            Self::Tuple(members)
+            | Self::Object {
+                arguments: members, ..
+            } => {
                 for member in members.iter() {
                     member.opaque(opaque, found);
                 }
@@ -1080,7 +1091,11 @@ impl Type {
             | Self::Reference {
                 target: element, ..
             } => element.named(named),
-            Self::Tuple(members) => {
+            // A trait object's trait is named by its trait header.
+            Self::Tuple(members)
+            | Self::Object {
+                arguments: members, ..
+            } => {
                 for member in members.iter() {
                     member.named(named);
                 }
@@ -1115,7 +1130,10 @@ impl Type {
             | Self::Reference {
                 target: element, ..
             } => element.declared(declared),
-            Self::Tuple(members) => members.iter().all(|ty| ty.declared(declared)),
+            Self::Tuple(members)
+            | Self::Object {
+                arguments: members, ..
+            } => members.iter().all(|ty| ty.declared(declared)),
             _ => true,
         }
     }
@@ -4671,6 +4689,20 @@ fn ty(
     use representability::convert::{Builtin, Type as Source};
     Ok(match source {
         Source::Inferred => return Err(Unwritten::Type),
+        Source::Object(object) => {
+            let mut arguments = Vec::new();
+            arguments
+                .try_reserve_exact(object.arguments().len())
+                .map_err(|_| super::Error::Allocation)?;
+            for argument in object.arguments() {
+                arguments.push(ty(argument, parameters)?);
+            }
+            Type::Object {
+                pointer: object.pointer(),
+                identity: *object.principal().as_bytes(),
+                arguments: arguments.into_boxed_slice(),
+            }
+        }
         Source::Unit => Type::Unit,
         Source::Never => Type::Never,
         Source::Builtin(Builtin::Bool) => Type::Bool,

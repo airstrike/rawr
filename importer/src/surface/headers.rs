@@ -618,6 +618,11 @@ fn parameter_indices(ty: &convert::Type, found: &mut BTreeSet<u32>) {
             parameter_indices(ok, found);
             parameter_indices(err, found);
         }
+        convert::Type::Object(object) => {
+            for ty in object.types() {
+                parameter_indices(ty, found);
+            }
+        }
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)

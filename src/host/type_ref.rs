@@ -186,6 +186,15 @@ pub(crate) enum Shape {
         identity: host::type_def::import::Identity,
         arguments: Box<[Type]>,
     },
+    /// A crate's trait object behind a pointer, as tracing's `Identifier`
+    /// holds a `&'static dyn Callsite` (D872): of the trait `identity` at
+    /// its type `arguments`.
+    #[cfg(feature = "rust-import")]
+    Object {
+        pointer: rawr_import::classify::representability::object::Pointer,
+        identity: [u8; 32],
+        arguments: Box<[Type]>,
+    },
     External {
         export: Box<host::type_def::Export>,
         arguments: Box<[Type]>,
@@ -238,6 +247,9 @@ impl Type {
             Shape::Tuple(types)
             | Shape::Keyed(_, types)
             | Shape::Imported {
+                arguments: types, ..
+            }
+            | Shape::Object {
                 arguments: types, ..
             } => slice(types),
             Shape::Callable { input, output } | Shape::ImportedFunctionItem { input, output } => {
@@ -310,6 +322,15 @@ impl Type {
             Shape::Builtin(builtin) => Shape::Builtin(*builtin),
             Shape::Registered { path, arguments } => Shape::Registered {
                 path: path.try_clone()?,
+                arguments: slice(arguments)?,
+            },
+            Shape::Object {
+                pointer,
+                identity,
+                arguments,
+            } => Shape::Object {
+                pointer: *pointer,
+                identity: *identity,
                 arguments: slice(arguments)?,
             },
             Shape::Imported {
@@ -532,6 +553,21 @@ impl Type {
         })
     }
 
+    /// Construct a crate's trait object of the trait `identity` at
+    /// `arguments`, behind `pointer` (D872).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn object(
+        pointer: rawr_import::classify::representability::object::Pointer,
+        identity: [u8; 32],
+        arguments: Box<[Self]>,
+    ) -> Self {
+        Self(Shape::Object {
+            pointer,
+            identity,
+            arguments,
+        })
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn imported_boxed(
         identity: host::type_def::import::Identity,
@@ -628,6 +664,16 @@ impl Type {
                 }))
             }
             Shape::Builtin(builtin) => Ok(Self::builtin(*builtin)),
+            #[cfg(feature = "rust-import")]
+            Shape::Object {
+                pointer,
+                identity,
+                arguments,
+            } => Ok(Self::object(
+                *pointer,
+                *identity,
+                resolve_types(arguments, root, declared, parameters, item)?,
+            )),
             Shape::Parameter(name) => {
                 if parameters
                     .binary_search_by(|(candidate, _)| candidate.cmp(name))
@@ -747,6 +793,11 @@ impl Type {
             Shape::ImportedFunctionItem { input, output } => {
                 input.resolve_imported(root, declared, parameters, item, allocation)?;
                 output.resolve_imported(root, declared, parameters, item, allocation)?;
+            }
+            Shape::Object { arguments, .. } => {
+                for argument in arguments {
+                    argument.resolve_imported(root, declared, parameters, item, allocation)?;
+                }
             }
             Shape::Parameter(name) => {
                 if parameters
@@ -906,7 +957,7 @@ impl Type {
                 }
             }
             #[cfg(feature = "rust-import")]
-            Shape::Imported { arguments, .. } => {
+            Shape::Imported { arguments, .. } | Shape::Object { arguments, .. } => {
                 for argument in arguments {
                     argument.collect_exports(exports);
                 }
@@ -1073,6 +1124,21 @@ impl crate::digest::Write for Type {
                 writer.tag(0x2351);
                 writer.bytes(identity.as_bytes());
                 writer.tag(0x2352);
+                write_slice(writer, arguments)?;
+            }
+            #[cfg(feature = "rust-import")]
+            Shape::Object {
+                pointer,
+                identity,
+                arguments,
+            } => {
+                use rawr_import::classify::representability::object::Pointer;
+                writer.tag(match pointer {
+                    Pointer::Lasting => 0x2361,
+                    Pointer::Shared => 0x2362,
+                    Pointer::Boxed => 0x2363,
+                });
+                writer.bytes(identity);
                 write_slice(writer, arguments)?;
             }
             Shape::External { export, arguments } => {

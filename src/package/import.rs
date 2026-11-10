@@ -682,6 +682,7 @@ fn crossing_impls(
                 paths(input, found);
                 paths(output, found);
             }
+            Type::Object(object) => object.types().for_each(|ty| paths(ty, found)),
             Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) | Type::Inferred => {}
         }
     }
@@ -2057,6 +2058,12 @@ fn facade_named(facade: &Facade<'_>) -> std::collections::BTreeSet<[u8; 32]> {
                     walk(member, named);
                 }
             }
+            // Its trait is named by the facade's trait headers.
+            Type::Object(object) => {
+                for ty in object.types() {
+                    walk(ty, named);
+                }
+            }
             Type::Inferred | Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => {}
         }
     }
@@ -3209,6 +3216,7 @@ fn undeclared_parameter(
             input: first,
             output: second,
         } => undeclared(first).or_else(|| undeclared(second)),
+        Type::Object(object) => object.types().find_map(undeclared),
         Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => None,
     }
 }
@@ -3407,6 +3415,25 @@ fn written(
             format!("fn({}) -> {}", write(input), write(output))
         }
         Type::ProfileMessage { payload, .. } => write(payload),
+        Type::Object(object) => {
+            use rawr_import::classify::representability::object::Pointer;
+            let principal = object.principal();
+            let mut name = names(principal).unwrap_or_else(|| {
+                let prefix = principal.as_bytes()[..4]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                format!("#{prefix}")
+            });
+            if !object.arguments().is_empty() {
+                name = format!("{name}<{}>", list(object.arguments()));
+            }
+            match object.pointer() {
+                Pointer::Lasting => format!("&'static dyn {name}"),
+                Pointer::Shared => format!("&dyn {name}"),
+                Pointer::Boxed => format!("Box<dyn {name}>"),
+            }
+        }
     }
 }
 
@@ -3615,6 +3642,8 @@ fn ty_ok(
             arguments: members, ..
         } => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
+        // Its trait is the facade's trait header's.
+        Type::Object(object) => object.types().all(|ty| ty_ok(ty, declared)),
         Type::Inferred => true,
         Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => true,
     }
@@ -3711,6 +3740,7 @@ fn writes_declared(
                 input: first,
                 output: second,
             } => declared(first, parameters) && declared(second, parameters),
+            Type::Object(object) => object.types().all(|ty| declared(ty, parameters)),
             Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
         }
     }
@@ -3828,6 +3858,16 @@ impl Types {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
             Type::Inferred => unreachable!("a crate item's signature names no inferred type"),
+            // A crate's trait object, named by its trait's identity (D872).
+            Type::Object(object) => host::type_ref::Type::object(
+                object.pointer(),
+                *object.principal().as_bytes(),
+                object
+                    .arguments()
+                    .iter()
+                    .map(|argument| Self::convert_charged(argument, parameters))
+                    .collect::<Result<Box<[_]>, _>>()?,
+            ),
             Type::Unit => host::type_ref::Type::unit(),
             Type::Never => host::type_ref::Type::builtin(host::type_ref::Builtin::Never),
             Type::Builtin(builtin) => host::type_ref::Type::builtin(match builtin {
@@ -4346,6 +4386,7 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
             names_impl_parameter(input) || names_impl_parameter(output)
         }
         Type::ProfileMessage { payload, .. } => names_impl_parameter(payload),
+        Type::Object(object) => object.types().any(names_impl_parameter),
     }
 }
 
@@ -4533,6 +4574,17 @@ fn type_usage(
                     bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
                 ))
             })?,
+        Type::Object(object) => {
+            object
+                .types()
+                .try_fold((0_usize, 0_usize), |(items, bytes), member| {
+                    let (member_items, member_bytes) = type_usage(member, parameters)?;
+                    Ok::<_, Error>((
+                        items.checked_add(member_items).ok_or(Error::Allocation)?,
+                        bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
+                    ))
+                })?
+        }
         Type::Inferred => (0, 0),
         Type::Unit | Type::Never | Type::Builtin(_) => (0, 0),
     };

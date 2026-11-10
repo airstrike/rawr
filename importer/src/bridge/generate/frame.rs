@@ -562,6 +562,11 @@ fn nominal_types(ty: &convert::Type, found: &mut Vec<convert::Type>) {
             nominal_types(input, found);
             nominal_types(output, found);
         }
+        convert::Type::Object(object) => {
+            for argument in object.arguments() {
+                nominal_types(argument, found);
+            }
+        }
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)

@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 154;
+const CLASSIFIER_VERSION: u32 = 155;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4367,6 +4367,9 @@ fn field_type_nameable(
             .all(|member| field_type_nameable(member, nominal)),
         Type::Inferred => true,
         Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => true,
+        Type::Object(object) => object
+            .types()
+            .all(|member| field_type_nameable(member, nominal)),
     }
 }
 
@@ -4542,6 +4545,10 @@ fn type_nameable(
         | representability::convert::Type::Never
         | representability::convert::Type::Builtin(_)
         | representability::convert::Type::Parameter(_) => (true, false),
+        // Its trait is nameable as every trait a facade declares is.
+        representability::convert::Type::Object(object) => {
+            all_nameable(object.types(), root, names)
+        }
     }
 }
 
@@ -8009,6 +8016,8 @@ impl<P: api::Phase> Context<'_, P> {
             | Type::ProfileMessage { .. }
             | Type::Parameter(_)
             | Type::Script { .. } => false,
+            // A borrow of an object is `Copy`; a box of one isn't `Clone`.
+            Type::Object(object) => object.pointer() != representability::object::Pointer::Boxed,
         }
     }
 
@@ -8874,6 +8883,67 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// `dyn Trait + auto` of the object `bounds`, behind `pointer` (D872):
+    /// one public trait of the graph's, at its type arguments, and `Send`
+    /// or `Sync`. Any other bound, an associated type's binding among
+    /// them, is rejected.
+    fn convert_object(
+        &self,
+        pointer: representability::object::Pointer,
+        bounds: &[model::ObjectBound],
+    ) -> Result<representability::convert::Type, Failure> {
+        use representability::object::{Auto, Object};
+        let rejected = || Failure::from(representability::reject::Kind::TraitObject);
+        let mut principal = None;
+        let mut auto = Vec::new();
+        for bound in bounds {
+            let model::ObjectBound::Trait(model::Bound::Trait {
+                trait_id,
+                arguments,
+                polarity: model::Polarity::Positive,
+                ..
+            }) = bound
+            else {
+                return Err(rejected());
+            };
+            if self.is_core_trait(trait_id, "Send") {
+                auto.push(Auto::Send);
+            } else if self.is_core_trait(trait_id, "Sync") {
+                auto.push(Auto::Sync);
+            } else if self.auto_trait(trait_id) || principal.is_some() {
+                return Err(rejected());
+            } else {
+                principal = Some((trait_id, arguments));
+            }
+        }
+        let (trait_id, arguments) = principal.ok_or_else(rejected)?;
+        let definition = self
+            .graph
+            .definition_index(trait_id)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .ok_or_else(rejected)?;
+        if !matches!(definition.kind(), model::Kind::Trait { .. }) {
+            return Err(rejected());
+        }
+        definition_is_public(definition)?;
+        let mut converted = Vec::new();
+        for argument in arguments {
+            match argument {
+                model::Argument::Type(ty) => converted.push(self.convert(ty)?),
+                model::Argument::Lifetime(_) => {}
+                model::Argument::Const(_) => return Err(rejected()),
+            }
+        }
+        Ok(representability::convert::Type::Object(Box::new(
+            Object::new(
+                pointer,
+                crate::surface::identity::Definition::of(trait_id),
+                converted.into_boxed_slice(),
+                auto,
+            ),
+        )))
+    }
+
     /// A struct's public field: as `convert`, and a shared slice of
     /// scalars or a `&str` that borrows for the struct's own lifetime, as
     /// iced's `LineDash<'a>` has `segments: &'a [f32]`. A value Rawr builds
@@ -9134,6 +9204,16 @@ impl<P: api::Phase> Context<'_, P> {
                         owned: true,
                         length: None,
                     },
+                    // A `Box<dyn Trait>` of a crate's trait (D872).
+                    Some(Std::Box)
+                        if let Some(model::Type::TraitObject { bounds, lifetime }) =
+                            std_binding::type_argument(arguments, 0) =>
+                    {
+                        if !matches!(lifetime, model::Lifetime::Static) {
+                            return Err(representability::reject::Kind::TraitObject.into());
+                        }
+                        self.convert_object(representability::object::Pointer::Boxed, bounds)?
+                    }
                     // A `Box<T>`: rawr's `Box`, which holds its value as
                     // itself, boxed where the crate takes it.
                     Some(Std::Box) => Type::Nominal {
@@ -9298,6 +9378,15 @@ impl<P: api::Phase> Context<'_, P> {
                         arguments: Box::default(),
                     }
                 }
+            }
+            // A `&'static dyn Trait` of a crate's trait, as tracing's
+            // `Identifier` holds (D872).
+            model::Type::Reference {
+                lifetime: model::Lifetime::Static,
+                mutability: model::Mutability::Shared,
+                ty: target,
+            } if let model::Type::TraitObject { bounds, .. } = target.as_ref() => {
+                self.convert_object(representability::object::Pointer::Lasting, bounds)?
             }
             model::Type::Reference { .. } => {
                 return Err(representability::reject::Kind::ReferenceType.into())
@@ -12105,6 +12194,7 @@ fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> b
         Type::Result(ok, err) => other(ok) || other(err),
         Type::FunctionItem { input, output } => other(input) || other(output),
         Type::ProfileMessage { payload, .. } => other(payload),
+        Type::Object(object) => object.types().any(other),
     }
 }
 
@@ -12134,6 +12224,7 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
             names_parameter(input, index) || names_parameter(output, index)
         }
         Type::ProfileMessage { payload, .. } => names_parameter(payload, index),
+        Type::Object(object) => object.types().any(|ty| names_parameter(ty, index)),
     }
 }
 
@@ -12309,6 +12400,7 @@ fn declares_its_parameters(plan: &representability::Representability) -> bool {
             Type::FunctionItem { input, output } => {
                 declared(input, parameters) && declared(output, parameters)
             }
+            Type::Object(object) => object.types().all(|ty| declared(ty, parameters)),
         }
     }
     let (signature, item) = match plan {

@@ -386,6 +386,11 @@ pub(super) enum PreludeOp {
     /// stand-in rawr's copy of the crate declares for the owner, holding
     /// the value's handle (`island::object`, #1264).
     NativeObject,
+    /// A program's value coerced to a crate's trait object (D872), tagged
+    /// with the type it was coerced from: `coerce(value, tag)`, which the
+    /// runner's adapter makes the object of (`object::Coerced`).
+    #[cfg(feature = "rust-import")]
+    NativeCoerce,
     /// A static declared in a body, of a native type (D862): its place,
     /// or before its block writes it, its slot: `value(key)`.
     StaticValue,
@@ -523,6 +528,8 @@ impl PreludeOp {
             Self::Memory => "place.memory",
             Self::DropParts => "drop.parts",
             Self::NativeObject => "island.object",
+            #[cfg(feature = "rust-import")]
+            Self::NativeCoerce => "object.coerce",
             Self::StaticValue => "static.value",
             Self::StaticReserved => "static.reserved",
             Self::StaticSettle => "static.settle",
@@ -807,6 +814,8 @@ impl PreludeOp {
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<ImmutableString>(),
             ],
+            #[cfg(feature = "rust-import")]
+            Self::NativeCoerce => vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()],
         }
     }
 
@@ -894,6 +903,14 @@ impl PreludeOp {
                 let owner = args[1].clone_cast::<ImmutableString>();
                 let trait_name = args[2].clone_cast::<ImmutableString>();
                 return crate::island::object(args[0].take(), &owner, &trait_name).or_else(&panic);
+            }
+            #[cfg(feature = "rust-import")]
+            Self::NativeCoerce => {
+                let tag = args[1].clone_cast::<ImmutableString>();
+                return Ok(Dynamic::from(crate::object::Coerced::new(
+                    args[0].take(),
+                    tag,
+                )));
             }
             // Only a native trait's object makes one, which needs the crate.
             #[cfg(not(feature = "rust-import"))]

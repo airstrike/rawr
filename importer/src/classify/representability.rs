@@ -9,6 +9,7 @@ pub mod enumeration;
 pub mod exclude;
 pub mod function;
 pub mod method;
+pub mod object;
 pub mod origin;
 pub mod ownership;
 pub mod predicate;

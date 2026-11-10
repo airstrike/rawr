@@ -1161,6 +1161,14 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
         | convert::Type::Never
         | convert::Type::Builtin(_)
         | convert::Type::Parameter(_) => Some(0),
+        convert::Type::Object(object) => object.types().try_fold(
+            std::mem::size_of::<crate::classify::representability::object::Object>(),
+            |bytes, ty| {
+                bytes
+                    .checked_add(std::mem::size_of::<convert::Type>())?
+                    .checked_add(type_bytes(ty)?)
+            },
+        ),
     }
 }
 
@@ -1712,6 +1720,27 @@ impl Framed {
                 self.bytes(path.as_bytes());
                 self.count(arguments.len());
                 for argument in arguments {
+                    self.converted_type(argument);
+                }
+            }
+            convert::Type::Object(object) => {
+                use crate::classify::representability::object::{Auto, Pointer};
+                self.byte(19);
+                self.byte(match object.pointer() {
+                    Pointer::Lasting => 0,
+                    Pointer::Shared => 1,
+                    Pointer::Boxed => 2,
+                });
+                self.bytes(object.principal().as_bytes());
+                self.count(object.auto().len());
+                for auto in object.auto() {
+                    self.byte(match auto {
+                        Auto::Send => 0,
+                        Auto::Sync => 1,
+                    });
+                }
+                self.count(object.arguments().len());
+                for argument in object.arguments() {
                     self.converted_type(argument);
                 }
             }
