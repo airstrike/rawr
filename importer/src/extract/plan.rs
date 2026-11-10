@@ -633,7 +633,7 @@ impl Plan {
                 aliases.clone(),
                 engine::session_key([entry.unit_key.as_ref()]),
             )
-            .run(&demand)
+            .run(engine::Seed::of(&self.demand, &demand))
             .ok()?;
             let body = extracted.body().ok()?;
             let entry_root = bindings.join(shared.key.as_ref());

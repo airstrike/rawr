@@ -341,6 +341,39 @@ pub(crate) trait Oracle {
     fn index(&mut self) -> Result<Rc<[Box<RawValue>]>, Fault>;
 }
 
+/// What a walk of a selected crate starts from.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Seed<'a> {
+    /// Every public path of the crate, as a request that demands nothing
+    /// extracts each of its crates.
+    Whole,
+    /// The paths a request names below the crate, its alias first. A
+    /// request that demands anything extracts each crate from its own
+    /// paths alone: one it names nothing of gives its names and nothing
+    /// else, and a type the paths' signatures reach comes with them.
+    Paths(&'a [Vec<String>]),
+}
+
+impl<'a> Seed<'a> {
+    /// The seed of a selected crate whose paths, of every path the request
+    /// demands in `requested`, are `paths`.
+    pub(crate) const fn of<T>(requested: &[T], paths: &'a [Vec<String>]) -> Self {
+        if requested.is_empty() {
+            Self::Whole
+        } else {
+            Self::Paths(paths)
+        }
+    }
+
+    /// The paths this seed names: none for a whole walk.
+    pub(crate) const fn paths(self) -> &'a [Vec<String>] {
+        match self {
+            Self::Whole => &[],
+            Self::Paths(paths) => paths,
+        }
+    }
+}
+
 /// The selected crate a walk starts from.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Root {
@@ -757,14 +790,13 @@ impl<'o, O: Oracle> Engine<'o, O> {
         self
     }
 
-    /// Walk the crate for `demand`, its paths with the crate's alias first;
-    /// an empty demand is the whole crate.
-    pub(crate) fn run(mut self, demand: &[Vec<String>]) -> Result<Extracted, Fault> {
+    /// Walk the crate from `seed`.
+    pub(crate) fn run(mut self, seed: Seed<'_>) -> Result<Extracted, Fault> {
         let root = self.root.module;
         // A complete table must also answer a later named demand. Capture
         // the index on whole-crate walks, not only on already-demanded ones.
         let index = self.oracle.index()?;
-        if demand.is_empty() {
+        if let Seed::Whole = seed {
             // Whole-crate seeding: every public path of the selected crate.
             self.walk(root, Vec::new(), &[], 0, false)?;
             self.drain()?;
@@ -814,7 +846,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 self.walk(segment.root, vec![name], &[], 1, true)?;
             }
         } else {
-            for path in demand {
+            for path in seed.paths() {
                 self.select_path(root, path.get(1..).unwrap_or_default(), 0)?;
             }
             self.drain()?;
@@ -908,7 +940,7 @@ impl<'o, O: Oracle> Engine<'o, O> {
             manifest.ok_or_else(|| Fault::Error("missing intrinsic completion manifest".into()))?,
         );
         self.apply_emissions(&emissions)?;
-        self.run(&[])
+        self.run(Seed::Whole)
     }
 
     fn apply(&mut self, unit: &Unit) -> Result<Vec<Id>, Fault> {
@@ -1685,7 +1717,7 @@ mod tests {
     use super::model::{Authority, Binding, Id, Implementation, Namespace, Span};
     use super::{
         Child, ChildExport, ChildTarget, Class, Emission, Engine, Fault, Hash, Key, Level, Memo,
-        Nested, Oracle, Record, Replay, Request, Root, Segment, Unit,
+        Nested, Oracle, Record, Replay, Request, Root, Seed, Segment, Unit,
     };
 
     /// Units a test spells out; counts how often each is asked.
@@ -1844,7 +1876,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(Seed::Whole)
         .unwrap();
         assert_eq!(extracted.definitions.len(), 3);
         assert_eq!(extracted.reachable.len(), 1);
@@ -1858,6 +1890,34 @@ mod tests {
             assert_eq!(fixture.asked.get(&unit), Some(&1), "{unit:?}");
         }
         assert!(!fixture.asked.contains_key(&Unit::Surface(hash(3))));
+    }
+
+    /// A crate a request that demands other crates names nothing of asks
+    /// no unit: it gives its root's names and no definition, where a whole
+    /// walk of it asks each unit its export reaches.
+    #[test]
+    fn a_crate_a_demanding_request_names_nothing_of_asks_no_unit() {
+        let mut fixture = Fixture::default();
+        exporting(&mut fixture);
+        fixture.units.insert(
+            Unit::Shape(key(1)),
+            vec![definition(1), request(2, Level::Shape)],
+        );
+        fixture
+            .units
+            .insert(Unit::Shape(key(2)), vec![definition(2)]);
+        let walk = |fixture: &mut Fixture, seed| {
+            fixture.asked.clear();
+            Engine::new(fixture, root(), vec!["fixture".to_owned()], String::new())
+                .run(seed)
+                .unwrap()
+        };
+        let whole = walk(&mut fixture, Seed::Whole);
+        assert_eq!(whole.definitions.len(), 2);
+        assert!(fixture.asked.contains_key(&Unit::Shape(key(2))));
+        let named = walk(&mut fixture, Seed::of(&["other"], &[]));
+        assert!(named.definitions.is_empty());
+        assert!(fixture.asked.is_empty(), "{:?}", fixture.asked);
     }
 
     #[test]
@@ -1899,7 +1959,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(Seed::Whole)
         .unwrap();
         let asked = |key: &str| {
             fixture.asked.contains_key(&Unit::Obligation {
@@ -1985,7 +2045,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(Seed::Whole)
         .unwrap();
         assert_eq!(extracted.implementations.len(), 1);
         let record = &extracted.implementations[0];
@@ -2017,7 +2077,7 @@ mod tests {
                 vec!["fixture".to_owned()],
                 String::new(),
             )
-            .run(&[])
+            .run(Seed::Whole)
             .unwrap()
             .body()
             .unwrap()
@@ -2030,7 +2090,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(Seed::Whole)
         .unwrap()
         .body()
         .unwrap();
@@ -2045,7 +2105,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[]);
+        .run(Seed::Whole);
         assert!(matches!(missing, Err(Fault::Missing(_))));
     }
 
@@ -2077,7 +2137,7 @@ mod tests {
             vec!["original".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(Seed::Whole)
         .unwrap();
         let memo = Memo::from_table(
             serde_json::from_slice(&serde_json::to_vec(&memo.to_table(root())).unwrap()).unwrap(),
@@ -2089,7 +2149,7 @@ mod tests {
             vec!["renamed".to_owned()],
             String::new(),
         )
-        .run(&demand)
+        .run(Seed::Paths(&demand))
         .unwrap()
         .body()
         .unwrap();
@@ -2099,7 +2159,7 @@ mod tests {
             vec!["renamed".to_owned()],
             String::new(),
         )
-        .run(&demand)
+        .run(Seed::Paths(&demand))
         .unwrap()
         .body()
         .unwrap();
@@ -2140,7 +2200,7 @@ mod tests {
                 Some(own) => engine.own_segment(own.to_owned()),
                 None => engine,
             }
-            .run(&[])
+            .run(Seed::Whole)
             .unwrap();
             memo
         };
@@ -2152,7 +2212,7 @@ mod tests {
                 vec!["fixture".to_owned()],
                 String::new(),
             )
-            .run(&demand)
+            .run(Seed::Paths(&demand))
             .map(|extracted| extracted.body().unwrap())
         };
         assert!(
@@ -2166,7 +2226,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&demand)
+        .run(Seed::Paths(&demand))
         .unwrap()
         .body()
         .unwrap();
@@ -2228,7 +2288,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&[])
+        .run(Seed::Whole)
         .unwrap();
         let paths = extracted
             .reachable
@@ -2296,7 +2356,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(demand)
+        .run(Seed::of(demand, demand))
         .unwrap();
         let derive = extracted
             .reachable
@@ -2470,7 +2530,7 @@ mod tests {
             vec!["fixture".to_owned()],
             String::new(),
         )
-        .run(&demand)
+        .run(Seed::Paths(&demand))
         .unwrap();
         let paths = extracted
             .reachable

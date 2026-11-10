@@ -155,16 +155,13 @@ fn demand_more(
         if owner.is_some_and(missed_type) && !probing {
             continue;
         }
-        crate_demand.extend(crate::demandable(path, through_alias, request_demand).map(Box::from));
+        crate_demand
+            .extend(crate::demandable(path, through_alias, request_demand, graph).map(Box::from));
         // A member the type lacks may be its `Deref` target's, which the
         // method probe reaches through its `deref` and `deref_mut` (#762).
         // Only a crate's type is extracted: std's `String` is no crate.
-        let root = |path: &str| path.split("::").next().map(str::to_owned);
         if let Some(owner) = owner
-            && (through_alias
-                || request_demand
-                    .iter()
-                    .any(|known| root(known) == root(owner)))
+            && crate::from_demand(owner, through_alias, request_demand, graph)
         {
             crate_demand.extend(
                 graph
@@ -708,7 +705,7 @@ fn prepare(
                             // is demanded as before; demanded already, it
                             // is reported as the miss it is.
                             Err(Proof::Rejected(_))
-                                if crate::new_demand(&error, &request_demand).is_some() =>
+                                if crate::new_demand(&error, &request_demand, &graph).is_some() =>
                             {
                                 demand_more(&error, &request_demand, &mut crate_demand, &graph);
                                 rawr_import::crate_demand::store(&project, &crate_demand);
@@ -726,7 +723,7 @@ fn prepare(
                         }
                     }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
-                        if crate::new_demand(&error, &request_demand).is_some() =>
+                        if crate::new_demand(&error, &request_demand, &graph).is_some() =>
                     {
                         demand_more(&error, &request_demand, &mut crate_demand, &graph);
                         rawr_import::crate_demand::store(&project, &crate_demand);
