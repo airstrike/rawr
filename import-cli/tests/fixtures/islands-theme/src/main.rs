@@ -191,6 +191,8 @@ fn main() {
     }
     .into();
     println!("sidebar {} {:?}", group.draw(&theme), group.message());
+    let strip = grid::strip("strip");
+    println!("sidebar {} {:?}", strip.draw(&theme), strip.message());
     println!("clones {}", theme::clones());
     // Run on, as a running program does, till told to stop: each tick
     // calls the marked generic through the native helper.

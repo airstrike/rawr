@@ -989,6 +989,12 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
+    // A marked generic at a message type of a private module, which no
+    // path from the crate root names (`grid::tiles`).
+    assert!(
+        printed.contains("\nsidebar strip row styled 0 Some(Strip(13))\n"),
+        "{printed}"
+    );
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
