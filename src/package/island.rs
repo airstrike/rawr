@@ -7243,7 +7243,7 @@ mod tests {
             text.contains(
                 "pub fn render(__a0: &Ball, __a1: usize, __a2: &str) -> String {\n    \
                  let mut __call = crate::__rawr_island::Call::new(\"physics::render\", false);\n    \
-                 __call.argument(__a0);\n    __call.argument(&__a1);\n    __call.argument(__a2);\n    \
+                 __call.argument(__a0);\n    __call.argument(&__a1);\n    __call.kept_text(__a2);\n    \
                  let mut __reply = __call.send();\n    let __value: String = __reply.take();\n    __value\n}\n"
             ),
             "{text}"
@@ -7594,8 +7594,11 @@ mod tests {
                  Option<ui::Element<'static, u32>>>(__a2) };\n        __call.for_call();\n        \
                  __call.give_parts(|out| { let __value = __a2; match __value { \
                  ::std::option::Option::None => out.none(), \
-                 ::std::option::Option::Some(__p0) => { out.some(); \
-                 crate::__rawr_island::give_part!(out, __p0); } } });\n"
+                 ::std::option::Option::Some(__p0) => { out.some(); { // SAFETY: only its \
+                 lifetimes change, which have no layout; the interpreter keeps it no longer \
+                 than rustc lets the marked value.\n    #[allow(unsafe_code)] let __p1 = unsafe { \
+                 crate::__rawr_island::at_lifetimes::<_, ui::Element<'static, u32>>(__p0) }; \
+                 crate::__rawr_island::give_part!(out, __p1); } } } });\n"
             ),
             "{text}"
         );
@@ -7841,10 +7844,6 @@ mod tests {
                     back("Item")
                 ),
             ),
-            (
-                "ui::Element<'a, Message>",
-                back("ui::Element<'static, Message>"),
-            ),
         ] {
             let expected = format!(
                 "    let __value: {output} = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
@@ -7852,6 +7851,20 @@ mod tests {
             );
             assert!(text.contains(&expected), "{expected}\n{text}");
         }
+        // A result whose type names a lifetime comes back at `'static` and
+        // is re-lifetimed to the signature's (D867).
+        let expected = format!(
+            "    let __value: ui::Element<'a, Message> = {{\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
+             let __value: ui::Element<'static, Message> = __reply.read(|input| {});\n",
+            back("ui::Element<'static, Message>")
+        );
+        assert!(text.contains(&expected), "{expected}\n{text}");
+        assert!(
+            text.contains(&format!(
+                "        unsafe {{ {island}::at_lifetimes(__value) }}\n    }};\n"
+            )),
+            "{text}"
+        );
         assert!(
             text.contains(&format!(
                 "    {island}::give!(__call, __a0);\n    __call.argument(&__a1);\n"
