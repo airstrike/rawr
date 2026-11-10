@@ -14,6 +14,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `-` of an unsigned integer or literal is rustc's E0600 ("unsigned values cannot be negated"), and changing a std collection through a `&` reference is rustc's E0596 in its words. (#945, #938)
 - More std paths run as cargo's build runs them: `std::num::ParseIntError` written in full in a `let`, an imported `Duration` or `Instant` in a `let`, `Instant::now` as a value, `fmt::Formatter::write_str(f, s)`, `Iterator::sum::<i64>(it)`, `<i64 as FromStr>::from_str`, `<T as TryFrom<U>>::try_from`, and `SystemTime`'s `+`, `-`, `+=`, `-=` with a `Duration` and its ordering. (#922, #1002, #978, #977, #924)
 - A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text. (#969)
+- A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span("right")])` runs again inside a view. (#1369, #1368, #1366)
+- A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`. (#1282)
 
 ## 0.3.176 (2026-11-10)
 

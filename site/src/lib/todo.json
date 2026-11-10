@@ -20,7 +20,9 @@
         {"text":"inboard's marked files that name a std trait beside tracing's macros pass `rawr check` again. The extraction error now names the item it misread, not a bare hash.","issues":[1622]},
         {"text":"`-` of an unsigned integer or literal is rustc's E0600 (\"unsigned values cannot be negated\"), and changing a std collection through a `&` reference is rustc's E0596 in its words.","issues":[945,938]},
         {"text":"More std paths run as cargo's build runs them: `std::num::ParseIntError` written in full in a `let`, an imported `Duration` or `Instant` in a `let`, `Instant::now` as a value, `fmt::Formatter::write_str(f, s)`, `Iterator::sum::<i64>(it)`, `<i64 as FromStr>::from_str`, `<T as TryFrom<U>>::try_from`, and `SystemTime`'s `+`, `-`, `+=`, `-=` with a `Duration` and its ordering.","issues":[922,1002,978,977,924]},
-        {"text":"A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text.","issues":[969]}
+        {"text":"A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text.","issues":[969]},
+        {"text":"A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span(\"right\")])` runs again inside a view.","issues":[1369,1368,1366]},
+        {"text":"A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`.","issues":[1282]}
       ]
     },
     "releases": [
@@ -2828,8 +2830,8 @@
     {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
     {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"},
-    {"issue":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open","category":"Divergences from rustc"},
-    {"issue":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open","category":"Divergences from rustc"},
+    {"issue":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"closed","category":"Divergences from rustc"},
+    {"issue":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"closed","category":"Divergences from rustc"},
     {"issue":918,"title":"A parse whose target its own chain gives is lost when a closure in the chain formats","state":"closed","category":"Divergences from rustc","release":"0.3.132"},
     {"issue":919,"title":"E0382 says borrow or use as rustc does, at the name, with the move's type","state":"closed","category":"Divergences from rustc","release":"0.3.132"},
     {"issue":920,"title":"Restore the test that every playground example prints what rustc's build prints","state":"closed","category":"Health","release":"0.3.132"},
@@ -2879,7 +2881,7 @@
     {"issue":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open","category":"Health"},
     {"issue":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open","category":"Divergences from rustc"},
     {"issue":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open","category":"Divergences from rustc"},
-    {"issue":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open","category":"Divergences from rustc"},
+    {"issue":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"closed","category":"Divergences from rustc"},
     {"issue":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"closed","category":"Divergences from rustc"},
     {"issue":970,"title":"A crate's async fn taking &str through a type parameter generated code that didn't compile","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
@@ -3194,7 +3196,7 @@
     {"issue":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open","category":"Divergences from rustc"},
     {"issue":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open","category":"Divergences from rustc"},
     {"issue":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open","category":"Divergences from rustc"},
-    {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"closed","category":"Divergences from rustc"},
     {"issue":1283,"title":"A marked static of native values with &'static str and &'static [T] fields, read by native code (icedxdy)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"open","category":"Divergences from rustc"},
     {"issue":1285,"title":"A literal passed to a trait-object parameter coerces each element","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3278,10 +3280,10 @@
     {"issue":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1364,"title":"A native trait object's `&[T]`/`&T` result that borrows the receiver comes back as a copy per call","state":"open","category":"Divergences from rustc"},
     {"issue":1365,"title":"Repeated `&self` views of a trait object with no `&mut` between them keep one region each","state":"open","category":"Divergences from rustc"},
-    {"issue":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"open","category":"Divergences from rustc"},
+    {"issue":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"closed","category":"Divergences from rustc"},
     {"issue":1367,"title":"A crate function taking an array of a region-held opaque value","state":"open","category":"Divergences from rustc"},
-    {"issue":1368,"title":"A crate function with two opaque-type parameters fails to compile in the runner","state":"open","category":"Divergences from rustc"},
-    {"issue":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":1368,"title":"A crate function with two opaque-type parameters fails to compile in the runner","state":"closed","category":"Divergences from rustc"},
+    {"issue":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"closed","category":"Divergences from rustc"},
     {"issue":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open","category":"Divergences from rustc"},
     {"issue":1371,"title":"The driver's extraction/ prune can remove an unsettled table a staged record names","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1372,"title":"The landing page's iced and ratatui snippets run on rawr's server, like its other snippets","state":"closed","category":"Health","release":"0.3.172"},
@@ -3537,7 +3539,8 @@
     {"issue":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"open","category":"No glue (D593)"},
     {"issue":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open","category":"Divergences from rustc"},
     {"issue":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"open","category":"Divergences from rustc"},
-    {"issue":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"open","category":"Divergences from rustc"}
+    {"issue":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"open","category":"Divergences from rustc"},
+    {"issue":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4128,13 +4131,13 @@
             {"number":887,"title":"ferris: `f32::from(Degrees)` is E0277","state":"closed"},
             {"number":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed"},
             {"number":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"closed"},
-            {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"open"},
-            {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"open"},
+            {"number":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"closed"},
+            {"number":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"closed"},
             {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed"},
             {"number":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"closed"},
             {"number":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open"},
             {"number":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open"},
-            {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"open"},
+            {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"closed"},
             {"number":1187,"title":"Run opaque iterators and inherent methods' opaque members","state":"closed"},
             {"number":1188,"title":"An iterator whose items are references, as Vec::iter_mut's are","state":"open"},
             {"number":1189,"title":"An opaque output that borrows its receiver, as `fn items(&self) -> impl Iterator + '_`","state":"open"},
@@ -4153,17 +4156,18 @@
             {"number":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open"},
             {"number":1280,"title":"A generic type's `&self` method giving an opaque type that borrows it fails in the generated runner (E0521)","state":"open"},
             {"number":1281,"title":"The opaque type of a method reached through a sole type alias has no members","state":"open"},
-            {"number":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"open"},
+            {"number":1282,"title":"A call by path with arguments for a generic trait, as `Counted::<u16>::doubled(x)`, is refused","state":"closed"},
             {"number":1313,"title":"A projection bound on a crate's own trait (`<F as Trait>::Output = T`) has no cases","state":"open"},
             {"number":1333,"title":"A `&mut` place of a receiver in a scope frame's region calls the method once","state":"closed"},
             {"number":1334,"title":"An `Option<&mut T>` a crate method lends calls the method once","state":"closed"},
             {"number":1335,"title":"A call takes invariant or opaque borrowed values from several scope frames","state":"closed"},
             {"number":1353,"title":"A call whose instance has no key takes whichever adapter of the item bound first","state":"closed"},
-            {"number":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"open"},
+            {"number":1366,"title":"A free function taking `&T` of a value a scope frame's region holds","state":"closed"},
             {"number":1367,"title":"A crate function taking an array of a region-held opaque value","state":"open"},
-            {"number":1368,"title":"A crate function with two opaque-type parameters fails to compile in the runner","state":"open"},
-            {"number":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"open"},
-            {"number":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open"}
+            {"number":1368,"title":"A crate function with two opaque-type parameters fails to compile in the runner","state":"closed"},
+            {"number":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"closed"},
+            {"number":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open"},
+            {"number":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"open"}
           ]
         }
       ]
