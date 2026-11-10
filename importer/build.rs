@@ -37,6 +37,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/cargo/toolchain/window.rs");
     if env::var_os("CARGO_FEATURE_EMBEDDED_HOST").is_some() {
         embed_host()?;
+    } else {
+        hosted_digest()?;
     }
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_RUSTC_DRIVER");
     println!("cargo:rerun-if-env-changed=RUSTC");
@@ -205,6 +207,33 @@ fn compiler_cfgs(version: &str) {
 /// files and binary sources, with the root's lockfile) and their digest, which is also this Rawr's source
 /// identity. Tests, benches, examples and binaries are never built for a
 /// dependency, so editing them keeps the host.
+/// The digest of the sources this build carries when it builds a host
+/// (`src/host.rs`), which the host's `.digest` stamp names: the digest of
+/// the rawr that wrote it, so a runner built from the host knows the build
+/// it came from. A development checkout has no stamp, and no digest.
+fn hosted_digest() -> Result<(), Box<dyn Error>> {
+    let stamp = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("no manifest dir")?)
+        .join("../.digest");
+    println!("cargo:rerun-if-changed={}", stamp.display());
+    let digest = fs::read_to_string(&stamp)
+        .ok()
+        .filter(|hex| hex.len() == 64)
+        .and_then(|hex| {
+            (0..32)
+                .map(|index| u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok())
+                .collect::<Option<Vec<u8>>>()
+        })
+        .unwrap_or_else(|| vec![0; 32]);
+    let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("no OUT_DIR")?);
+    fs::write(
+        output.join("host.rs"),
+        format!(
+            "/// Identity of the Rawr sources this build carries.\npub const DIGEST: [u8; 32] = {digest:?};\n"
+        ),
+    )?;
+    Ok(())
+}
+
 fn embed_host() -> Result<(), Box<dyn Error>> {
     let repository = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("no manifest dir")?)
         .join("..")
@@ -274,7 +303,9 @@ fn embed_host() -> Result<(), Box<dyn Error>> {
     let digest: [u8; 32] = digest.finalize().into();
     fs::write(
         output.join("host.rs"),
-        format!("pub const DIGEST: [u8; 32] = {digest:?};\n{table}"),
+        format!(
+            "/// Identity of the Rawr sources this build carries.\npub const DIGEST: [u8; 32] = {digest:?};\n{table}"
+        ),
     )?;
     Ok(())
 }

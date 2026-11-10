@@ -15,13 +15,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-#[cfg(feature = "embedded-host")]
+// `DIGEST`, the identity of the Rawr sources this build carries: the
+// embedded sources' digest, or for a build of a written host the digest its
+// `.digest` stamp names, which is the writer's own; zero for a development
+// build that uses its own checkout.
 include!(concat!(env!("OUT_DIR"), "/host.rs"));
-
-/// Identity of the Rawr sources this build carries; zero for a development
-/// build that uses its own checkout.
-#[cfg(not(feature = "embedded-host"))]
-pub const DIGEST: [u8; 32] = [0; 32];
 
 /// The Rawr repository root holding `rawr` and `rawr-import`.
 #[cfg(not(feature = "embedded-host"))]
