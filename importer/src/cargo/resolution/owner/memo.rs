@@ -26,7 +26,7 @@ use sha2::{Digest as _, Sha256};
 use crate::bindings::{Script, Settled};
 use crate::input::proof::{Entry, Proof, Role};
 
-const SCHEMA: u32 = 4;
+const SCHEMA: u32 = 5;
 /// Kept beside the harness copies a shared resolution leaves.
 const FILE: &str = "shared/remembered.json";
 /// The sidecar document the tables replayed, beside it.

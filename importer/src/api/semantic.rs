@@ -26,7 +26,7 @@ impl Serialize for Context<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         let context = self.0;
         let mut value = serializer.serialize_struct("SemanticContext", 14)?;
-        value.serialize_field("semantic_schema", &3_u32)?;
+        value.serialize_field("semantic_schema", &4_u32)?;
         value.serialize_field("graph_schema", &context.graph_schema)?;
         value.serialize_field("probe_schema", &context.probe_schema)?;
         value.serialize_field("canonicalizer", &context.canonicalizer)?;
@@ -44,7 +44,45 @@ impl Serialize for Context<'_> {
             &context.resolution_proof,
         ));
         value.serialize_field("unassociated_derivation", &unassociated)?;
-        value.serialize_field("selections", &context.selections)?;
+        value.serialize_field("selections", &Selections(&context.selections))?;
+        value.end()
+    }
+}
+
+/// The selections as the API's semantics name them. A selection Rawr links
+/// for itself, with no library role, is named by its package name and
+/// version alone: its source is the host directory of the Rawr build that
+/// resolved it, which moves with every Rawr build while no extracted crate's
+/// API changes. A library's package id is kept whole.
+struct Selections<'graph>(&'graph [super::Selection]);
+
+struct Selection<'graph>(&'graph super::Selection);
+
+impl Serialize for Selections<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut values = serializer.serialize_seq(Some(self.0.len()))?;
+        for selection in self.0 {
+            values.serialize_element(&Selection(selection))?;
+        }
+        values.end()
+    }
+}
+
+impl Serialize for Selection<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let selection = self.0;
+        let library = selection
+            .roles
+            .iter()
+            .any(|role| **role == *crate::cargo::config::Role::Library.as_str());
+        let package_id = match selection.package_id.rsplit_once('#') {
+            Some((_, name)) if !library => name,
+            _ => &selection.package_id,
+        };
+        let mut value = serializer.serialize_struct("SemanticSelection", 3)?;
+        value.serialize_field("alias", &selection.alias)?;
+        value.serialize_field("package_id", package_id)?;
+        value.serialize_field("roles", &selection.roles)?;
         value.end()
     }
 }

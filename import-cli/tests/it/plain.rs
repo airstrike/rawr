@@ -826,6 +826,52 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
     assert!(!nightly(second), "the second project reads the home");
 }
 
+/// Each Rawr build of other sources, as each install of a new generator or
+/// classifier version is, links its own host directory, so the project's
+/// crates resolve again under it. Nothing is extracted again, and the API
+/// read back from the shared tables is the one the last build classified:
+/// it names the Rawr it links by package name and version, and the
+/// resolution by its lockfile, not by the host directory's path. So no
+/// definition is classified and no facade generated again.
+#[test]
+fn another_rawr_build_extracts_and_classifies_nothing_again() {
+    let home = crate::support::scratch().join("moved-host-home");
+    let root = crate::support::scratch().join("moved-host");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(FIXTURE), &root);
+    let check = |host: &str| {
+        let checked = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("check")
+            .arg(&root)
+            .env("RAWR_HOME", &home)
+            .env(
+                "RAWR_RUNTIME_HOME",
+                crate::support::scratch().join(format!("moved-host-{host}")),
+            )
+            .env("RAWR_VERBOSE", "1")
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        let said = text(&checked.stderr);
+        assert!(checked.status.success(), "{said}");
+        said
+    };
+    // The first build extracts or reads the home; the second reads the
+    // tables under its own host and classifies what they give.
+    check("first");
+    check("second");
+    let said = check("third");
+    assert!(
+        said.contains("nightly builds 0, probes 0"),
+        "another Rawr build extracts nothing again\n{said}"
+    );
+    assert!(
+        said.contains("classified 0, generated 0"),
+        "another Rawr build classifies and generates nothing again\n{said}"
+    );
+}
+
 /// A program with a module of its own selects its own crate, whose table
 /// stays with its project. A second project extracts only that crate: the
 /// dependency's table, trait members included, replays from rawr's home
