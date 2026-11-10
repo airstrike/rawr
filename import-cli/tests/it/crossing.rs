@@ -705,12 +705,28 @@ fn methods_of_a_generic_target_are_callable_through_its_opaque_alias() {
     assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3), quad 4r1 rgb(4, 5, 6) at 3");
 }
 
+/// A provided method reaches the script's `labels`, and what it pushes
+/// onto the `&mut Vec<String>` native code lends it is in native code's
+/// vector after the callback returns (#365). The output is `cargo run`'s.
 #[test]
 fn a_provided_method_reaches_a_script_impl_through_a_blanket_trait() {
     let (rawr, cargo) = both_printed("provided.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr.matches("script widget").count(), 5, "{rawr}");
-    assert!(rawr.contains("last view pad 0"), "{rawr}");
+    assert!(rawr.contains("last view pad 0 script widget"), "{rawr}");
+}
+
+/// A widget whose only name is an alias, the fixture's `Caption`, sits in
+/// one `column!` beside another widget of the same shape (#339). The
+/// output is `cargo run`'s.
+#[test]
+fn a_sole_alias_widget_sits_beside_a_widget_of_its_shape() {
+    let (rawr, cargo) = both_printed("caption_beside.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 \"0\"/mono0 'beside'@12 \"last\""),
+        "{rawr}"
+    );
 }
 
 /// A crate struct's `String` field is read in place, as Rust reads it:

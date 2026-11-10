@@ -10,8 +10,8 @@ enum Message {}
 struct Label;
 
 impl<M, T, R> Widget<M, T, R> for Label {
-    fn labels(&self, _labels: &mut Vec<String>) {
-        println!("script widget");
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.push("script widget".to_string());
     }
 
     fn press(&self, _label: &str) -> Option<M> {
