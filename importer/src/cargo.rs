@@ -3332,25 +3332,39 @@ fn prepare_harness(request: &Request) -> Result<PathBuf> {
     retire_stale_temporaries(&harness_root)?;
     let manifest = render_manifest(request, None)?;
     let manifest_path = harness_root.join(HARNESS_MANIFEST);
-    let changed = fs::read(&manifest_path).map_or(true, |current| current != manifest.as_bytes());
     write_atomic(&manifest_path, manifest.as_bytes())?;
     write_atomic(&harness_root.join("src/lib.rs"), HARNESS_SOURCE.as_bytes())?;
-    let lock = harness_root.join("Cargo.lock");
-    if fs::symlink_metadata(&lock).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err(Error::Path {
-            field: "Rawr-owned lock authority",
-            path: lock,
-            reason: "must not be a symlink".into(),
-        });
-    }
-    if changed && lock.exists() {
-        fs::remove_file(&lock).map_err(|source| Error::Io {
-            operation: "retire stale Rawr-owned harness lock",
-            path: lock,
-            source,
-        })?;
-    }
+    seed_harness_lock(request, &harness_root.join("Cargo.lock"))?;
     Ok(harness_root)
+}
+
+/// Start a harness resolution from the project's own `Cargo.lock`, as the
+/// versioned harness does (`Request::starting_lock`). Cargo then keeps every
+/// version that lock pins and adds only the packages the harness brings, so
+/// rawr compiles what `cargo build` compiles (#1635). A project without a
+/// lock starts from none, and a lock an earlier resolution left is retired.
+fn seed_harness_lock(request: &Request, lock: &Path) -> Result<()> {
+    if let Some(seed) = request.authority.lock.as_deref() {
+        return write_atomic(lock, seed);
+    }
+    match fs::symlink_metadata(lock) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(Error::Io {
+            operation: "inspect Rawr-owned harness lock",
+            path: lock.to_path_buf(),
+            source,
+        }),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::Path {
+            field: "Rawr-owned lock authority",
+            path: lock.to_path_buf(),
+            reason: "must not be a symlink".into(),
+        }),
+        Ok(_) => fs::remove_file(lock).map_err(|source| Error::Io {
+            operation: "retire stale Rawr-owned harness lock",
+            path: lock.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 /// Sweep stale generated temporaries from a Rawr-owned harness directory. The
@@ -3531,16 +3545,7 @@ fn finalize_harness(
 ) -> Result<()> {
     let manifest = render_manifest(request, Some(internal))?;
     write_atomic(&harness_root.join(HARNESS_MANIFEST), manifest.as_bytes())?;
-    let lock = harness_root.join("Cargo.lock");
-    if lock.exists() {
-        let lock = canonical_file("provisional harness lock", &lock)?;
-        fs::remove_file(&lock).map_err(|source| Error::Io {
-            operation: "retire provisional Rawr-owned harness lock",
-            path: lock,
-            source,
-        })?;
-    }
-    Ok(())
+    seed_harness_lock(request, &harness_root.join("Cargo.lock"))
 }
 
 fn cargo_metadata(
@@ -5291,5 +5296,101 @@ mod capture_tests {
             .unwrap()
             .unwrap();
         assert_eq!(bytes.len(), process::CAPTURE_BYTES);
+    }
+}
+
+#[cfg(test)]
+mod project_lock_tests {
+    use super::*;
+
+    /// The project's lock pins smallvec 2.0.0-alpha.12, which its member's
+    /// `^2.0.0-alpha.12` accepts, as 2.0.0-beta.4 does too.
+    const PROJECT_LOCK: &str = "version = 4\n\n[[package]]\nname = \"pinned\"\nversion = \"0.1.0\"\ndependencies = [\n \"smallvec\",\n]\n\n[[package]]\nname = \"smallvec\"\nversion = \"2.0.0-alpha.12\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ef784004ca8777809dcdad6ac37629f0a97caee4c685fcea805278d81dd8b857\"\n";
+
+    fn locked_versions(lock: &str, name: &str) -> Vec<String> {
+        let document = lock
+            .parse::<DocumentMut>()
+            .expect("Cargo writes a TOML lock");
+        document["package"]
+            .as_array_of_tables()
+            .expect("the lock lists packages")
+            .iter()
+            .filter(|package| package["name"].as_str() == Some(name))
+            .filter_map(|package| package["version"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    /// A harness resolves from the project's `Cargo.lock`, so Cargo keeps
+    /// the older compatible version that lock pins instead of the newest one
+    /// the registry offers (#1635).
+    #[test]
+    fn a_harness_resolution_keeps_the_version_the_project_lock_pins() {
+        crate::store::isolate_for_tests();
+        let project = crate::store::TestProject::new("rawr-project-lock");
+        let root = project.path();
+        let member = root.join("pinned");
+        fs::create_dir_all(member.join("src")).expect("member creates");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"pinned\"]\n",
+        )
+        .expect("workspace manifest writes");
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"pinned\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nsmallvec = \"2.0.0-alpha.12\"\n",
+        )
+        .expect("member manifest writes");
+        fs::write(member.join("src/lib.rs"), "").expect("member source writes");
+        fs::write(root.join("Cargo.lock"), PROJECT_LOCK).expect("project lock writes");
+        let limits = Limits::standard();
+        let request = Request::builder(root, &root.join("target/rawr/cache"), &limits)
+            .expect("request builder seals")
+            .environment(config::Environment::capture().expect("environment captures"))
+            .cargo_authority(&member.join("Cargo.toml"))
+            .policy(crate::extract::Policy::manifest().seal())
+            .dependency(config::Dependency::path("pinned", &member).expect("member seals"))
+            .build()
+            .expect("request seals");
+
+        let harness = prepare_harness(&request).expect("the harness prepares");
+        let lock = harness.join("Cargo.lock");
+        assert_eq!(
+            fs::read_to_string(&lock).expect("the harness lock is seeded"),
+            PROJECT_LOCK
+        );
+        let output = std::process::Command::new("cargo")
+            .args([
+                "metadata",
+                "--offline",
+                "--format-version=1",
+                "--manifest-path",
+            ])
+            .arg(harness.join(HARNESS_MANIFEST))
+            .env("CARGO_TARGET_DIR", harness.join("target"))
+            .output()
+            .expect("cargo runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let resolved = fs::read_to_string(&lock).expect("Cargo writes the harness lock");
+        // rawr's own crates bring a smallvec 1 of their own.
+        let mut smallvec = locked_versions(&resolved, "smallvec");
+        smallvec.retain(|version| version.starts_with("2."));
+        assert_eq!(smallvec, ["2.0.0-alpha.12"]);
+        assert_eq!(
+            locked_versions(&resolved, HARNESS_PACKAGE),
+            [HARNESS_VERSION]
+        );
+
+        // The final form starts from the project's lock again, never from
+        // the provisional resolution's.
+        seed_harness_lock(&request, &lock).expect("the final form seeds");
+        assert_eq!(
+            fs::read_to_string(&lock).expect("the harness lock is reseeded"),
+            PROJECT_LOCK
+        );
     }
 }
