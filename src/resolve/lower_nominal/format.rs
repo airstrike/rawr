@@ -900,8 +900,15 @@ impl<'a> Parser<'a> {
             };
             // A format argument is borrowed, and the borrow lasts until the
             // macro has read every argument, as rustc's `format_args!` has
-            // it: a later argument that moves or changes it is refused.
-            let mut argument = self.parse_expr()?;
+            // it: a later argument that moves or changes it is refused. A
+            // moved local given alone is rustc's "borrow of moved value".
+            let mut ahead = self.input.clone();
+            let alone = matches!(ahead.next(), Some((Token::Identifier(_), _)))
+                && matches!(ahead.next(), Some((Token::Comma | Token::RightParen, _)));
+            let mut argument = self.parse_expr().map_err(|error| match error {
+                Error::MovedValue { .. } if alone => error.borrowing(),
+                error => error,
+            })?;
             self.format_argument_borrow(&argument, &mut borrowed);
             self.hold_temporary(&mut argument)?;
             arguments.push((name, argument));

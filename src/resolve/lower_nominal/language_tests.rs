@@ -10107,6 +10107,14 @@ fn language_a_use_after_a_move_is_worded_and_placed_as_rustc_does() {
     );
     assert_eq!((position.line(), position.position()), (Some(7), Some(20)));
 
+    // A positional argument borrows the local as an inline one does.
+    let error = Engine::new()
+        .compile(source.replace("{words:?}\")", "{:?}\", words)"))
+        .expect_err("rustc rejects this program")
+        .to_string();
+    assert!(error.contains("borrow of moved value: `words`"), "{error}");
+    assert!(error.contains("value borrowed here after move"), "{error}");
+
     let error = Engine::new()
         .compile("pub fn run() -> i64 { let s = String::new(); let t = s; let u = s; 0 }")
         .expect_err("rustc rejects this program")
