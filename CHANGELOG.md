@@ -17,6 +17,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A method with elided lifetimes whose output borrows its receiver, as `fn user(&self, id: &Id) -> Option<&User>`, can be called from marked code: its lifetimes are read as the call's own, not as a higher-ranked signature. A method that gives `&T` or `Option<&T>` also works on a receiver native code lent, or on a field of one, and may take arguments. (#1647)
 - A save that changes a script impl's shape, such as a provided method it now overrides or a signature it changes, now reaches native code. `rawr run` used to swap in the new code while native code kept calling the old shape; the save now rebuilds the runner, and body edits still apply in place. (#326)
 - An expected type reaches every arm of `if`/`else` and `match`, a block-like tail of a block or function body, and every `break` value of a `loop`, and each arm coerces to it as rustc does. `let style: Box<dyn Fn(&Theme) -> Style> = if c { Box::new(|t| ..) } else { Box::new(|t| ..) };` checks, as do `&dyn` and `fn`-pointer arms. (#1648)
+- A save of one marked file lowers only that file again; every other file reuses its lowering from the last compile. `RAWR_VERBOSE` says how many files a save lowered. (#1649; part of #1646, #1604)
 
 ## 0.3.177 (2026-11-10)
 
