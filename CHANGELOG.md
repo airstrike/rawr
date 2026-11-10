@@ -13,6 +13,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - When `cargo check` also fails, `rawr check` and `rawr run` show cargo's errors alone, with rustc's own text and positions. A supervised run's `failed` event carries rustc's diagnostics. (#1605)
 - A marked type boxed as a native trait object works again when the crate's root imports the trait, as with `use page::Page;`. The trait is now compared by the one path it's known by. (#1607; part of #1578)
 - A crate's re-exported enum variant reads by its path in marked code, as in `.align_y(iced::Center)` with iced's `pub use Alignment::Center;`. (#1608)
+- inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone. (#1584, #1587, #1588)
 
 ## 0.3.175 (2026-11-09)
 

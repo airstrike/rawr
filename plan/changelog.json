@@ -12,7 +12,8 @@
       {"text":"A `Box<dyn Iterator<Item = T>>` that marked code makes, as inboard's sidebar `Header::new` keeps, crosses to native code as an iterator that pulls one item from marked code at each `next`. Native code and marked `&mut self` methods pull from the same iterator.","issues":[1600]},
       {"text":"When `cargo check` also fails, `rawr check` and `rawr run` show cargo's errors alone, with rustc's own text and positions. A supervised run's `failed` event carries rustc's diagnostics.","issues":[1605]},
       {"text":"A marked type boxed as a native trait object works again when the crate's root imports the trait, as with `use page::Page;`. The trait is now compared by the one path it's known by.","issues":[1607],"refs":[1578]},
-      {"text":"A crate's re-exported enum variant reads by its path in marked code, as in `.align_y(iced::Center)` with iced's `pub use Alignment::Center;`.","issues":[1608]}
+      {"text":"A crate's re-exported enum variant reads by its path in marked code, as in `.align_y(iced::Center)` with iced's `pub use Alignment::Center;`.","issues":[1608]},
+      {"text":"inboard's sidebar builders run from native code. A marked `&mut self` view passes its lent `Pixels` to a crate call, moves the elements native code keeps into a crate column, and mixes widgets that two crates' paths make in one row. A marked function borrows native code's `&Theme` through the crate root's `pub use` without a clone.","issues":[1584,1587,1588]}
     ]
   },
   "releases": [
