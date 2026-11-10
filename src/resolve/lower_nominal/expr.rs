@@ -657,12 +657,14 @@ impl<'a> Parser<'a> {
                 let root = trait_name.clone();
                 let root_span = trait_span;
                 let mut segments = 1_usize;
+                let mut written = vec![trait_name.clone()];
                 // `<T as std::default::Default>`: the path's last segment.
                 while matches!(self.peek(), Token::DoubleColon)
                     && matches!(self.peek_second(), Token::Identifier(_))
                 {
                     self.next();
                     (trait_name, trait_span) = self.expect_name("trait in a qualified path")?;
+                    written.push(trait_name.clone());
                     segments += 1;
                 }
                 // `<C as Shape>` of the module's `Shape`, when another
@@ -702,6 +704,15 @@ impl<'a> Parser<'a> {
                 };
                 self.expect_close_angle("'>' after a qualified path's trait")?;
                 self.expect(Token::DoubleColon, "'::' after a qualified path")?;
+                // `<u64 as common::cast::NumCast>::from(n)`: the member the
+                // crate trait's impl for the scalar gives it
+                // (`surface::scalar`).
+                #[cfg(feature = "rust-import")]
+                if explicit.is_none()
+                    && let Some(path) = self.qualified_scalar_member(&self_ty, &written)
+                {
+                    return self.qualified_scalar_call(&path, position);
+                }
                 if !through_crate
                     && !self.ufcs_trait(&trait_name)
                     && let Some(std_name) = crate::resolve::std_trait::anywhere(&trait_name)

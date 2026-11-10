@@ -322,9 +322,9 @@ pub fn narrowed(count: u64) -> Option<u32> {
     common::cast::Count(count).to_u32()
 }
 
-/// A std integer narrowed by a crate's trait in scope, as num-traits'
-/// `NumCast` gives `u64` its `to_u32`.
+/// A std integer narrowed and widened by a crate's trait in scope, as
+/// num-traits' `NumCast` gives `u64` its `to_u32` and `from`.
 pub fn widened(count: u64) -> Option<u64> {
     let narrow = count.to_u32()?;
-    Some(narrow.into())
+    <u64 as common::cast::NumCast>::from(narrow)
 }

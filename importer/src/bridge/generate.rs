@@ -19856,12 +19856,14 @@ fn render_container_path(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     // A method of an impl that fixes its type's arguments is reached at
-    // that instance, `quick_xml::reader::Reader<&[u8]>`.
+    // that instance, `quick_xml::reader::Reader<&[u8]>`. A crate trait's
+    // member on a number is reached through the trait, `<u64 as
+    // NumCast>::from`, as `u64` has `From::from` too (`surface::scalar`).
     if let Some(instance) = signature.instance().and_then(concrete_type) {
-        let instance = if type_position {
-            instance
-        } else {
-            format!("<{instance}>")
+        let instance = match through_trait(signature, substitutions)? {
+            _ if type_position => instance,
+            Some(through) => format!("<{instance} as {through}>"),
+            None => format!("<{instance}>"),
         };
         return output
             .write_all(instance.as_bytes())

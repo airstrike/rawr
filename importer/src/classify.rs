@@ -6446,6 +6446,7 @@ impl<P: api::Phase> Context<'_, P> {
                     mutability: model::Mutability::Shared,
                     ty: Box::new(number.clone()),
                 }),
+                model::Receiver::None if own => None,
                 _ => return Err(reject::Kind::GenericImplementation.into()),
             };
             if implementation.generics().parameters().next().is_some()
