@@ -10,6 +10,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate function that takes trait objects in a slice, each alone or in an `Option`, and gives back a value that borrows them, as tracing-core's `fields.value_set_all(&[Some(&n as &dyn Value), None])`, runs from marked code. The value can be read, passed to a crate function such as `Event::dispatch(meta, &set)`, or passed to a closure. (#1591)
 - A generic marked function's call to another marked generic takes its type arguments from the expected type (a return, `let` annotation, argument or field), as rustc does, so inboard's `Sidebar::default()` in a function returning `Sidebar<'a, Message>` passes `rawr check`. A turbofish no longer counts an argument-position `impl Trait`. (#578; part of #408)
 - A `Box<dyn Iterator<Item = T>>` that marked code makes, as inboard's sidebar `Header::new` keeps, crosses to native code as an iterator that pulls one item from marked code at each `next`. Native code and marked `&mut self` methods pull from the same iterator. (#1600)
+- After an install, `rawr check` records which types native code calls marked generics at again, instead of reading a record an older rawr build kept. (#1601)
+- When `cargo check` also fails, `rawr check` and `rawr run` show cargo's errors alone, with rustc's own text and positions. A supervised run's `failed` event carries rustc's diagnostics. (#1605)
 
 ## 0.3.175 (2026-11-09)
 
