@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A `Box<dyn Fn>`, a `&dyn Fn` or a `&Box<dyn Fn>` fills a function's `impl Fn` or `F: Fn` input, as in Rust, so a boxed style closure given to iced's `container::style` checks and runs. An `Rc` or `Arc` of one stays an error, as in rustc. Messages name a box or reference of a function `dyn Fn(..)`, and a crate method on a borrowed receiver can call back a closure the receiver holds.","issues":[1650],"refs":[222]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.178",
@@ -3588,7 +3593,8 @@
     {"issue":1646,"title":"A save resolves and lowers every marked file again","state":"open","category":"No glue (D593)"},
     {"issue":1647,"title":"A method with elided lifetimes whose output borrows self is refused as higher-ranked","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1648,"title":"An if/else whose arms box different closures into an annotated Box<dyn Fn> is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
-    {"issue":1649,"title":"A save of one marked file lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.178"}
+    {"issue":1649,"title":"A save of one marked file lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.178"},
+    {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

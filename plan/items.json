@@ -1648,6 +1648,7 @@
     {"t":"T1645","issue":1646,"title":"T1645: A save resolves and lowers every marked file again","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"parity","row":"real-app-shapes"},"decisions":[],"commit":null,"release":null},
     {"t":"T1646","issue":1647,"title":"T1646: A method with elided lifetimes whose output borrows self is refused as higher-ranked","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.178"},
     {"t":"T1647","issue":1648,"title":"T1647: An if/else whose arms box different closures into an annotated Box<dyn Fn> is E0308","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.178"},
-    {"t":"T1648","issue":1649,"title":"T1648: A save of one marked file lowered every marked file again","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.178"}
+    {"t":"T1648","issue":1649,"title":"T1648: A save of one marked file lowered every marked file again","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.178"},
+    {"t":"T1649","issue":1650,"title":"T1649: A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
