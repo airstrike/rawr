@@ -546,6 +546,8 @@ pub enum Error {
         /// The use borrows the value, as `format!` and `&self` calls do:
         /// rustc's "borrow of moved value" rather than "use of".
         borrowed: bool,
+        /// Only a part of the value moved: rustc's "partially moved".
+        partial: bool,
         /// Why the value moves, where the lowering knows the local's type.
         cause: Option<MoveCause>,
         /// The move is in a loop's body, which goes on to its next
@@ -1957,11 +1959,13 @@ impl fmt::Display for Written<'_> {
                 moved,
                 reference,
                 borrowed,
+                partial,
                 ..
             } => write!(
                 formatter,
-                "{} of moved value `{name}` at {reference}; it was already moved at {moved}",
-                if *borrowed { "borrow" } else { "use" }
+                "{} of {}moved value `{name}` at {reference}; it was already moved at {moved}",
+                if *borrowed { "borrow" } else { "use" },
+                if *partial { "partially " } else { "" }
             ),
             Error::BorrowConflict {
                 code,

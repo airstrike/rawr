@@ -492,6 +492,20 @@ impl<'a> Parser<'a> {
                 value = self.call_host_function(&items, owner, inputs, span(start, end))?;
                 continue;
             }
+            // `count.to_u32()`: a member of a crate's trait in scope that
+            // the trait's impl for a number, `bool` or `char` gives it, as
+            // num-traits' `NumCast` gives `u64` (`surface::scalar`). std's
+            // own methods come first, as rustc finds an inherent method
+            // before a trait's.
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && let scalar = without_references(&self.inference.resolve(&value.ty)).clone()
+                && std_method::inherent(&scalar, &member).is_none()
+                && let Some(path) = self.scoped_scalar_member(&scalar, &member)
+            {
+                value = self.scalar_member_call(value, &path)?;
+                continue;
+            }
             // `value.fmt(f)` in a `Display` or `Debug` `fmt` body writes the
             // value into its formatter, through the impl's own trait.
             if member == "fmt"

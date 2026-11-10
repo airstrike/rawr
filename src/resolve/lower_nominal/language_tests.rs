@@ -14881,3 +14881,59 @@ fn language_a_part_below_a_field_moves_out_of_an_owned_receiver() {
         assert!(error.contains("E0507"), "{error}");
     }
 }
+
+/// An owned `self` is a local of its method: after a field moves out of
+/// it, a use of that field or of all of `self` is rustc's E0382, and the
+/// other fields stay usable (#1609).
+#[test]
+fn language_an_owned_receiver_is_partly_moved_after_its_field_moves_out() {
+    let value = run(r#"
+        struct Content { items: Vec<i64>, title: String }
+        struct Page { content: Content, items: Vec<i64>, n: i64 }
+        impl Page {
+            fn rest(self) -> i64 { let a = self.items; self.n + a.len() as i64 }
+            fn again(mut self) -> i64 {
+                let a = self.items;
+                self.items = vec![1, 2, 3];
+                (self.items.len() + a.len()) as i64
+            }
+            fn whole(self) -> i64 { let p = self; p.n }
+            fn nested(self) -> i64 { let t = self.content.title; t.len() as i64 + self.content.items.len() as i64 }
+        }
+        pub fn run() -> i64 {
+            let page = || Page { content: Content { items: vec![7], title: String::from("ab") }, items: vec![1], n: 5 };
+            page().rest() * 1000 + page().again() * 100 + page().whole() * 10 + page().nested()
+        }
+        run()
+    "#);
+    assert_eq!(value, 6 * 1000 + 4 * 100 + 5 * 10 + 3);
+    for (body, message) in [
+        (
+            "let a = self.items; self.items.len() + a.len()",
+            "borrow of moved value: `self.items`",
+        ),
+        (
+            "let a = self.items; let p = self; a.len()",
+            "use of partially moved value: `self`",
+        ),
+        (
+            "let p = self; self.items.len()",
+            "borrow of moved value: `self`",
+        ),
+        (
+            "let a = self.content.items; self.content.items.len() + a.len()",
+            "borrow of moved value: `self.content.items`",
+        ),
+    ] {
+        let error = Engine::new()
+            .compile(format!(
+                "struct C {{ items: Vec<i64> }} struct P {{ content: C, items: Vec<i64> }} \
+                 impl P {{ fn f(self) -> usize {{ {body} }} }} \
+                 pub fn run() -> i64 {{ 0 }}"
+            ))
+            .expect_err("rustc rejects this program")
+            .to_string();
+        assert!(error.contains(message), "{body}: {error}");
+        assert!(error.contains("E0382"), "{body}: {error}");
+    }
+}

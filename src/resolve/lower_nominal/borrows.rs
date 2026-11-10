@@ -570,7 +570,7 @@ impl Parser<'_> {
             start: value.span.start(),
             span: value.span,
             ty: self.inference.resolve(&value.ty),
-            place: !from_call && (value.lvalue.is_some() || self.flow().is_place(value.span)),
+            place: !from_call && (is_place(value) || self.flow().is_place(value.span)),
         }
     }
 
@@ -1472,7 +1472,7 @@ impl Parser<'_> {
 
     /// The place `value` reads one step further down.
     pub(super) fn project_place(&self, value: &ParsedExpr, step: Projection) {
-        if value.lvalue.is_some() {
+        if is_place(value) {
             self.flow().project(value.span.start(), step);
         }
     }
@@ -1480,7 +1480,7 @@ impl Parser<'_> {
     /// `value[i]`: an element of an array is a place below it; `Index` on a
     /// `Vec`, a `VecDeque`, a `String` or a map borrows all of it.
     pub(super) fn indexed(&self, value: &ParsedExpr) {
-        if value.lvalue.is_none() {
+        if !is_place(value) {
             return;
         }
         match self.inference.resolve(&value.ty) {
@@ -1499,7 +1499,7 @@ impl Parser<'_> {
     /// A method call on the place `value`: a shared borrow of it, unless
     /// the method's mutability check makes it a `&mut` one.
     pub(super) fn call_on_place(&self, value: &ParsedExpr) {
-        if value.lvalue.is_some() {
+        if is_place(value) {
             self.flow().shared(value.span.start());
         }
     }
@@ -1508,7 +1508,7 @@ impl Parser<'_> {
     /// arguments after it: a place's shared borrow, made where it is read,
     /// or the borrows a value made for it holds (`&p`, `s.as_str()`).
     pub(super) fn format_argument_borrow(&self, value: &ParsedExpr, borrowed: &mut Held) {
-        if value.lvalue.is_some() {
+        if is_place(value) {
             // `&r` of a reference keeps what `r` borrows.
             let inner = self.may_hold_borrow(&self.inference.resolve(&value.ty));
             let loan = self
@@ -1523,7 +1523,7 @@ impl Parser<'_> {
     /// The place `value` is borrowed `&mut` for a call made here, after its
     /// arguments: a two-phase borrow, reserved where it was read.
     pub(super) fn mutable_use(&self, value: &ParsedExpr, at: Span) {
-        if value.lvalue.is_some() {
+        if is_place(value) {
             self.flow()
                 .mutable_call(value.span.start(), span(value.span.start(), at.end()));
         }
@@ -1723,6 +1723,7 @@ impl Parser<'_> {
                 moved: moved.moved,
                 reference: moved.access,
                 borrowed: moved.borrowed,
+                partial: moved.partial,
                 cause: None,
                 // A move in a loop's body, made again on its next iteration.
                 previous_iteration: moved.moved == moved.access,
@@ -1872,4 +1873,10 @@ fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
         }
         _ => None,
     }
+}
+
+/// Whether `value` is a place the borrow facts follow: a local or a part of
+/// one, or the receiver `self`, which is a local when it is owned.
+fn is_place(value: &ParsedExpr) -> bool {
+    value.lvalue.is_some() || value.source.as_str() == "self"
 }

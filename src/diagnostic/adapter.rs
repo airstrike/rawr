@@ -528,6 +528,7 @@ fn resolution_report_with_sources(
 ) -> Result<Report, Error> {
     let builder = sourced_builder(error, &source, error.primary_span());
     let secondary_message = error.secondary_span().map(|_| match error {
+        resolve::Error::MovedValue { partial: true, .. } => "value partially moved here".into(),
         resolve::Error::MovedValue { .. } => "value moved here".into(),
         resolve::Error::BorrowConflict { .. } => "borrow made here".into(),
         resolve::Error::UnboundAlternative { .. } => "variable not in all patterns".into(),
@@ -706,10 +707,16 @@ fn primary_label(
             previous_iteration: true,
             ..
         } => Some("value moved here, in previous iteration of loop".into()),
-        resolve::Error::MovedValue { borrowed: true, .. } => {
-            Some("value borrowed here after move".into())
-        }
-        resolve::Error::MovedValue { .. } => Some("value used here after move".into()),
+        resolve::Error::MovedValue {
+            borrowed, partial, ..
+        } => Some(
+            format!(
+                "value {} here after {}move",
+                if *borrowed { "borrowed" } else { "used" },
+                if *partial { "partial " } else { "" }
+            )
+            .into(),
+        ),
         resolve::Error::Uninitialized {
             name,
             possibly: false,
@@ -1181,10 +1188,14 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::Unimplemented { message, .. } => message.to_string(),
         resolve::Error::MovedValue {
             name,
-            borrowed: true,
+            borrowed,
+            partial,
             ..
-        } => format!("borrow of moved value: `{name}`"),
-        resolve::Error::MovedValue { name, .. } => format!("use of moved value: `{name}`"),
+        } => format!(
+            "{} of {}moved value: `{name}`",
+            if *borrowed { "borrow" } else { "use" },
+            if *partial { "partially " } else { "" }
+        ),
         resolve::Error::BorrowConflict { message, .. } => message.to_string(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")

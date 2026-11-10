@@ -21,6 +21,8 @@ pub(crate) struct UseAfterMove {
     pub(crate) access: Span,
     /// The use borrows the place: rustc's "borrow of moved value".
     pub(crate) borrowed: bool,
+    /// What moved is a part of the place used: rustc's "partially moved".
+    pub(crate) partial: bool,
 }
 
 /// The first use of a moved place in `body`, in the order the body runs.
@@ -85,12 +87,16 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
             Block(index as u32),
             &moved,
             &mut state,
-            &mut |place, span, at, borrowed| {
+            &mut |place, span, (known, at), borrowed| {
+                // rustc names the moved place when it is above the one
+                // used, and the one used when only a part of it moved.
+                let above = known.projection.len() < place.projection.len();
                 first.get_or_insert_with(|| UseAfterMove {
-                    name: describe(body, place),
+                    name: describe(body, if above { known } else { place }),
                     moved: at,
                     access: span,
                     borrowed,
+                    partial: known.projection.len() > place.projection.len(),
                 });
             },
         );
@@ -101,15 +107,18 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
     first
 }
 
+/// A place moved out of, and where.
+type Moved<'a> = (&'a Place, Span);
+
 /// Runs `block`'s facts over `state` (which moved places may be moved),
-/// calling `error` at each access of a place that may be moved, and whether
-/// the access borrows it.
+/// calling `error` at each access of a place that may be moved, with the
+/// moved place and where it moved, and whether the access borrows it.
 fn run(
     body: &Body,
     block: Block,
-    moved: &[(&Place, Span)],
+    moved: &[Moved<'_>],
     state: &mut [bool],
-    error: &mut dyn FnMut(&Place, Span, Span, bool),
+    error: &mut dyn FnMut(&Place, Span, Moved<'_>, bool),
 ) {
     // Where a place that may be moved and overlaps `place` was moved, if
     // one does (`strict`: one above it).
@@ -121,7 +130,7 @@ fn run(
                 **on && (!strict || known.projection.len() < place.projection.len())
                     && overlaps(known, place)
             })
-            .map(|((_, at), _)| *at)
+            .map(|((known, at), _)| (*known, *at))
     };
     // A closure's body reads its captures through hidden locals of its own,
     // which, with its parameters, are given their values each time it is

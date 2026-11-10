@@ -1353,6 +1353,127 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
+    /// The path of the member `member` that the impl for the scalar `ty`
+    /// of a crate's trait this source imports by name gives it
+    /// (`surface::scalar`), as `use common::cast::NumCast;` gives `u64`
+    /// its `to_u32`. `None` when `ty` is no settled scalar or no such
+    /// trait has the member.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn scoped_scalar_member(&self, ty: &Ty, member: &str) -> Option<String> {
+        let scalar = scalar_name(&self.inference.resolve(ty))?;
+        let context = self.models.context;
+        self.models
+            .imports
+            .iter()
+            .filter(|((source, _), binding)| {
+                *source == context && matches!(binding.target, item::Import::Module)
+            })
+            .map(|(_, binding)| {
+                rawr_import::surface::scalar::path(&binding.qualified, scalar, member)
+            })
+            .find(|path| self.models.host_items(path).is_some())
+    }
+
+    /// The path of the member named next that the impl for the scalar
+    /// `ty` of the crate's trait written as `trait_path` gives it
+    /// (`surface::scalar`), as `<u64 as common::cast::NumCast>::from`
+    /// names. The path's first segment is the import or crate it names.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn qualified_scalar_member(
+        &mut self,
+        ty: &Ty,
+        trait_path: &[ImmutableString],
+    ) -> Option<String> {
+        let scalar = scalar_name(&self.inference.resolve(ty))?;
+        let Token::Identifier(member) = self.peek().clone() else {
+            return None;
+        };
+        let (first, rest) = trait_path.split_first()?;
+        let mut qualified = self.models.import(first).map_or_else(
+            || first.to_string(),
+            |binding| binding.qualified.to_string(),
+        );
+        for segment in rest {
+            qualified.push_str("::");
+            qualified.push_str(segment);
+        }
+        let path = rawr_import::surface::scalar::path(&qualified, scalar, member.as_str());
+        self.models.host_items(&path).is_some().then_some(path)
+    }
+
+    /// `<u64 as Trait>::member(..)` once `::` is read, of the member at
+    /// `path` (`qualified_scalar_member`): a call of the function the
+    /// facade declares for it.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn qualified_scalar_call(
+        &mut self,
+        path: &str,
+        start: Position,
+    ) -> Result<ParsedExpr, Error> {
+        self.expect_member_name()?;
+        let items = self
+            .models
+            .host_items(path)
+            .expect("a qualified scalar member has items")
+            .to_vec();
+        let owner = self.models.item_owner(path).cloned();
+        let (mut arguments, end) = self.parse_call_arguments("trait function arguments")?;
+        for argument in &mut arguments {
+            self.move_local(argument)?;
+        }
+        self.call_host_function(&items, owner, arguments, span(start, end))
+    }
+
+    /// `receiver.member(..)` of the member at `path` a crate's trait gives
+    /// the scalar `receiver` (`scoped_scalar_member`): a call of the
+    /// function the facade declares for it, whose first input is the
+    /// scalar, or a shared borrow of it for a `&self` method.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn scalar_member_call(
+        &mut self,
+        mut receiver: ParsedExpr,
+        path: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let items = self
+            .models
+            .host_items(path)
+            .expect("a scoped scalar member has items")
+            .to_vec();
+        let owner = self.models.item_owner(path).cloned();
+        let start = receiver.span.start();
+        let borrowed = items.first().is_some_and(|item| {
+            item.signature()
+                .parameters()
+                .first()
+                .is_some_and(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Reference { .. }
+                    )
+                })
+        });
+        let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
+        // The scalar through any references, as rustc's autoderef reaches
+        // it, then borrowed again for a `&self` method.
+        let scalar = without_references(&self.inference.resolve(&receiver.ty)).clone();
+        receiver.ty = if borrowed {
+            self.call_on_place(&receiver);
+            Ty::Reference {
+                mutable: false,
+                target: Box::new(scalar),
+            }
+        } else {
+            scalar
+        };
+        let mut inputs = Vec::with_capacity(arguments.len() + 1);
+        inputs.push(receiver);
+        for mut argument in arguments {
+            self.move_local(&mut argument)?;
+            inputs.push(argument);
+        }
+        self.call_host_function(&items, owner, inputs, span(start, end))
+    }
+
     /// `Trait::f::<T>(..)`'s turbofish, given to `f`'s own parameters
     /// `generics` in `substitution`, as rustc's E0107 counts them.
     pub(super) fn apply_trait_turbofish(
@@ -1377,5 +1498,23 @@ impl<'a> Parser<'a> {
             self.require_type(&fresh, &argument, call)?;
         }
         Ok(())
+    }
+}
+
+/// The Rust name of the settled scalar `ty`, a number, `bool` or `char`,
+/// as a facade names the members a crate's trait gives it
+/// (`surface::scalar`).
+#[cfg(feature = "rust-import")]
+fn scalar_name(ty: &Ty) -> Option<&'static str> {
+    match ty {
+        Ty::Bool => Some("bool"),
+        Ty::Char => Some("char"),
+        Ty::Float(Float::F32) => Some("f32"),
+        Ty::Float(Float::F64) => Some("f64"),
+        Ty::Int(kind) => Int::KINDS
+            .iter()
+            .find(|(_, known)| known == kind)
+            .map(|(name, _)| *name),
+        _ => None,
     }
 }

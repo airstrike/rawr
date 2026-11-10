@@ -1165,7 +1165,7 @@ mod tests {
     fn closed_plan_grammar_covers_only_each_canonical_control_mutation() {
         let digest = "11".repeat(32);
         assert!(valid_plan(
-            Path::new("actions/runner/0003"),
+            &Path::new("actions/runner").join(crate::node::STORAGE_DIRECTORY),
             Operation::Directory
         ));
         assert!(valid_plan(

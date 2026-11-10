@@ -1381,6 +1381,18 @@ fn imported_paths<'contract>(
                 });
                 continue;
             }
+            // A member of a trait's impl for a number, `bool` or `char` is
+            // reached beside the trait (`surface::scalar`).
+            if let Some(scalar) = rawr_import::surface::scalar::of(associated.representability()) {
+                let associated_path =
+                    rawr_import::surface::scalar::path(&path, scalar, associated.name());
+                allocation.retain(1, associated_path.len())?;
+                entries.push(ImportedPath {
+                    path: associated_path.into_boxed_str(),
+                    outcome: associated,
+                });
+                continue;
+            }
             // The members of the opaque type an inherent method gives,
             // declared in its owner's module (`opaque_types`), each impl's
             // apart (`opaque::inherent_owner`).
@@ -1481,6 +1493,10 @@ struct Facade<'contract> {
     /// The methods the traits the program names give Rawr's string through
     /// their impls for `&str`, each at its path (`surface::text`).
     text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
+    /// The members the traits the program names give a number, `bool` or
+    /// `char` through their impls for it, each a function at its path
+    /// (`surface::scalar`).
+    scalar_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The methods of the traits the program names that take `self` by
     /// value, each a function generic over the trait's `Self` at its path,
     /// which a program's own type that implements the trait calls
@@ -1657,6 +1673,7 @@ fn install(
                         derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        scalar_members: Vec::new(),
                         self_members: Vec::new(),
                         opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
@@ -1683,6 +1700,7 @@ fn install(
                         derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        scalar_members: Vec::new(),
                         self_members: Vec::new(),
                         opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
@@ -1717,6 +1735,7 @@ fn install(
                             derives: Vec::new(),
                             trait_identities: Vec::new(),
                             text_members: Vec::new(),
+                            scalar_members: Vec::new(),
                             self_members: Vec::new(),
                             opaque_members: Vec::new(),
                             std_reexports: Vec::new(),
@@ -1741,6 +1760,21 @@ fn install(
                 members.try_reserve(1).map_err(|_| Error::Allocation)?;
                 members.push((
                     rawr_import::surface::text::path(&relative, associated.name()),
+                    associated,
+                ));
+            }
+            for associated in outcome
+                .implementations()
+                .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+            {
+                let Some(scalar) = rawr_import::surface::scalar::of(associated.representability())
+                else {
+                    continue;
+                };
+                let members = &mut facades[index].scalar_members;
+                members.try_reserve(1).map_err(|_| Error::Allocation)?;
+                members.push((
+                    rawr_import::surface::scalar::path(&relative, scalar, associated.name()),
                     associated,
                 ));
             }
@@ -1797,6 +1831,7 @@ fn install(
                         derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        scalar_members: Vec::new(),
                         self_members: Vec::new(),
                         opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
@@ -1887,6 +1922,7 @@ fn install(
                         derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
+                        scalar_members: Vec::new(),
                         self_members: Vec::new(),
                         opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
@@ -2103,7 +2139,12 @@ fn facade_named(facade: &Facade<'_>) -> std::collections::BTreeSet<[u8; 32]> {
             outcome(associated, &mut named);
         }
     }
-    for (_, associated) in facade.text_members.iter().chain(&facade.self_members) {
+    for (_, associated) in facade
+        .text_members
+        .iter()
+        .chain(&facade.scalar_members)
+        .chain(&facade.self_members)
+    {
         outcome(*associated, &mut named);
     }
     named
@@ -2216,6 +2257,7 @@ fn build(
     let text_modules = facade
         .text_members
         .iter()
+        .chain(&facade.scalar_members)
         .chain(&facade.self_members)
         .filter_map(|(path, _)| {
             path.rsplit_once("::")
@@ -2588,6 +2630,32 @@ fn build(
                 builder.imported_item(values)?;
             }
         }
+    }
+    // A trait's member its impl for a number, `bool` or `char` gives it: a
+    // function of the scalar (`surface::scalar`).
+    for (path, member) in &facade.scalar_members {
+        let Representability::Function(plan) = member.representability() else {
+            continue;
+        };
+        if left_out(path, *member) || !names_declared(*member, resolved) {
+            continue;
+        }
+        let selector_bytes = member.identity().selector().retained_bytes();
+        let bytes = selector_bytes.and_then(|selector| {
+            std::mem::size_of::<host::item::Definition>()
+                .checked_add(unqualified_path_bytes(path)?)?
+                .checked_add(selector)
+        });
+        allocation.retain_checked(Some(1), bytes)?;
+        builder.item(
+            host::item::Definition::function(
+                path,
+                signature(&types, plan.signature(), allocation)?,
+            )?
+            .imported(member.identity().selector().try_clone()?)
+            .lending_static(lent_static(plan.signature()))
+            .lending(lends(plan.signature())),
+        )?;
     }
     // A trait's method its impl for `&str` gives Rawr's string: a function
     // whose first input is the string (`surface::text`).
