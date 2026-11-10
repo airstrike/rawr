@@ -140,23 +140,17 @@ impl<'a> Parser<'a> {
             self.splice_tokens(tokens);
             return self.parse_primary();
         }
-        // `std::fmt::Formatter::write_str(f, ..)`: a std type's method by its
-        // path is the method on its first argument, as rustc calls it.
+        // `std::fmt::Formatter::write_str(f, ..)`, or `fmt::Formatter::..`
+        // through `use std::fmt`: a std type's method by its path is the
+        // method on its first argument, as rustc calls it.
         if let [owner @ .., (member, member_span)] = &segments[..]
             && owner.len() > 1
             && self.pending_turbofish.is_none()
             && matches!(self.peek(), Token::LeftParen)
             && !self.bindings.contains_key(owner[0].0.as_str())
             && self.models.get(&owner[0].0).is_none()
-            && self.models.import(&owner[0].0).is_none()
-            && self.std_type_method(
-                &segments
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("::"),
-                *member_span,
-            )
+            && let Some(full) = self.std_module_path(&segments)
+            && self.std_type_method(&full, *member_span)
             && let Some(tokens) = self.path_method_call(member, *member_span, None)
         {
             self.splice_tokens(tokens);

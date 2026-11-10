@@ -21,6 +21,7 @@ pub(super) const HELD: [Held; 2] = [
         lent: &[],
         also: &[],
         register: |builder, path, capabilities| {
+            crate::host::value::register_ordering::<SystemTime>();
             builder
                 .value_type::<SystemTime>(path, &[], capabilities)
                 .map(drop)
@@ -32,6 +33,8 @@ pub(super) const HELD: [Held; 2] = [
             capability::Kind::Copy,
             capability::Kind::PartialEq,
             capability::Kind::Eq,
+            capability::Kind::PartialOrd,
+            capability::Kind::Ord,
             capability::Kind::Send,
             capability::Kind::Static,
         ],
@@ -120,6 +123,20 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         let duration = read::<Duration>(args[1], "Duration")?;
         let time = read::<SystemTime>(args[0], "SystemTime")?;
         Ok(crate::option::from(time.checked_sub(duration)))
+    });
+    // `impl Add<Duration> for SystemTime` and `Sub`, which `+`, `-`, `+=`
+    // and `-=` call; they panic where `checked_add` is `None`, as std's do.
+    bind("time::SystemTime::add", |args| {
+        let duration = read::<Duration>(args[1], "Duration")?;
+        Ok(Dynamic::from(
+            read::<SystemTime>(args[0], "SystemTime")? + duration,
+        ))
+    });
+    bind("time::SystemTime::sub", |args| {
+        let duration = read::<Duration>(args[1], "Duration")?;
+        Ok(Dynamic::from(
+            read::<SystemTime>(args[0], "SystemTime")? - duration,
+        ))
     });
     bind("time::SystemTimeError::duration", |args| {
         let error = read::<SystemTimeError>(args[0], "SystemTimeError")?;

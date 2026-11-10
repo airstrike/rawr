@@ -81,6 +81,18 @@ impl<'a> Parser<'a> {
                 })
             }
         };
+        // A function named without a call, as `get_or_insert_with(Instant::now)`
+        // takes it, is the closure that calls it.
+        if let Some(input) = &input
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+        {
+            return self.function_value_closure(
+                &format!("std::time::{}::{member}", time.name()),
+                usize::from(*input != Ty::Unit),
+                None,
+                path,
+            );
+        }
         let code = match member.as_str() {
             "default" => time_code("ZERO"),
             member => time_code(member),

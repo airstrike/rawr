@@ -470,6 +470,12 @@ impl<'a> Parser<'a> {
                     _ => Time::Instant,
                 }));
             }
+            // `std::num::ParseIntError` and kin, the errors of `str::parse`.
+            if let Some(error) = crate::resolve::std_parse_error(&path) {
+                return Ok(Ty::ParseError(
+                    ParseError::named(error).expect("a std parse error"),
+                ));
+            }
             // A crate's alias of a builtin, as iced's `markdown::Uri` is
             // `String`.
             if let Some(crate::host::Entry::Builtin(builtin)) = self.models.host.entry(&path)
@@ -1214,6 +1220,17 @@ impl<'a> Parser<'a> {
                 && let Some(ty) = builtin_path_type(builtin) =>
             {
                 ty
+            }
+            // `use std::time::Duration;`: std's `Duration` and `Instant`.
+            name if self.models.get(name).is_none()
+                && let Some(binding) = self.models.import(name)
+                && let Some(time) = crate::resolve::std_time(&binding.qualified)
+                && binding.qualified.contains("::") =>
+            {
+                Ty::Time(match time {
+                    "Duration" => Time::Duration,
+                    _ => Time::Instant,
+                })
             }
             _ => {
                 #[cfg(feature = "rust-import")]

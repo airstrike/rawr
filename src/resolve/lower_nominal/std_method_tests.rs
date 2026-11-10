@@ -732,3 +732,52 @@ main();
     );
     assert!(report.starts_with("error[E0277]"), "{report}");
 }
+
+#[test]
+fn language_std_paths_rustlings_writes_run() {
+    // A parse error written in full in a `let` (#922), std's time types
+    // imported into a `let` and an associated function named as a value
+    // (#1002), `Formatter::write_str` through `use std::fmt` (#978), std's
+    // trait functions with a turbofish or a written `Self` (#977), and
+    // `SystemTime`'s `Add` and `Sub` of a `Duration` (#924).
+    let source = r#"
+use std::fmt;
+use std::str::FromStr;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+struct Name;
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Formatter::write_str(f, "name")?;
+        std::fmt::Formatter::write_str(f, "!")
+    }
+}
+
+fn main() {
+    let r: Result<i64, std::num::ParseIntError> = "3".parse();
+    let bad: Result<u8, std::num::ParseIntError> = "x".parse();
+    let d: Duration = Duration::from_secs(2);
+    let start: Instant = Instant::now();
+    let now = Instant::now;
+    let later: Option<Instant> = Some(now());
+    let secs = Duration::from_secs;
+    let sum = Iterator::sum::<i64>(vec![1i64, 2, 3].into_iter());
+    let parsed = <i64 as FromStr>::from_str("4").unwrap();
+    let wide = <i64 as TryFrom<i32>>::try_from(5).unwrap();
+    let narrow = <u8 as TryFrom<i32>>::try_from(300).is_err();
+    let t: SystemTime = UNIX_EPOCH + Duration::from_secs(90);
+    let mut u = t - Duration::from_secs(30);
+    u += Duration::from_secs(1);
+    u -= Duration::from_secs(2);
+    println!("{r:?} {bad:?} {d:?} {} {:?} {}", later.unwrap() >= start, secs(3), Name);
+    println!("{sum} {parsed} {wide} {narrow} {:?}", u.duration_since(UNIX_EPOCH).unwrap());
+    println!("{} {} {:?}", t > u, t <= u, t.cmp(&u));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Ok(3) Err(ParseIntError { kind: InvalidDigit }) 2s true 3s name!\n6 4 5 true 59s\ntrue false Greater\n"
+    );
+}

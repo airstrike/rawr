@@ -1663,11 +1663,11 @@ impl<'a> Parser<'a> {
             ));
             return Ok(self.operator_expr(source, param, call));
         }
-        // `Into::<String>::into(x)`, `From::<N>::from(x)`: a prelude
-        // trait's argument written.
+        // `Into::<String>::into(x)`, `From::<N>::from(x)`, `TryFrom::<N>`:
+        // a prelude trait's argument written.
         if matches!(self.peek(), Token::DoubleColon)
             && self.peek_second() == Token::LessThan
-            && let Some(std_name) = ["From", "Into"]
+            && let Some(std_name) = ["From", "Into", "TryFrom", "TryInto"]
                 .into_iter()
                 .find(|std_name| *std_name == name.as_str())
             && !self.ufcs_trait(&name)
@@ -1702,7 +1702,9 @@ impl<'a> Parser<'a> {
             }
             if let [module, std_name] = &segments[..]
                 && module == "convert"
-                && let Some(std_name) = ["From", "Into"].into_iter().find(|name| name == std_name)
+                && let Some(std_name) = ["From", "Into", "TryFrom", "TryInto"]
+                    .into_iter()
+                    .find(|name| name == std_name)
                 && matches!(ahead.peek(), Some((Token::LessThan, _)))
                 && !self.ufcs_trait(std_name)
             {
