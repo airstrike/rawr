@@ -1087,7 +1087,9 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     // `<u64 as NumCast>::from` (#1613, #1614).
     assert!(printed.contains("\nwidened Some(9)\n"), "{printed}");
     // inboard's inbox item style: a typed `let` of a `Box<dyn Fn(&Theme)
-    // -> Padding>` reaches each `if` arm, whose boxed closure coerces to it.
+    // -> Padding>` reaches each `if` arm, whose boxed closure coerces to it,
+    // and the box fills the crate's `impl Fn(&T) -> Padding`, as std's `impl
+    // Fn for Box<F>` lets it.
     assert!(
         printed.contains(
             "\nitem Padding { vertical: 3.0, horizontal: 120.5 } \

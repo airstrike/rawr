@@ -13565,19 +13565,11 @@ fn render_scoped_receiver(
             (call, converted, copied_back(signature, substitutions)?)
         }
     };
-    // A method that calls a script closure back at once, as `Element<'a,
-    // M>::map(f)` maps its message, lends the arena while it runs, as
-    // `render_borrowed_receiver`'s does, so the closure's own native calls
-    // reach it (#1473).
-    let calls_back = signature.inputs().iter().any(|ty| {
-        callable_parameter(ty, signature)
-            || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature))
-    });
-    let call = if calls_back {
-        format!("lend(arguments.arena, || {call})")
-    } else {
-        call
-    };
+    // The call lends the arena while it runs, as `render_borrowed_receiver`'s
+    // does, so a script closure it calls back reaches it: one it takes, as
+    // `Element<'a, M>::map(f)` maps its message (#1473), or one the receiver
+    // holds, as a `&self` method calls the style closure it was given.
+    let call = format!("lend(arguments.arena, || {call})");
     // A `&str` the call lends the receiver, as `label(impl IntoFragment<'a>)`
     // takes one, is pinned in the region the receiver is in, at its
     // lifetime, as a slot's region pins its strings.

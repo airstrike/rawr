@@ -29,6 +29,7 @@ impl<'a> Parser<'a> {
         {
             *argument = iterator;
         }
+        self.fill_fn_bound(expected, argument);
         self.coerce_expr(expected, argument)?;
         // A `u64` or a `usize` passed where the parameter's type names a
         // generic (`T`, `&[T]`, `Option<T>`), which the body formats and
@@ -50,6 +51,48 @@ impl<'a> Parser<'a> {
             argument.source.cover(argument.span);
         }
         Ok(())
+    }
+
+    /// A `Box<dyn Fn>` or a `&dyn Fn` (or a box or reference of one, as
+    /// `&Box<dyn Fn>`) given where a function takes a function value, as a
+    /// crate's `impl Fn(&Theme) -> Style` or a script's `F: Fn(i64)`: the
+    /// function it points to, as std's `impl Fn for Box<F>` and `impl Fn
+    /// for &F` let it fill the bound. Boxes and references are their
+    /// values at runtime, so the value is passed on as it is, and a crate
+    /// takes it as it takes any closure. std has no such impl for `Rc` or
+    /// `Arc`, so a counted function stays a mismatch, as in rustc.
+    pub(super) fn fill_fn_bound(&self, expected: &Ty, argument: &mut ParsedExpr) {
+        if !matches!(
+            self.inference.resolve(expected),
+            Ty::Fn { .. } | Ty::Callable { .. }
+        ) {
+            return;
+        }
+        let mut ty = self.inference.resolve(&argument.ty);
+        let (mut boxed, mut borrowed) = (false, false);
+        loop {
+            ty = match ty {
+                Ty::Boxed(target) => {
+                    boxed = true;
+                    self.inference.resolve(&target)
+                }
+                Ty::Reference { target, .. } => {
+                    borrowed = true;
+                    self.inference.resolve(&target)
+                }
+                _ => break,
+            };
+        }
+        // A borrowed closure item stays the caller's: only a function
+        // value, which a use copies, reads through a reference.
+        let function = match ty {
+            Ty::Fn { .. } => boxed || borrowed,
+            Ty::FnItem { .. } | Ty::FnChoice { .. } => boxed && !borrowed,
+            _ => false,
+        };
+        if function {
+            argument.ty = ty;
+        }
     }
 
     /// `&String` reads as `&str` where Rust takes a string slice.

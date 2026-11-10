@@ -115,7 +115,8 @@ pub fn inbox<'a>(theme: &'a theme::Theme) -> Element<'a, Message> {
 /// An inbox item's padding, as inboard's `inbox::view` styles an item: a
 /// typed `let` expects its `if` to be a `Box<dyn Fn>`, so each arm's boxed
 /// closure, which gives a crate struct over a native function's, coerces
-/// to it.
+/// to it. The box is then given by value to a crate method that takes an
+/// `impl Fn(&Theme) -> Padding`, as inboard gives it to `container::style`.
 pub fn item_padding(theme: &theme::Theme, unread: bool, last: bool) -> ui::Padding {
     let bottom = if last { 3.0 } else { 0.0 };
     let style: Box<dyn Fn(&theme::Theme) -> ui::Padding> = if unread {
@@ -129,7 +130,7 @@ pub fn item_padding(theme: &theme::Theme, unread: bool, last: bool) -> ui::Paddi
             ..theme::container::item(theme)
         })
     };
-    style(theme)
+    ui::framed().style(style).padding(theme)
 }
 
 /// The sidebar, as inboard's views: a marked fn gives the theme native
