@@ -514,6 +514,7 @@ fn prepare(
             Err(error) => return Err(Error::other(error)),
         };
         remembered = false;
+        rawr_import::progress::phase("resolving");
         let mut prepared = request
             .prepare_cached_in(&limits, scope)
             .map_err(Error::import)?;
@@ -534,6 +535,7 @@ fn prepare(
         }
         // What a crate derive's expansion runs against: this run's own build.
         let basis = prepared.expansion_basis();
+        rawr_import::progress::phase("reading API");
         let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
