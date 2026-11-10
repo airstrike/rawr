@@ -290,6 +290,7 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
         #[cfg(not(unix))]
         let _ = target;
     } else {
+        crate::progress::copied();
         let dep_info = matches!(
             destination
                 .extension()

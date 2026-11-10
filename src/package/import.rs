@@ -118,7 +118,7 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
-        self.compile_imported_applied(contract, snapshot, &limits, &[], None)
+        self.compile_imported_applied(contract, snapshot, &limits, &[], None, None)
             .map(|compiled| compiled.demand)
     }
 
@@ -126,7 +126,9 @@ impl crate::Engine {
     /// program's imported calls need (D650). Each was proved locally from
     /// intrinsic facts; a call none answers fails with the call to prove.
     /// `facade` is the contract's cached facade node, whose plan the check
-    /// reads instead of generating it a second time (#1618).
+    /// reads instead of generating it a second time, and the program is
+    /// loaded through `cells`, so a check that remembers its parses parses
+    /// each source once across its rounds (#1618).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn compile_imported_with_applications(
@@ -135,6 +137,7 @@ impl crate::Engine {
         facade: &rawr_import::surface::facade::Cached,
         snapshot: crate::reload::source::Snapshot,
         applications: &[rawr_import::surface::application::Application],
+        cells: &super::Cells,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
         self.compile_imported_applied(
@@ -143,6 +146,7 @@ impl crate::Engine {
             &limits,
             applications,
             Some(facade.bytes()),
+            Some(cells),
         )
         .map(|compiled| compiled.demand)
     }
@@ -154,6 +158,7 @@ impl crate::Engine {
         limits: &rawr_import::limits::Limits,
         applications: &[rawr_import::surface::application::Application],
         facade: Option<&[u8]>,
+        cells: Option<&super::Cells>,
     ) -> Result<CompiledImported, super::Error> {
         snapshot
             .revalidate()
@@ -167,7 +172,10 @@ impl crate::Engine {
         let target = crate::project::Target::discover(snapshot.entry())
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        let graph = super::Graph::load(self, &target)?;
+        let graph = match cells {
+            Some(cells) => super::Graph::load_with_cells(self, &target, cells)?,
+            None => super::Graph::load(self, &target)?,
+        };
         let current_source = crate::reload::source::Graph::from_package(&graph);
         let current_snapshot = crate::reload::source::Snapshot::from_graph(&current_source);
         if !snapshot.exactly_matches(&current_snapshot) {

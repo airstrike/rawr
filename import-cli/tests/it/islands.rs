@@ -1112,7 +1112,9 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     );
     // Each round says what its stages did: the first reads no API, and
     // each demand round probes once and reads, classifies and generates
-    // the whole API it grew to (#1618).
+    // the whole API it grew to. No round parses the program again: the
+    // check reads its sources' parses from their cells once and remembers
+    // them (#1618).
     let round = |number: usize| {
         said.lines()
             .find_map(|line| line.strip_prefix(&format!("rawr-import: round {number}: ")))
@@ -1120,13 +1122,14 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
             .to_owned()
     };
     assert!(
-        round(1).ends_with("probes 0, read 0, classified 0, generated 0"),
+        round(1).ends_with("probes 0, read 0, classified 0, generated 0, parsed 0"),
         "{said}"
     );
     for number in 2..=4 {
         let stages = round(number);
         assert!(stages.contains(", probes 1, read "), "{said}");
         assert!(!stages.contains("read 0,"), "{said}");
+        assert!(stages.ends_with(", parsed 0"), "{said}");
     }
     let mut run = start(&root, &[]);
     for expected in printed.lines() {

@@ -462,9 +462,16 @@ fn prepare(
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
 ) -> Result<crate::Prepared, crate::Error> {
     use crate::Error;
+    // The program's parses, read from its cells and remembered: each round's
+    // check loads the program again, and a demand changes none of its
+    // sources, so no round parses one the check read already (#1618).
+    let cells = rawr::package::Cells::new(rawr_cli::cells::directory(target)).remember();
     let graph = match graph {
         Some(graph) => graph,
-        None => rawr::package::Graph::load(&rawr::Engine::new(), target).map_err(Error::Rawr)?,
+        None => {
+            rawr::package::Graph::load_with_cells(&rawr::future::facade::engine(), target, &cells)
+                .map_err(Error::Rawr)?
+        }
     };
     let limits = graph.rust_limits();
     let source = rawr::reload::source::Graph::from_package(&graph);
@@ -602,12 +609,16 @@ fn prepare(
                             // (D683.4).
                             let mut engine = rawr::future::facade::engine();
                             engine.set_access(rawr::Access::all());
-                            let error = match engine.compile_imported_with_applications(
+                            let parsed = cells.counts().parsed;
+                            let compiled = engine.compile_imported_with_applications(
                                 contract,
                                 facade,
                                 snapshot,
                                 &applications,
-                            ) {
+                                &cells,
+                            );
+                            rawr_import::progress::parsed(cells.counts().parsed - parsed);
+                            let error = match compiled {
                                 Ok(demand) => {
                                     let checked =
                                         Checked(*demand.contract_fingerprint().as_bytes());
