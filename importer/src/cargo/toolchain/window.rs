@@ -70,7 +70,7 @@ mod tests {
     use super::{contains, CHANGES, NEWEST, OLDEST};
 
     #[test]
-    fn each_change_is_inside_the_window_in_date_order() {
+    fn each_change_follows_the_oldest_nightly_in_date_order() {
         assert!(contains(OLDEST) && contains(NEWEST));
         // `~` sorts after every digit, so `NEWEST~` is just past NEWEST
         // wherever CI's nightly-window workflow moves it.
@@ -80,7 +80,9 @@ mod tests {
         }
         for (cfg, since) in CHANGES {
             assert!(cfg.starts_with("rawr_rustc_"), "{cfg}");
-            assert!(OLDEST < since && contains(since), "{cfg} {since}");
+            // A real break is recorded before the nightly-window run moves
+            // NEWEST to it, so an entry may be dated past NEWEST.
+            assert!(OLDEST < since, "{cfg} {since}");
         }
     }
 }

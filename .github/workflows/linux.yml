@@ -83,6 +83,18 @@ jobs:
             --features rustc-driver --bin rawr-import-driver
           echo "$PWD/target/release" >> "$GITHUB_PATH"
 
+      # Code written against the pin's rustc API can break on a later nightly
+      # the window admits, so the driver also builds on the window's newest.
+      - name: Build rawr-import-driver on the window's newest nightly
+        run: |
+          newest="$(sed -n 's/^pub(crate) const RANGE: &str = ".* through \(nightly-[0-9-]*\)";$/\1/p' \
+            importer/src/cargo/toolchain/window.rs)"
+          rustup toolchain install "$newest" --profile minimal \
+            --component rustc-dev,rust-src --no-self-update
+          cargo "+$newest" build --locked -p rawr-import \
+            --features rustc-driver --bin rawr-import-driver \
+            --target-dir target/newest-nightly
+
       # rawr embeds std's table for the pinned nightly (D711): it must be
       # the one this nightly gives.
       - name: Check the std table is current
