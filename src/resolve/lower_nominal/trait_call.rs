@@ -128,6 +128,30 @@ impl<'a> Parser<'a> {
             && !self.models.std_traits.contains(name)
     }
 
+    /// A function's turbofish ahead, `::<A, B>`, as its tokens, taken from
+    /// the input. `None`, taking nothing, when none is ahead.
+    fn take_turbofish_tokens(&mut self) -> Option<Vec<(Token, Position)>> {
+        if !matches!(self.peek(), Token::DoubleColon) || self.peek_second() != Token::LessThan {
+            return None;
+        }
+        let mut tokens = vec![self.next()];
+        let mut depth = 0_usize;
+        loop {
+            let (token, position) = self.next();
+            depth = match token {
+                Token::LessThan => depth + 1,
+                Token::GreaterThan => depth.saturating_sub(1),
+                Token::RightShift => depth.saturating_sub(2),
+                Token::EOF => 0,
+                _ => depth,
+            };
+            tokens.push((token, position));
+            if depth == 0 {
+                return Some(tokens);
+            }
+        }
+    }
+
     /// `<A, B>` after a trait's name in a qualified path.
     pub(super) fn parse_trait_path_arguments(&mut self) -> Result<Vec<Ty>, Error> {
         self.expect(Token::LessThan, "'<' before a trait's arguments")?;
@@ -155,14 +179,21 @@ impl<'a> Parser<'a> {
     ) -> Option<(&'static str, &'static str, usize)> {
         let mut ahead = self.input.clone();
         let mut segments = vec![ImmutableString::from(first)];
+        let mut turbofish = false;
         while matches!(ahead.peek(), Some((Token::DoubleColon, _))) {
             ahead.next();
             match ahead.next() {
                 Some((Token::Identifier(name), _)) => segments.push((*name).as_str().into()),
+                // `Iterator::sum::<i64>(it)`: the function's turbofish, which
+                // `parse_std_trait_call` reads.
+                Some((Token::LessThan, _)) if segments.len() > 1 => {
+                    turbofish = true;
+                    break;
+                }
                 _ => return None,
             }
         }
-        let called = matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _)));
+        let called = turbofish || matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _)));
         if segments.len() < 2 {
             return None;
         }
@@ -258,6 +289,9 @@ impl<'a> Parser<'a> {
         member: &str,
         start: Position,
     ) -> Result<ParsedExpr, Error> {
+        // `Iterator::sum::<i64>(it)`: the turbofish goes to the method call
+        // the trait's function is.
+        let mut turbofish = self.take_turbofish_tokens();
         // `.map(From::from)`, `ToString::to_string` as a value: the closure
         // `|value| value.into()` (or the method named).
         if !matches!(self.peek(), Token::LeftParen | Token::Unit)
@@ -329,6 +363,14 @@ impl<'a> Parser<'a> {
                 call,
             )
         };
+        // A turbofish only a method call takes.
+        let turbofish_not_yet = || Error::NotYet {
+            path: format!("{}::<..>", crate::resolve::Qualified(trait_name, member)).into(),
+            reference: call,
+        };
+        if turbofish.is_some() && matches!(trait_name, "Default" | "cmp") {
+            return Err(turbofish_not_yet());
+        }
         if trait_name == "Default" {
             if !arguments.is_empty() {
                 return Err(expects(0));
@@ -528,6 +570,7 @@ impl<'a> Parser<'a> {
                         (Token::Period, close),
                         (identifier(member), close),
                     ]);
+                    tokens.extend(turbofish.take().into_iter().flatten());
                     if rest.is_empty() {
                         tokens.push((Token::Unit, close));
                     } else {
@@ -553,6 +596,9 @@ impl<'a> Parser<'a> {
                     });
                 }
             },
+        }
+        if turbofish.is_some() {
+            return Err(turbofish_not_yet());
         }
         self.splice_tokens(tokens);
         self.parse_primary()
@@ -648,7 +694,10 @@ impl<'a> Parser<'a> {
             });
         };
         let mut explicit = explicit.unwrap_or_default();
-        let arity = usize::from(matches!(trait_name, "From" | "Into"));
+        let arity = usize::from(matches!(
+            trait_name,
+            "From" | "Into" | "TryFrom" | "TryInto"
+        ));
         if !explicit.is_empty() && explicit.len() != arity {
             return Err(Error::InvalidTypeArguments {
                 ty: trait_name.into(),
@@ -658,10 +707,22 @@ impl<'a> Parser<'a> {
             });
         }
         let argument = explicit.pop();
+        // A fallible conversion's value is a `Result` of its target, with
+        // the error its impl gives.
+        let fallible = |this: &mut Self, target: Option<Ty>| {
+            target.map(|target| Ty::Result(Box::new(target), Box::new(this.inference.fresh())))
+        };
         let (source, target) = match trait_name {
             "Default" => (None, self_ty),
             "From" => (argument, self_ty),
             "Into" => (self_ty, argument),
+            "TryFrom" => (argument, fallible(self, self_ty)),
+            "TryInto" => {
+                let target = fallible(self, argument);
+                (self_ty, target)
+            }
+            // `<i64 as FromStr>::from_str(s)`: the parse into `Self`.
+            "FromStr" => (None, fallible(self, self_ty)),
             _ => {
                 return match self_ty {
                     Some(self_ty) => {
@@ -671,8 +732,26 @@ impl<'a> Parser<'a> {
                 };
             }
         };
+        let conversion = if matches!(trait_name, "TryFrom" | "TryInto") {
+            "try_into"
+        } else {
+            "into"
+        };
         let mut value = if trait_name == "Default" {
             self.parse_std_trait_call(trait_name, member, start)?
+        } else if trait_name == "FromStr" {
+            // The call and its postfix up to a `;` that stops the loop, so
+            // the target is the parse's.
+            let (arguments, close) = self.take_argument_tokens()?;
+            let mut tokens = vec![(Token::LeftParen, start)];
+            tokens.extend(arguments);
+            tokens.extend([(Token::RightParen, close), (Token::SemiColon, close)]);
+            self.splice_tokens(tokens);
+            let call = self.parse_std_trait_call(trait_name, member, start)?;
+            let mut value = self.parse_postfix_of(call)?;
+            self.expect(Token::SemiColon, "the end of a qualified parse")?;
+            value.span = span(start, close);
+            value
         } else {
             // `x` as written, coerced to its type, then `.into()`, ended by
             // a `;` that stops the postfix loop.
@@ -698,6 +777,7 @@ impl<'a> Parser<'a> {
             }
             let call = span(start, close);
             if let Some(target) = &target
+                && conversion == "into"
                 && let Some((items, owner)) = self.text_from_target(&argument.ty, target, call)?
             {
                 self.move_local(&mut argument)?;
@@ -707,7 +787,7 @@ impl<'a> Parser<'a> {
             }
             self.splice_tokens(vec![
                 (Token::Period, close),
-                (Token::Identifier(Box::new("into".into())), close),
+                (Token::Identifier(Box::new(conversion.into())), close),
                 (Token::Unit, close),
                 (Token::SemiColon, close),
             ]);

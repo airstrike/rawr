@@ -106,6 +106,25 @@ impl<'a> Parser<'a> {
             )
     }
 
+    /// The std path `segments` name: as written when no `use` binds the
+    /// first, or through the std module a `use` binds it to, as
+    /// `fmt::Formatter` after `use std::fmt`. `None` for a path through any
+    /// other import.
+    pub(super) fn std_module_path(&self, segments: &[(ImmutableString, Span)]) -> Option<String> {
+        let written = segments
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join("::");
+        let first = segments.first()?.0.as_str();
+        let Some(binding) = self.models.import(first) else {
+            return Some(written);
+        };
+        let root = binding.qualified.split("::").next().unwrap_or_default();
+        (matches!(binding.target, item::Import::Module) && crate::std_table::is_root(root))
+            .then(|| format!("{}{}", binding.qualified, &written[first.len()..]))
+    }
+
     /// The path ahead from its first segment `name`, which is read: its
     /// segments up to a turbofish or anything else, their span, and the
     /// token after them.

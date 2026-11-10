@@ -1383,3 +1383,45 @@ fn an_or_pattern_binding_a_name_in_one_alternative_is_e0408() {
         )
     );
 }
+
+#[test]
+fn negating_an_unsigned_value_is_e0600() {
+    // A literal and a local alike: unsigned integers have no `Neg` (#945).
+    for source in [
+        "fn main() {\n    let u: u8 = -1;\n}\n",
+        "fn main() {\n    let x: u8 = 3;\n    let y = -x;\n}\n",
+        "fn main() {\n    let n = 4usize;\n    let m = -n;\n}\n",
+    ] {
+        let (code, message, label) = refused(source);
+        assert_eq!(code, "E0600", "{source}");
+        assert!(
+            message.starts_with("cannot apply unary operator `-` to type `u"),
+            "{message}"
+        );
+        assert_eq!(label, Some("cannot apply unary operator `-`".into()));
+    }
+}
+
+#[test]
+fn changing_a_collection_behind_a_shared_reference_is_e0596() {
+    // `&self` of an impl for `Vec`, and a local `&Vec` (#938).
+    assert_eq!(
+        refused(
+            "trait T { fn f(&self); }\nimpl T for Vec<i32> { fn f(&self) { self.push(1) } }\n\
+             fn main() {}\n"
+        ),
+        (
+            "E0596".into(),
+            "cannot borrow `*self` as mutable, as it is behind a `&` reference".into(),
+            label("`self` is a `&` reference, so it cannot be borrowed as mutable")
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let mut v = vec![1];\n    let r = &v;\n    r.push(1);\n}\n"),
+        (
+            "E0596".into(),
+            "cannot borrow `*r` as mutable, as it is behind a `&` reference".into(),
+            label("`r` is a `&` reference, so it cannot be borrowed as mutable")
+        )
+    );
+}

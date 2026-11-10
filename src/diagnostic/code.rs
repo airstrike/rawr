@@ -242,8 +242,6 @@ pub(crate) fn private(item: crate::resolve::Private) -> Code {
     }
 }
 
-/// The code of rustc's error `rustc` that `resolve::Error::StdPath` carries:
-/// a std path's (`resolve::std_path`), or another error in rustc's words.
 /// The code of a local whose type is unknown where rustc needs it.
 pub(crate) fn type_needed(rustc: &str) -> Code {
     match rustc {
@@ -253,6 +251,8 @@ pub(crate) fn type_needed(rustc: &str) -> Code {
     }
 }
 
+/// The code of rustc's error `rustc` that `resolve::Error::StdPath` carries:
+/// a std path's (`resolve::std_path`), or another error in rustc's words.
 pub(crate) fn std_path(rustc: &str) -> Code {
     match rustc {
         "E0432" => RESOLVE_UNRESOLVED_IMPORT,
@@ -268,6 +268,7 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0532" => RESOLVE_EXPECTED_PATTERN,
         "E0072" => RESOLVE_INFINITE_SIZE,
         "E0107" => RESOLVE_GENERIC_ARGUMENT_COUNT,
+        "E0596" => BORROW_NOT_MUTABLE,
         _ => RESOLVE_UNSTABLE,
     }
 }

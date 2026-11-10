@@ -78,6 +78,13 @@ fn equal<T: PartialEq + Clone + 'static>(lhs: &Dynamic, rhs: &Dynamic) -> Option
     Some(*lhs.read_lock::<T>()? == *rhs.read_lock::<T>()?)
 }
 
+fn compare<T: PartialOrd + Clone + 'static>(
+    lhs: &Dynamic,
+    rhs: &Dynamic,
+) -> Option<std::cmp::Ordering> {
+    lhs.read_lock::<T>()?.partial_cmp(&*rhs.read_lock::<T>()?)
+}
+
 fn encode<T: Carry>(value: &Dynamic, out: &mut Vec<u8>) -> Option<()> {
     T::encode(&*value.read_lock::<T::Value>()?, out);
     Some(())
@@ -90,6 +97,14 @@ fn decode<T: Carry>(bytes: &[u8]) -> Option<Dynamic> {
 pub(crate) fn register_equality<T: PartialEq + Clone + 'static>() {
     if let Ok(mut equalities) = EQUALITIES.write() {
         equalities.insert(TypeId::of::<T>(), equal::<T>);
+    }
+}
+
+/// Let the values of the host type `T` order by its own `PartialOrd`, as a
+/// facade's ordered std type does: `<` and `Ord::cmp` of them.
+pub(crate) fn register_ordering<T: PartialOrd + Clone + 'static>() {
+    if let Ok(mut orderings) = ORDERINGS.write() {
+        orderings.insert(TypeId::of::<T>(), compare::<T>);
     }
 }
 

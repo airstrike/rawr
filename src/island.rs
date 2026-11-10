@@ -927,11 +927,40 @@ pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Outp
                 _ => 0,
             },
             Err(error) => {
-                eprintln!("error: {}", crate::future::message(&error));
+                eprint!("{}", main_panic(&error));
                 101
             }
         })
     }))
+}
+
+/// What a program built by Cargo prints on stderr when its `main` fails
+/// with `error`: a run-time failure is its panic on the main thread, as
+/// Rust's panic hook prints it; rawr's own refusal to run it is its error.
+pub fn main_failure(error: &program::Error) -> String {
+    match error {
+        program::Error::Evaluation { error, .. } => main_panic(error),
+        error => format!("error: {error}\n"),
+    }
+}
+
+/// A future's failure from its function's `error`: a run-time failure as
+/// it is, so a panic keeps its message and position; rawr's own refusal to
+/// run the function by its text.
+fn runtime_error(error: program::Error) -> Box<crate::EvalAltResult> {
+    match error {
+        program::Error::Evaluation { error, .. } => error,
+        error => crate::future::error(error.to_string()),
+    }
+}
+
+/// The panic of `main`'s run-time failure `error`, with Rust's note on
+/// backtraces.
+fn main_panic(error: &crate::EvalAltResult) -> String {
+    match crate::diagnostic::Report::from_evaluation(None, error) {
+        Ok(report) => crate::diagnostic::panic(&report),
+        Err(_) => format!("error: {}\n", crate::future::message(error)),
+    }
 }
 
 /// Call the published generation's Rawr `fn main`. `None` when nothing is
@@ -1225,7 +1254,7 @@ impl crate::future::Host for Current {
         self.bootstrap
             .catalog()
             .invoke_item(function, arguments)
-            .map_err(|error| crate::future::error(error.to_string()))
+            .map_err(runtime_error)
     }
 
     #[cfg(feature = "sync")]
@@ -1562,7 +1591,7 @@ impl crate::future::Remote for Shared {
     ) -> crate::RawrResultOf<Dynamic> {
         self.authority
             .invoke_bound(function, arguments, self.runtime.clone())
-            .map_err(|error| crate::future::error(error.to_string()))
+            .map_err(runtime_error)
     }
 
     fn validate(
@@ -2641,4 +2670,25 @@ fn main_text_ignores_layout_and_comments_and_stops_at_its_brace() {
     assert_eq!(main_text(moved), main_text(one));
     assert_ne!(main_text(&edited), main_text(one));
     assert_eq!(main_text("fn domain() {}"), None);
+}
+
+#[cfg(test)]
+mod main_tests {
+    use crate::Engine;
+
+    /// A runner's `main` that panics prints the panic as a program built
+    /// by Cargo does, with no rawr wording about the item it called (#969).
+    #[test]
+    fn a_failing_main_prints_rusts_panic() {
+        let error = Engine::new()
+            .run("fn main() {\n    let o: Option<i32> = None;\n    o.unwrap();\n}\nmain();\n")
+            .expect_err("`main` panics");
+        assert_eq!(
+            super::main_panic(&error),
+            format!(
+                "thread 'main' panicked:\ncalled `Option::unwrap()` on a `None` value\n{}\n",
+                crate::diagnostic::BACKTRACE_NOTE
+            )
+        );
+    }
 }

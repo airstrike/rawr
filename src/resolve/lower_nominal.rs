@@ -219,7 +219,7 @@ use op::{
     IntrinsicOperation, Keys, Op, PreludeOp, ProjectionOperation, WitnessedOp,
     FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS, SHAPED_HASHED, SHAPED_TOTAL,
 };
-use operator::{cast_value, compound_operator, kind_code, unsigned_order};
+use operator::{cast_value, compound_operator, kind_code, unsigned_negation, unsigned_order};
 use pattern::{PatternBinding, Prelude};
 pub(crate) use relocate::relocate;
 use relocate::rewrite_statements;

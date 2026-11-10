@@ -5094,7 +5094,7 @@ mod __rawr_profile {
                 _ => 0,
             },
             Some(Err(error)) => {
-                eprintln!("error: {error}");
+                eprint!("{}", __rawr_internal::island::main_failure(&error));
                 101
             }
         })

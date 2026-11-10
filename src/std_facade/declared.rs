@@ -134,6 +134,8 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Copy,
             capability::Kind::PartialEq,
             capability::Kind::Eq,
+            capability::Kind::PartialOrd,
+            capability::Kind::Ord,
             capability::Kind::Send,
             capability::Kind::Static,
         ],
@@ -2604,6 +2606,18 @@ pub(super) static STEPS: &[Step] = &[
         kind: Kind::Method(Mode::Shared),
         inputs: &[Ty::Builtin(Builtin::Duration)],
         output: Ty::Option(&Ty::Registered("time::SystemTime")),
+    },
+    Step::Item {
+        path: "time::SystemTime::add",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[Ty::Builtin(Builtin::Duration)],
+        output: Ty::Registered("time::SystemTime"),
+    },
+    Step::Item {
+        path: "time::SystemTime::sub",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[Ty::Builtin(Builtin::Duration)],
+        output: Ty::Registered("time::SystemTime"),
     },
     Step::Item {
         path: "time::SystemTimeError::duration",

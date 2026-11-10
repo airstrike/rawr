@@ -303,11 +303,37 @@ impl Parser<'_> {
     /// element of one (`v[i]`, a map's entry), or a field, each where it is.
     pub(super) fn keyed_place(&mut self, value: &ParsedExpr) -> Result<origin::Fragment, Error> {
         self.mutable_use(value, value.span);
+        // A change through a `&` reference: rustc's E0596, in its words for
+        // a named reference or another one.
         if let Ty::Reference { mutable: false, .. } = self.inference.resolve(&value.ty) {
-            return Err(Error::TypeMismatch {
-                expected: "a mutable collection (`&mut`, or a `mut` binding)".into(),
-                actual: value.ty.name(&self.models),
-                expression: value.span,
+            // The reference as written, when a local or `self` is the
+            // whole receiver of the change (`r.push(1)`).
+            let written = self.written_from(value.span.start()).unwrap_or_default();
+            let name: String = written
+                .chars()
+                .take_while(|character| character.is_alphanumeric() || *character == '_')
+                .collect();
+            let named = (written[name.len()..].starts_with('.')
+                && self.bindings.contains_key(name.as_str()))
+            .then_some(name.as_str());
+            let (message, label) = match named {
+                Some(binding) => (
+                    format!(
+                        "cannot borrow `*{binding}` as mutable, as it is behind a `&` reference"
+                    ),
+                    format!("`{binding}` is a `&` reference, so it cannot be borrowed as mutable"),
+                ),
+                _ => (
+                    "cannot borrow data in a `&` reference as mutable".into(),
+                    "cannot borrow as mutable".into(),
+                ),
+            };
+            return Err(Error::StdPath {
+                code: "E0596",
+                message: message.into(),
+                label: Some(label.into()),
+                note: None,
+                reference: named.map_or(value.span, |name| self.name_span(value.span, name)),
             });
         }
         match &value.lvalue {
