@@ -32,11 +32,11 @@ impl<'a> Parser<'a> {
             return match self.mutation_binding(root.as_str()) {
                 Some(binding) if binding.mutable => Ok(()),
                 Some(binding) => Err(match &binding.kind {
-                    BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
-                        owner: owner.clone(),
-                        mutation: operation,
-                        receiver: binding.declaration,
-                    },
+                    BindingKind::Receiver { .. } => self.receiver_borrow(
+                        &binding.ty,
+                        self.written_place(receiver.span),
+                        receiver.span,
+                    ),
                     BindingKind::Local | BindingKind::Invocation => {
                         let place = self
                             .written(receiver.span)
@@ -147,6 +147,68 @@ impl<'a> Parser<'a> {
         (from < to && to <= chars.len()).then(|| chars[from..to].iter().collect())
     }
 
+    /// rustc's E0594 for an assignment at `at`, the whole assignment, to a
+    /// place below a `self` of type `receiver` that can't change it: one
+    /// behind `&self`, or a `self` not declared `mut`.
+    pub(super) fn receiver_assignment(&self, receiver: &Ty, at: Span) -> Error {
+        let place = self.written(at).map_or_else(
+            || "self".to_owned(),
+            |text| assigned_place(&text).to_owned(),
+        );
+        if !matches!(
+            self.inference.resolve(receiver),
+            Ty::Reference { mutable: false, .. }
+        ) {
+            return Error::assign_immutable(&place, "self", at);
+        }
+        Error::StdPath {
+            code: "E0594",
+            message: format!("cannot assign to `{place}`, which is behind a `&` reference").into(),
+            label: Some(
+                "`self` is a `&` reference, so the data it refers to cannot be written".into(),
+            ),
+            note: None,
+            reference: at,
+        }
+    }
+
+    /// The place below `self` written at `at`, as `self.items`.
+    pub(super) fn written_place(&self, at: Span) -> Option<String> {
+        self.written(at)
+            .filter(|text| text.starts_with("self.") || text.starts_with("self["))
+    }
+
+    /// rustc's E0596 for a `&mut` borrow of `place`, a place below `self`
+    /// written from where `at` starts, or `self` itself, through a `self`
+    /// of type `receiver` that can't change it: one behind `&self`, or a
+    /// `self` not declared `mut`.
+    pub(super) fn receiver_borrow(&self, receiver: &Ty, place: Option<String>, at: Span) -> Error {
+        let shared = matches!(
+            self.inference.resolve(receiver),
+            Ty::Reference { mutable: false, .. }
+        );
+        let at = place.as_deref().map_or(at, |place| {
+            Span::new(at.start(), text_end(at.start(), place))
+        });
+        let place = place.unwrap_or_else(|| if shared { "*self" } else { "self" }.to_owned());
+        if !shared {
+            return Error::borrow_immutable_place(&place, "self", at);
+        }
+        let label = if place == "*self" {
+            "`self` is a `&` reference, so it cannot be borrowed as mutable"
+        } else {
+            "`self` is a `&` reference, so the data it refers to cannot be borrowed as mutable"
+        };
+        Error::StdPath {
+            code: "E0596",
+            message: format!("cannot borrow `{place}` as mutable, as it is behind a `&` reference")
+                .into(),
+            label: Some(label.into()),
+            note: None,
+            reference: at,
+        }
+    }
+
     /// rustc's error for an assignment to `lvalue`, at `at`, whose root
     /// local `binding` (declared at `declaration`) isn't `mut`: E0384 for the
     /// local itself, E0596 for an element of a `Vec`, which `IndexMut`
@@ -250,11 +312,13 @@ impl<'a> Parser<'a> {
             return Ok(writeback);
         }
         Err(match &binding.kind {
-            BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
-                owner: owner.clone(),
-                mutation: operation,
-                receiver: binding.declaration,
-            },
+            BindingKind::Receiver { .. } => {
+                let place = match &value.lvalue {
+                    Some(Lvalue::Field(field)) => Some(format!("self.{}", field.member)),
+                    _ => self.written_place(value.span),
+                };
+                self.receiver_borrow(&binding.ty, place, value.span)
+            }
             // The method's `&mut self` borrows the local itself: rustc's
             // E0596, as for std's methods.
             BindingKind::Local | BindingKind::Invocation

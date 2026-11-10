@@ -221,8 +221,13 @@ fn impl_owners_duplicate_methods_and_self_scope_are_compile_checked() {
 
 #[test]
 fn shared_receivers_and_immutable_bindings_cannot_mutate() {
-    let shared = resolution_error(&Engine::new(), "struct Counter { value: i64 } impl Counter { fn break_it(&self) { self.value = 1; } }", Category::ImmutableReceiver, "shared receiver '&self'");
-    assert!(shared.secondary_span().is_some());
+    // An assignment through `&self` is rustc's E0594 (#1625).
+    assert_resolution(
+        &Engine::new(),
+        "struct Counter { value: i64 } impl Counter { fn break_it(&self) { self.value = 1; } }",
+        Category::StdPath,
+        "cannot assign to `self.value`, which is behind a `&` reference",
+    );
 
     assert_resolution(
         &Engine::new(),
@@ -231,13 +236,13 @@ fn shared_receivers_and_immutable_bindings_cannot_mutate() {
         "cannot borrow `counter` as mutable, as it is not declared as mutable",
     );
 
-    let shared_field = resolution_error(
+    // And a `&mut self` call on a field through it is E0596.
+    assert_resolution(
         &Engine::new(),
         "struct Child { value: i64 } struct Parent { child: Child } impl Child { fn increment(&mut self) { self.value += 1; } } impl Parent { fn reject(&self) { self.child.increment(); } }",
-        Category::ImmutableReceiver,
-        "shared receiver '&self'",
+        Category::StdPath,
+        "cannot borrow `self.child` as mutable, as it is behind a `&` reference",
     );
-    assert!(shared_field.secondary_span().is_some());
 
     assert_resolution(
         &Engine::new(),

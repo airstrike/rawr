@@ -2720,11 +2720,10 @@ impl<'a> Parser<'a> {
                     Some(binding) if binding.mutable => {}
                     Some(binding) => {
                         return Err(match &binding.kind {
-                            BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
-                                owner: owner.clone(),
-                                mutation: member_span,
-                                receiver: binding.declaration,
-                            },
+                            BindingKind::Receiver { .. } => self.receiver_assignment(
+                                &binding.ty,
+                                span(receiver.span.start(), member_span.end()),
+                            ),
                             BindingKind::Local | BindingKind::Invocation => {
                                 let place = self
                                     .written(span(receiver.span.start(), member_span.end()))

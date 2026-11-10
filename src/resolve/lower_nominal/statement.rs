@@ -390,7 +390,13 @@ impl<'a> Parser<'a> {
                 .then_some(binding.declaration)
                 .filter(|_| binding.available || deferred.is_none())
                 .map(|declaration| deferred.flatten().unwrap_or(declaration));
-        if !binding.mutable && !matches!(binding.kind, BindingKind::Local) {
+        // A place below a `self` that can't change it is rustc's E0594 once
+        // the value's type is checked, as an immutable local's is.
+        let receiver = (!binding.mutable
+            && matches!(binding.kind, BindingKind::Receiver { .. })
+            && !matches!(lvalue, Lvalue::Binding { .. }))
+        .then(|| binding.ty.clone());
+        if !binding.mutable && !matches!(binding.kind, BindingKind::Local) && receiver.is_none() {
             return Err(match &binding.kind {
                 BindingKind::Receiver { owner, .. } => Error::ImmutableReceiver {
                     owner: owner.clone(),
@@ -412,6 +418,7 @@ impl<'a> Parser<'a> {
         // `r = &mut b;` of a `&mut` local given new borrows.
         if compound_operator(&assignment).is_none()
             && immutable.is_none()
+            && receiver.is_none()
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
         {
             return self.rebind_selector(value.span, &value.ty, selector, mutable);
@@ -445,6 +452,10 @@ impl<'a> Parser<'a> {
         if let Some(declaration) = immutable {
             let assignment = span(value.span.start(), replacement.span.end());
             return Err(self.immutable_assignment(&lvalue, declaration, assignment));
+        }
+        if let Some(receiver) = receiver {
+            let assignment = span(value.span.start(), replacement.span.end());
+            return Err(self.receiver_assignment(&receiver, assignment));
         }
         // A `let x;` drops its value where its scope ends only on the paths
         // that gave it one, which needs drop flags Rawr doesn't keep.

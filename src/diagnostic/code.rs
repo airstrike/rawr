@@ -269,6 +269,7 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0072" => RESOLVE_INFINITE_SIZE,
         "E0107" => RESOLVE_GENERIC_ARGUMENT_COUNT,
         "E0596" => BORROW_NOT_MUTABLE,
+        "E0594" => BORROW_ASSIGN_IMMUTABLE,
         _ => RESOLVE_UNSTABLE,
     }
 }

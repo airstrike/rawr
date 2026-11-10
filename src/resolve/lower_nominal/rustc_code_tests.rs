@@ -1403,6 +1403,49 @@ fn negating_an_unsigned_value_is_e0600() {
 }
 
 #[test]
+fn assigning_to_a_field_through_a_shared_receiver_is_e0594() {
+    // `&self`, and a `self` not declared `mut` (#1625).
+    assert_eq!(
+        refused(
+            "struct Counter { value: i64 }\nimpl Counter {\n    fn reset(&self) {\n        \
+             self.value += 1;\n    }\n}\nfn main() {}\n"
+        ),
+        (
+            "E0594".into(),
+            "cannot assign to `self.value`, which is behind a `&` reference".into(),
+            label("`self` is a `&` reference, so the data it refers to cannot be written")
+        )
+    );
+    let (code, message, _) = refused(
+        "struct Counter { value: i64 }\nimpl Counter {\n    fn reset(self) {\n        \
+         self.value = 0;\n    }\n}\nfn main() {}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        (
+            "E0594",
+            "cannot assign to `self.value`, as `self` is not declared as mutable"
+        )
+    );
+    // A `&mut self` method of a field called through `&self` is E0596.
+    assert_eq!(
+        refused(
+            "struct Child { value: i64 }\nimpl Child {\n    fn bump(&mut self) {\n        \
+             self.value += 1;\n    }\n}\nstruct Parent { child: Child }\nimpl Parent {\n    \
+             fn bump(&self) {\n        self.child.bump();\n    }\n}\nfn main() {}\n"
+        ),
+        (
+            "E0596".into(),
+            "cannot borrow `self.child` as mutable, as it is behind a `&` reference".into(),
+            label(
+                "`self` is a `&` reference, so the data it refers to cannot be borrowed as \
+                 mutable"
+            )
+        )
+    );
+}
+
+#[test]
 fn changing_a_collection_behind_a_shared_reference_is_e0596() {
     // `&self` of an impl for `Vec`, and a local `&Vec` (#938).
     assert_eq!(
