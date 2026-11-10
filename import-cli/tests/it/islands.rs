@@ -84,6 +84,31 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// A supervised run whose marked file fails its check says `failed` and
+/// waits for a save. A wait for the program's output ends there, with the
+/// error rustc gives, instead of waiting for that save (#1585).
+#[test]
+fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
+    let root = crate::support::scratch().join("islands-failed-check");
+    let events = root.join("events.jsonl");
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(FIXTURE), &root);
+    edit(
+        &root.join("src/physics.rs"),
+        "const SCALE: i64 = 1;",
+        "const SCALE: i64 = \"one\";",
+    );
+    let mut run = start(&root, &[("RAWR_MCP_EVENTS", events)]);
+    let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.until(|line| parse(line).is_some())
+    }));
+    let failure = waited.expect_err("the program ran");
+    let failure = failure.downcast_ref::<String>().map_or("", String::as_str);
+    assert!(failure.starts_with("the run failed:"), "{failure}");
+    assert!(failure.contains("mismatched types"), "{failure}");
+}
+
 /// A package whose `target` holds a big subtree that git ignores, as a
 /// real app's does: the watcher stands for the program's inputs, not the
 /// tree, so a save of the marked file still reaches the running program,

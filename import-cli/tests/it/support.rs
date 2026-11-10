@@ -8,15 +8,22 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 pub mod alone;
+mod events;
 pub mod fixture;
 pub mod runtime;
 
 pub use alone::alone;
 pub use fixture::Fixture;
+
+use events::Events;
+
+/// How often a wait looks at the run's events and whether it exited. A
+/// look that finds neither looks again: no wait has a deadline.
+const LOOK: Duration = Duration::from_millis(50);
 
 pub fn copy(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
@@ -41,14 +48,19 @@ pub struct Run {
     pub child: Child,
     lines: mpsc::Receiver<Line>,
     pub seen: Vec<String>,
+    /// The `RAWR_MCP_EVENTS` file the run was given, if any.
+    events: Option<Events>,
 }
 
 impl Run {
-    /// The next stdout line that `accept` takes. A run whose output ends
-    /// without one fails the test, with what it printed.
+    /// The next stdout line that `accept` takes. A run that says `failed`
+    /// in its events, exits or ends its output without one fails the test,
+    /// with the failure, what it printed and its events.
     pub fn until(&mut self, accept: impl Fn(&str) -> bool) -> String {
+        let mut looked = Instant::now();
+        let mut exited = false;
         loop {
-            match self.lines.recv() {
+            match self.lines.recv_timeout(LOOK) {
                 Ok(Line::Out(line)) => {
                     self.seen.push(line.clone());
                     if accept(&line) {
@@ -56,29 +68,56 @@ impl Run {
                     }
                 }
                 Ok(Line::Err(line)) => self.seen.push(format!("stderr: {line}")),
-                Err(_) => panic!(
-                    "the run ended without it; its output:\n{}",
-                    self.seen.join("\n")
-                ),
+                Err(RecvTimeoutError::Disconnected) => self.fail("the run ended without it"),
+                // The run exited and its pipes are quiet: they gave what it
+                // printed, and a process it left may hold them open.
+                Err(RecvTimeoutError::Timeout) if exited => {
+                    self.fail("the run exited without it");
+                }
+                Err(RecvTimeoutError::Timeout) => {}
             }
+            if looked.elapsed() < LOOK {
+                continue;
+            }
+            looked = Instant::now();
+            self.look();
+            exited = self.child.try_wait().unwrap().is_some();
         }
     }
 
     /// The text of the `RAWR_MCP_EVENTS` file `events` once `accept` takes
-    /// it. A run that exits first fails the test.
+    /// it. A run that says `failed` first, or exits first, fails the test.
     pub fn told(&mut self, events: &Path, accept: impl Fn(&str) -> bool) -> String {
         loop {
             let text = fs::read_to_string(events).unwrap_or_default();
             if accept(&text) {
+                if let Some(heard) = self.events.as_mut() {
+                    heard.hear(&text);
+                }
                 return text;
             }
-            assert!(
-                self.child.try_wait().unwrap().is_none(),
-                "the run exited first; its events:\n{text}\nits output:\n{}",
-                self.seen.join("\n")
-            );
-            std::thread::sleep(Duration::from_millis(50));
+            self.look();
+            if self.child.try_wait().unwrap().is_some() {
+                self.fail("the run exited first");
+            }
+            std::thread::sleep(LOOK);
         }
+    }
+
+    /// Fail the test when the run said `failed` since the last look.
+    fn look(&mut self) {
+        if let Some(failure) = self.events.as_mut().and_then(Events::failure) {
+            self.fail(&format!("the run failed:\n{failure}"));
+        }
+    }
+
+    /// Fail the test for `why`, with what the run printed and its events.
+    fn fail(&self, why: &str) -> ! {
+        let events = self.events.as_ref().map_or_else(String::new, Events::text);
+        panic!(
+            "{why}\nits output:\n{}\nits events:\n{events}",
+            self.seen.join("\n")
+        )
     }
 
     /// Wait for the run to end, and keep the output it printed since the
@@ -167,9 +206,14 @@ pub fn start_with(
             let _ = send.send(Line::Err(line));
         }
     });
+    let events = variables
+        .iter()
+        .find(|(name, _)| *name == "RAWR_MCP_EVENTS")
+        .map(|(_, path)| Events::new(path.clone()));
     Run {
         child,
         lines,
         seen: Vec::new(),
+        events,
     }
 }
