@@ -109,6 +109,7 @@ fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
          one 5\n\
          uncoerced 5\n\
          5,-,(2, 3)\n\
+         5,-,(2, 3)\n\
          event a=n 5 b=5 c=x 5 y\n"
     );
 }

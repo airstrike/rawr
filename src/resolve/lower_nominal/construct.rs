@@ -551,9 +551,11 @@ impl<'a> Parser<'a> {
         if variant == Prelude::Err && inferred {
             self.box_returned_error(value)?;
         }
-        if variant == Prelude::Err {
-            self.err_payloads.insert(start.start(), value.span);
-        }
+        match variant {
+            Prelude::Err => self.err_payloads.insert(start.start(), value.span),
+            Prelude::Some => self.some_payloads.insert(start.start(), value.span),
+            Prelude::Ok | Prelude::None => None,
+        };
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
