@@ -810,7 +810,7 @@ impl<'a> Parser<'a> {
         let original = self.bindings.clone();
         let split = self.flow().split();
         self.flow().arm(split);
-        let otherwise = self.parse_match_action();
+        let otherwise = self.parse_unexpected_block();
         let otherwise_end = self.flow().arm_end();
         self.flow().arm(split);
         let matched = self.flow().arm_end();

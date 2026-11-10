@@ -13259,6 +13259,78 @@ main();
     );
 }
 
+/// An expected type reaches every arm of `if`/`else` and `match`, a block
+/// tail, a `return` and a `break` value, and each coerces to it there:
+/// boxed closures and shapes unsize to `Box<dyn ..>`, borrows to `&dyn`,
+/// closures to a `fn` pointer. With no expectation, two closures that
+/// capture nothing meet at a `fn` pointer. `cargo run` prints these lines.
+#[test]
+fn language_an_expected_type_reaches_each_arm_and_each_arm_coerces_to_it() {
+    let source = r#"
+trait Shape { fn area(&self) -> i64; }
+struct Sq(i64);
+struct Rect(i64, i64);
+impl Shape for Sq { fn area(&self) -> i64 { self.0 * self.0 } }
+impl Shape for Rect { fn area(&self) -> i64 { self.0 * self.1 } }
+fn pick(n: i64) -> Box<dyn Shape> {
+    if n > 0 { Box::new(Sq(n)) } else { Box::new(Rect(n, 2)) }
+}
+fn early(n: i64) -> Box<dyn Shape> {
+    if n < 0 {
+        return Box::new(Rect(1, 1));
+    }
+    Box::new(Sq(n))
+}
+fn total(shapes: &[Box<dyn Shape>]) -> i64 { shapes.iter().map(|s| s.area()).sum() }
+fn main() {
+    let k = 3;
+    let f: Box<dyn Fn(i64) -> i64> = if k > 2 { Box::new(move |x| x + k) } else { Box::new(|x| x * 2) };
+    let g: Box<dyn Fn(i64) -> i64> = match k {
+        0 => Box::new(|x| x),
+        1 => Box::new(move |x| x - k),
+        _ => Box::new(move |x| x * k),
+    };
+    let h: fn(i64) -> i64 = if k > 2 { |x| x + 1 } else { |x| x - 1 };
+    let a = Sq(2);
+    let b = Rect(1, 2);
+    let s: &dyn Shape = if k > 2 { &a } else { &b };
+    let r: Box<dyn Shape> = { let n = 4; Box::new(Sq(n)) };
+    let l: Box<dyn Shape> = loop {
+        if k > 5 { break Box::new(Sq(1)); }
+        break Box::new(Rect(2, 5));
+    };
+    let lub = if k > 2 { |x: i64| x + 10 } else { |x: i64| x - 10 };
+    let nested: Box<dyn Shape> = if k > 5 { Box::new(Sq(1)) } else if k > 1 { Box::new(Rect(3, 3)) } else { Box::new(Sq(0)) };
+    println!("{} {} {} {} {} {} {} {}", f(1), g(2), h(3), s.area(), r.area(), l.area(), lub(1), nested.area());
+    println!("{} {} {}", pick(3).area(), pick(-1).area(), early(-2).area() + early(5).area());
+    println!("{}", total(&[pick(1), early(2)]));
+}
+main();
+"#;
+    assert_eq!(printed(source), "4 6 4 4 16 10 11 9\n9 -2 26\n5\n");
+    // With no expectation the first arm's type is the `if`'s: rustc's
+    // E0308, expected `Box<Sq>`, found `Box<Rect>`.
+    let error = rejected(
+        r#"
+trait Shape { fn area(&self) -> i64; }
+struct Sq(i64);
+struct Rect(i64, i64);
+impl Shape for Sq { fn area(&self) -> i64 { self.0 } }
+impl Shape for Rect { fn area(&self) -> i64 { self.0 * self.1 } }
+fn main() {
+    let k = 3;
+    let s = if k > 2 { Box::new(Sq(1)) } else { Box::new(Rect(1, 2)) };
+    println!("{}", s.area());
+}
+main();
+"#,
+    );
+    assert!(
+        error.contains("expected `Box<Sq>`, found `Box<Rect>`"),
+        "{error}"
+    );
+}
+
 /// `String` and `&str` are two types, as rustc types them (#706). A
 /// `&String` becomes a `&str` only by deref coercion at a coercion site,
 /// `String::from` takes a `&str`, a `&String` or a `String`, and

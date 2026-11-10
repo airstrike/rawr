@@ -1768,6 +1768,24 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 
+    /// The type the block or arm ahead is expected to have: the
+    /// expectation of the expression it gives the value of.
+    pub(super) fn block_expectation(&self) -> Option<Ty> {
+        self.collect_hint
+            .as_ref()
+            .filter(|(_, depth)| *depth == self.expression_stack.len())
+            .map(|(expected, _)| expected.clone())
+    }
+
+    /// A block whose value is not the enclosing expression's, as a loop's
+    /// body, a closure's or a `let`-`else`'s: no expectation reaches it.
+    pub(super) fn parse_unexpected_block(&mut self) -> Result<Branch, Error> {
+        let outer = self.collect_hint.take();
+        let block = self.parse_match_action();
+        self.collect_hint = outer;
+        block
+    }
+
     pub(super) fn parse_match_action(&mut self) -> Result<Branch, Error> {
         if matches!(self.peek(), Token::LeftBrace) {
             let start = self.next().1;
@@ -1789,6 +1807,8 @@ impl<'a> Parser<'a> {
             // has rustc check the tail against the expected type (#1450).
             let closure_hint = self.closure_hint.take();
             let closure_output = self.closure_output.take();
+            // The type the block is expected to have reaches its tail.
+            let expected = self.block_expectation();
 
             while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
                 if self.closure_ahead() {
@@ -1809,7 +1829,7 @@ impl<'a> Parser<'a> {
                     _ if self.macro_definition_ahead() => self.parse_local_macro()?,
                     _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                     _ if self.nested_item_ahead() => self.skip_nested_item()?,
-                    _ => self.parse_statement()?,
+                    _ => self.parse_tail_expecting(expected.as_ref())?,
                 }
             }
             // A block's own macros and statics end with it.
@@ -1863,7 +1883,8 @@ impl<'a> Parser<'a> {
         self.open_temporaries();
         self.flow().open_temporaries();
         self.open_frames();
-        let value = self.parse_expr();
+        let expected = self.block_expectation();
+        let value = self.parse_expr_expecting(expected.as_ref());
         let frames = self.close_frames();
         self.flow().close_temporaries(ScopeEnd::Value);
         let temporaries = self.close_temporaries();

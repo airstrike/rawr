@@ -993,7 +993,7 @@ impl Parser<'_> {
     /// expression, or an assignment.
     pub(super) fn parse_inline_closure_body(&mut self) -> Result<ParsedExpr, Error> {
         if matches!(self.peek(), Token::LeftBrace) {
-            return self.parse_match_action().map(|branch| branch.value);
+            return self.parse_unexpected_block().map(|branch| branch.value);
         }
         let value = self.parse_expr()?;
         if !super::assignment_token(&self.peek()) {

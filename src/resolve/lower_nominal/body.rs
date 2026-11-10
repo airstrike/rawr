@@ -664,7 +664,7 @@ impl<'a> Parser<'a> {
                     {
                         self.array_hint = Some(element);
                     }
-                    let statement = self.parse_statement();
+                    let statement = self.parse_tail_expecting(Some(&expected));
                     self.array_hint = None;
                     statement?;
                 }
