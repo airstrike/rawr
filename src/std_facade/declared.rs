@@ -886,6 +886,15 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Iter(&Ty::Builtin(Builtin::String)),
     },
     Step::Item {
+        path: "env::current_dir",
+        kind: Kind::Function,
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
         path: "fs::read",
         kind: Kind::Function,
         inputs: &[Ty::Reference {
@@ -2746,10 +2755,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "env::args_os",
         std: "std::env::args_os",
-    },
-    Step::StdAlias {
-        path: "env::current_dir",
-        std: "std::env::current_dir",
     },
     Step::StdAlias {
         path: "env::current_exe",

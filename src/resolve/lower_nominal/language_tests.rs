@@ -10999,6 +10999,40 @@ main();
     );
 }
 
+/// `env::current_dir()` gives the working directory as an
+/// `io::Result<PathBuf>`, as iced's todos joins its save path onto it, and
+/// a program its engine grants no environment fails with
+/// `PermissionDenied`.
+#[test]
+fn language_std_env_current_dir_is_the_working_directory() {
+    let program = r#"
+fn main() {
+    let directory = std::env::current_dir().unwrap_or_default();
+    let path = directory.join("todos.json");
+    let shown = path.display().to_string();
+    println!("{} {}", shown.ends_with("/todos.json"), shown.len() > "/todos.json".len());
+    println!("{:?}", std::env::current_dir().map_err(|error| error.kind()).is_ok());
+}
+main();
+"#;
+    assert_eq!(
+        printed_with(program, crate::Access::all()),
+        "true true\ntrue\n"
+    );
+    assert_eq!(
+        printed_with(
+            r#"
+fn main() {
+    println!("{:?}", std::env::current_dir().map_err(|error| error.kind()));
+}
+main();
+"#,
+            crate::Access::none(),
+        ),
+        "Err(PermissionDenied)\n"
+    );
+}
+
 /// `std::fs::read` gives a file's bytes as a `Vec<u8>` in an `io::Result`,
 /// as a program reads a font file to load it, and a missing file's error
 /// kind, as rustc gives them.
