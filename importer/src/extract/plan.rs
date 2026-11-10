@@ -609,7 +609,7 @@ impl Plan {
             // Inputs are checked before any replay: a path crate's files,
             // as a git crate's declared ones (#398).
             let inputs = read.meta.inputs.as_ref()?.validate(current)?;
-            let table = serde_json::from_slice::<engine::Table>(&read.table).ok()?;
+            let table = crate::extract::sidecar::read::<engine::Table>(&read.table).ok()?;
             if table.schema != engine::TABLE_SCHEMA {
                 return None;
             }
@@ -1926,7 +1926,7 @@ impl Capture {
         struct Shell {
             handshake: protocol::Handshake,
         }
-        const BODY: &[u8] = b",\"reachable\":";
+        const BODY: &[u8] = b",\"ids\":";
         let mut handshakes = Vec::new();
         for (path, expected) in &self.sidecars {
             if path.file_name() == Some(std::ffi::OsStr::new(ATTEMPTS_FILE)) {
@@ -1972,7 +1972,7 @@ impl Capture {
         struct Shell {
             handshake: protocol::Handshake,
         }
-        const BODY: &[u8] = b",\"reachable\":";
+        const BODY: &[u8] = b",\"ids\":";
         let mut sidecars = Vec::new();
         for (path, expected) in &self.sidecars {
             if path.file_name() == Some(std::ffi::OsStr::new(ATTEMPTS_FILE)) {
@@ -1983,7 +1983,7 @@ impl Capture {
                 return None;
             }
             // A JSON string cannot hold an unescaped quote, so the first
-            // `,"reachable":` closes the handshake the driver writes first.
+            // `,"ids":` closes the handshake the driver writes first.
             let start = bytes
                 .windows(BODY.len())
                 .position(|window| window == BODY)?;
@@ -3143,7 +3143,7 @@ mod tests {
         };
         // The driver writes the handshake first, then the body's fields.
         let driver = |handshake: serde_json::Value, body: &str| {
-            format!("{{\"handshake\":{handshake},\"reachable\":[],\"definitions\":[{body}],\"implementations\":[],\"scalar_predicate_proofs\":[],\"index\":[]}}")
+            format!("{{\"handshake\":{handshake},\"ids\":[],\"reachable\":[],\"definitions\":[{body}],\"implementations\":[],\"scalar_predicate_proofs\":[],\"index\":[]}}")
                 .into_bytes()
         };
         let key = |bytes: &[u8], digest: Option<[u8; 32]>| {

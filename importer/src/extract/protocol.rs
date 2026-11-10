@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 66;
+pub(crate) const SCHEMA: u32 = 67;
 
 #[cfg(all(test, feature = "rustc-driver"))]
 #[test]
@@ -48,10 +48,9 @@ pub(crate) struct Population {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "Written")]
 pub(crate) struct Fragment {
     #[cfg(feature = "rustc-driver")]
-    #[serde(default)]
     pub(crate) inventory: Option<super::engine::model::Inventory>,
     pub(crate) handshake: Handshake,
     pub(crate) reachable: Vec<Export>,
@@ -59,8 +58,42 @@ pub(crate) struct Fragment {
     pub(crate) implementations: Vec<Implementation>,
     pub(crate) scalar_predicate_proofs: Vec<ScalarPredicateProof>,
     /// The selected crate's name index, published for demanded units.
-    #[serde(default)]
     pub(crate) index: Vec<crate::api::ledger::Name>,
+}
+
+/// A fragment as written: its body's ids lead its body's fields, which name
+/// them by index (`sidecar`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Written {
+    #[serde(default)]
+    ids: super::sidecar::Opened,
+    #[cfg(feature = "rustc-driver")]
+    #[serde(default)]
+    inventory: Option<super::engine::model::Inventory>,
+    handshake: Handshake,
+    reachable: Vec<Export>,
+    definitions: Vec<Definition>,
+    implementations: Vec<Implementation>,
+    scalar_predicate_proofs: Vec<ScalarPredicateProof>,
+    #[serde(default)]
+    index: Vec<crate::api::ledger::Name>,
+}
+
+impl From<Written> for Fragment {
+    fn from(written: Written) -> Self {
+        written.ids.close();
+        Self {
+            #[cfg(feature = "rustc-driver")]
+            inventory: written.inventory,
+            handshake: written.handshake,
+            reachable: written.reachable,
+            definitions: written.definitions,
+            implementations: written.implementations,
+            scalar_predicate_proofs: written.scalar_predicate_proofs,
+            index: written.index,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
@@ -171,12 +204,38 @@ pub(crate) enum Compilation {
     Target,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(deny_unknown_fields)]
+/// A definition's id, written in full or by its index in its fragment's ids.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Id {
     pub(crate) authority: Authority,
     pub(crate) def_path_hash: String,
     pub(crate) namespace: Namespace,
+}
+
+/// An id's fields, as it is written in full.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdFields {
+    authority: Authority,
+    def_path_hash: String,
+    namespace: Namespace,
+}
+
+impl<'de> Deserialize<'de> for Id {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let IdFields {
+            authority,
+            def_path_hash,
+            namespace,
+        } = super::sidecar::id(deserializer)?;
+        Ok(Self {
+            authority,
+            def_path_hash,
+            namespace,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
@@ -984,10 +1043,11 @@ pub(crate) fn decode_accounted(
     allocation.items(usage.items)?;
     allocation.bytes(usage.bytes)?;
     allocation.captured_document(usage.items);
-    let document: Document = serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
-        code: "sidecar-schema",
-        reason: error.to_string().into_boxed_str(),
-    })?;
+    let document: Document =
+        super::sidecar::read_fragments(bytes).map_err(|error| Error::Extraction {
+            code: "sidecar-schema",
+            reason: error.to_string().into_boxed_str(),
+        })?;
     if document.schema != SCHEMA {
         return Err(Error::Extraction {
             code: "unknown-sidecar-schema",
@@ -1015,6 +1075,8 @@ pub(crate) fn decode_handshakes(bytes: &[u8]) -> Result<Document> {
     #[allow(dead_code, reason = "the payload fields are skipped, not read")]
     struct Part {
         handshake: Handshake,
+        #[serde(default)]
+        ids: IgnoredAny,
         reachable: IgnoredAny,
         definitions: IgnoredAny,
         implementations: IgnoredAny,
@@ -1022,7 +1084,7 @@ pub(crate) fn decode_handshakes(bytes: &[u8]) -> Result<Document> {
         #[serde(default)]
         index: IgnoredAny,
     }
-    let shell: Shell = serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
+    let shell: Shell = super::sidecar::read(bytes).map_err(|error| Error::Extraction {
         code: "sidecar-schema",
         reason: error.to_string().into_boxed_str(),
     })?;

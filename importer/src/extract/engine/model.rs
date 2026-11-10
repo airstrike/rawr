@@ -5,12 +5,37 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
+/// A definition's id. A body writes it once and names it by index after
+/// that (`sidecar::intern`), so it reads in either form.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Id {
     pub(crate) authority: Authority,
     pub(crate) def_path_hash: String,
     pub(crate) namespace: Namespace,
+}
+
+/// An id's fields, as it is written in full.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdFields {
+    authority: Authority,
+    def_path_hash: String,
+    namespace: Namespace,
+}
+
+impl<'de> Deserialize<'de> for Id {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let IdFields {
+            authority,
+            def_path_hash,
+            namespace,
+        } = super::super::sidecar::id(deserializer)?;
+        Ok(Self {
+            authority,
+            def_path_hash,
+            namespace,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

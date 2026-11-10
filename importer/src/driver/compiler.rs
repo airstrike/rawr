@@ -42,6 +42,13 @@ mod layout;
 #[path = "compiler/scope.rs"]
 mod scope;
 
+#[path = "../extract/sidecar.rs"]
+#[allow(
+    dead_code,
+    reason = "shared with the library, which reads the sidecars it writes"
+)]
+mod sidecar;
+
 #[path = "compiler/table.rs"]
 mod table;
 
@@ -107,10 +114,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 61 gives a struct its layout: its pointers that may hold a
 // static's address, for a cycle of body statics (D865). Schema 63 gives a
 // `dyn Trait` its trait's impls for numbers and std types (#1561). Schema
-// 65 leaves out a std trait's impls for scalars.
+// 65 leaves out a std trait's impls for scalars. Schema 67 writes each id
+// of a body once, in its leading `ids`, and names it by index elsewhere.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 66;
+const PROTOCOL_SCHEMA: u32 = 67;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

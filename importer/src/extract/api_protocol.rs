@@ -1676,6 +1676,37 @@ fn sidecar_depth_is_a_physical_bound() {
     assert_limit(protocol::decode(&bytes, &limits), "sidecar depth");
 }
 
+/// A field type nested past serde_json's default 128 levels decodes, and a
+/// fragment that writes each id once (`sidecar::intern`) decodes to the
+/// same document as the one that spells them all.
+#[test]
+fn a_type_nested_past_128_levels_decodes_with_its_ids_written_once() {
+    let package = "root 0.1.0 (path+root)";
+    let hash = "11111111111111111111111111111111";
+    let thing = id(package, "root", hash);
+    let mut ty = json!({"kind":"definition", "id":thing, "arguments":[]});
+    for _ in 0..50 {
+        ty = json!({"kind":"definition", "id":thing, "arguments":[{"kind":"type", "ty":ty}]});
+    }
+    let mut root = fragment(package, "root", Some("root"));
+    root["definitions"] = json!([struct_definition(package, "root", hash, ["Deep"], [ty])]);
+    let full = document(std::slice::from_ref(&root));
+    let written = sidecar::intern(&serde_json::to_vec(&root).expect("the fragment serializes"));
+    let mut interned = format!("{{\"schema\":{},\"fragments\":[", protocol::SCHEMA).into_bytes();
+    interned.extend_from_slice(&written);
+    interned.extend_from_slice(b"]}");
+    assert!(
+        interned.len() * 2 < full.len(),
+        "{} of {}",
+        interned.len(),
+        full.len()
+    );
+    let limits = cargo::Limits::standard();
+    let spelled = protocol::decode(&full, &limits).expect("the deep document decodes");
+    let once = protocol::decode(&interned, &limits).expect("the interned document decodes");
+    assert_eq!(once, spelled);
+}
+
 #[test]
 fn unknown_top_level_key_is_a_schema_failure_after_the_scan() {
     let bytes = format!(
