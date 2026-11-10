@@ -2642,9 +2642,18 @@ fn build(
     }
     // A trait's member its impl for a number, `bool` or `char` gives it: a
     // function of the scalar (`surface::scalar`); and a trait's method on
-    // its object, a function of the object (`surface::object`).
+    // its object, a function of the object (`surface::object`). Members of
+    // one path whose inputs are the same differ only in the trait's
+    // arguments, as num-traits' `impl AsPrimitive<u8> for bool` and `impl
+    // AsPrimitive<u16> for bool` give `as_(self)` each: rustc picks one by
+    // the type the call is expected to have, which no overload is chosen by,
+    // so they are left out.
+    let ambiguous = return_only_members(&facade.scalar_members);
     for (path, member) in &facade.scalar_members {
-        if left_out(path, *member) || !names_declared(*member, resolved) {
+        if left_out(path, *member)
+            || !names_declared(*member, resolved)
+            || ambiguous.contains(path.as_str())
+        {
             continue;
         }
         let selector_bytes = member.identity().selector().retained_bytes();
@@ -3247,6 +3256,34 @@ fn imported_values(
             .lending_static(lent_static(values.signature()))
             .lending(lends(values.signature())),
     ))
+}
+
+/// The paths among `members` that two functions of the same inputs share,
+/// which differ only in what they return.
+fn return_only_members<'a>(
+    members: &'a [(String, rawr_import::classify::Outcome<'_>)],
+) -> std::collections::BTreeSet<&'a str> {
+    fn inputs<'o>(
+        member: &rawr_import::classify::Outcome<'o>,
+    ) -> Option<&'o [rawr_import::classify::representability::convert::Type]> {
+        match member.representability() {
+            Representability::Function(plan) => Some(plan.signature().inputs()),
+            _ => None,
+        }
+    }
+    let mut ambiguous = std::collections::BTreeSet::new();
+    for (index, (path, member)) in members.iter().enumerate() {
+        let Some(own) = inputs(member) else {
+            continue;
+        };
+        if members[index + 1..]
+            .iter()
+            .any(|(other, member)| other == path && inputs(member) == Some(own))
+        {
+            ambiguous.insert(path.as_str());
+        }
+    }
+    ambiguous
 }
 
 /// Whether every imported type the outcome's signature names is declared,
