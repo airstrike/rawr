@@ -2107,6 +2107,128 @@ pub fn representability_generic() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes generic fixture")
 }
 
+/// Return a trait `Shape` with an associated type `Out` and `count` unit
+/// structs `S0`.. each implementing it with `type Out = u8`, as a crate's
+/// trait implemented for many of its types is, with the trait's and its
+/// associated type's identities.
+#[doc(hidden)]
+pub fn projected_implementations(
+    count: u32,
+) -> (
+    api::Graph<api::Extracted>,
+    identity::Definition,
+    identity::Definition,
+) {
+    let shape = definition("shape", identity::Namespace::Type);
+    let out = definition("shape-out", identity::Namespace::Type);
+    let associated_type = |id: &identity::Definition, owner, display: &[&str], default, at| {
+        model::Definition::new(
+            id.clone(),
+            path(display),
+            owner,
+            model::Visibility::Public,
+            model::Kind::AssociatedType {
+                bounds: Box::default(),
+                default,
+                generics: generics(),
+            },
+            span(at, at + 1),
+            model::Origin::Source,
+        )
+    };
+    let mut definitions = vec![
+        model::Definition::new(
+            shape.clone(),
+            path(&["fixture", "Shape"]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Trait {
+                unsafe_trait: false,
+                auto_trait: false,
+                supertraits: Box::default(),
+                associated: Box::from([out.clone()]),
+                generics: generics(),
+            },
+            span(0, 1),
+            model::Origin::Source,
+        ),
+        associated_type(
+            &out,
+            model::Owner::Definition(shape.clone()),
+            &["fixture", "Shape", "Out"],
+            model::Default::Absent,
+            2,
+        ),
+    ];
+    let mut implementations = Vec::new();
+    for index in 0..count {
+        let name = format!("S{index}");
+        let ty = definition(&format!("s{index}"), identity::Namespace::Type);
+        let implementation = definition(&format!("s{index}-shape"), identity::Namespace::Type);
+        let value = definition(&format!("s{index}-out"), identity::Namespace::Type);
+        let at = 10 + index * 10;
+        definitions.push(model::Definition::new(
+            ty.clone(),
+            path(&["fixture", &name]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Struct {
+                fields: model::FieldSet::new(model::FieldForm::Unit, Box::default(), true, false),
+                generics: generics(),
+            },
+            span(at, at + 1),
+            model::Origin::Source,
+        ));
+        definitions.push(associated_type(
+            &value,
+            model::Owner::Implementation(implementation.clone()),
+            &["fixture", &name, "Out"],
+            model::Default::Present(model::Type::Primitive("u8".into())),
+            at + 2,
+        ));
+        let self_type = model::Type::Definition {
+            id: ty.clone(),
+            arguments: Box::default(),
+        };
+        implementations.push(model::Implementation::new(
+            format!("fixture-{name}-shape").into_boxed_str(),
+            implementation,
+            Box::from([ty, shape.clone()]),
+            model::Trait::Trait {
+                id: shape.clone(),
+                arguments: Box::from([model::Argument::Type(self_type.clone())]),
+            },
+            self_type,
+            model::Safety::Safe,
+            model::Polarity::Positive,
+            false,
+            false,
+            generics(),
+            Box::from([value]),
+            span(at + 4, at + 5),
+            model::Origin::Source,
+        ));
+    }
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
+    implementations.sort_by(|left, right| left.id().cmp(right.id()));
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    let graph = api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        definitions,
+        Vec::new(),
+        implementations,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        &mut allocation,
+    )
+    .expect("projected implementations fixture seals")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("freshness proof publishes the projected implementations fixture");
+    (graph, shape, out)
+}
+
 fn function(
     id: identity::Definition,
     safety: model::Safety,

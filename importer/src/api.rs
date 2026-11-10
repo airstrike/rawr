@@ -126,15 +126,21 @@ pub struct Graph<P: Phase> {
 struct Lookup {
     definitions: std::collections::HashMap<Box<str>, u32>,
     implementations: std::collections::HashMap<Box<str>, u32>,
-    /// Each trait's implementations, by the trait's hash, in graph order.
-    by_trait: std::collections::HashMap<Box<str>, Box<[u32]>>,
+    /// Each trait's implementations, by the trait's hash: one group, in
+    /// graph order, for each trait identity of that hash, so a lookup
+    /// compares the whole identity once, not once for each implementation.
+    by_trait: Groups,
     /// Each nominal type's implementations, by the hash of the self type's
-    /// definition, in graph order.
-    by_self: std::collections::HashMap<Box<str>, Box<[u32]>>,
+    /// definition, grouped as `by_trait` is.
+    by_self: Groups,
     /// Each definition's relevant implementations, by its hash, in graph
     /// order.
     relevant: std::collections::HashMap<Box<str>, Box<[u32]>>,
 }
+
+/// Implementation indices by an identity's hash, one group for each
+/// identity of that hash.
+type Groups = std::collections::HashMap<Box<str>, Box<[Box<[u32]>]>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Usage {
@@ -1482,17 +1488,7 @@ impl<P: Phase> Graph<P> {
         &self,
         id: &identity::Definition,
     ) -> impl Iterator<Item = &model::Implementation> {
-        let indices = self
-            .lookup()
-            .by_trait
-            .get(id.def_path_hash())
-            .map_or(&[][..], AsRef::as_ref);
-        indices
-            .iter()
-            .map(|index| &self.implementations[*index as usize])
-            .filter(move |implementation| {
-                matches!(implementation.trait_ref(), model::Trait::Trait { id: actual, .. } if actual == id)
-            })
+        self.implementation_group(&self.lookup().by_trait, id, trait_of)
     }
 
     /// The implementations whose self type is the nominal type `id`, at
@@ -1501,17 +1497,29 @@ impl<P: Phase> Graph<P> {
         &self,
         id: &identity::Definition,
     ) -> impl Iterator<Item = &model::Implementation> {
-        let indices = self
-            .lookup()
-            .by_self
+        self.implementation_group(&self.lookup().by_self, id, nominal_self_of)
+    }
+
+    /// The implementations of the group in `groups` whose first one
+    /// `named` names `id` for.
+    fn implementation_group<'graph>(
+        &'graph self,
+        groups: &'graph Groups,
+        id: &identity::Definition,
+        named: fn(&model::Implementation) -> Option<&identity::Definition>,
+    ) -> impl Iterator<Item = &'graph model::Implementation> {
+        groups
             .get(id.def_path_hash())
-            .map_or(&[][..], AsRef::as_ref);
-        indices
+            .into_iter()
+            .flat_map(|groups| groups.iter())
+            .find(|group| {
+                group
+                    .first()
+                    .is_some_and(|first| named(&self.implementations[*first as usize]) == Some(id))
+            })
+            .map_or(&[][..], AsRef::as_ref)
             .iter()
             .map(|index| &self.implementations[*index as usize])
-            .filter(move |implementation| {
-                matches!(implementation.self_type(), model::Type::Definition { id: actual, .. } if actual == id)
-            })
     }
 
     /// The implementations relevant to the definition `id`, in graph order.
@@ -1539,25 +1547,21 @@ impl<P: Phase> Graph<P> {
                     .entry(definition.id().def_path_hash().into())
                     .or_insert(index as u32);
             }
-            let mut by_trait = std::collections::HashMap::<&str, Vec<u32>>::new();
-            let mut by_self = std::collections::HashMap::<&str, Vec<u32>>::new();
+            let mut by_trait = std::collections::HashMap::<&str, Vec<Group<'_>>>::new();
+            let mut by_self = std::collections::HashMap::<&str, Vec<Group<'_>>>::new();
             let mut relevant = std::collections::HashMap::<&str, Vec<u32>>::new();
             for (index, implementation) in self.implementations.iter().enumerate() {
                 lookup
                     .implementations
                     .entry(implementation.id().def_path_hash().into())
                     .or_insert(index as u32);
-                if let model::Trait::Trait { id, .. } = implementation.trait_ref() {
-                    by_trait
-                        .entry(id.def_path_hash())
-                        .or_default()
-                        .push(index as u32);
+                if let Some(id) = trait_of(implementation) {
+                    let groups = by_trait.entry(id.def_path_hash()).or_default();
+                    Group::add(groups, id, index as u32);
                 }
-                if let model::Type::Definition { id, .. } = implementation.self_type() {
-                    by_self
-                        .entry(id.def_path_hash())
-                        .or_default()
-                        .push(index as u32);
+                if let Some(id) = nominal_self_of(implementation) {
+                    let groups = by_self.entry(id.def_path_hash()).or_default();
+                    Group::add(groups, id, index as u32);
                 }
                 for id in implementation.relevance() {
                     let indices = relevant.entry(id.def_path_hash()).or_default();
@@ -1566,20 +1570,64 @@ impl<P: Phase> Graph<P> {
                     }
                 }
             }
-            lookup.by_trait = by_trait
-                .into_iter()
-                .map(|(hash, indices)| (hash.into(), indices.into_boxed_slice()))
-                .collect();
-            lookup.by_self = by_self
-                .into_iter()
-                .map(|(hash, indices)| (hash.into(), indices.into_boxed_slice()))
-                .collect();
+            lookup.by_trait = Group::seal(by_trait);
+            lookup.by_self = Group::seal(by_self);
             lookup.relevant = relevant
                 .into_iter()
                 .map(|(hash, indices)| (hash.into(), indices.into_boxed_slice()))
                 .collect();
             lookup
         })
+    }
+}
+
+/// The implementations of one exact identity among those that share its
+/// hash, while a [`Lookup`] is built.
+struct Group<'graph> {
+    id: &'graph identity::Definition,
+    indices: Vec<u32>,
+}
+
+impl<'graph> Group<'graph> {
+    /// Add the implementation `index` to the group in `groups` for `id`,
+    /// or to a new one.
+    fn add(groups: &mut Vec<Self>, id: &'graph identity::Definition, index: u32) {
+        match groups.iter_mut().find(|group| group.id == id) {
+            Some(group) => group.indices.push(index),
+            None => groups.push(Self {
+                id,
+                indices: vec![index],
+            }),
+        }
+    }
+
+    fn seal(groups: std::collections::HashMap<&str, Vec<Self>>) -> Groups {
+        groups
+            .into_iter()
+            .map(|(hash, groups)| {
+                let groups = groups
+                    .into_iter()
+                    .map(|group| group.indices.into_boxed_slice())
+                    .collect();
+                (hash.into(), groups)
+            })
+            .collect()
+    }
+}
+
+/// The trait `implementation` implements, when it is a trait impl.
+fn trait_of(implementation: &model::Implementation) -> Option<&identity::Definition> {
+    match implementation.trait_ref() {
+        model::Trait::Trait { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// The nominal type `implementation` is for, when its self type is one.
+fn nominal_self_of(implementation: &model::Implementation) -> Option<&identity::Definition> {
+    match implementation.self_type() {
+        model::Type::Definition { id, .. } => Some(id),
+        _ => None,
     }
 }
 

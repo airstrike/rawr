@@ -292,8 +292,17 @@ impl std::hash::Hash for Identity {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// How many definition identities were digested, for tests that count
+    /// the digests a classification makes.
+    pub(crate) static DEFINITION_DIGESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Definition {
     pub(crate) fn of(definition: &api::Definition) -> Self {
+        #[cfg(test)]
+        DEFINITION_DIGESTS.with(|digests| digests.set(digests.get().saturating_add(1)));
         let mut framed = Framed::new(DEFINITION_DOMAIN);
         framed.definition(definition);
         Self(framed.finish())
