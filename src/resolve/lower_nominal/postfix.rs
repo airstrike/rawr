@@ -353,12 +353,12 @@ impl<'a> Parser<'a> {
                     }
                     continue;
                 }
-                // An imported crate type's or std type's `.into()`: the
-                // target the use site needs, through that type's `From` of
-                // it, as rustc infers `Some(color.into())` a `Background`
-                // where the field is an `Option<Background>`, or an
-                // `io::Error` a crate error through its `#[from]`.
-                #[cfg(feature = "rust-import")]
+                // A crate type's or std type's `.into()`: the target the
+                // use site needs, through that type's `From` of it, as
+                // rustc infers `Some(color.into())` a `Background` where
+                // the field is an `Option<Background>`, or an `io::Error` a
+                // crate error through its `#[from]`; E0283 where no use
+                // fixes it.
                 if let Ty::Host { .. } = &source
                     && self.host_witnesses.is_empty()
                     && self.projected_host_types(&source).is_empty()
@@ -369,8 +369,9 @@ impl<'a> Parser<'a> {
                 // A value no `From` of the program takes, as a number: the
                 // target the use site needs, through that crate type's
                 // `From` of it, as rustc infers `size: 14.0.into()` a
-                // `Pixels` through `From<f32>` and the literal an `f32`.
-                #[cfg(feature = "rust-import")]
+                // `Pixels` through `From<f32>` and the literal an `f32`, or
+                // through std's (`impl From<u8> for u16`); E0282 or E0283
+                // when no use fixes it.
                 if self.host_witnesses.is_empty()
                     && !matches!(
                         source,
@@ -378,16 +379,6 @@ impl<'a> Parser<'a> {
                     )
                     && !source.is_text()
                     && self.widget_erasure(&source).is_none()
-                    && !self.converts_from(&source)
-                {
-                    value = self.parse_target_into(value, &source, Vec::new(), None, end);
-                    continue;
-                }
-                // A number's `.into()`: the target the use site needs,
-                // through std's `From` of it (`impl From<u8> for u16`), as
-                // rustc infers it, and E0282 or E0283 when no use does.
-                if matches!(source, Ty::Int(_) | Ty::Float(_))
-                    && self.host_witnesses.is_empty()
                     && !self.converts_from(&source)
                 {
                     value = self.parse_target_into(value, &source, Vec::new(), None, end);

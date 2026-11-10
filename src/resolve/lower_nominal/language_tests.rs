@@ -2096,7 +2096,10 @@ fn language_generic_functions() {
     // Rust's rules: bounds hold at each use and limit the body.
     let unbounded =
         rejected("fn eq<T>(a: T, b: T) -> bool { a == b } pub fn run() -> i64 { 0 } run()");
-    assert!(unbounded.contains("PartialEq"), "{unbounded}");
+    assert!(
+        unbounded.contains("binary operation `==` cannot be applied to type `T`"),
+        "{unbounded}"
+    );
     rejected("fn dup<T>(a: &T) -> T { a.clone() } pub fn run() -> i64 { 0 } run()");
     let missing = rejected(
         "struct Plain { v: i64 } fn dup<T: Clone>(a: &T) -> T { a.clone() } \
@@ -6682,27 +6685,28 @@ fn language_operator_traits() {
         "V2 { x: 2.0, y: 5.0 } V2 { x: -1.0, y: -3.0 } 5 Flag(false) V2 { x: 11.0, y: 2.0 } \
          V2 { x: 2.0, y: 4.0 } V2 { x: 1.0, y: 2.0 } V2 { x: 2.0, y: 4.0 } 7 3.5 6"
     );
-    // Rust's E0369, E0600 and E0368 without the impl; an unmet bound.
+    // Rust's E0369, E0600 and E0368 without the impl, in rustc's words, and
+    // E0308 for a right operand the one impl doesn't take; an unmet bound.
     for (source, expected) in [
         (
             "#[derive(Clone, Copy)] struct V(i64); fn f() -> i64 { let v = V(1) + V(2); 0 }",
-            "E0369",
+            "cannot add `V` to `V`",
         ),
         (
             "#[derive(Clone, Copy)] struct V(i64); fn f() -> i64 { let v = -V(1); 0 }",
-            "E0600",
+            "cannot apply unary operator `-` to type `V`",
         ),
         (
             "use std::ops::Add; #[derive(Clone, Copy)] struct V(i64); \
              impl Add for V { type Output = V; fn add(self, o: V) -> V { V(self.0 + o.0) } } \
              fn f() -> i64 { let mut v = V(1); v += V(2); 0 }",
-            "E0368",
+            "binary assignment operation `+=` cannot be applied to type `V`",
         ),
         (
             "use std::ops::Add; #[derive(Clone, Copy)] struct V(i64); \
              impl Add for V { type Output = V; fn add(self, o: V) -> V { V(self.0 + o.0) } } \
              fn f() -> i64 { let v = V(1) + 2; 0 }",
-            "E0369",
+            "mismatched types",
         ),
         (
             "use std::ops::Add; fn sum<T: Add<Output = T>>(a: T, b: T) -> T { a + b } \
@@ -6966,7 +6970,7 @@ fn language_bit_reference_and_index_operator_traits() {
         "Flags(13) Flags(5) Flags(8) V(3.0) V(103.0) V(4.0) 4 3 2 false"
     );
     for (source, expected) in [
-        ("#[derive(Clone, Copy)] struct F(u8); fn f() -> i64 { let x = F(1) | F(2); 0 }", "E0369"),
+        ("#[derive(Clone, Copy)] struct F(u8); fn f() -> i64 { let x = F(1) | F(2); 0 }", "no implementation for `F | F`"),
         (
             "use std::ops::Index; struct G { c: Vec<i64> } \
              impl Index<usize> for G { type Output = i64; fn index(&self, i: usize) -> &i64 { &self.c[i] } } \

@@ -485,7 +485,12 @@ impl<'a> Parser<'a> {
         let start = self.next().1;
         let operand = self.parse_operand()?;
         let symbol = if operator == "-" { "neg" } else { "!" };
-        if let Some(mut value) = self.operator_impl(symbol, &operand, None)? {
+        if let Some(mut value) = self.operator_impl(
+            symbol,
+            Some(span(start, operand.span.end())),
+            &operand,
+            None,
+        )? {
             value.span = span(start, operand.span.end());
             return Ok(value);
         }

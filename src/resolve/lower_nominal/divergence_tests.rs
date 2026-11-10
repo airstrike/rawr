@@ -199,6 +199,57 @@ fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
 }
 
 #[test]
+fn language_an_operator_on_a_struct_without_its_trait_is_rustcs_error() {
+    // A crate type with no impl of the operator's trait, in rustc's code,
+    // words and span for each operator (#1615): a binary operator's error
+    // is at the operator, `+=`'s and `-`'s at the whole expression.
+    for (expression, message, column) in [
+        (
+            "Level + Level",
+            "error[E0369]: cannot add `Level` to `Level`",
+            19,
+        ),
+        (
+            "Level <= Level",
+            "error[E0369]: binary operation `<=` cannot be applied to type `Level`",
+            19,
+        ),
+        (
+            "Level == Level",
+            "error[E0369]: binary operation `==` cannot be applied to type `Level`",
+            19,
+        ),
+        (
+            "Level | Level",
+            "error[E0369]: no implementation for `Level | Level`",
+            19,
+        ),
+        (
+            "{ let mut l = Level; l += Level; }",
+            "error[E0368]: binary assignment operation `+=` cannot be applied to type `Level`",
+            34,
+        ),
+        (
+            "-Level",
+            "error[E0600]: cannot apply unary operator `-` to type `Level`",
+            13,
+        ),
+        // The one impl takes its `Rhs`, which `Other` mismatches.
+        ("Other + Other", "error[E0308]: mismatched types", 21),
+    ] {
+        let report = refused(&format!(
+            "struct Level;\nstruct Other;\nimpl std::ops::Add<i32> for Other {{\n    \
+             type Output = i32;\n    fn add(self, _: i32) -> i32 {{\n        0\n    }}\n}}\n\
+             fn main() {{\n    let x = {expression};\n}}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with(&format!("{message}\n --> <script>:10:{column}")),
+            "{expression}: {report}"
+        );
+    }
+}
+
+#[test]
 fn language_a_deref_mut_impl_may_name_self_target() {
     // `DerefMut`'s `Self::Target` is its `Deref` impl's, as rustc
     // normalizes it (#858).
