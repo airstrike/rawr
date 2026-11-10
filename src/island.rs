@@ -870,6 +870,21 @@ pub fn __rawr_scope_release_v1(nonce: u64, shared: bool) {
 /// which owns the program from now on, and on every other thread. Async
 /// steps run in it too (D513.3).
 pub fn publish(bootstrap: Bootstrap) {
+    // A panic on any of its threads names its place in the program's
+    // files, each by its path from the package's root, as Cargo names it.
+    #[cfg(feature = "debugging")]
+    if let Some(located) = bootstrap.located() {
+        let located = Arc::clone(located);
+        let root = bootstrap
+            .generation()
+            .source()
+            .entry_package()
+            .root()
+            .to_path_buf();
+        crate::diagnostic::locate_panics_with(move |error| {
+            located.report(error, |file| cargo_named(file, &root))
+        });
+    }
     let current = Rc::new(Current::new(bootstrap));
     crate::future::serve(current.clone());
     #[cfg(feature = "sync")]
@@ -881,6 +896,23 @@ pub fn publish(bootstrap: Bootstrap) {
             Some((current.calls.clone(), current.shared.clone()));
     }
     CURRENT.with(|slot| *slot.borrow_mut() = Some(current));
+}
+
+/// `file` named by its path from `root`, as a program Cargo builds names
+/// it in a panic; by its own path outside `root`.
+#[cfg(feature = "debugging")]
+fn cargo_named(
+    file: &crate::diagnostic::Source,
+    root: &std::path::Path,
+) -> crate::diagnostic::Source {
+    std::path::Path::new(file.identity())
+        .strip_prefix(root)
+        .ok()
+        .and_then(|relative| {
+            crate::diagnostic::Source::new(relative.to_string_lossy().into_owned(), file.text())
+                .ok()
+        })
+        .unwrap_or_else(|| file.clone())
 }
 
 /// The future of the program's async `main`, which its runtime's entry
@@ -957,9 +989,9 @@ fn runtime_error(error: program::Error) -> Box<crate::EvalAltResult> {
 /// The panic of `main`'s run-time failure `error`, with Rust's note on
 /// backtraces.
 fn main_panic(error: &crate::EvalAltResult) -> String {
-    match crate::diagnostic::Report::from_evaluation(None, error) {
-        Ok(report) => crate::diagnostic::panic(&report),
-        Err(_) => format!("error: {}\n", crate::future::message(error)),
+    match crate::diagnostic::located(error) {
+        Some(report) => crate::diagnostic::panic(&report),
+        None => format!("error: {}\n", crate::future::message(error)),
     }
 }
 

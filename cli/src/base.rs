@@ -196,7 +196,9 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
         });
         inspector.compiled(&ast);
     }
-    let runtime = |error| Failed::Panic(located(error, target, &positions));
+    locate_panics(target, &positions);
+    let runtime =
+        |error: Box<rawr::EvalAltResult>| Failed::Panic(located(&error, target, &positions));
     let mut scope = Scope::new();
     let value = engine
         .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
@@ -223,26 +225,36 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     })
 }
 
+/// Locate a panic on any of the program's threads as [`located`] does.
+pub(crate) fn locate_panics(
+    target: &project::Target,
+    positions: &std::sync::Arc<rawr::program::Positions>,
+) {
+    let target = target.clone();
+    let positions = std::sync::Arc::clone(positions);
+    diagnostic::locate_panics_with(move |error| Some(located(error, &target, &positions)));
+}
+
 /// A runtime `error` as Rust reports its panic. Its position is in the
 /// lowered program: the compiler's `positions` map it back to its file,
 /// the entry or a module's, or to none in code it wrote.
 pub(crate) fn located(
-    error: Box<rawr::EvalAltResult>,
+    error: &rawr::EvalAltResult,
     target: &project::Target,
     positions: &rawr::program::Positions,
 ) -> diagnostic::Report {
     let Some(entry) = source(target) else {
-        return diagnostic::Report::from_evaluation(None, &error)
+        return diagnostic::Report::from_evaluation(None, error)
             .unwrap_or_else(|_| report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, None));
     };
-    let located = match positions.locate(&entry, &error) {
+    let located = match positions.locate(&entry, error) {
         Some((file, span)) => diagnostic::Report::from_evaluation_located(
             cargo_named(file, target),
             Some(span),
-            &error,
+            error,
         ),
         None => {
-            diagnostic::Report::from_evaluation_located(cargo_named(&entry, target), None, &error)
+            diagnostic::Report::from_evaluation_located(cargo_named(&entry, target), None, error)
         }
     };
     located.unwrap_or_else(|_| report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, Some(entry)))

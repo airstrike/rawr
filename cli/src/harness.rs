@@ -108,9 +108,19 @@ impl Options {
 
 /// Build the loaded program for its tests and run those `options`
 /// selects, reporting as libtest does. The exit status is libtest's: 101
-/// when a test failed.
+/// when a test failed. For a Cargo crate, `cargo check` builds its tests
+/// beside them, and its errors follow the report: rustc stays the
+/// authority.
 #[must_use]
 pub fn run(loaded: base::Loaded, options: &Options) -> ExitCode {
+    let cargo = crate::cargo::begin_tests(&loaded.graph);
+    let code = run_tests(loaded, options);
+    crate::cargo::after_run(cargo.map(crate::cargo::Pending::finish));
+    code
+}
+
+/// [`run`]'s tests.
+fn run_tests(loaded: base::Loaded, options: &Options) -> ExitCode {
     let base::Loaded { target, graph, .. } = loaded;
     let mut engine = base::engine(base::Build::Test);
     let captured = Arc::new(Mutex::new(String::new()));
@@ -127,7 +137,9 @@ pub fn run(loaded: base::Loaded, options: &Options) -> ExitCode {
         Ok(compiled) => compiled,
         Err(error) => return crate::failure(&base::compile_report(&error, &target)),
     };
-    let located = |error| base::located(error, &target, &positions);
+    let positions = Arc::new(positions);
+    base::locate_panics(&target, &positions);
+    let located = |error: Box<rawr::EvalAltResult>| base::located(&error, &target, &positions);
     let mut scope = Scope::new();
     if let Err(error) = engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
         eprint!("{}", diagnostic::panic(&located(error)));

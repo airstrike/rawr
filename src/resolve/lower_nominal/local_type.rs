@@ -82,6 +82,10 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_local_type(&mut self) -> Result<Ty, Error> {
+        // `t!()`: the type the program's own macro expands to.
+        if self.splice_macro_ahead()? {
+            return self.parse_local_type();
+        }
         // `::image::ImageError`: a leading `::` names an outside crate,
         // which no `use` or generic parameter shadows.
         if matches!(self.peek(), Token::DoubleColon) {

@@ -6,12 +6,20 @@ use std::num::{NonZeroU64, NonZeroUsize};
 /// Default limits, identical in debug and release builds (the hot-reload runner
 /// is a debug build; a script must not behave differently there).
 pub mod default_limits {
-    /// Maximum levels of function calls.
+    /// Maximum levels of function calls: about as deep as a debug build of
+    /// a small recursive Rust function goes on an 8 MiB main thread. A
+    /// script call grows its stack, so this, not the host's stack, ends
+    /// recursion.
+    #[cfg(not(target_family = "wasm"))]
+    pub const MAX_CALL_STACK_DEPTH: usize = 100_000;
+    /// Maximum levels of function calls on wasm, whose stack doesn't grow.
+    #[cfg(target_family = "wasm")]
     pub const MAX_CALL_STACK_DEPTH: usize = 64;
-    /// Maximum levels of expressions.
-    pub const MAX_EXPR_DEPTH: usize = 256;
-    /// Maximum levels of expressions in function bodies.
-    pub const MAX_FUNCTION_EXPR_DEPTH: usize = 256;
+    /// Maximum levels of expressions: none, as Rust has none. The parser
+    /// grows its stack.
+    pub const MAX_EXPR_DEPTH: usize = 0;
+    /// Maximum levels of expressions in function bodies: none.
+    pub const MAX_FUNCTION_EXPR_DEPTH: usize = 0;
 }
 
 /// A type containing all the limits imposed by the [`Engine`].

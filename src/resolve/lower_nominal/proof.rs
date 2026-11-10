@@ -265,6 +265,29 @@ impl<'a> Parser<'a> {
                     };
                     return self.prove_executable_op(self.keyed_op(op, kind, &arguments[0]));
                 }
+                // Into a map or a set of the payloads, once none failed.
+                Ty::Result(payload, _) | Ty::Option(payload)
+                    if let Ty::Keyed(kind, arguments) = self.inference.resolve(&payload) =>
+                {
+                    let keyed = if kind.is_map() {
+                        PreludeOp::MapFrom
+                    } else {
+                        PreludeOp::SetFrom
+                    };
+                    let Op::Shaped { op, ty, flags } = self.keyed_op(keyed, kind, &arguments[0])
+                    else {
+                        unreachable!("a keyed operation is shaped");
+                    };
+                    let tried = match self.inference.resolve(&target) {
+                        Ty::Result(..) => SHAPED_RESULT,
+                        _ => SHAPED_OPTION,
+                    };
+                    return self.prove_executable_op(Op::Shaped {
+                        op,
+                        ty,
+                        flags: flags | tried,
+                    });
+                }
                 Ty::Result(payload, _) => ExecutableOp::Kinded {
                     op: PreludeOp::CollectTry,
                     kinds: [COLLECT_RESULT, kind_code(self.inference.resolve(&payload))],

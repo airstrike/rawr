@@ -942,8 +942,14 @@ fn move_constant_arg(arg_expr: &mut Expr) -> bool {
     }
 }
 
-/// Optimize an [expression][Expr].
-fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
+/// Optimize an [expression][Expr], on a stack grown when it runs low, as
+/// its nesting has no limit (#962).
+fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, chaining: bool) {
+    crate::eval::stack::with_room(|| optimize_nested(expr, state, chaining));
+}
+
+/// [`optimize_expr`] on the stack it left.
+fn optimize_nested(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
     let start_pos = expr.position();
 
     match expr {

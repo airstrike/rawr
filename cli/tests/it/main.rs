@@ -238,6 +238,26 @@ fn a_panic_exits_101_like_rust() {
     );
 }
 
+/// A spawned thread's panic names where it panicked, as the main thread's
+/// does (#948).
+#[test]
+fn a_thread_s_panic_names_its_place() {
+    let sandbox = Sandbox::new("thread-panic");
+    fs::write(
+        sandbox.work().join("thread.rs"),
+        "fn main() {\n    let h = std::thread::spawn(|| {\n        panic!(\"boom {}\", 3);\n    });\n    let _ = h.join();\n}\n",
+    )
+    .unwrap();
+
+    let output = sandbox.rawr(&["run", "thread.rs"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        stderr(&output),
+        "thread '<unnamed>' panicked at thread.rs:3:9:\nboom 3\n"
+    );
+}
+
 #[test]
 fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     let sandbox = Sandbox::new("type-error");

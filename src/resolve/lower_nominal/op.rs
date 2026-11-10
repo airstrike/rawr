@@ -112,6 +112,12 @@ pub(super) const SHAPED_TOTAL: u8 = 1;
 /// A hashed collection whose key type has a hand-written `PartialEq`: a
 /// key is found by its `eq`, not by its order.
 pub(super) const SHAPED_HASHED: u8 = 2;
+/// A `MapFrom` or `SetFrom` of `Result` items, a `collect()` into a
+/// `Result` of a map or a set: the first `Err`, else `Ok` of the payloads'.
+pub(super) const SHAPED_RESULT: u8 = 4;
+/// A `MapFrom` or `SetFrom` of `Option` items: the first `None`, else
+/// `Some` of the payloads'.
+pub(super) const SHAPED_OPTION: u8 = 8;
 
 /// The runtime primitives of `Option<T>` and `Result<T, E>`;
 /// every method composes them.
@@ -1334,6 +1340,30 @@ impl PreludeOp {
                     .try_cast::<std::cmp::Reverse<Dynamic>>()
                     .map(|reverse| reverse.0)
                     .ok_or_else(|| invariant("a `Reverse` operand is not one at runtime"));
+            }
+            Self::MapFrom | Self::SetFrom if flags & (SHAPED_RESULT | SHAPED_OPTION) != 0 => {
+                let result = flags & SHAPED_RESULT != 0;
+                let code = if result {
+                    COLLECT_RESULT
+                } else {
+                    COLLECT_OPTION
+                };
+                let collected = collect_try([code, 0], args[0].take())?;
+                let payload = if result {
+                    crate::result::read(&collected).and_then(Result::ok)
+                } else {
+                    crate::option::read(&collected).flatten()
+                };
+                let Some(mut payload) = payload else {
+                    return Ok(collected);
+                };
+                let flags = flags & !(SHAPED_RESULT | SHAPED_OPTION);
+                let keyed = self.invoke(context, &mut [&mut payload], models, shape, flags)?;
+                return Ok(if result {
+                    crate::result::ok(keyed)
+                } else {
+                    crate::option::some(keyed)
+                });
             }
             Self::MapFrom | Self::SetFrom => {
                 let mut items = args[0]

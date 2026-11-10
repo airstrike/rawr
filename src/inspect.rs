@@ -423,8 +423,8 @@ fn short_type_name(name: &str) -> String {
 pub type Locate = dyn Fn(Position) -> Option<(String, usize)> + Send + Sync;
 
 /// A compiled program's entry source and the compiler's positions, which
-/// place a step of the lowered program in its file and line. A compiler
-/// keeps them only on an engine a debugger was registered on.
+/// place a step of the lowered program in its file and line, and a panic
+/// at its place.
 pub struct Located {
     entry: crate::diagnostic::Source,
     positions: crate::program::Positions,
@@ -446,6 +446,22 @@ impl Located {
     pub fn line(&self, position: Position) -> Option<(String, usize)> {
         let (file, span) = self.positions.locate_position(&self.entry, position)?;
         Some((file.identity().to_owned(), span.start().line()?))
+    }
+
+    /// The report of `error`, a run-time failure of the program, at its
+    /// place in the program's files, named by `name`; at the entry's alone
+    /// in code the compiler wrote.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn report(
+        &self,
+        error: &EvalAltResult,
+        name: impl Fn(&crate::diagnostic::Source) -> crate::diagnostic::Source,
+    ) -> Option<crate::diagnostic::Report> {
+        let (file, span) = match self.positions.locate(&self.entry, error) {
+            Some((file, span)) => (file, Some(span)),
+            None => (&self.entry, None),
+        };
+        crate::diagnostic::Report::from_evaluation_located(name(file), span, error).ok()
     }
 }
 

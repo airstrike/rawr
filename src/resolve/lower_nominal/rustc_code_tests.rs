@@ -474,6 +474,15 @@ fn a_type_nothing_settles_where_rustc_needs_it_is_e0282() {
             None
         )
     );
+    // A `let x;` a format string names before it has a value or a type:
+    // the type check's E0282 comes before the borrow check's E0381 (#946).
+    let (code, message, _) = refused("fn main() {\n    let x;\n    println!(\"{x}\");\n}\n");
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0282", "type annotations needed")
+    );
+    let (code, _, _) = refused("fn main() {\n    let x: i32;\n    println!(\"{x}\");\n}\n");
+    assert_eq!(code, "E0381");
     // An `.into()` no use gives a target.
     let (code, message, _) = refused("fn main() {\n    let n: u8 = 1;\n    let x = n.into();\n}\n");
     assert_eq!(

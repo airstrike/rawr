@@ -9,6 +9,10 @@ use crate::{host, program, reload, Dynamic, Engine, Shared};
 pub struct Bootstrap {
     generation: Arc<reload::Generation>,
     binding: Arc<reload::BoundCatalog>,
+    /// Where the generation's steps are in its files, which place a panic.
+    #[cfg(feature = "debugging")]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    located: Option<Arc<crate::inspect::Located>>,
 }
 
 /// A compiled candidate could not cross exact engine-origin or runtime binding.
@@ -33,18 +37,28 @@ impl reload::Candidate {
         let reload::Candidate {
             generation,
             catalog,
-            ..
+            #[cfg(feature = "debugging")]
+            located,
         } = self;
         let catalog = catalog.bind(engine, runtime)?;
         debug_assert_eq!(generation.id(), catalog.generation());
         Ok(Bootstrap {
             generation,
             binding: Arc::new(catalog),
+            #[cfg(feature = "debugging")]
+            located,
         })
     }
 }
 
 impl Bootstrap {
+    /// Where the generation's steps are in its files.
+    #[cfg(feature = "debugging")]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) const fn located(&self) -> Option<&Arc<crate::inspect::Located>> {
+        self.located.as_ref()
+    }
+
     /// Return the immutable metadata proof for this initial generation.
     #[must_use]
     pub const fn generation(&self) -> &Arc<reload::Generation> {

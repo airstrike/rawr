@@ -901,8 +901,8 @@ impl Parser<'_> {
 
     /// Rust's `FromIterator<item>` for a `collect()` into `target`, once
     /// `target` is known: a `Vec` or a `VecDeque` of the items, a `String`
-    /// of text or `char`s, a `Result` or an `Option` of items that are, each
-    /// of a payload that is. Else rustc's E0277.
+    /// of text or `char`s, a map or a set, a `Result` or an `Option` of
+    /// items that are, each of a payload that is. Else rustc's E0277.
     pub(super) fn collected_into(
         &mut self,
         target: &Ty,
@@ -910,14 +910,6 @@ impl Parser<'_> {
         collect: Span,
     ) -> Result<(), Error> {
         let item = self.inference.resolve(item);
-        if let Ty::Result(payload, _) | Ty::Option(payload) = self.inference.resolve(target)
-            && let Ty::Keyed(..) = self.inference.resolve(&payload)
-        {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "`collect()` into a `Result` or an `Option` of a map or a set".into(),
-                source: collect,
-            });
-        }
         let fits = match self.inference.resolve(target) {
             target @ Ty::Array { kind, .. } if kind.length().is_none() => {
                 let collected = Ty::sequence(kind, item.clone());

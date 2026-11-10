@@ -2352,15 +2352,17 @@ impl Engine {
         }
     }
 
-    /// Parse an expression.
+    /// Parse an expression, on a stack grown when it runs low: Rust limits
+    /// no expression's nesting, so the native stack mustn't.
     fn parse_expr(&self, state: &mut ParseState, mut settings: ParseSettings) -> ParseResult<Expr> {
         settings.pos = state.input.peek().unwrap().1;
 
-        // Parse expression normally.
         let precedence = Precedence::new(1);
         let settings = settings.level_up()?;
-        let lhs = self.parse_unary(state, settings)?;
-        self.parse_binary_op(state, settings, precedence, lhs)
+        crate::eval::stack::with_room(|| {
+            let lhs = self.parse_unary(state, settings)?;
+            self.parse_binary_op(state, settings, precedence, lhs)
+        })
     }
 
     /// Parse an if statement.

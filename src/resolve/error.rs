@@ -1001,6 +1001,15 @@ pub enum Error {
 }
 
 impl Error {
+    /// This error, a use of a moved value where the use borrows it, as a
+    /// format argument does: rustc's "borrow of moved value".
+    pub(crate) fn borrowing(mut self) -> Self {
+        if let Self::MovedValue { borrowed, .. } = &mut self {
+            *borrowed = true;
+        }
+        self
+    }
+
     /// A name bound twice in one of Rust's namespaces: rustc's E0252 when
     /// an import bound it before, a duplicate item when a declaration did.
     pub(crate) fn duplicate(

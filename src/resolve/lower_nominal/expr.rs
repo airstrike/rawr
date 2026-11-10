@@ -196,8 +196,10 @@ impl<'a> Parser<'a> {
         false
     }
 
+    /// Parse an expression, on a stack grown when it runs low: Rust limits
+    /// no expression's nesting, so the native stack mustn't (#962).
     pub(super) fn parse_expr(&mut self) -> Result<ParsedExpr, Error> {
-        self.parse_expr_in(false)
+        crate::eval::stack::with_room(|| self.parse_expr_in(false))
     }
 
     pub(super) fn peek_block_like(&mut self) -> bool {

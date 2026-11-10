@@ -1023,6 +1023,10 @@ impl<'a> Parser<'a> {
     /// A pattern without top-level alternatives, as closure parameters and
     /// `let` take.
     pub(super) fn parse_pattern_no_alt(&mut self) -> Result<Syntax, Error> {
+        // `p!()`: the pattern the program's own macro expands to.
+        if self.splice_macro_ahead()? {
+            return self.parse_pattern_syntax();
+        }
         let start = self.position();
         // `todo!()` where a pattern goes: std's panicking macros expand to
         // a call, which no pattern is (E0532).

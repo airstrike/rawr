@@ -132,7 +132,7 @@ impl Threads {
                 // A thread that panics prints its panic as it ends, as
                 // Rust's panic hook does; `join` gives the payload.
                 if let Err(error) = &outcome
-                    && let Ok(report) = crate::diagnostic::Report::from_evaluation(None, error)
+                    && let Some(report) = crate::diagnostic::located(error)
                 {
                     eprint!("{}", crate::diagnostic::panicked(&report, "<unnamed>"));
                 }

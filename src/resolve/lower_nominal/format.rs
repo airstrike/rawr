@@ -900,8 +900,15 @@ impl<'a> Parser<'a> {
             };
             // A format argument is borrowed, and the borrow lasts until the
             // macro has read every argument, as rustc's `format_args!` has
-            // it: a later argument that moves or changes it is refused.
-            let mut argument = self.parse_expr()?;
+            // it: a later argument that moves or changes it is refused. A
+            // moved local given alone is rustc's "borrow of moved value".
+            let mut ahead = self.input.clone();
+            let alone = matches!(ahead.next(), Some((Token::Identifier(_), _)))
+                && matches!(ahead.next(), Some((Token::Comma | Token::RightParen, _)));
+            let mut argument = self.parse_expr().map_err(|error| match error {
+                Error::MovedValue { .. } if alone => error.borrowing(),
+                error => error,
+            })?;
             self.format_argument_borrow(&argument, &mut borrowed);
             self.hold_temporary(&mut argument)?;
             arguments.push((name, argument));
@@ -1028,7 +1035,27 @@ impl<'a> Parser<'a> {
                                             name,
                                         )
                                         .unwrap_or(expression);
-                                    return Err(this.moved_value(name, binding, reference, true));
+                                    // A `let x;` without a value yet is
+                                    // E0381 once the body's types are
+                                    // settled, or E0282 where its type
+                                    // stays unknown, as an expression's is.
+                                    if let Some(first) =
+                                        this.deferred.get(&binding.declaration).copied()
+                                        && !this.moved_at.contains_key(&binding.declaration)
+                                    {
+                                        this.uninitialized.push(super::UninitializedUse {
+                                            name: name.as_str().into(),
+                                            declaration: binding.declaration,
+                                            reference,
+                                            ty: binding.ty.clone(),
+                                            possibly: first.is_some(),
+                                            operator: None,
+                                        });
+                                    } else {
+                                        return Err(
+                                            this.moved_value(name, binding, reference, true)
+                                        );
+                                    }
                                 }
                                 // The macro borrows the local where it runs.
                                 this.mention(
