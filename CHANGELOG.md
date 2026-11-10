@@ -13,6 +13,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool. (#1658; part of #990)
 - A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them. (#1638)
 - A cold `rawr check` or `rawr run` extracts, reads, classifies and binds only the crates the marked code names, and the crates defining the types and traits their signatures reach. A dependency it never names is still built by cargo, but rawr records only its names. (#1663; part of #1618)
+- A new rawr build, such as one with a generator or classifier bump, reads, classifies and generates nothing again for an unchanged project. The API now names rawr's own package by name and version, and a shared resolution by its lockfile, instead of by the path of rawr's build directory. Only the runner rebuilds, because it links the new rawr. (#1666; part of #1604)
+- Each selected crate's shared extraction table is read, checked and replayed on its own core. (#1667; part of #1604)
+- A driver built for a nightly other than the pinned one compiles, because its embedded sources now include `sidecar.rs` and `expand/request.rs`. (#1668)
 
 ## 0.3.180 (2026-11-10)
 
