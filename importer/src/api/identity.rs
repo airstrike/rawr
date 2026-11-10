@@ -99,8 +99,17 @@ pub struct Export {
 
 // Equality reads the field most likely to differ first: two units of one
 // graph share their package, and two definitions of one unit their unit.
+#[cfg(test)]
+std::thread_local! {
+    /// How many unit identities were compared, for tests that count the
+    /// comparisons a lookup makes.
+    pub(crate) static UNIT_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl PartialEq for Unit {
     fn eq(&self, other: &Self) -> bool {
+        #[cfg(test)]
+        UNIT_COMPARISONS.with(|count| count.set(count.get().saturating_add(1)));
         self.stable_crate_id == other.stable_crate_id
             && self.crate_name == other.crate_name
             && self.features == other.features

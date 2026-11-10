@@ -325,6 +325,78 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     core_traits: std::cell::OnceCell<HashMap<&'graph str, Box<[usize]>>>,
     /// `callable_traits`, read once.
     callable_traits: std::cell::OnceCell<Option<CallableTraits>>,
+    /// What each projection bound reads, by its associated type's
+    /// definition index (`projection_cases`).
+    projection_cases: std::cell::OnceCell<Box<[std::cell::OnceCell<Box<ProjectionCases>>]>>,
+    /// Each definition's semantic identity, by its index, digested at the
+    /// first ask (`surface_definition`).
+    surface_definitions: std::cell::OnceCell<SurfaceDefinitions>,
+}
+
+/// The concrete types a projection bound `<_ as Trait>::Name` may read,
+/// each with what `Name` is there, as [`associated_at`] reads it from the
+/// trait's implementations.
+struct ProjectionCases {
+    trait_id: api::identity::Definition,
+    cases: Box<[ProjectionCase]>,
+}
+
+#[derive(Clone)]
+struct ProjectionCase {
+    candidate: model::Type,
+    value: model::Type,
+}
+
+impl ProjectionCases {
+    fn read(
+        graph: &api::Graph<impl api::Phase>,
+        trait_id: &api::identity::Definition,
+        name: &str,
+        instances: &[usize],
+    ) -> Self {
+        let cases = projection_candidates(graph, trait_id, instances)
+            .into_iter()
+            .filter_map(|candidate| {
+                let value = associated_at(graph, trait_id, name, &candidate, 0)?;
+                Some(ProjectionCase { candidate, value })
+            })
+            .collect();
+        Self {
+            trait_id: trait_id.clone(),
+            cases,
+        }
+    }
+}
+
+/// Each graph definition's semantic identity, by its index, and the
+/// indices sorted by identity.
+struct SurfaceDefinitions {
+    by_index: Box<[crate::surface::identity::Definition]>,
+    sorted: Box<[u32]>,
+}
+
+impl SurfaceDefinitions {
+    fn new(graph: &api::Graph<impl api::Phase>) -> Self {
+        let by_index = graph
+            .definitions()
+            .map(|definition| crate::surface::identity::Definition::of(definition.id()))
+            .collect::<Box<[_]>>();
+        let mut sorted = (0..by_index.len() as u32).collect::<Box<[_]>>();
+        // Stable, so of two definitions with one identity the first is found.
+        sorted.sort_by_key(|index| by_index[*index as usize]);
+        Self { by_index, sorted }
+    }
+
+    /// The index of the first definition whose identity is `identity`.
+    fn position(&self, identity: &crate::surface::identity::Definition) -> Option<usize> {
+        let start = self
+            .sorted
+            .partition_point(|index| self.by_index[*index as usize] < *identity);
+        self.sorted
+            .get(start)
+            .map(|index| *index as usize)
+            .filter(|index| self.by_index[*index] == *identity)
+    }
 }
 
 /// `core`'s `Fn` and `FnOnce` traits and `FnOnce::Output`.
@@ -654,6 +726,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             opaque_associated: std::cell::RefCell::new(Vec::new()),
             core_traits: std::cell::OnceCell::new(),
             callable_traits: std::cell::OnceCell::new(),
+            projection_cases: std::cell::OnceCell::new(),
+            surface_definitions: std::cell::OnceCell::new(),
         };
         let initialized = (|| {
             context.retain(
@@ -2647,8 +2721,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
             for implementation in self.graph.implementations_of(trait_id) {
                 let model::Trait::Trait {
-                    id,
                     arguments: implemented,
+                    ..
                 } = implementation.trait_ref()
                 else {
                     continue;
@@ -2662,8 +2736,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     .iter()
                     .filter(|argument| !matches!(argument, model::Argument::Lifetime(_)))
                     .collect::<Vec<_>>();
-                if id != trait_id
-                    || implementation.polarity() != model::Polarity::Positive
+                if implementation.polarity() != model::Polarity::Positive
                     || implemented.len() != arguments.len()
                 {
                     continue;
@@ -2737,15 +2810,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 else {
                     return None;
                 };
-                let name = self.definition_name(associated)?;
-                let candidates =
-                    projection_candidates(self.graph, trait_id, self.instance_aliases());
+                let associated = self.graph.definition_index(associated)?;
+                let read = self.projection_cases(trait_id, associated)?;
                 let mut cases = Vec::new();
-                for candidate in &candidates {
-                    let Some(at) = self.associated_at(trait_id, name, candidate, 0) else {
-                        continue;
-                    };
-                    let (Ok(case), Ok(at)) = (self.convert(candidate), self.convert(&at)) else {
+                for ProjectionCase { candidate, value } in read.iter() {
+                    let (Ok(case), Ok(at)) = (self.convert(candidate), self.convert(value)) else {
                         continue;
                     };
                     if names_other_parameter(&case, u32::MAX)
@@ -2818,6 +2887,48 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
         }
         Ok(cases.into_boxed_slice())
+    }
+
+    /// What a projection bound `<_ as trait_id>::Name` reads, `Name` the
+    /// associated type at definition index `associated`: each type it may
+    /// be with what `Name` is there. Every implementation whose where-clause
+    /// binds `Name` asks the same, so each is read once. `None` when the
+    /// associated type has no name.
+    fn projection_cases(
+        &self,
+        trait_id: &api::identity::Definition,
+        associated: usize,
+    ) -> Option<std::borrow::Cow<'_, [ProjectionCase]>> {
+        let name = self
+            .graph
+            .definitions()
+            .nth(associated)?
+            .display_path()
+            .last()?;
+        let read = || ProjectionCases::read(self.graph, trait_id, name, self.instance_aliases());
+        let table = self.projection_cases.get_or_init(|| {
+            (0..self.graph.definitions().len())
+                .map(|_| std::cell::OnceCell::new())
+                .collect()
+        });
+        let cached = table.get(associated)?.get_or_init(|| Box::new(read()));
+        // An associated type is its own trait's; a bound naming it through
+        // another trait reads that trait's impls.
+        Some(if cached.trait_id == *trait_id {
+            std::borrow::Cow::Borrowed(&cached.cases)
+        } else {
+            std::borrow::Cow::Owned(read().cases.into_vec())
+        })
+    }
+
+    /// The semantic identity of the definition at `index`, digested once.
+    fn surface_definition(&self, index: usize) -> Option<crate::surface::identity::Definition> {
+        self.surface_definitions().by_index.get(index).copied()
+    }
+
+    fn surface_definitions(&self) -> &SurfaceDefinitions {
+        self.surface_definitions
+            .get_or_init(|| SurfaceDefinitions::new(self.graph))
     }
 
     fn definition_name(&self, definition: &api::identity::Definition) -> Option<&str> {
@@ -8008,11 +8119,8 @@ impl<P: api::Phase> Context<'_, P> {
             Type::Inferred => false,
             Type::Unit | Type::Never | Type::Builtin(_) => true,
             Type::Nominal { definition, .. } => self
-                .graph
-                .definitions()
-                .position(|candidate| {
-                    crate::surface::identity::Definition::of(candidate.id()) == *definition
-                })
+                .surface_definitions()
+                .position(definition)
                 .is_some_and(|index| self.implements_for_any(index, "Clone")),
             Type::Option(element)
             | Type::Borrowed { ty: element, .. }
@@ -9389,7 +9497,9 @@ impl<P: api::Phase> Context<'_, P> {
                             });
                         }
                         Type::Nominal {
-                            definition: crate::surface::identity::Definition::of(id),
+                            definition: self
+                                .surface_definition(index)
+                                .ok_or(representability::reject::Kind::UnresolvedDefinition)?,
                             arguments: converted.into_boxed_slice(),
                         }
                     }
@@ -9426,7 +9536,9 @@ impl<P: api::Phase> Context<'_, P> {
                     definition_is_public(definition)?;
                     definition_is_publishable_nominal(definition)?;
                     Type::Nominal {
-                        definition: crate::surface::identity::Definition::of(id),
+                        definition: self
+                            .surface_definition(index)
+                            .ok_or(representability::reject::Kind::UnresolvedDefinition)?,
                         arguments: Box::default(),
                     }
                 }
@@ -10954,6 +11066,13 @@ fn sole_passing_aliases(
         .collect()
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// How many times [`associated_at`] read an associated type, for tests
+    /// that count the reads a classification makes.
+    static ASSOCIATED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// What the associated type `name` of `trait_id` is for the concrete
 /// type `this`, read from the one implementation whose self type
 /// `this` is an instance of, with the projections its value names read
@@ -10971,16 +11090,18 @@ pub(crate) fn associated_at(
 ) -> Option<model::Type> {
     /// Projections inside a value are read this deep.
     const DEPTH: usize = 4;
+    #[cfg(test)]
+    ASSOCIATED_READS.with(|reads| reads.set(reads.get().saturating_add(1)));
     if depth > DEPTH || names_type_parameter(this) {
         return None;
     }
     let mut found = None;
+    // Each one implements `trait_id` itself, not another trait of its hash.
     for implementation in graph.implementations_of(trait_id) {
-        let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+        let model::Trait::Trait { arguments, .. } = implementation.trait_ref() else {
             continue;
         };
-        if id != trait_id
-            || implementation.polarity() != model::Polarity::Positive
+        if implementation.polarity() != model::Polarity::Positive
             || arguments
                 .iter()
                 .skip(1)
@@ -16004,5 +16125,115 @@ mod tests {
             first.driver_retained_usage(),
             second.driver_retained_usage()
         );
+    }
+
+    /// A where-clause bound `<P as Shape>::Out == u8` reads `Shape`'s
+    /// implementations once, however many implementations bind it, and
+    /// compares the trait's whole identity once for each read, not once for
+    /// each implementation (#1604).
+    #[test]
+    fn a_projection_bound_reads_its_trait_s_implementations_once_for_every_binding_implementation()
+    {
+        use crate::api::model;
+        const TYPES: u32 = 40;
+        const BINDINGS: usize = 30;
+        let (graph, shape, out) = crate::test_fixture::projected_implementations(TYPES);
+        let limits = crate::limits::Limits::standard();
+        let context = super::Context::new(&graph, super::Authority::production(&limits))
+            .expect("fixture context is bounded");
+        let owner = definition_in(&graph, "Shape");
+        let span = model::Span::new("fixture/lib.rs".into(), 0, 1, 1, 0, 1, 1);
+        let parameter = model::Type::Parameter { owner, index: 0 };
+        let binding = model::Implementation::new(
+            "fixture-binding".into(),
+            shape.clone(),
+            Box::default(),
+            model::Trait::Inherent,
+            parameter.clone(),
+            model::Safety::Safe,
+            model::Polarity::Positive,
+            false,
+            false,
+            model::Generics::new(
+                Box::default(),
+                Box::from([model::Predicate::ProjectionEquality {
+                    projection: model::Type::Projection {
+                        trait_id: shape,
+                        associated: out,
+                        arguments: Box::from([model::Argument::Type(parameter)]),
+                    },
+                    ty: model::Type::Primitive("u8".into()),
+                }]),
+            ),
+            Box::default(),
+            span,
+            model::Origin::Source,
+        );
+
+        super::ASSOCIATED_READS.with(|reads| reads.set(0));
+        crate::api::identity::UNIT_COMPARISONS.with(|count| count.set(0));
+        for _ in 0..BINDINGS {
+            let projections = context.case_projections(&binding, |ty| ty);
+            let [projection] = &*projections else {
+                panic!("the one bound is read: {}", projections.len());
+            };
+            assert_eq!(projection.cases().len(), TYPES as usize);
+        }
+        let reads = super::ASSOCIATED_READS.with(std::cell::Cell::get);
+        let comparisons = crate::api::identity::UNIT_COMPARISONS.with(std::cell::Cell::get);
+        eprintln!(
+            "{BINDINGS} bindings of {TYPES} impls: {reads} reads, {comparisons} unit comparisons"
+        );
+        assert_eq!(reads, TYPES as usize);
+        // Each binding converts each case's type once; the impls are read
+        // once in all.
+        assert!(
+            comparisons <= BINDINGS * (TYPES as usize + 4) + 4 * TYPES as usize,
+            "{comparisons} unit comparisons"
+        );
+    }
+
+    /// Whether a crate type is `Clone` is read from its definition's
+    /// identity through an index: each definition is digested once, not
+    /// once for each type asked about (#1604).
+    #[test]
+    fn a_nominal_type_s_clone_is_read_with_each_definition_digested_once() {
+        const TYPES: u32 = 40;
+        let (graph, _, _) = crate::test_fixture::projected_implementations(TYPES);
+        let limits = crate::limits::Limits::standard();
+        let context = super::Context::new(&graph, super::Authority::production(&limits))
+            .expect("fixture context is bounded");
+        let types = (0..TYPES)
+            .map(|index| super::representability::convert::Type::Nominal {
+                definition: crate::surface::identity::Definition::of(&definition_in(
+                    &graph,
+                    &format!("S{index}"),
+                )),
+                arguments: Box::default(),
+            })
+            .collect::<Vec<_>>();
+
+        crate::surface::identity::DEFINITION_DIGESTS.with(|digests| digests.set(0));
+        for ty in &types {
+            assert!(!context.clones(ty), "a fixture struct implements no Clone");
+        }
+        let digests = crate::surface::identity::DEFINITION_DIGESTS.with(std::cell::Cell::get);
+        eprintln!(
+            "{TYPES} types of {} definitions: {digests} digests",
+            graph.definitions().len()
+        );
+        assert_eq!(digests, graph.definitions().len());
+    }
+
+    fn definition_in(
+        graph: &crate::api::Graph<crate::api::Extracted>,
+        name: &str,
+    ) -> crate::api::identity::Definition {
+        graph
+            .definitions()
+            .find(|definition| definition.display_path().last() == Some(name))
+            .unwrap_or_else(|| panic!("the fixture defines {name}"))
+            .id()
+            .clone()
     }
 }
