@@ -11,7 +11,8 @@
       {"text":"A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin(\"..\")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again.","issues":[991]},
       {"text":"A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner.","issues":[1073]},
       {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]},
-      {"text":"A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them.","issues":[1638]}
+      {"text":"A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them.","issues":[1638]},
+      {"text":"A cold `rawr check` or `rawr run` extracts, reads, classifies and binds only the crates the marked code names, and the crates defining the types and traits their signatures reach. A dependency it never names is still built by cargo, but rawr records only its names.","issues":[1663],"refs":[1618]}
     ]
   },
   "releases": [

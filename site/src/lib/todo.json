@@ -18,7 +18,8 @@
         {"text":"A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin(\"..\")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again.","issues":[991]},
         {"text":"A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner.","issues":[1073]},
         {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]},
-        {"text":"A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them.","issues":[1638]}
+        {"text":"A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them.","issues":[1638]},
+        {"text":"A cold `rawr check` or `rawr run` extracts, reads, classifies and binds only the crates the marked code names, and the crates defining the types and traits their signatures reach. A dependency it never names is still built by cargo, but rawr records only its names.","issues":[1663],"refs":[1618]}
       ]
     },
     "releases": [
@@ -3638,7 +3639,10 @@
     {"issue":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"open","category":"Divergences from rustc"},
     {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open","category":"Divergences from rustc"},
     {"issue":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open","category":"No glue (D593)"},
-    {"issue":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open","category":"No glue (D593)"}
+    {"issue":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open","category":"No glue (D593)"},
+    {"issue":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4697,7 +4701,10 @@
             {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"},
             {"number":397,"title":"Show the full package report for a resident source error","state":"closed"},
             {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
-            {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"}
+            {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
+            {"number":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open"},
+            {"number":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"open"},
+            {"number":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"open"}
           ]
         }
       ]
