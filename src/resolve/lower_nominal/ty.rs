@@ -1051,12 +1051,12 @@ impl Ty {
             Self::Reference { mutable, target } => format!(
                 "&{}{}",
                 if *mutable { "mut " } else { "" },
-                target.name(models)
+                pointee_name(target, models)
             )
             .into(),
-            Self::Boxed(target) => format!("Box<{}>", target.name(models)).into(),
+            Self::Boxed(target) => format!("Box<{}>", pointee_name(target, models)).into(),
             Self::Counted(counter, target) => {
-                format!("{}<{}>", counter.name(), target.name(models)).into()
+                format!("{}<{}>", counter.name(), pointee_name(target, models)).into()
             }
             Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
             // rustc names a std iterator by its struct: `Chars<'_>`.
@@ -1349,6 +1349,21 @@ impl Ty {
         {
             false
         }
+    }
+}
+
+/// The name of what a box, a reference or a counted pointer points to: a
+/// function value there is rustc's `dyn Fn(A) -> B`, as Rawr's one
+/// function type is `Box<dyn Fn>`'s pointee far more often than a `fn`
+/// pointer's box.
+fn pointee_name(target: &Ty, models: &Models) -> ImmutableString {
+    match target {
+        Ty::Fn { inputs, output } => {
+            let name = fn_type_name(inputs, output, models);
+            let signature = name.strip_prefix("fn").unwrap_or(&name);
+            format!("dyn Fn{signature}").into()
+        }
+        target => target.name(models),
     }
 }
 

@@ -464,6 +464,32 @@ where
     }
 }
 
+/// A frame whose padding a style function of the theme gives, as the iced
+/// fork's `Container::style` takes an `impl Fn(&Theme) -> Style`.
+pub struct Framed<'a, T> {
+    style: Box<dyn Fn(&T) -> Padding + 'a>,
+}
+
+pub fn framed<'a, T>() -> Framed<'a, T> {
+    Framed {
+        style: Box::new(|_| Padding {
+            vertical: 0.0,
+            horizontal: 0.0,
+        }),
+    }
+}
+
+impl<'a, T> Framed<'a, T> {
+    pub fn style(mut self, style: impl Fn(&T) -> Padding + 'a) -> Self {
+        self.style = Box::new(style);
+        self
+    }
+
+    pub fn padding(&self, theme: &T) -> Padding {
+        (self.style)(theme)
+    }
+}
+
 /// Content that scrolls, as the iced fork's `Scrollable<'a, Message, W,
 /// Theme>`.
 pub struct Scrollable<'a, M, W, T = Theme> {

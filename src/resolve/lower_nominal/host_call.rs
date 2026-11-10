@@ -409,6 +409,7 @@ impl<'a> Parser<'a> {
                 );
             }
             if !profile_mapper {
+                self.fill_fn_bound(expected, argument);
                 self.coerce_expr(expected, argument)?;
             }
             self.lend_guarded_place(expected, argument);
@@ -1798,6 +1799,7 @@ impl<'a> Parser<'a> {
                     kind: sequence::Kind::Vec,
                 };
             }
+            self.fill_fn_bound(expected, argument);
             self.coerce_expr(expected, argument)?;
             self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() {

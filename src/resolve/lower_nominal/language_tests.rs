@@ -737,6 +737,44 @@ fn language_closures_in_variables_are_values() {
 }
 
 #[test]
+fn language_a_boxed_or_borrowed_function_fills_an_fn_bound() {
+    // std's `impl Fn for Box<F>` and `impl Fn for &F`: a `Box<dyn Fn>`, a
+    // `&dyn Fn` and a `&Box<dyn Fn>` each fill `impl Fn` and `F: Fn`
+    // parameters, and the box is still the caller's to call after a
+    // borrowed use.
+    let value = run(r#"
+        fn apply(f: impl Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+        fn twice<F: Fn(i64) -> i64>(f: F, x: i64) -> i64 { f(f(x)) }
+        pub fn run() -> i64 {
+            let step = 3;
+            let boxed: Box<dyn Fn(i64) -> i64> = if step > 1 {
+                Box::new(move |x| x + step)
+            } else {
+                Box::new(|x| x)
+            };
+            let borrowed: &dyn Fn(i64) -> i64 = &|x| x * 2;
+            let first = apply(&boxed, 1) + twice(borrowed, 1) * 10;
+            first + boxed(0) * 100 + apply(boxed, 10) * 1000
+        }
+        run()
+    "#);
+    assert_eq!(value, 4 + 40 + 300 + 13000);
+}
+
+#[test]
+fn language_a_counted_function_does_not_fill_an_fn_bound() {
+    // std has no `impl Fn for Rc<F>`: rustc's E0277 says the `Rc` is no
+    // closure, and rawr rejects it too.
+    let message = rejected(
+        "use std::rc::Rc;
+         fn apply(f: impl Fn(i64) -> i64) -> i64 { f(1) }
+         pub fn run() -> i64 { let shared: Rc<dyn Fn(i64) -> i64> = Rc::new(|x| x); apply(shared) }
+         run()",
+    );
+    assert!(message.contains("Rc<dyn Fn(i64) -> i64>"), "{message}");
+}
+
+#[test]
 fn language_a_blocks_tail_closure_takes_the_parameter_types_its_place_gives() {
     // The closure a block gives where a function takes `impl FnMut(Key)`
     // has a `Key` parameter, which the `match` reads at once, after the
