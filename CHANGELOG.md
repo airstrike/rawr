@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.177 (2026-11-10)
+
 - A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once. (#446, #470; part of #1604)
 - An operator on a type without an impl of its trait is rustc's error in rustc's words, at the operator: E0369 for `+`, `|`, `<=` and `==`, E0368 for `+=`, E0600 for unary `-`, and E0308 for a right operand the one impl doesn't take. A `.into()` that nothing fixes is E0283 in every build. (#1615, #1617)
 - A project's record of native instances is keyed by the rawr build that kept it, and the runner a check builds reads the same key, so a record from an older rawr is never reused. (#1606)

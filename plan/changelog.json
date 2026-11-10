@@ -4,26 +4,31 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once.","issues":[446,470],"refs":[1604]},
-      {"text":"An operator on a type without an impl of its trait is rustc's error in rustc's words, at the operator: E0369 for `+`, `|`, `<=` and `==`, E0368 for `+=`, E0600 for unary `-`, and E0308 for a right operand the one impl doesn't take. A `.into()` that nothing fixes is E0283 in every build.","issues":[1615,1617]},
-      {"text":"A project's record of native instances is keyed by the rawr build that kept it, and the runner a check builds reads the same key, so a record from an older rawr is never reused.","issues":[1606]},
-      {"text":"Marked code calls a crate trait's `&self` methods on a trait object, as `held.0.area()` on a `&'static dyn Shape` or a `Box<dyn Shape>` a crate gave. A marked value is lent to native code as a native trait's `&dyn`, written `&page as &dyn Page` or `&page`, and `Rc<dyn Trait>` and `Arc<dyn Trait>` cross for marked types, numbers and crate values.","issues":[1593,1304]},
-      {"text":"`&format_args!(..)` needs no `as &dyn Value` where a crate call takes `&dyn Value`. A slice of objects lent to a call whose result keeps none of them is accepted.","issues":[1621],"refs":[1592]},
-      {"text":"inboard's marked files that name a std trait beside tracing's macros pass `rawr check` again. The extraction error now names the item it misread, not a bare hash.","issues":[1622]},
-      {"text":"`-` of an unsigned integer or literal is rustc's E0600 (\"unsigned values cannot be negated\"), and changing a std collection through a `&` reference is rustc's E0596 in its words.","issues":[945,938]},
-      {"text":"More std paths run as cargo's build runs them: `std::num::ParseIntError` written in full in a `let`, an imported `Duration` or `Instant` in a `let`, `Instant::now` as a value, `fmt::Formatter::write_str(f, s)`, `Iterator::sum::<i64>(it)`, `<i64 as FromStr>::from_str`, `<T as TryFrom<U>>::try_from`, and `SystemTime`'s `+`, `-`, `+=`, `-=` with a `Duration` and its ordering.","issues":[922,1002,978,977,924]},
-      {"text":"A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text.","issues":[969]},
-      {"text":"A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span(\"right\")])` runs again inside a view.","issues":[1369,1368,1366]},
-      {"text":"A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`.","issues":[1282]},
-      {"text":"A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core.","issues":[1627]},
-      {"text":"Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION.","issues":[1625]},
-      {"text":"A program with marked generic instances keeps its extracted tables for the next demand round again, so a round whose items the tables already hold needs no nightly build or probe. A check no longer generates its bindings plan twice per round, and `rawr check` with `RAWR_VERBOSE=1` prints what each round's stages did.","issues":[1629],"refs":[1618]},
-      {"text":"`std::env::current_dir()` runs, a generic function's type parameter is inferred through an `impl Trait` argument as rustc does, a borrowed crate field derefs at a call even when the program never names its type, and `Rectangle::<u32> { .. }` literals work. iced's screenshot passes `rawr check`, and todos and integration get further.","issues":[1061,1218,1100,1320]},
-      {"text":"A crate macro that includes a file relative to a native module, as `wgpu::include_wgsl!(\"shader/vert.wgsl\")`, finds it: a native module's non-`.rs` files sit beside its copy. iced's integration gets past its shaders.","issues":[1630],"refs":[314]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.177",
+      "date": "2026-11-10",
+      "entries": [
+        {"text":"A check whose first build records new instances of marked generics no longer probes that build, and a check keyed by proved facts proves each imported call in place instead of starting again for each call. A toolchain or driver version mismatch stops a check at once.","issues":[446,470],"refs":[1604]},
+        {"text":"An operator on a type without an impl of its trait is rustc's error in rustc's words, at the operator: E0369 for `+`, `|`, `<=` and `==`, E0368 for `+=`, E0600 for unary `-`, and E0308 for a right operand the one impl doesn't take. A `.into()` that nothing fixes is E0283 in every build.","issues":[1615,1617]},
+        {"text":"A project's record of native instances is keyed by the rawr build that kept it, and the runner a check builds reads the same key, so a record from an older rawr is never reused.","issues":[1606]},
+        {"text":"Marked code calls a crate trait's `&self` methods on a trait object, as `held.0.area()` on a `&'static dyn Shape` or a `Box<dyn Shape>` a crate gave. A marked value is lent to native code as a native trait's `&dyn`, written `&page as &dyn Page` or `&page`, and `Rc<dyn Trait>` and `Arc<dyn Trait>` cross for marked types, numbers and crate values.","issues":[1593,1304]},
+        {"text":"`&format_args!(..)` needs no `as &dyn Value` where a crate call takes `&dyn Value`. A slice of objects lent to a call whose result keeps none of them is accepted.","issues":[1621],"refs":[1592]},
+        {"text":"inboard's marked files that name a std trait beside tracing's macros pass `rawr check` again. The extraction error now names the item it misread, not a bare hash.","issues":[1622]},
+        {"text":"`-` of an unsigned integer or literal is rustc's E0600 (\"unsigned values cannot be negated\"), and changing a std collection through a `&` reference is rustc's E0596 in its words.","issues":[945,938]},
+        {"text":"More std paths run as cargo's build runs them: `std::num::ParseIntError` written in full in a `let`, an imported `Duration` or `Instant` in a `let`, `Instant::now` as a value, `fmt::Formatter::write_str(f, s)`, `Iterator::sum::<i64>(it)`, `<i64 as FromStr>::from_str`, `<T as TryFrom<U>>::try_from`, and `SystemTime`'s `+`, `-`, `+=`, `-=` with a `Duration` and its ordering.","issues":[922,1002,978,977,924]},
+        {"text":"A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text.","issues":[969]},
+        {"text":"A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span(\"right\")])` runs again inside a view.","issues":[1369,1368,1366]},
+        {"text":"A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`.","issues":[1282]},
+        {"text":"A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core.","issues":[1627]},
+        {"text":"Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION.","issues":[1625]},
+        {"text":"A program with marked generic instances keeps its extracted tables for the next demand round again, so a round whose items the tables already hold needs no nightly build or probe. A check no longer generates its bindings plan twice per round, and `rawr check` with `RAWR_VERBOSE=1` prints what each round's stages did.","issues":[1629],"refs":[1618]},
+        {"text":"`std::env::current_dir()` runs, a generic function's type parameter is inferred through an `impl Trait` argument as rustc does, a borrowed crate field derefs at a call even when the program never names its type, and `Rectangle::<u32> { .. }` literals work. iced's screenshot passes `rawr check`, and todos and integration get further.","issues":[1061,1218,1100,1320]},
+        {"text":"A crate macro that includes a file relative to a native module, as `wgpu::include_wgsl!(\"shader/vert.wgsl\")`, finds it: a native module's non-`.rs` files sit beside its copy. iced's integration gets past its shaders.","issues":[1630],"refs":[314]}
+      ]
+    },
     {
       "version": "0.3.176",
       "date": "2026-11-10",
