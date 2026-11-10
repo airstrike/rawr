@@ -24,7 +24,8 @@
         {"text":"A method taking `self` or `mut self` can move a part below its fields out of the receiver, as in `let items = self.content.items;`, as rustc allows. Behind `&self` or `&mut self` the move is rustc's E0507, naming the place.","issues":[1589]},
         {"text":"A crate trait's function can be called through the trait's module path: `home::Shape::size(&x)`, `crate::home::Shape::size(..)` and `<T as home::Shape>::size(..)` resolve, as in rustc.","issues":[1596]},
         {"text":"`rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install.","issues":[1610],"refs":[1604]},
-        {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]}
+        {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
+        {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]}
       ]
     },
     "releases": [
@@ -3475,7 +3476,7 @@
     {"issue":1580,"title":"`&T` as a crate function's type argument is refused in marked code","state":"open","category":"No glue (D593)"},
     {"issue":1581,"title":"A lent marked value given on by a marked fn with an elided result lifetime panics at the next native call","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1582,"title":"Marked iced builders shaped as inboard's sidebar.rs fail rawr check","state":"closed","category":"No glue (D593)","release":"0.3.175"},
-    {"issue":1583,"title":"A marked closure a crate calls with a lent &MarkedType doesn't build in the runner (E0609)","state":"open","category":"No glue (D593)"},
+    {"issue":1583,"title":"A marked closure a crate calls with a lent &MarkedType doesn't build in the runner (E0609)","state":"closed","category":"No glue (D593)"},
     {"issue":1584,"title":"Marked generic builders instantiated by marked code fail attestation at run time","state":"closed","category":"No glue (D593)"},
     {"issue":1585,"title":"An islands run test waits forever when the program's check fails instead of failing","state":"closed","category":"No glue (D593)"},
     {"issue":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"closed","category":"No glue (D593)"},
@@ -3503,7 +3504,10 @@
     {"issue":1608,"title":"A crate's re-exported enum variant named by its qualified path in an expression is E0425","state":"open","category":"No glue (D593)"},
     {"issue":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"open","category":"Divergences from rustc"},
     {"issue":1610,"title":"A check walks the build graph once per loaded crate artifact, so it grows with the square of the crate count","state":"open","category":"No glue (D593)"},
-    {"issue":1611,"title":"rawr check shows nothing while it works, so a slow phase can't be told from outside","state":"open","category":"No glue (D593)"}
+    {"issue":1611,"title":"rawr check shows nothing while it works, so a slow phase can't be told from outside","state":"open","category":"No glue (D593)"},
+    {"issue":1612,"title":"The runner's handle identity names u64::from, which a crate trait's own from makes ambiguous (E0034)","state":"open","category":"No glue (D593)"},
+    {"issue":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4504,7 +4508,7 @@
             {"number":1578,"title":"`&v as &dyn NativeTrait` of a primitive or marked value is refused","state":"open"},
             {"number":1579,"title":"A const-generic block in a type, as tracing's field arrays, is refused in marked code","state":"open"},
             {"number":1580,"title":"`&T` as a crate function's type argument is refused in marked code","state":"open"},
-            {"number":1583,"title":"A marked closure a crate calls with a lent &MarkedType doesn't build in the runner (E0609)","state":"open"},
+            {"number":1583,"title":"A marked closure a crate calls with a lent &MarkedType doesn't build in the runner (E0609)","state":"closed"},
             {"number":1584,"title":"Marked generic builders instantiated by marked code fail attestation at run time","state":"closed"},
             {"number":1585,"title":"An islands run test waits forever when the program's check fails instead of failing","state":"closed"},
             {"number":1586,"title":"A generic marked fn taking an impl of a marked trait, as inboard's impl IntoContent<'a, Message>, is refused at the call","state":"closed"},
@@ -4526,7 +4530,9 @@
             {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"open"},
             {"number":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open"},
             {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"open"},
-            {"number":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"open"}
+            {"number":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"open"},
+            {"number":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"open"},
+            {"number":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open"}
           ]
         }
       ]
