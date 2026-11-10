@@ -751,8 +751,12 @@ fn a_native_root_s_modules_load_as_cargo_configures_them_for_the_target() {
 /// where it is however often (#1322), and `draw(&self) -> Drawn<'_>`, a
 /// native type that borrows the page as `view(&self) -> Element<'_,
 /// Message>` does, borrows that same text, its pins the page's own and let
-/// go at its next `update` (#1321). `rawr check` passes as `cargo check` does, and
-/// `rawr run` prints what `cargo run` prints.
+/// go at its next `update` (#1321). A marked page lent to a native
+/// function as a `&dyn page::Page`, written `&page as &dyn page::Page` and
+/// `&page`, and given as an `Rc<dyn page::Page>` and an `Arc<dyn
+/// page::Page>`, runs its impl while marked code keeps it (#1304). `rawr
+/// check` passes as `cargo check` does, and `rawr run` prints what `cargo
+/// run` prints.
 #[test]
 fn a_marked_type_becomes_a_native_trait_object() {
     const OBJECTS: &str = concat!(

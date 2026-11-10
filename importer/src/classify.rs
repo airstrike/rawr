@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 158;
+const CLASSIFIER_VERSION: u32 = 159;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4930,6 +4930,7 @@ impl<P: api::Phase> Context<'_, P> {
                     let mut records = self.implementations(export, definitions)?.into_vec();
                     records.extend(self.opaque_implementations(export, definition)?);
                     records.extend(self.self_member_implementations(export, definition)?);
+                    records.extend(self.object_member_implementations(export, definition)?);
                     records.into_boxed_slice()
                 };
                 Ok(OutcomeRecord {
@@ -5740,6 +5741,198 @@ impl<P: api::Phase> Context<'_, P> {
             span: definition.span().clone(),
             associated: outcomes.into_boxed_slice(),
         }])
+    }
+
+    /// The `&self` methods the trait `definition` declares, each a
+    /// function of the trait's object `&dyn Trait` (`surface::object`), as
+    /// marked code calls `held.0.area()` on a crate's `&'static dyn Shape`
+    /// (#1593). A trait with type parameters, a method generic over a
+    /// type, and one whose signature names `Self` beyond its receiver are
+    /// not called on an object here.
+    fn object_member_implementations(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+    ) -> Result<Vec<ImplementationRecord>, Error> {
+        let model::Kind::Trait {
+            associated,
+            generics,
+            ..
+        } = definition.kind()
+        else {
+            return Ok(Vec::new());
+        };
+        let typed = |generics: &model::Generics| {
+            generics
+                .parameters()
+                .any(|parameter| parameter.name() != "Self" && !is_lifetime_parameter(parameter))
+        };
+        if typed(generics) {
+            return Ok(Vec::new());
+        }
+        let trait_id = definition.id();
+        let mut outcomes = Vec::new();
+        for method_id in associated.iter() {
+            let Some(method) = self
+                .graph
+                .definition_index(method_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            else {
+                continue;
+            };
+            let model::Kind::Function {
+                signature,
+                generics: method_generics,
+            } = method.kind()
+            else {
+                continue;
+            };
+            let model::Receiver::Reference {
+                lifetime,
+                mutability: model::Mutability::Shared,
+                ty: model::Type::SelfType(owner),
+            } = signature.receiver()
+            else {
+                continue;
+            };
+            // `Self` beyond the receiver, or a `where Self: Sized` method,
+            // which no object has.
+            let names_self = |ty: &model::Type| self_as_parameter(ty, trait_id) != *ty;
+            if owner != trait_id
+                || typed(method_generics)
+                || signature.inputs().any(names_self)
+                || names_self(signature.output())
+                || method_generics.predicates().any(|predicate| {
+                    matches!(
+                        predicate,
+                        model::Predicate::Bound {
+                            ty: model::Type::SelfType(_),
+                            ..
+                        }
+                    )
+                })
+            {
+                continue;
+            }
+            let object = model::Type::TraitObject {
+                bounds: Box::new([model::ObjectBound::Trait(model::Bound::Trait {
+                    trait_id: trait_id.clone(),
+                    arguments: Box::default(),
+                    polarity: model::Polarity::Positive,
+                    binders: Box::default(),
+                })]),
+                lifetime: lifetime.clone(),
+            };
+            let receiver = model::Type::Reference {
+                lifetime: lifetime.clone(),
+                mutability: model::Mutability::Shared,
+                ty: Box::new(object),
+            };
+            let free = model::Signature::new(
+                signature.safety(),
+                signature.const_function(),
+                signature.async_function(),
+                signature.abi().into(),
+                signature.variadic(),
+                signature.binders().cloned().collect(),
+                model::Receiver::None,
+                std::iter::once(receiver)
+                    .chain(signature.inputs().cloned())
+                    .collect(),
+                signature.output().clone(),
+            );
+            let selector = crate::surface::identity::Selector::AssociatedFunction {
+                item: crate::surface::identity::Definition::object_member(trait_id, method.id()),
+            };
+            self.retain_selector(&selector)?;
+            let identity = crate::surface::identity::Identity::imported(export, None, selector)?;
+            let name = method.display_path().last().unwrap_or("<unnamed>");
+            self.retain_outcome_common(export.key(), name)?;
+            self.retain_span(export.span())?;
+            self.retain_span(method.span())?;
+            let origin =
+                representability::origin::Set::new(export.span().clone(), method.span().clone());
+            let evidence = self.classify_object_member(trait_id, &free, method_generics, method)?;
+            outcomes.push(OutcomeRecord {
+                export: export.key().clone(),
+                identity,
+                name: name.into(),
+                origin: Some(origin),
+                evidence,
+                implementations: Box::default(),
+                variant: None,
+                member: None,
+            });
+        }
+        if outcomes.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Charged as `implementations` charges a crate's own.
+        self.retain_items(1)?;
+        self.retain_items(outcomes.len())?;
+        self.retain_array::<ImplementationRecord>(1)?;
+        self.retain_array::<OutcomeRecord>(outcomes.len())?;
+        self.retain_span(definition.span())?;
+        Ok(vec![ImplementationRecord {
+            identity: crate::surface::identity::Implementation::object_members(
+                &crate::surface::identity::Definition::of(trait_id),
+            ),
+            span: definition.span().clone(),
+            associated: outcomes.into_boxed_slice(),
+        }])
+    }
+
+    /// The function `free` of the object of the trait `trait_id` that its
+    /// method `method` is (`object_member_implementations`), called
+    /// through the trait at the object (`surface::object`).
+    fn classify_object_member(
+        &self,
+        trait_id: &api::identity::Definition,
+        free: &model::Signature,
+        generics: &model::Generics,
+        method: &model::Definition,
+    ) -> Result<OutcomeEvidence, Error> {
+        use representability::{object, reject, Representability};
+        let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        let result = (|| -> Result<Representability, Failure> {
+            // The receiver `&dyn Trait` is read as `&impl Trait`, as any
+            // `&dyn` input is, which the object fills.
+            let Representability::FunctionItem(item) = self.function(free, generics)? else {
+                return Err(reject::Kind::TraitObject.into());
+            };
+            let object = representability::convert::Type::Object(Box::new(object::Object::new(
+                object::Pointer::Shared,
+                crate::surface::identity::Definition::of(trait_id),
+                Box::default(),
+                Vec::new(),
+            )));
+            let through = representability::convert::Type::Nominal {
+                definition: crate::surface::identity::Definition::of(trait_id),
+                arguments: Box::default(),
+            };
+            Ok(Representability::FunctionItem(
+                item.with_instance(object).with_through(Some(through)),
+            ))
+        })();
+        match result {
+            Ok(plan) => {
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(plan)))
+            }
+            Err(Failure::Reject(kind)) => {
+                self.retained_items.set(retained_before.0);
+                self.retained_bytes.set(retained_before.1);
+                self.retain_span(method.span())?;
+                self.retain_inline_representability()?;
+                Ok(OutcomeEvidence::Inline(Box::new(
+                    Representability::Rejected(reject::Reason::classification(
+                        kind,
+                        method.span().clone(),
+                    )),
+                )))
+            }
+            Err(Failure::Operational(error)) => Err(error),
+        }
     }
 
     /// The opaque type each type parameter of the methods of the trait
@@ -9450,6 +9643,22 @@ impl<P: api::Phase> Context<'_, P> {
                             )?,
                         )?]),
                     },
+                    // An `Rc<dyn Trait>` or `Arc<dyn Trait>` of a crate's
+                    // trait, as a `Box<dyn Trait>` is (#1304).
+                    Some(Std::Counted { arc })
+                        if let Some(model::Type::TraitObject { bounds, lifetime }) =
+                            std_binding::type_argument(arguments, 0) =>
+                    {
+                        if !matches!(lifetime, model::Lifetime::Static) {
+                            return Err(representability::reject::Kind::TraitObject.into());
+                        }
+                        let pointer = if arc {
+                            representability::object::Pointer::Arc
+                        } else {
+                            representability::object::Pointer::Rc
+                        };
+                        self.convert_object(pointer, bounds)?
+                    }
                     // An `Rc<T>` or `Arc<T>` of a crate's type: rawr's
                     // counted pointer, whose value is the crate's own
                     // pointer, so passing it copies nothing (#775). Of any
@@ -11760,7 +11969,7 @@ fn lends_late_borrows(ty: &model::Type) -> bool {
         model::Argument::Const(_) => true,
     };
     match ty {
-        model::Type::Reference { ty, .. } => !names_late_lifetime(ty),
+        model::Type::Reference { ty, .. } => !names_late_lifetime(ty) || lends_late_objects(ty),
         model::Type::Definition { arguments, .. } => arguments.iter().all(argument),
         model::Type::Tuple(types) => types.iter().all(lends_late_borrows),
         model::Type::Slice(ty) => lends_late_borrows(ty),
@@ -11769,6 +11978,28 @@ fn lends_late_borrows(ty: &model::Type) -> bool {
         }
         ty => !names_late_lifetime(ty),
     }
+}
+
+/// Whether `ty` is a slice of objects the call lends at its own lifetime,
+/// as tracing-core's `&'v [Option<&'v (dyn Value + 'v)>]` is: each a
+/// shared `&dyn Trait`, alone or as an `Option`'s one argument, which
+/// native code makes for the call (D877, `lent_object`) and whose borrow
+/// ends with it.
+fn lends_late_objects(ty: &model::Type) -> bool {
+    fn object(ty: &model::Type) -> bool {
+        match ty {
+            model::Type::Reference {
+                mutability: model::Mutability::Shared,
+                ty,
+                ..
+            } => matches!(**ty, model::Type::TraitObject { .. }),
+            model::Type::Definition { arguments, .. } => {
+                matches!(&**arguments, [model::Argument::Type(inner)] if object(inner))
+            }
+            _ => false,
+        }
+    }
+    matches!(ty, model::Type::Slice(element) if object(element))
 }
 
 /// `signature`, of a function that borrows no receiver, with each of its

@@ -57,6 +57,25 @@ thread_local! {
     pub static SHOWN: RefCell<Vec<Box<dyn Page>>> = const { RefCell::new(Vec::new()) };
 }
 
+/// What a page lent as a trait object says of itself.
+pub fn describe(page: &dyn Page) -> String {
+    format!("{} is {}", page.title(), page.view())
+}
+
+/// What a page shared by count says of itself.
+pub fn counted(page: std::rc::Rc<dyn Page>) -> String {
+    format!(
+        "{} counted {}",
+        page.title(),
+        std::rc::Rc::strong_count(&page)
+    )
+}
+
+/// What a page shared across threads says of itself.
+pub fn shared(page: std::sync::Arc<dyn Page>) -> String {
+    format!("{} shared", page.view())
+}
+
 /// The title of the shown page at `index`.
 pub fn title_of(index: usize) -> String {
     SHOWN.with_borrow(|shown| shown[index].title())

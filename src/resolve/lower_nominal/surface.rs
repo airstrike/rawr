@@ -181,6 +181,9 @@ pub(super) fn imported_surface_type(
         Ty::Unit => Type::Unit,
         Ty::Bool => Type::Builtin(Builtin::Bool),
         Ty::Char => Type::Builtin(Builtin::Char),
+        // `format_args!`, as `&format_args!(..)` fills a `&dyn Trait` input
+        // read as `&impl Trait` (#1592).
+        Ty::Arguments => Type::Builtin(Builtin::Arguments),
         // An unbound literal is `i32` or `f64`, as in Rust.
         Ty::Float(Float::F32) => Type::Builtin(Builtin::F32),
         Ty::Float(_) => Type::Builtin(Builtin::F64),
@@ -310,7 +313,7 @@ pub(super) fn imported_surface_type(
         Ty::Dyn(name, bindings) if crate::resolve::type_ref::is_native_trait(name) => {
             native_object(inference, models, name, bindings, operation, imported)?
         }
-        Ty::Boxed(inner)
+        Ty::Boxed(inner) | Ty::Counted(_, inner)
             if matches!(inference.resolved_ref(inner),
                 Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name)) =>
         {
@@ -319,9 +322,7 @@ pub(super) fn imported_surface_type(
             else {
                 return Err(unsupported_type_argument(ty.name(models), operation));
             };
-            Type::Object(Box::new(object.behind(
-                rawr_import::classify::representability::object::Pointer::Boxed,
-            )))
+            Type::Object(Box::new(object.behind(owning_pointer(ty))))
         }
         // A `Box<T>`: alloc's, which a crate's signature names (D711
         // step 5).
@@ -480,9 +481,18 @@ pub(super) fn imported_surface_type(
     })
 }
 
-/// A host type's identity in the runner: an imported crate's own, or one
-/// of std's types Rawr's std holds as its Rust value, as `PathBuf` is
-/// std's native `PathBuf` (D683.3).
+/// The pointer a crate's trait object owned by `ty`, a `Box`, `Rc` or
+/// `Arc` of it, is behind (#1304).
+#[cfg(feature = "rust-import")]
+fn owning_pointer(ty: &Ty) -> rawr_import::classify::representability::object::Pointer {
+    use rawr_import::classify::representability::object::Pointer;
+    match ty {
+        Ty::Counted(Counter::Rc, _) => Pointer::Rc,
+        Ty::Counted(Counter::Arc, _) => Pointer::Arc,
+        _ => Pointer::Boxed,
+    }
+}
+
 /// `dyn Trait<..>` of the crate trait `name` with `bindings`, as a crate's
 /// type argument (D872): the trait by its identity, at its positional
 /// arguments. One that binds an associated type isn't one yet.
@@ -541,6 +551,9 @@ fn shared_object(
     )))
 }
 
+/// A host type's identity in the runner: an imported crate's own, or one
+/// of std's types Rawr's std holds as its Rust value, as `PathBuf` is
+/// std's native `PathBuf` (D683.3).
 #[cfg(feature = "rust-import")]
 pub(super) fn host_surface_definition(
     definition: &crate::host::type_def::Definition,
@@ -878,6 +891,7 @@ pub(super) fn instance_surface_type(
         Ty::Unit => Type::Unit,
         Ty::Bool => Type::Builtin(Builtin::Bool),
         Ty::Char => Type::Builtin(Builtin::Char),
+        Ty::Arguments => Type::Builtin(Builtin::Arguments),
         Ty::Float(Float::F32) => Type::Builtin(Builtin::F32),
         Ty::Float(_) => Type::Builtin(Builtin::F64),
         Ty::Int(kind) => Type::Builtin(match kind {
@@ -938,16 +952,14 @@ pub(super) fn instance_surface_type(
                     .collect::<Option<_>>()?,
             )
         }
-        Ty::Boxed(inner)
+        Ty::Boxed(inner) | Ty::Counted(_, inner)
             if matches!(inference.resolved_ref(inner),
                 Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name)) =>
         {
             let Type::Object(object) = instance_surface_type(inference, models, inner)? else {
                 return None;
             };
-            Type::Object(Box::new(object.behind(
-                rawr_import::classify::representability::object::Pointer::Boxed,
-            )))
+            Type::Object(Box::new(object.behind(owning_pointer(ty))))
         }
         Ty::Boxed(inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::boxed(),

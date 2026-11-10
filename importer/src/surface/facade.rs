@@ -1272,6 +1272,23 @@ impl Plan {
                     items.push(item);
                     facade.items = items.into_boxed_slice();
                 }
+                // The trait's methods on its object, each a function of the
+                // object beside the trait (`surface::object`).
+                for associated in outcome
+                    .implementations()
+                    .flat_map(crate::classify::ImplementationOutcome::associated)
+                    .filter(|associated| super::object::of(associated.representability()))
+                {
+                    let path = super::object::path(&relative, associated.name());
+                    let Some(mut item) = item(&path, associated)? else {
+                        continue;
+                    };
+                    item.made_mut().kind = ItemKind::Function;
+                    let mut items = std::mem::take(&mut facade.items).into_vec();
+                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                    items.push(item);
+                    facade.items = items.into_boxed_slice();
+                }
                 // The members of the trait's impls for a number, `bool` or
                 // `char`, each a function of the scalar beside the trait
                 // (`surface::scalar`).

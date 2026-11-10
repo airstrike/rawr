@@ -9,7 +9,12 @@
 //! them borrows, as tracing-core's `value_set_all` gives its `ValueSet`,
 //! with `format_args!` among them, made in the frame that lends them, and
 //! in a block an older edition's macro makes, whose frame is its caller
-//! statement's (#1561).
+//! statement's (#1561). Marked code calls an object's methods, of one it
+//! holds, one native code boxed and one it coerced (#1593), and gives
+//! `&format_args!(..)` where a call takes `&dyn Value`, as rustc coerces
+//! it, and a slice of objects to a call that doesn't keep them (#1592).
+//! An `Rc<dyn Trait>` and an `Arc<dyn Trait>` the program makes cross as
+//! native code's own (#1304).
 //! Build the driver first, as for `islands`.
 
 use std::fs;
@@ -76,6 +81,10 @@ fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them()
     assert_eq!(
         runs_as_cargo("trait-objects"),
         "held 9 true\n\
+         path 9\n\
+         called 9\n\
+         given 25 back 25\n\
+         coerced 1003\n\
          static 9\n\
          int 5\n\
          u8 1007\n\
@@ -83,6 +92,8 @@ fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them()
          square 4\n\
          boxed 16\n\
          made 6\n\
+         counted (25, 1)\n\
+         shared 7\n\
          tick tick back true\n\
          tick tick back true\n"
     );
@@ -96,6 +107,8 @@ fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
          event a=5 b=- c=(2, 3)\n\
          event a=true b=- c=-\n\
          one 5\n\
+         uncoerced 5\n\
+         5,-,(2, 3)\n\
          event a=n 5 b=5 c=x 5 y\n"
     );
 }

@@ -115,6 +115,12 @@ fn implementor(ty: &crate::surface::facade::Type) -> Option<Implementor> {
     })
 }
 
+/// `(dyn Trait<..> + auto)`, as the object names its trait where a type
+/// path names it, as `<(dyn Shape) as Shape>::area` does.
+pub(super) fn dyn_type(object: &Object) -> Option<String> {
+    object_type(object).map(|dynamic| format!("({dynamic})"))
+}
+
 /// `dyn Trait<..> + auto`, as the object names its trait.
 fn object_type(object: &Object) -> Option<String> {
     let mut text = String::from("dyn ");
@@ -135,6 +141,16 @@ fn object_type(object: &Object) -> Option<String> {
     Some(text)
 }
 
+/// The function that puts a value behind the owning pointer `pointer`, as
+/// `Box::new` does.
+fn owner(pointer: Pointer) -> &'static str {
+    match pointer {
+        Pointer::Rc => "std::rc::Rc::new",
+        Pointer::Arc => "std::sync::Arc::new",
+        Pointer::Boxed | Pointer::Lasting | Pointer::Shared => "Box::new",
+    }
+}
+
 /// The Rust type of `object` behind its pointer.
 pub(super) fn rust_type(object: &Object) -> Option<String> {
     let dynamic = object_type(object)?;
@@ -142,6 +158,8 @@ pub(super) fn rust_type(object: &Object) -> Option<String> {
         Pointer::Lasting => format!("&'static ({dynamic})"),
         Pointer::Shared => format!("&({dynamic})"),
         Pointer::Boxed => format!("Box<{dynamic}>"),
+        Pointer::Rc => format!("std::rc::Rc<{dynamic}>"),
+        Pointer::Arc => format!("std::sync::Arc<{dynamic}>"),
     })
 }
 
@@ -176,9 +194,23 @@ pub(super) fn render_owned(
     for (tag, made) in implementors {
         write!(arms, "{tag:?} => {}, ", made?).map_err(request::unwritable)?;
     }
+    // An object native code gave, or a counted one made of the box a
+    // program's own type is a native trait's object as (#1264, #1304).
+    let given = match object.pointer() {
+        Pointer::Rc | Pointer::Arc => {
+            let boxed = rust_type(&object.behind(Pointer::Boxed))
+                .ok_or_else(|| request::drift("a trait object's type"))?;
+            format!(
+                "if arguments.arena.index::<{boxed}>(&handle).is_ok() {{ arguments.arena.take::<{boxed}>(handle).map(<{rust}>::from) }} else {{ arguments.arena.take::<{rust}>(handle) }}"
+            )
+        }
+        Pointer::Lasting | Pointer::Shared | Pointer::Boxed => {
+            format!("arguments.arena.take::<{rust}>(handle)")
+        }
+    };
     write!(
         output,
-        "{{ let value = {value}; match __rawr_internal::object::Coerced::of(&value) {{ Some((inner, tag)) => match tag.as_str() {{ {arms}_ => Err(Error::TypeMismatch) }}, None => value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle)) }} }}"
+        "{{ let value = {value}; match __rawr_internal::object::Coerced::of(&value) {{ Some((inner, tag)) => match tag.as_str() {{ {arms}_ => Err(Error::TypeMismatch) }}, None => value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| {given}) }} }}"
     )
     .map_err(request::unwritable)
 }
@@ -206,21 +238,26 @@ fn arm(
                 depth + 1,
                 &mut converted,
             )?;
-            format!("({converted}).map(|made| -> {rust} {{ Box::new(made) }})")
+            let owner = owner(object.pointer());
+            format!("({converted}).map(|made| -> {rust} {{ {owner}(made) }})")
         }
         // A static's place, of a body or of native code (D862).
         (Kind::Native(path), Pointer::Lasting) => format!(
             "__rawr_internal::place::statics::lasting::<{path}>(&inner).map(|lasting| -> {rust} {{ lasting }}).ok_or_else(|| Error::Value(\"borrowed value does not live long enough (E0597)\".to_owned()))"
         ),
-        // The value the box holds, moved out of its slot.
-        (Kind::Native(path), _) => format!(
-            "inner.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{path}>(handle)).map(|made| -> {rust} {{ Box::new(made) }})"
-        ),
+        // The value the pointer holds, moved out of its slot.
+        (Kind::Native(path), pointer) => {
+            let owner = owner(pointer);
+            format!(
+                "inner.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{path}>(handle)).map(|made| -> {rust} {{ {owner}(made) }})"
+            )
+        }
     })
 }
 
 /// The statements that make `argument_{local}`, the `&dyn Trait` input
-/// `object` of the call's argument `index`: an object native code gave, a
+/// `object` of the call's argument `index`: an object native code gave (a
+/// `&'static dyn`, or a `Box<dyn>` lent from its slot for the call), a
 /// static's place, a crate value lent from its slot, or a program's number
 /// made into its Rust value for the call.
 pub(super) fn render_lent_input(
@@ -287,11 +324,19 @@ pub(super) fn render_lent_input(
     #[allow(unused_variables)]
     let argument_{local}_made: {boxed};
 {kept}    let argument_{local}_lasting: {lasting};
+    #[allow(unused_variables, unused_mut)]
+    let mut argument_{local}_held: PlaceHeld<{boxed}>;
     let argument_{local}: {rust} = match __rawr_internal::object::Coerced::of(&argument_{local}_value) {{
         Some((inner, tag)) => match tag.as_str() {{ {arms}_ => return Err(Error::TypeMismatch) }},
         None => {{
-            argument_{local}_lasting = argument_{local}_value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{lasting}>(handle))?;
-            argument_{local}_lasting
+            let handle = argument_{local}_value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+            if arguments.arena.index::<{boxed}>(&handle).is_ok() {{
+                argument_{local}_held = arguments.arena.lease_place::<{boxed}>(handle)?;
+                &**argument_{local}_held.get_mut()
+            }} else {{
+                argument_{local}_lasting = arguments.arena.take::<{lasting}>(handle)?;
+                argument_{local}_lasting
+            }}
         }}
     }};"
     )

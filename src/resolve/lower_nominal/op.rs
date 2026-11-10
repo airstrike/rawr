@@ -898,19 +898,22 @@ impl PreludeOp {
                 crate::place::statics::slot(&key).settle(args[1].take(), layout)?;
                 return Ok(Dynamic::UNIT);
             }
+            // An `Rc` or `Arc` coerced to a trait object's gives its value,
+            // which native code puts behind its own pointer (#1304).
             #[cfg(feature = "rust-import")]
             Self::NativeObject => {
                 let owner = args[1].clone_cast::<ImmutableString>();
                 let trait_name = args[2].clone_cast::<ImmutableString>();
-                return crate::island::object(args[0].take(), &owner, &trait_name).or_else(&panic);
+                let value = args[0].take();
+                let value = counted::value(&value).unwrap_or(value);
+                return crate::island::object(value, &owner, &trait_name).or_else(&panic);
             }
             #[cfg(feature = "rust-import")]
             Self::NativeCoerce => {
                 let tag = args[1].clone_cast::<ImmutableString>();
-                return Ok(Dynamic::from(crate::object::Coerced::new(
-                    args[0].take(),
-                    tag,
-                )));
+                let value = args[0].take();
+                let value = counted::value(&value).unwrap_or(value);
+                return Ok(Dynamic::from(crate::object::Coerced::new(value, tag)));
             }
             // Only a native trait's object makes one, which needs the crate.
             #[cfg(not(feature = "rust-import"))]

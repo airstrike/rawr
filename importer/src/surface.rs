@@ -19,6 +19,7 @@ pub mod headers;
 pub mod identity;
 pub mod instance;
 pub mod member;
+pub mod object;
 pub mod opaque;
 #[cfg(not(target_arch = "wasm32"))]
 mod runner;

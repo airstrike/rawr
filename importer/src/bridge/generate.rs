@@ -8626,6 +8626,9 @@ fn copy_scalar(ty: &convert::Type) -> bool {
 fn copy_field(ty: &convert::Type) -> bool {
     copy_scalar(ty)
         || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
+        // A `&dyn Trait` is a shared borrow too, as `Held(&'static dyn
+        // Shape)` holds one (#1593).
+        || matches!(ty, convert::Type::Object(object) if !object.pointer().owns())
         || matches!(ty, convert::Type::Sequence { element, length: Some(_), .. } if copy_scalar(element))
 }
 
@@ -9676,10 +9679,14 @@ fn has_store(plan: &Plan) -> bool {
     };
     // A type with lifetimes may be in a region. Its family is spelled by
     // its instance, never its bare path, which names no type arguments.
+    // A trait object's field, as `Held(&'static dyn Shape)`, is stored as
+    // the object `render_owned` makes, whose trait is spelled by the
+    // facade's paths only while the source is written.
     let path = rust_path(plan);
     !carries_lifetimes(&path)
         && !may_borrow(field.ty())
-        && render_take(0, 1, field.ty(), &mut Vec::new()).is_ok()
+        && (matches!(field.ty(), convert::Type::Object(_))
+            || render_take(0, 1, field.ty(), &mut Vec::new()).is_ok())
 }
 
 /// The entry identity of a field's store: its reader's, tagged.
@@ -16691,6 +16698,21 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&fmt::Arguments`, as `&format_args!(..)` fills a `&dyn Trait` input
+    // whose trait the crate implements for `fmt::Arguments` (#1592): made
+    // in a `let` of its own, which rustc keeps to the statement's end.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: borrowed,
+    } = substituted(ty, signature, substitutions)?
+        && *borrowed == convert::Type::Builtin(convert::Builtin::Arguments)
+    {
+        return writeln!(
+            output,
+            "    let argument_{local}_text = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local}_arguments = ::core::format_args!(\"{{}}\", argument_{local}_text);\n    let argument_{local} = &argument_{local}_arguments;"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
     // each value moved out of its slot into one slice, and back once nothing
     // borrows it (`SliceLent`). An output that may borrow it keeps it
@@ -19967,8 +19989,14 @@ fn render_container_path(
     // A method of an impl that fixes its type's arguments is reached at
     // that instance, `quick_xml::reader::Reader<&[u8]>`. A crate trait's
     // member on a number is reached through the trait, `<u64 as
-    // NumCast>::from`, as `u64` has `From::from` too (`surface::scalar`).
-    if let Some(instance) = signature.instance().and_then(concrete_type) {
+    // NumCast>::from`, as `u64` has `From::from` too (`surface::scalar`),
+    // and a trait's method on its object through the trait at the object,
+    // `<(dyn Shape) as Shape>::area` (`surface::object`).
+    let instance = signature.instance().and_then(|instance| match instance {
+        convert::Type::Object(object) => object::dyn_type(object),
+        instance => concrete_type(instance),
+    });
+    if let Some(instance) = instance {
         let instance = match through_trait(signature, substitutions)? {
             _ if type_position => instance,
             Some(through) => format!("<{instance} as {through}>"),

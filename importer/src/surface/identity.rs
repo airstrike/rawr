@@ -26,6 +26,7 @@ const JOIN_HANDLE_DOMAIN: &[u8] = b"rawr.identity.join-handle/v1";
 const KEYED: [&str; 4] = ["HashMap", "HashSet", "BTreeMap", "BTreeSet"];
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
+const OBJECT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.object-member/v1";
 const CALLABLE_DOMAIN: &[u8] = b"rawr.identity.callable/v1";
 const ITERATOR_DOMAIN: &[u8] = b"rawr.identity.iterator/v1";
 const STD_DOMAIN: &[u8] = b"rawr.identity.std/v1";
@@ -329,6 +330,15 @@ impl Definition {
         Self(framed.finish())
     }
 
+    /// The method `method` of the trait `trait_id` as a function of the
+    /// trait's object, called on a `&dyn Trait` (`surface::object`).
+    pub(crate) fn object_member(trait_id: &api::Definition, method: &api::Definition) -> Self {
+        let mut framed = Framed::new(OBJECT_MEMBER_DOMAIN);
+        framed.definition(trait_id);
+        framed.definition(method);
+        Self(framed.finish())
+    }
+
     /// The type a Rust future of `T` crosses as: iced's `Task<T>`. Any
     /// crate may return one, so no crate's own types declare it.
     #[must_use]
@@ -587,6 +597,15 @@ impl Implementation {
     #[must_use]
     pub fn self_members(trait_identity: &Definition) -> Self {
         let mut framed = Framed::new(b"rawr.identity.self-members/v1");
+        framed.bytes(trait_identity.as_bytes());
+        Self(framed.finish())
+    }
+
+    /// The methods of the trait whose identity is `trait_identity`, each a
+    /// function of the trait's object (`surface::object`).
+    #[must_use]
+    pub fn object_members(trait_identity: &Definition) -> Self {
+        let mut framed = Framed::new(b"rawr.identity.object-members/v1");
         framed.bytes(trait_identity.as_bytes());
         Self(framed.finish())
     }
@@ -1739,6 +1758,8 @@ impl Framed {
                     Pointer::Lasting => 0,
                     Pointer::Shared => 1,
                     Pointer::Boxed => 2,
+                    Pointer::Rc => 3,
+                    Pointer::Arc => 4,
                 });
                 self.bytes(object.principal().as_bytes());
                 self.count(object.auto().len());

@@ -21,6 +21,19 @@ pub enum Pointer {
     Shared,
     /// `Box<dyn Trait>`, which owns its value.
     Boxed,
+    /// `Rc<dyn Trait>`, which shares its value (#1304).
+    Rc,
+    /// `Arc<dyn Trait>`, which shares its value across threads (#1304).
+    Arc,
+}
+
+impl Pointer {
+    /// Whether the object owns its value, as a `Box`, `Rc` or `Arc` does,
+    /// rather than borrowing it.
+    #[must_use]
+    pub const fn owns(self) -> bool {
+        matches!(self, Self::Boxed | Self::Rc | Self::Arc)
+    }
 }
 
 /// An auto trait an object names beside its trait.

@@ -3968,7 +3968,8 @@ impl Candidate {
 
                 let mut owners = Vec::new();
                 if let model::Owner::Implementation(owner) = definition.owner() {
-                    let index = fixed_implementation_index(&self.implementations, owner)?;
+                    let index =
+                        fixed_implementation_index(&self.implementations, owner, definition)?;
                     let implementation = &self.implementations[index];
                     if implementation
                         .associated_slice()
@@ -4475,13 +4476,27 @@ fn fixed_implementation<'candidate>(
         .map(|index| (index, &implementations[index]))
 }
 
+/// The index of the impl `id` that owns `member`, named by the member's
+/// path when it is missing, as its hash alone names nothing a reader can
+/// find.
 fn fixed_implementation_index(
     implementations: &[model::Implementation],
     id: &identity::Definition,
+    member: &model::Definition,
 ) -> Result<usize> {
     fixed_implementation(implementations, id)
         .map(|(index, _)| index)
-        .ok_or_else(|| extraction("implementation-owner-cardinality", id.def_path_hash()))
+        .ok_or_else(|| {
+            let path = member.display_path().collect::<Vec<_>>().join("::");
+            extraction(
+                "implementation-owner-cardinality",
+                &format!(
+                    "{} (the impl of `{path}` in crate `{}`)",
+                    id.def_path_hash(),
+                    id.unit().crate_name()
+                ),
+            )
+        })
 }
 
 fn validate_fixed_implementation(
