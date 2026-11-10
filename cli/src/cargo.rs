@@ -218,10 +218,16 @@ struct Running {
 
 impl Running {
     /// Start cargo on the package of `manifest`, or on its `target` when
-    /// options select one, with the command's feature flags, or say why it
-    /// didn't start: cargo is
-    /// unavailable, or a script's manifest failed as cargo's would.
-    fn start(program: &OsString, manifest: &Path, target: &[OsString]) -> Result<Self, Status> {
+    /// options select one, with the command's feature flags, in the
+    /// `profile` it checks with (`check`, or `test` for `cfg(test)`), or
+    /// say why it didn't start: cargo is unavailable, or a script's
+    /// manifest failed as cargo's would.
+    fn start(
+        program: &OsString,
+        manifest: &Path,
+        target: &[OsString],
+        profile: Profile,
+    ) -> Result<Self, Status> {
         let mut command = Command::new(program);
         let selection = rawr::project::cargo::features::Selection::selected();
         if manifest
@@ -236,7 +242,12 @@ impl Running {
                 })
             })?;
             command
-                .args(["rustc", "--profile", "check", "--message-format=json"])
+                .args([
+                    "rustc",
+                    "--profile",
+                    profile.script(),
+                    "--message-format=json",
+                ])
                 .arg("--bin")
                 .arg(&check.bin)
                 .arg("--manifest-path")
@@ -253,6 +264,7 @@ impl Running {
             settle_lock(program, manifest);
             command
                 .args(["check", "--message-format=json"])
+                .args(profile.package())
                 .args(target)
                 .args(selection.flags())
                 .arg("--manifest-path")
@@ -332,7 +344,7 @@ impl Pending {
     /// [`Pending::start`] with an explicit cargo command.
     #[must_use]
     pub fn start_with(program: &OsString, manifest: &Path) -> Self {
-        Self(Running::start(program, manifest, &[]))
+        Self(Running::start(program, manifest, &[], Profile::Check))
     }
 
     /// Wait for cargo and read what it said.
@@ -369,8 +381,46 @@ pub fn print(status: &Status) -> bool {
 /// crate of marked files.
 #[must_use]
 pub fn begin(graph: &rawr::package::Graph) -> Option<Pending> {
+    begin_in(graph, Profile::Check)
+}
+
+/// [`begin`] for `rawr test`: the check builds with `cfg(test)`, as
+/// `cargo test` does, so test code rustc rejects is reported.
+#[must_use]
+pub fn begin_tests(graph: &rawr::package::Graph) -> Option<Pending> {
+    begin_in(graph, Profile::Test)
+}
+
+fn begin_in(graph: &rawr::package::Graph, profile: Profile) -> Option<Pending> {
     let target = selection(graph);
-    manifest(graph).map(|manifest| Pending(Running::start(&program(), &manifest, &target)))
+    manifest(graph).map(|manifest| Pending(Running::start(&program(), &manifest, &target, profile)))
+}
+
+/// The profile a `cargo check` builds with.
+#[derive(Clone, Copy)]
+enum Profile {
+    /// A program's: `cargo check`'s own.
+    Check,
+    /// Its tests': `cfg(test)` holds.
+    Test,
+}
+
+impl Profile {
+    /// The `--profile` of a script's `cargo rustc`.
+    const fn script(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Test => "test",
+        }
+    }
+
+    /// The options of a package's `cargo check`.
+    const fn package(self) -> &'static [&'static str] {
+        match self {
+            Self::Check => &[],
+            Self::Test => &["--profile", "test"],
+        }
+    }
 }
 
 /// The options that check only the binary Rawr runs, as `cargo check
@@ -485,7 +535,7 @@ impl Background {
                     }
                     if due.is_some_and(|due| Instant::now() >= due) {
                         due = None;
-                        match Running::start(&program, &manifest, &[]) {
+                        match Running::start(&program, &manifest, &[], Profile::Check) {
                             Ok(started) => running = Some(started),
                             Err(status) => {
                                 // Said once: a missing cargo stays missing.

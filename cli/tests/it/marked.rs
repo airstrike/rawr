@@ -590,6 +590,48 @@ fn rawr_check_reports_what_only_rustc_rejects() {
     assert!(text.contains("src/main.rs:17:31"), "{text}");
 }
 
+/// `rawr test` checks the tests with cargo too, built with `cfg(test)`:
+/// test code rustc rejects is reported after libtest's report (#929).
+#[test]
+fn rawr_test_reports_what_only_rustc_rejects_in_a_test() {
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-test-rustc");
+    let root = copy("rs-marker-cart", &sandbox.work());
+    let main = root.join("src/main.rs");
+    let mut text = fs::read_to_string(&main).unwrap();
+    text.push_str(
+        "\n#[cfg(test)]\nmod checked {\n    #[test]\n    fn wide() {\n        let n = 3;\n        \
+         let shown: &'static i32 = &n;\n        assert_eq!(*shown, 3);\n    }\n}\n",
+    );
+    fs::write(&main, text).unwrap();
+    let bin = Path::new(&cargo).parent().unwrap();
+
+    let output = Command::new(sandbox.path.join("bin/rawr"))
+        .arg("test")
+        .current_dir(&root)
+        .env("PATH", bin)
+        .env("CARGO", &cargo)
+        .env("CARGO_TARGET_DIR", sandbox.path.join("target"))
+        .output()
+        .unwrap();
+
+    assert!(
+        stdout(&output).contains("test checked::wide ... ok"),
+        "{}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let text = stderr(&output);
+    assert!(
+        text.starts_with(
+            "\ncargo check found 1 error:\n\nerror[E0597]: `n` does not live long enough"
+        ),
+        "{text}"
+    );
+}
+
 /// A script gets `cargo check` too, though rustc refuses its frontmatter
 /// outside `cargo -Zscript`: rustc's error names the script's own line.
 #[test]
