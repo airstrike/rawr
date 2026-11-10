@@ -24,6 +24,7 @@ pub(crate) mod plan;
 pub(crate) mod protocol;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod shared;
+pub(crate) mod sidecar;
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) struct DirectPublication {

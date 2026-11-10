@@ -915,8 +915,8 @@ impl Graph<Captured> {
             allocation.admit_decode()?;
             allocation.items(decode.items)?;
             allocation.bytes(decode.bytes)?;
-            let selected: StoredSelected =
-                serde_json::from_slice(&stored.selected).map_err(|error| Error::Extraction {
+            let selected: StoredSelected = crate::extract::sidecar::read(&stored.selected)
+                .map_err(|error| Error::Extraction {
                     code: "stored-selected-schema",
                     reason: error.to_string().into_boxed_str(),
                 })?;

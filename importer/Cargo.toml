@@ -11,7 +11,14 @@ path = "src/lib.rs"
 
 [features]
 default = []
-rustc-driver = ["unicode-hosts", "unicode-names", "dep:rmp-serde"]
+# A sidecar reads at any depth rustc's types reach (`extract/sidecar.rs`).
+rustc-driver = [
+    "unicode-hosts",
+    "unicode-names",
+    "dep:rmp-serde",
+    "dep:serde_stacker",
+    "serde_json/unbounded_depth",
+]
 # UTS46 processing of non-ASCII and uppercase host names in manifest URLs.
 # Every command that reads manifests has it; a project's runner does not.
 unicode-hosts = ["dep:icu_collections", "dep:icu_normalizer", "dep:idna_adapter"]
@@ -45,6 +52,8 @@ rmp-serde = { version = "1.3.1", optional = true }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# Grows the stack a sidecar's deep values decode on (`rustc-driver`).
+serde_stacker = { version = "0.1", optional = true }
 sha2 = "0.10"
 thiserror = "2"
 toml_edit = { package = "rawr-toml-edit", path = "../toml/edit" }

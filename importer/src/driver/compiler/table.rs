@@ -202,7 +202,7 @@ impl Tables {
             let shared = self.shared.values().find(|shared| shared.key == key)?;
             fs::read(shared.table.as_ref()?).ok()
         })?;
-        let table: Table = serde_json::from_slice(&bytes).ok()?;
+        let table: Table = super::sidecar::read(&bytes).ok()?;
         let shared = self
             .shared
             .values()

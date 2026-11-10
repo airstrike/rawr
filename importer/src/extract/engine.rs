@@ -647,7 +647,8 @@ pub(crate) struct Extracted {
 }
 
 impl Extracted {
-    /// The protocol body, exactly as the sidecar carries it.
+    /// The protocol body, exactly as the sidecar carries it: each id written
+    /// once (`sidecar::intern`).
     pub(crate) fn body(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&model::Body {
             reachable: &self.reachable,
@@ -661,6 +662,7 @@ impl Extracted {
             index: &self.index,
             inventory: self.inventory.as_ref(),
         })
+        .map(|body| super::sidecar::intern(&body))
         .map_err(|error| format!("failed to encode compiler sidecar: {error}"))
     }
 }
