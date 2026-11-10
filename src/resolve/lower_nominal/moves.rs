@@ -156,6 +156,14 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         let place = self.flow().place_at(value.span.start());
+        if place.is_none()
+            && let Some(Lvalue::Nested(nested)) = &value.lvalue
+        {
+            let nested = nested.clone();
+            if let Some(moved) = self.move_receiver_part(value, &nested) {
+                return moved;
+            }
+        }
         let root_ty = self
             .bindings
             .get(root.as_str())
@@ -235,6 +243,80 @@ impl<'a> Parser<'a> {
         }
         self.flow().moved(value.span.start());
         Ok(())
+    }
+
+    /// A by-value use of a part of the receiver below its fields
+    /// (`self.content.items`), which the borrow facts don't hold as a
+    /// local: an owned `self` gives it up, as `move_field` moves out one
+    /// field, and `&self` or `&mut self` can't (rustc's E0507). `None`
+    /// when `nested` is not such a part.
+    fn move_receiver_part(
+        &mut self,
+        value: &ParsedExpr,
+        nested: &lvalue::Nested,
+    ) -> Option<Result<(), Error>> {
+        let binding = self.bindings.get(nested.binding.as_str())?;
+        if !matches!(binding.kind, BindingKind::Receiver { .. }) {
+            return None;
+        }
+        let root_ty = self.inference.resolve(&binding.ty);
+        let (owned_ty, behind) = match &root_ty {
+            Ty::Reference { target, mutable } => {
+                let behind = if *mutable { "mutable" } else { "shared" };
+                ((**target).clone(), Some(behind))
+            }
+            Ty::Counted(..) => return None,
+            owned => (owned.clone(), None),
+        };
+        // Each step's name, and the projection the field types are read by.
+        let mut projection = Vec::with_capacity(nested.steps.len());
+        let mut written = nested.binding.to_string();
+        for step in &nested.steps {
+            let member = match step {
+                PlaceStep::Field { slot } => {
+                    let Some(Ty::Script(owner, _)) = self.part_ty(&owned_ty, &projection) else {
+                        return None;
+                    };
+                    let Nominal::Struct { item, .. } = self.models.definition(owner) else {
+                        return None;
+                    };
+                    item.fields.get(*slot)?.name.text.to_string()
+                }
+                PlaceStep::Member(index) => index.to_string(),
+                _ => return None,
+            };
+            written = format!("{written}.{member}");
+            projection.push(borrowck::Projection::Field(member.into()));
+        }
+        if let Some(behind) = behind {
+            return Some(Err(Error::BorrowConflict {
+                code: "E0507",
+                message: format!(
+                    "cannot move out of `{written}` which is behind a {behind} reference"
+                )
+                .into(),
+                access: value.span,
+                borrow: value.span,
+            }));
+        }
+        let moved = (|| {
+            // A type with `impl Drop` keeps its fields (E0509).
+            for index in 0..projection.len() {
+                if let Some(Ty::Script(owner, _)) = self.part_ty(&owned_ty, &projection[..index]) {
+                    self.reject_drop_move(owner, true, value.span)?;
+                }
+            }
+            if self.needs_drop(&value.ty, value.span)? {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a move out of a field below a field of `self`, whose type has \
+                                drop glue: not supported in Rawr yet"
+                        .into(),
+                    source: value.span,
+                });
+            }
+            Ok(())
+        })();
+        Some(moved)
     }
 
     /// rustc's E0507 for a by-value use of `value`, a place Rust cannot

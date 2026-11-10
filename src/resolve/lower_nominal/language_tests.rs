@@ -14825,3 +14825,37 @@ fn language_turbofish_leaves_out_impl_trait_arguments() {
          pub fn run() -> i64 { tagged::<i64, A>(A) } run()",
     );
 }
+
+/// An owned `self` gives up a part below its fields, as rustc moves it out
+/// of the receiver (#1589); behind `&self` or `&mut self` it can't
+/// (E0507).
+#[test]
+fn language_a_part_below_a_field_moves_out_of_an_owned_receiver() {
+    let value = run(r#"
+        struct Content { items: Vec<i64>, title: String }
+        struct Page { content: Content, n: i64 }
+        impl Page {
+            fn items(mut self) -> Vec<i64> { self.n += 1; let items = self.content.items; items }
+            fn title(self) -> String { let t = self.content.title; t }
+        }
+        pub fn run() -> i64 {
+            let p = Page { content: Content { items: vec![1, 2], title: String::from("t") }, n: 0 };
+            let q = Page { content: Content { items: vec![], title: String::from("abc") }, n: 0 };
+            p.items().len() as i64 * 10 + q.title().len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 23);
+    for receiver in ["&self", "&mut self"] {
+        let error = rejected(&format!(
+            "struct C {{ items: Vec<i64> }} struct P {{ content: C }} \
+             impl P {{ fn items({receiver}) -> Vec<i64> {{ let items = self.content.items; items }} }} \
+             pub fn run() -> i64 {{ 0 }} run()"
+        ));
+        assert!(
+            error.contains("cannot move out of `self.content.items` which is behind a"),
+            "{error}"
+        );
+        assert!(error.contains("E0507"), "{error}");
+    }
+}
