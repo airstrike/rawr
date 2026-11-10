@@ -7,6 +7,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A marked function that panics in a call from native `main` prints the panic cargo's build prints: its place in the marked file and Rust's message, with nothing of rawr's. (#1657)
 - An error a save's compile finds in a marked module of a native app names its own file, line and column in rustc's form, such as `error[E0425]` in `src/widget/sidebar.rs`. Before, it named the crate root, as a framework error. (#397)
+- A crate's callable value, such as the `impl Fn` that iced's `Function::with` gives, fills a generic callable that the call's output type names, as in `self.grid.view().map(Message::Grid.with(version))` in iced's game_of_life. (#1060)
+- A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin("..")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again. (#991)
+- A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner. (#1073)
+- `{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool. (#1658; part of #990)
 
 ## 0.3.180 (2026-11-10)
 

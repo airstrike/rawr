@@ -13,7 +13,11 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A marked function that panics in a call from native `main` prints the panic cargo's build prints: its place in the marked file and Rust's message, with nothing of rawr's.","issues":[1657]},
-        {"text":"An error a save's compile finds in a marked module of a native app names its own file, line and column in rustc's form, such as `error[E0425]` in `src/widget/sidebar.rs`. Before, it named the crate root, as a framework error.","issues":[397]}
+        {"text":"An error a save's compile finds in a marked module of a native app names its own file, line and column in rustc's form, such as `error[E0425]` in `src/widget/sidebar.rs`. Before, it named the crate root, as a framework error.","issues":[397]},
+        {"text":"A crate's callable value, such as the `impl Fn` that iced's `Function::with` gives, fills a generic callable that the call's output type names, as in `self.grid.view().map(Message::Grid.with(version))` in iced's game_of_life.","issues":[1060]},
+        {"text":"A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin(\"..\")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again.","issues":[991]},
+        {"text":"A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner.","issues":[1073]},
+        {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]}
       ]
     },
     "releases": [
@@ -2951,7 +2955,7 @@
     {"issue":977,"title":"std trait-path calls with a turbofish or a written Self","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":978,"title":"`fmt::Formatter::write_str(f, s)` by its path in a fmt body","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"closed","category":"Divergences from rustc","release":"0.3.148"},
-    {"issue":980,"title":"bezier_tool: Cursor::position_in gives an Option<Point> that fails attestation against Option<iced::Point<f64>>","state":"open","category":"Divergences from rustc"},
+    {"issue":980,"title":"bezier_tool: Cursor::position_in gives an Option<Point> that fails attestation against Option<iced::Point<f64>>","state":"closed","category":"Divergences from rustc"},
     {"issue":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"closed","category":"Divergences from rustc","release":"0.3.148"},
     {"issue":982,"title":"Crossing tests fail with 'runner did not connect before the protocol deadline' under load","state":"open","category":"Health"},
     {"issue":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open","category":"Divergences from rustc"},
@@ -2962,7 +2966,7 @@
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health","release":"0.3.168"},
     {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
-    {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open","category":"Divergences from rustc"},
+    {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"closed","category":"Divergences from rustc"},
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
     {"issue":994,"title":"A derive macro's own error is reported at the derive","state":"open","category":"Divergences from rustc"},
@@ -3031,7 +3035,7 @@
     {"issue":1057,"title":"A #1011 bindings drift test fails in full rawr-import lib runs and passes alone","state":"open","category":"Health"},
     {"issue":1058,"title":"Program structs a crate decodes on one of tokio's worker threads, such as a reqwest response's…","state":"closed","category":"Health","release":"0.3.158"},
     {"issue":1059,"title":"A crate's facts are the same whether Cargo rebuilt it or reused it, so caches keyed on them no…","state":"closed","category":"Health","release":"0.3.158"},
-    {"issue":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"open","category":"Divergences from rustc"},
+    {"issue":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"closed","category":"Divergences from rustc"},
     {"issue":1061,"title":"todos: std::env::current_dir isn't run","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"open","category":"Divergences from rustc"},
     {"issue":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"open","category":"Divergences from rustc"},
@@ -3044,7 +3048,7 @@
     {"issue":1070,"title":"delineate: the runner fails with E0282 on a native handle taken from the arena","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1071,"title":"ferris: the runner fails with E0271 on Renderer::Handle == &str (an image handle from a str)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"open","category":"Divergences from rustc"},
+    {"issue":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"closed","category":"Divergences from rustc"},
     {"issue":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open","category":"Divergences from rustc"},
     {"issue":1076,"title":"assert!() with no condition is a rustc-like error, not RAWR-RESOLVE-UNSUPPORTED-SYNTAX (rustlings tests1, tests2)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3628,7 +3632,10 @@
     {"issue":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed","category":"No glue (D593)","release":"0.3.180"},
     {"issue":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.180"},
     {"issue":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed","category":"No glue (D593)","release":"0.3.180"},
-    {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed","category":"Divergences from rustc"}
+    {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed","category":"Divergences from rustc"},
+    {"issue":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"open","category":"Divergences from rustc"},
+    {"issue":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"open","category":"Divergences from rustc"},
+    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4123,7 +4130,7 @@
             {"number":975,"title":"A crate's derive re-exported from its proc-macro crate isn't found","state":"closed"},
             {"number":976,"title":"A derive expansion's syntax in program code","state":"closed"},
             {"number":979,"title":"solar_system: iced::application::timed(..).theme(..) fails at runner start with E0282","state":"closed"},
-            {"number":980,"title":"bezier_tool: Cursor::position_in gives an Option<Point> that fails attestation against Option<iced::Point<f64>>","state":"open"},
+            {"number":980,"title":"bezier_tool: Cursor::position_in gives an Option<Point> that fails attestation against Option<iced::Point<f64>>","state":"closed"},
             {"number":981,"title":"clock: subscription closure panics with Stale on a tokio worker","state":"closed"},
             {"number":983,"title":"A lent struct's field that borrows for the struct can't be read by script code","state":"open"},
             {"number":984,"title":"A crate derive's expansion from the driver","state":"closed"},
@@ -4132,7 +4139,7 @@
             {"number":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open"},
             {"number":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed"},
             {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open"},
-            {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"open"},
+            {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"closed"},
             {"number":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open"},
             {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed"},
             {"number":994,"title":"A derive macro's own error is reported at the derive","state":"open"},
@@ -4164,13 +4171,13 @@
             {"number":1055,"title":"An a..=b of non-i64 integers isn't a RangeInclusive<T> value (game_of_life's fn rows, E0308)","state":"closed"},
             {"number":1058,"title":"Program structs a crate decodes on one of tokio's worker threads, such as a reqwest response's…","state":"closed"},
             {"number":1059,"title":"A crate's facts are the same whether Cargo rebuilt it or reused it, so caches keyed on them no…","state":"closed"},
-            {"number":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"open"},
+            {"number":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"closed"},
             {"number":1061,"title":"todos: std::env::current_dir isn't run","state":"closed"},
             {"number":1069,"title":"rawr check overflows its stack on iced's gallery, markdown and screenshot","state":"closed"},
             {"number":1070,"title":"delineate: the runner fails with E0282 on a native handle taken from the arena","state":"closed"},
             {"number":1071,"title":"ferris: the runner fails with E0271 on Renderer::Handle == &str (an image handle from a str)","state":"closed"},
             {"number":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"closed"},
-            {"number":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"open"},
+            {"number":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"closed"},
             {"number":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"closed"},
             {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open"},
             {"number":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"closed"},
@@ -4204,7 +4211,10 @@
             {"number":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open"},
             {"number":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open"},
             {"number":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"open"},
-            {"number":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open"}
+            {"number":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open"},
+            {"number":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"open"},
+            {"number":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open"},
+            {"number":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"open"}
           ],
           "milestone": "0.4"
         },
