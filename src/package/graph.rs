@@ -428,6 +428,7 @@ impl Graph {
 
     /// [`Graph::load_snapshot`], reading each source's parse from its cell
     /// in `cells` when one holds exactly its text, and parsing the rest.
+    #[cfg(feature = "rust-import")]
     pub(crate) fn load_snapshot_with_cells(
         engine: &Engine,
         snapshot: &super::snapshot::Snapshot,
