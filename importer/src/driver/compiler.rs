@@ -110,7 +110,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // 65 leaves out a std trait's impls for scalars.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 65;
+const PROTOCOL_SCHEMA: u32 = 66;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

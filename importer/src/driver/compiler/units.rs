@@ -1375,7 +1375,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 Res::Def(kind, def_id) => self.landing(kind, def_id),
                 _ => None,
             };
-            let export = if matches!(child.res, Res::Def(DefKind::Ctor(CtorOf::Variant, _), _)) {
+            // A constructor is its variant's or its struct's, whose own
+            // export carries it.
+            let export = if matches!(child.res, Res::Def(DefKind::Ctor(..), _)) {
                 None
             } else {
                 Some(self.child_export(child)?)
@@ -1396,10 +1398,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     fn landing(&mut self, kind: DefKind, def_id: DefId) -> Option<Result<engine::Landing, String>> {
         let tcx = self.tcx;
         // A re-exported variant, as `pub use Alignment::Center;`, selects
-        // its enum.
+        // its enum, and a struct's constructor its struct.
         let (kind, def_id) = match kind {
             DefKind::Variant => (DefKind::Enum, tcx.parent(def_id)),
             DefKind::Ctor(CtorOf::Variant, _) => (DefKind::Enum, tcx.parent(tcx.parent(def_id))),
+            DefKind::Ctor(CtorOf::Struct, _) => (DefKind::Struct, tcx.parent(def_id)),
             _ => (kind, def_id),
         };
         let ns = kind.ns()?;
