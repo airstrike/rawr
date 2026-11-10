@@ -956,7 +956,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{printed}"
     );
-    assert!(printed.contains("\nsidebar 2\n"), "{printed}");
+    assert!(printed.contains("\nsections 2\n"), "{printed}");
     // A marked `row_group` generic over the message, at two native message
     // types, directly, through `.into()` and a crate's column, and from a
     // generic native helper (D869).

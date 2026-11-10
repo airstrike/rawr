@@ -193,7 +193,7 @@ pub fn content<'a, Message: 'a>(
 
 /// A sidebar of the screen's elements, which native code calls: the
 /// generic sidebar's methods at the screen's `Message`.
-pub fn sidebar() -> usize {
+pub fn sections() -> usize {
     let items: Vec<Element<'static, Message>> = vec![crate::widget::void(), crate::widget::void()];
     Sidebar::new()
         .content(content(Content { items }))

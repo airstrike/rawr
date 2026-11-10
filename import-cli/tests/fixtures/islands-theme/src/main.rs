@@ -136,7 +136,7 @@ fn main() {
         "panel on native text {}",
         std::ptr::eq(panel.title(), heading.as_str())
     );
-    println!("sidebar {}", home::sidebar());
+    println!("sections {}", home::sections());
     // A marked function generic over the message, at two of native code's
     // message types: directly, through `.into()` and a crate's column, and
     // from a generic native helper.
