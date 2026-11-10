@@ -16,6 +16,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text. (#969)
 - A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span("right")])` runs again inside a view. (#1369, #1368, #1366)
 - A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`. (#1282)
+- A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core. (#1627)
+- Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION. (#1625)
 
 ## 0.3.176 (2026-11-10)
 

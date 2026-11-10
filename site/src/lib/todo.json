@@ -22,7 +22,9 @@
         {"text":"More std paths run as cargo's build runs them: `std::num::ParseIntError` written in full in a `let`, an imported `Duration` or `Instant` in a `let`, `Instant::now` as a value, `fmt::Formatter::write_str(f, s)`, `Iterator::sum::<i64>(it)`, `<i64 as FromStr>::from_str`, `<T as TryFrom<U>>::try_from`, and `SystemTime`'s `+`, `-`, `+=`, `-=` with a `Duration` and its ordering.","issues":[922,1002,978,977,924]},
         {"text":"A panic in a project's `main`, sync or async, prints Rust's `thread 'main' panicked:` and its message instead of rawr's internal text.","issues":[969]},
         {"text":"A frame-held element lends itself to a `&mut Vec<String>` call such as `labels` and to a crate function's `&T`, two values of one opaque type go to one call such as `hover(a, b)`, and `Column::with_children([span(&name), span(\"right\")])` runs again inside a view.","issues":[1369,1368,1366]},
-        {"text":"A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`.","issues":[1282]}
+        {"text":"A generic crate trait's method is called by its path with the trait's arguments, as in `Counted::<u8>::doubled(x)`.","issues":[1282]},
+        {"text":"A marked module that logs through a crate's re-export of tracing's macros, as inboard's inbox calls its own `log::warn!`, passes `rawr check` and runs as cargo runs it, even when the package names neither tracing nor tracing-core.","issues":[1627]},
+        {"text":"Assigning through `&self` is rustc's E0594, and a `&mut self` call through it is rustc's E0596, where rawr gave its own RAWR-RESOLVE-RECEIVER-MUTATION.","issues":[1625]}
       ]
     },
     "releases": [
@@ -3539,8 +3541,10 @@
     {"issue":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"open","category":"No glue (D593)"},
     {"issue":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open","category":"Divergences from rustc"},
     {"issue":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"open","category":"Divergences from rustc"},
-    {"issue":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"open","category":"Divergences from rustc"},
-    {"issue":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"closed","category":"Divergences from rustc"},
+    {"issue":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1627,"title":"A marked module that names tracing only through another crate's re-export fails with unknown member Level::le","state":"open","category":"No glue (D593)"},
+    {"issue":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4359,7 +4363,7 @@
             {"number":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"closed"},
             {"number":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"closed"},
             {"number":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"open"},
-            {"number":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"open"}
+            {"number":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"closed"}
           ]
         },
         {
@@ -4574,7 +4578,8 @@
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"},
             {"number":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open"},
             {"number":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"open"},
-            {"number":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open"}
+            {"number":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"open"},
+            {"number":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open"}
           ]
         }
       ]
