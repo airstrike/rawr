@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 157;
+const CLASSIFIER_VERSION: u32 = 158;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5013,6 +5013,21 @@ impl<P: api::Phase> Context<'_, P> {
                             receiver,
                         }
                     }
+                    // A member of a trait's impl for a number, `bool` or
+                    // `char` is that impl's own function of the scalar
+                    // (`surface::scalar`).
+                    crate::surface::identity::Selector::Method { .. }
+                    | crate::surface::identity::Selector::AssociatedFunction { .. }
+                        if is_number(implementation.self_type())
+                            && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == export.target()) =>
+                    {
+                        crate::surface::identity::Selector::AssociatedFunction {
+                            item: crate::surface::identity::Definition::text_member(
+                                implementation.id(),
+                                definition.id(),
+                            ),
+                        }
+                    }
                     // A trait's provided method that two of the type's own
                     // impls of the trait share, as `PartialOrd::lt` of
                     // `Degrees`'s `PartialOrd` and `PartialOrd<f32>` (T412):
@@ -6357,11 +6372,16 @@ impl<P: api::Phase> Context<'_, P> {
             }
             // A crate's impl of an operator for a number that takes this
             // type, as iced's `impl Mul<Radians> for f32`: the member is
-            // this type's function of the number and the operand.
+            // this type's function of the number and the operand. A crate
+            // trait's own impl for a number, as num-traits' `impl NumCast
+            // for u64`, is the trait's member on the number
+            // (`surface::scalar`).
             None if is_number(implementation.self_type())
                 && matches!(implementation.trait_ref(), model::Trait::Trait { .. }) =>
             {
-                self.classify_operand_member(implementation, definition)
+                let own = matches!(implementation.trait_ref(),
+                    model::Trait::Trait { id, .. } if id == target);
+                self.classify_operand_member(implementation, definition, own)
             }
             None if default_method => {
                 let index = self
@@ -6387,11 +6407,16 @@ impl<P: api::Phase> Context<'_, P> {
     /// The method of a trait's impl for a number that takes another type,
     /// as `mul` of `impl Mul<Radians> for f32`: a function of the number
     /// and the operand whose instance is the number, so the bridge calls
-    /// `<f32>::mul(number, operand)` and rustc selects the impl.
+    /// `<f32>::mul(number, operand)` and rustc selects the impl. Of the
+    /// trait's `own` impl, as `impl NumCast for u64`, a method that borrows
+    /// the number and an associated function are members too, called
+    /// through the trait, `<u64 as NumCast>::from(n)`, as `u64` has
+    /// `From::from` as well (`surface::scalar`).
     fn classify_operand_member(
         &self,
         implementation: &model::Implementation,
         definition: &model::Definition,
+        own: bool,
     ) -> Result<OutcomeEvidence, Error> {
         use representability::{function, reject, Representability};
         let retained_before = (self.retained_items.get(), self.retained_bytes.get());
@@ -6403,19 +6428,53 @@ impl<P: api::Phase> Context<'_, P> {
             else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            // A number's `self` is its type written out: the function's
-            // first input.
-            let by_value = matches!(signature.receiver(),
-                model::Receiver::Explicit { ty } if ty == implementation.self_type());
-            if !by_value
-                || implementation.generics().parameters().next().is_some()
+            // A number's `self` is its type written out, the function's
+            // first input, or a shared borrow of it for `&self`.
+            let number = implementation.self_type();
+            let receiver = match signature.receiver() {
+                model::Receiver::Explicit { ty } | model::Receiver::Value { ty }
+                    if ty == number =>
+                {
+                    Some(number.clone())
+                }
+                model::Receiver::Reference {
+                    lifetime,
+                    mutability: model::Mutability::Shared,
+                    ty,
+                } if own && ty == number => Some(model::Type::Reference {
+                    lifetime: lifetime.clone(),
+                    mutability: model::Mutability::Shared,
+                    ty: Box::new(number.clone()),
+                }),
+                _ => return Err(reject::Kind::GenericImplementation.into()),
+            };
+            if implementation.generics().parameters().next().is_some()
                 || generics.parameters().next().is_some()
             {
                 return Err(reject::Kind::GenericImplementation.into());
             }
             let instance = self
-                .convert(implementation.self_type())
+                .convert(number)
                 .map_err(|_| reject::Kind::GenericImplementation)?;
+            let through = if own {
+                let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+                    return Err(reject::Kind::GenericImplementation.into());
+                };
+                let arguments = arguments
+                    .iter()
+                    .skip(1)
+                    .filter_map(|argument| match argument {
+                        model::Argument::Type(ty) => Some(self.convert(ty)),
+                        _ => None,
+                    })
+                    .collect::<Result<Box<[_]>, _>>()?;
+                Some(representability::convert::Type::Nominal {
+                    definition: crate::surface::identity::Definition::of(id),
+                    arguments,
+                })
+            } else {
+                None
+            };
             let free = model::Signature::new(
                 signature.safety(),
                 signature.const_function(),
@@ -6424,15 +6483,21 @@ impl<P: api::Phase> Context<'_, P> {
                 signature.variadic(),
                 signature.binders().cloned().collect(),
                 model::Receiver::None,
-                std::iter::once(implementation.self_type().clone())
+                receiver
+                    .into_iter()
                     .chain(signature.inputs().cloned())
                     .collect(),
                 signature.output().clone(),
             );
             match self.function(&free, generics)? {
-                Representability::Function(plan) => Ok(Representability::Function(
-                    function::Plan::new(plan.signature().clone().with_instance(Some(instance))),
-                )),
+                Representability::Function(plan) => {
+                    Ok(Representability::Function(function::Plan::new(
+                        plan.signature()
+                            .clone()
+                            .with_instance(Some(instance))
+                            .with_through(through),
+                    )))
+                }
                 _ => Err(reject::Kind::GenericImplementation.into()),
             }
         })();

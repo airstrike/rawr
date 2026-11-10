@@ -22,6 +22,7 @@ pub mod member;
 pub mod opaque;
 #[cfg(not(target_arch = "wasm32"))]
 mod runner;
+pub mod scalar;
 pub mod text;
 
 pub(crate) const SURFACE_SCHEMA: u32 = 4;

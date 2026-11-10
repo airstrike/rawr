@@ -1079,6 +1079,8 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     // A crate's conversion named as `From`'s, as num-traits' `NumCast`, is
     // in the runner's scope, which names `From` for itself.
     assert!(printed.contains("\nnarrowed Some(7)\n"), "{printed}");
+    // The trait's impl for `u64` gives it `to_u32` in scope (#1614).
+    assert!(printed.contains("\nwidened Some(9)\n"), "{printed}");
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

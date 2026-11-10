@@ -1268,6 +1268,26 @@ impl Plan {
                     items.push(item);
                     facade.items = items.into_boxed_slice();
                 }
+                // The members of the trait's impls for a number, `bool` or
+                // `char`, each a function of the scalar beside the trait
+                // (`surface::scalar`).
+                for associated in outcome
+                    .implementations()
+                    .flat_map(crate::classify::ImplementationOutcome::associated)
+                {
+                    let Some(scalar) = super::scalar::of(associated.representability()) else {
+                        continue;
+                    };
+                    let path = super::scalar::path(&relative, scalar, associated.name());
+                    let Some(mut item) = item(&path, associated)? else {
+                        continue;
+                    };
+                    item.made_mut().kind = ItemKind::Function;
+                    let mut items = std::mem::take(&mut facade.items).into_vec();
+                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                    items.push(item);
+                    facade.items = items.into_boxed_slice();
+                }
                 // A provided method called on the program's own type is
                 // the same function over `Self` in the retained runner
                 // facade as it was during demand compilation.

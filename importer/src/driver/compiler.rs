@@ -108,7 +108,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // static's address, for a cycle of body statics (D865).
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 62;
+const PROTOCOL_SCHEMA: u32 = 63;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2744,8 +2744,53 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // A selected trait contributes its own associated surface below.
             // Implementations require an exact Self-bearing predicate,
             // projection, or demanded nominal edge; a trait definition alone
-            // is not an unconstrained request for every implementation.
-            ImplementationWork::Trait => {}
+            // is not an unconstrained request for every implementation. Its
+            // impls for a number, `bool` or `char` are the members it gives
+            // the scalar, which no type of a crate's holds, as num-traits'
+            // `impl NumCast for u64` gives `u64` its `to_u32`
+            // (`surface::scalar`).
+            ImplementationWork::Trait => {
+                let mut scalars = Vec::new();
+                for implementation in self.implementations(def_id)? {
+                    self.budget.edge(1)?;
+                    let impl_id = implementation.id();
+                    let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
+                        continue;
+                    };
+                    let reference = reference.instantiate_identity().skip_norm_wip();
+                    if matches!(
+                        reference.self_ty().kind(),
+                        ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Bool | ty::Char
+                    ) && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                    {
+                        scalars.push((implementation, reference.args));
+                    }
+                }
+                scalars.sort_unstable_by_key(|(implementation, _)| {
+                    self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+                });
+                // Each of the trait's functions, as the selected trait's own
+                // surface selects them all.
+                let functions = self
+                    .tcx
+                    .associated_items(def_id)
+                    .in_definition_order()
+                    .filter(|item| self.tcx.def_kind(item.def_id) == DefKind::AssocFn)
+                    .map(|item| item.def_id)
+                    .collect::<Vec<_>>();
+                for (implementation, arguments) in scalars {
+                    for function in &functions {
+                        self.budget.edge(1)?;
+                        let associated = AssociatedObligation {
+                            kind: AssociatedDemandKind::SelectedMember,
+                            trait_item: Some(*function),
+                            arguments: Some(arguments),
+                            param_env: self.tcx.param_env(implementation.id()),
+                        };
+                        self.request_implementation(implementation, def_id, Some(associated))?;
+                    }
+                }
+            }
             ImplementationWork::Nominal => {
                 // The names its inherent impls give: a demanded member of one
                 // of them needs no trait (`Unit::Member`).
