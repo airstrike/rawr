@@ -35,21 +35,15 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// A generation of any program, a plain one included, compiled by
-    /// `engine`. An engine a debugger reads keeps the program's positions.
+    /// A generation of any program, a plain one included. It keeps the
+    /// program's positions, which place a panic and a debugger's steps.
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_plain(
-        engine: &crate::Engine,
         executable: program::Executable,
         source: source::Graph,
     ) -> Self {
         #[cfg(feature = "debugging")]
-        let located = engine
-            .is_debugger_registered()
-            .then(|| executable.located().map(Arc::new))
-            .flatten();
-        #[cfg(not(feature = "debugging"))]
-        let _ = engine;
+        let located = executable.located().map(Arc::new);
         let schemas = executable.schemas().clone();
         let candidate = Self::from_catalog(
             catalog::Catalog::from_executable(executable),
@@ -64,8 +58,7 @@ impl Candidate {
         candidate
     }
 
-    /// Where this generation's steps are in its files: kept only when a
-    /// debugger was registered on the engine that compiled it.
+    /// Where this generation's steps are in its files.
     #[cfg(feature = "debugging")]
     #[must_use]
     pub const fn located(&self) -> Option<&Arc<crate::inspect::Located>> {

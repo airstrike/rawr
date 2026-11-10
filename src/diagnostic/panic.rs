@@ -15,6 +15,38 @@ pub fn panic(report: &Report) -> String {
     format!("{}{BACKTRACE_NOTE}\n", panicked(report, "main"))
 }
 
+/// What maps a run-time failure's position in the lowered program back to
+/// the program's files: the running program's, once it compiled.
+type Locator = dyn Fn(&crate::EvalAltResult) -> Option<Report> + Send + Sync;
+
+/// The running program's [`Locator`], which a panic on any of its threads
+/// reads: the process runs one program at a time.
+static LOCATOR: std::sync::RwLock<Option<std::sync::Arc<Locator>>> = std::sync::RwLock::new(None);
+
+/// Locate the panics of the program that runs next with `locate`, the
+/// report of a run-time failure at its place in the program's files.
+pub fn locate_panics_with(
+    locate: impl Fn(&crate::EvalAltResult) -> Option<Report> + Send + Sync + 'static,
+) {
+    *LOCATOR
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::sync::Arc::new(locate));
+}
+
+/// The report of `error`, a run-time failure of the running program, at
+/// its place in the program's files when the program was located, else at
+/// none.
+#[cfg(any(feature = "sync", feature = "rust-import"))]
+pub(crate) fn located(error: &crate::EvalAltResult) -> Option<Report> {
+    let locator = LOCATOR
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    locator
+        .and_then(|locate| locate(error))
+        .or_else(|| Report::from_evaluation(None, error).ok())
+}
+
 /// `report`, a run-time failure in the thread named `thread`, as Rust's
 /// panic hook prints it before its note on backtraces, which a process
 /// prints after its first panic only: `thread 'name' panicked at

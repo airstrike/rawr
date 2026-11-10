@@ -127,7 +127,9 @@ pub fn run(loaded: base::Loaded, options: &Options) -> ExitCode {
         Ok(compiled) => compiled,
         Err(error) => return crate::failure(&base::compile_report(&error, &target)),
     };
-    let located = |error| base::located(error, &target, &positions);
+    let positions = Arc::new(positions);
+    base::locate_panics(&target, &positions);
+    let located = |error: Box<rawr::EvalAltResult>| base::located(&error, &target, &positions);
     let mut scope = Scope::new();
     if let Err(error) = engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
         eprint!("{}", diagnostic::panic(&located(error)));
