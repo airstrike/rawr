@@ -450,6 +450,9 @@ fn session(
     // A save whose runner build found a cache entry stale is attempted
     // again, whose preparation rebuilds it (#613).
     let mut restarts = crate::Restarts::default();
+    // Each save reads the program's unchanged sources from the parse it
+    // kept of them, and parses only those whose text changed (#1604).
+    let cells = rawr::package::Cells::new(rawr_cli::cells::directory(target)).remember();
     // The program's run, as a block whose failures are checked against
     // the program's own end below.
     let ran = (|| -> Result<Ended, diagnostic::Report> {
@@ -539,6 +542,7 @@ fn session(
                         continue;
                     }
                 };
+                let work = resident::Work::now(&cells);
                 let _fallback_inputs = match resident::attempt(
                     &mut lane,
                     &adapter,
@@ -551,6 +555,7 @@ fn session(
                     refresh_required,
                     &mut native_inputs,
                     &scope,
+                    &cells,
                     &source,
                 ) {
                     Ok(resident::Attempt::Settled) => continue,
@@ -560,10 +565,12 @@ fn session(
                     Ok(resident::Attempt::Swapped) if admits => {
                         swapped_marked = true;
                         rawr_cli::events::queued();
+                        work.tell(&cells);
                         continue;
                     }
                     Ok(resident::Attempt::Swapped) => {
                         rawr_cli::events::swapped();
+                        work.tell(&cells);
                         continue;
                     }
                     Ok(resident::Attempt::Prepare(staged, reason)) => {

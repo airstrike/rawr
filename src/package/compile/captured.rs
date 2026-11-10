@@ -53,7 +53,7 @@ impl Output {
         snapshot: &package::snapshot::Snapshot,
         allocation: &mut A,
     ) -> Result<Self, Error> {
-        let graph = package::Graph::load_snapshot(engine, snapshot)?;
+        let graph = engine.load_snapshot_kept(snapshot)?;
         let sources = graph.diagnostic_sources();
         let source = reload::source::Graph::from_package(&graph);
         let native = resolve::native::Capture::from_graph(&graph, allocation)?;

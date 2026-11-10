@@ -65,6 +65,9 @@ pub struct Cells {
     stale: Cell<usize>,
     /// Each source's latest parse by path, when remembering.
     memory: Option<RefCell<Remembered>>,
+    /// Whether the cells are files in `directory`; cells only in memory
+    /// read and write none.
+    on_disk: bool,
 }
 
 /// What loading a program through [`Cells`] did.
@@ -89,6 +92,18 @@ impl Cells {
             parsed: Cell::new(0),
             stale: Cell::new(0),
             memory: None,
+            on_disk: true,
+        }
+    }
+
+    /// Cells kept only in memory, for a process that compiles the same
+    /// program again and again and keeps no files: a runner compiling each
+    /// save (#1604). An unchanged source is read from memory.
+    #[must_use]
+    pub fn in_memory() -> Self {
+        Self {
+            on_disk: false,
+            ..Self::new(PathBuf::new()).remember()
         }
     }
 
@@ -124,6 +139,9 @@ impl Cells {
     ///
     /// The directory or a cell cannot be written.
     pub fn save(&self, graph: &super::Graph) -> io::Result<usize> {
+        if !self.on_disk {
+            return Ok(0);
+        }
         let kept = self.kept.borrow();
         let features = graph.entry_package().features();
         let mut written = 0;
@@ -156,6 +174,9 @@ impl Cells {
         {
             self.kept.borrow_mut().insert(path.to_path_buf());
             return Some(unit.clone());
+        }
+        if !self.on_disk {
+            return None;
         }
         let bytes = fs::read(self.path(path)).ok()?;
         let mut reader = Reader { bytes: &bytes };

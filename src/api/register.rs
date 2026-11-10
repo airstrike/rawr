@@ -12,7 +12,18 @@ use std::any::{type_name, TypeId};
 
 use crate::func::register::Mut;
 
+/// How many facades this process's engines registered.
+static REGISTERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl Engine {
+    /// How many host facades the engines of this process registered so
+    /// far: a save that registers none reads no facade (#1604).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn registered_facades() -> usize {
+        REGISTERED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Install one validated compile-time host facade.
     ///
     /// This affects Rawr item-header and `use` resolution only. It does not
@@ -22,6 +33,7 @@ impl Engine {
         definition: crate::host::facade::Definition,
     ) -> Result<&mut Self, crate::host::Error> {
         self.host_registry.install(definition)?;
+        REGISTERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(self)
     }
 

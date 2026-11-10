@@ -209,6 +209,7 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
         false,
         &mut None,
         &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+        &rawr::package::Cells::new(fixture.root.join("target/rawr/parse")).remember(),
         &source,
     );
     let Err(report) = result else {

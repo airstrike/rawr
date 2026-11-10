@@ -353,6 +353,7 @@ impl node::Value for Product {
     }
 
     fn decode_owned(bytes: Box<[u8]>) -> Result<Self, node::Error> {
+        crate::progress::loaded();
         Ok(Self {
             form: Form::Captured {
                 stored: graph_bytes(bytes)?,
@@ -363,6 +364,7 @@ impl node::Value for Product {
     /// The manifest is checked here; its parts are read on replay.
     fn decode_parts(manifest: Box<[u8]>, parts: &Path) -> Result<Self, node::Error> {
         crate::store::parts::check(&manifest)?;
+        crate::progress::loaded();
         Ok(Self {
             form: Form::Manifest {
                 manifest,

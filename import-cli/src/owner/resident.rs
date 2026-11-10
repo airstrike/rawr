@@ -167,6 +167,42 @@ impl Reason {
 /// One native generation's watched identities and their derived inputs.
 pub(super) type NativeInputs = (Box<[rawr_import::input::proof::Watch]>, source::Inputs);
 
+/// What this process had done when a save began: the sources it parsed,
+/// Cargo's resolutions, the API tables it read and the facades it
+/// registered. A save of a marked file parses that file again and needs
+/// none of the rest (#1604).
+pub(super) struct Work {
+    parsed: usize,
+    api: rawr_import::progress::Work,
+    registered: usize,
+}
+
+impl Work {
+    /// What this process has done so far, its parses through `cells`.
+    pub(super) fn now(cells: &rawr::package::Cells) -> Self {
+        Self {
+            parsed: cells.counts().parsed,
+            api: rawr_import::progress::work(),
+            registered: rawr::Engine::registered_facades(),
+        }
+    }
+
+    /// With `RAWR_VERBOSE`, say what the save since `self` did.
+    pub(super) fn tell(self, cells: &rawr::package::Cells) {
+        if !rawr_cli::cells::verbose() {
+            return;
+        }
+        let now = Self::now(cells);
+        eprintln!(
+            "rawr-import: a save parsed {} sources, Cargo resolutions {}, API tables loaded {}, facades registered {}",
+            now.parsed - self.parsed,
+            now.api.resolved() - self.api.resolved(),
+            now.api.loaded() - self.api.loaded(),
+            now.registered - self.registered,
+        );
+    }
+}
+
 pub(super) enum Attempt {
     Settled,
     /// The runner committed the new generation compiled against it.
@@ -188,13 +224,14 @@ pub(super) fn attempt(
     refresh_required: bool,
     native_inputs: &mut Option<NativeInputs>,
     scope: &Scope,
+    cells: &rawr::package::Cells,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
     let native_change = adapter.resident_change(native_baseline);
     let native_current = native_change.is_none();
     let capture = (|| {
         let load = || {
-            rawr::package::Graph::load(&rawr::Engine::new(), target)
+            rawr::package::Graph::load_with_cells(&rawr::Engine::new(), target, cells)
                 .map_err(|error| crate::report::package(&error, diagnostic.clone()))
         };
         let mut graph = load()?;

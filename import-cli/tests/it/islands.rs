@@ -1179,6 +1179,78 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
     });
 }
 
+/// A save of a marked file in a running program parses that file again and
+/// nothing else: the owner and the runner each keep every other source's
+/// parse across saves, and neither asks Cargo to resolve, reads an API
+/// table or registers a facade, so a save costs the same however many
+/// dependencies the program has (#1604). `RAWR_VERBOSE` says what each
+/// save did, in the owner and in the runner.
+#[test]
+fn a_save_parses_only_the_file_it_changed() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-save-work");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    let sidebar = root.join("src/widget/sidebar.rs");
+    edit(&sidebar, "\"{label} row\"", "\"{label} item\"");
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
+    edit(&sidebar, "\"{label} item\"", "\"{label} entry\"");
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick entry styled 0"));
+    // The program ends; `rawr run` keeps watching for the next save.
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.take_printed();
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("preparing again"), "{seen}");
+    // Each save says what it did; one the watcher heard twice compiles the
+    // same text again and parses nothing.
+    let parsed = |prefix: &str, rest: &str| {
+        let counts = run
+            .seen
+            .iter()
+            .filter_map(|line| line.strip_prefix(prefix))
+            .map(|line| {
+                let (parsed, said) = line.split_once(" sources").unwrap();
+                assert_eq!(said, rest, "{seen}");
+                parsed.parse::<usize>().unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(counts.iter().all(|count| *count <= 1), "{seen}");
+        counts.iter().sum::<usize>()
+    };
+    assert_eq!(
+        parsed(
+            "stderr: rawr-import: a save parsed ",
+            ", Cargo resolutions 0, API tables loaded 0, facades registered 0"
+        ),
+        2,
+        "{seen}"
+    );
+    assert_eq!(
+        parsed(
+            "stderr: rawr runner: a save parsed ",
+            ", registered 0 facades"
+        ),
+        2,
+        "{seen}"
+    );
+}
+
 /// A generic method of a marked type generic over the message, which
 /// native code builds and keeps, as inboard's `Sidebar<'a, Message>`,
 /// swaps a body edit into the running program: native code calls the

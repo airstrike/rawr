@@ -5115,7 +5115,18 @@ mod __rawr_profile {
         snapshot: &__rawr_internal::package::snapshot::Snapshot,
         _contract: &ApplicationContract,
     ) -> Result<__rawr_internal::package::import::resident::Outcome, __rawr_internal::package::import::resident::Error> {
-        engine.compile_package_snapshot_resident_plain(snapshot)
+        let parsed = engine.resident_parsed();
+        let registered = __rawr_internal::Engine::registered_facades();
+        let compiled = engine.compile_package_snapshot_resident_plain(snapshot);
+        // `RAWR_VERBOSE` says what the save's compile did again (#1604).
+        if std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0") {
+            eprintln!(
+                "rawr runner: a save parsed {} sources, registered {} facades",
+                engine.resident_parsed() - parsed,
+                __rawr_internal::Engine::registered_facades() - registered,
+            );
+        }
+        compiled
     }
     pub fn bind_runtime(
         _definitions: &[__rawr_internal::host::facade::Definition],
