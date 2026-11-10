@@ -274,3 +274,139 @@ pub(super) fn render_lent_input(
     )
     .map_err(request::unwritable)
 }
+
+/// The element type of a `&[E]` input whose elements lend a crate trait's
+/// objects, `E` a `&dyn Trait` or an `Option` of one, as tracing-core's
+/// `value_set_all(&[Option<&dyn Value>])` takes (#1591). `None` for another
+/// type.
+pub(super) fn lent_slice_element(ty: &convert::Type) -> Option<&convert::Type> {
+    let convert::Type::Borrowed { mutable: false, ty } = ty else {
+        return None;
+    };
+    let convert::Type::Sequence { element, .. } = &**ty else {
+        return None;
+    };
+    lends_objects(element).then_some(&**element)
+}
+
+/// Whether `element` is a `&dyn Trait` of a crate's trait, or an `Option`
+/// of one.
+pub(super) fn lends_objects(element: &convert::Type) -> bool {
+    match element {
+        convert::Type::Object(object) => object.pointer() == Pointer::Shared,
+        convert::Type::Option(inner) => lends_objects(inner),
+        _ => false,
+    }
+}
+
+/// The statement that makes `argument_{local}_made`, each element of the
+/// call's argument `index`, a program's array, with its objects held
+/// (`HeldObject`): what a slice of `element`s lends, which a scope frame
+/// keeps while its output borrows them. [`lent_slice`] lends it.
+pub(super) fn render_held_slice(
+    local: usize,
+    index: usize,
+    element: &convert::Type,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use std::io::Write as _;
+    let mut made = String::new();
+    held_element(element, "value", &mut made)?;
+    writeln!(
+        output,
+        "    let argument_{local}_made = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten().into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|value| -> Result<_, Error> {{ {made} }}).collect::<Result<Vec<_>, Error>>()?;"
+    )
+    .map_err(request::unwritable)
+}
+
+/// The statements that lend `argument_{local}_made` (`render_held_slice`)
+/// as `argument_{local}`, the `&[E]` of `element`s the call takes.
+pub(super) fn lent_slice(local: usize, element: &convert::Type) -> Result<String, request::Error> {
+    let mut lent = String::new();
+    lent_element(element, "held", &mut lent)?;
+    let rust = concrete_type(element).ok_or_else(|| request::drift("a trait object's type"))?;
+    Ok(format!(
+        "let argument_{local}_lent: Vec<{rust}> = argument_{local}_made.iter().map(|held| {lent}).collect();
+    let argument_{local}: &[{rust}] = &argument_{local}_lent;"
+    ))
+}
+
+/// A generated `Result<_, Error>` expression holding `element` of the
+/// owned `Dynamic` named `value`: an `Option` of it as an `Option`, and an
+/// object as its `HeldObject`.
+fn held_element(
+    element: &convert::Type,
+    value: &str,
+    output: &mut String,
+) -> Result<(), request::Error> {
+    match element {
+        convert::Type::Option(inner) => {
+            let mut held = String::new();
+            held_element(inner, "inner", &mut held)?;
+            write!(
+                output,
+                "{{ let mut value = {value}; match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {{ None => Ok(None), Some(inner) => ({held}).map(Some) }} }}"
+            )
+            .map_err(request::unwritable)
+        }
+        convert::Type::Object(object) => held_object(object, value, output),
+        _ => Err(request::drift("a lent trait object's element")),
+    }
+}
+
+/// The `&dyn Trait`, or the `Option` of one, that `held`, a reference to
+/// what `held_element` made, lends.
+fn lent_element(
+    element: &convert::Type,
+    held: &str,
+    output: &mut String,
+) -> Result<(), request::Error> {
+    match element {
+        convert::Type::Option(inner) => {
+            let mut lent = String::new();
+            lent_element(inner, "held", &mut lent)?;
+            write!(output, "{held}.as_ref().map(|held| {lent})").map_err(request::unwritable)
+        }
+        convert::Type::Object(_) => write!(output, "{held}.get()").map_err(request::unwritable),
+        _ => Err(request::drift("a lent trait object's element")),
+    }
+}
+
+/// A generated `Result<HeldObject<dyn Trait>, Error>` expression holding
+/// `object` of the owned `Dynamic` named `value`: an object native code
+/// gave, a static's place, a crate value its slot shares, or a program's
+/// number made into its Rust value.
+fn held_object(object: &Object, value: &str, output: &mut String) -> Result<(), request::Error> {
+    let unwritten = || request::drift("a trait object's type");
+    let dynamic = object_type(object).ok_or_else(unwritten)?;
+    let lasting = rust_type(&object.behind(Pointer::Lasting)).ok_or_else(unwritten)?;
+    let held = format!("HeldObject::<{dynamic}>");
+    let mut arms = String::new();
+    IMPLEMENTORS.with_borrow(|implementors| -> Result<(), request::Error> {
+        let found = implementors.get(object.principal().as_bytes());
+        for implementor in found.into_iter().flatten() {
+            let made = match &implementor.kind {
+                Kind::Primitive(builtin) => {
+                    let mut converted = String::new();
+                    render_from_dynamic(
+                        &convert::Type::Builtin(*builtin),
+                        "inner",
+                        1,
+                        &mut converted,
+                    )?;
+                    format!("({converted}).map(|made| {held}::Made(Box::new(made)))")
+                }
+                Kind::Native(path) => format!(
+                    "match __rawr_internal::place::statics::lasting::<{path}>(&inner) {{ Some(lasting) => Ok({held}::Lasting(lasting)), None => inner.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.share::<{path}>(handle)).map(|shared| {held}::Shared(shared)) }}"
+                ),
+            };
+            write!(arms, "{:?} => {made}, ", implementor.tag).map_err(request::unwritable)?;
+        }
+        Ok(())
+    })?;
+    write!(
+        output,
+        "{{ let value = {value}; match __rawr_internal::object::Coerced::of(&value) {{ Some((inner, tag)) => match tag.as_str() {{ {arms}_ => Err(Error::TypeMismatch) }}, None => value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{lasting}>(handle)).map({held}::Lasting) }} }}"
+    )
+    .map_err(request::unwritable)
+}

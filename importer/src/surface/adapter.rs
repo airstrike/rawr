@@ -1210,6 +1210,7 @@ fn clone_signature_at(
     .with_opaques(source.opaques().into())
     .with_lends(source.lends().into())
     .with_statics(source.statics().into())
+    .with_regional(source.regional().into())
     .with_lasting_receiver(source.lasting_receiver()))
 }
 

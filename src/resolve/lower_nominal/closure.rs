@@ -595,6 +595,10 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        // The body runs when the closure is called, not where it is made:
+        // its calls are none of the statement's that makes it, which a
+        // scope frame opened later in that statement would run after.
+        let noted = self.noted_effects();
         let body = if async_closure {
             // `async |x| body` is `|x| async move { body }`.
             self.parse_async_block(start, true, None)
@@ -659,6 +663,7 @@ impl<'a> Parser<'a> {
                 value
             })
         };
+        self.unnote(noted);
         let parameter_drops = self.close_drops();
         self.drop_scopes = outer_drops;
         self.drop_base = outer_drop_base;

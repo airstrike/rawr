@@ -127,6 +127,13 @@ pub struct Signature {
     /// a value that lives as long as the runner fills it.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     statics: Box<[u32]>,
+    /// The inputs, by position, that borrow a crate value at lifetime
+    /// arguments the call picks, as tracing-core's `Event::dispatch(..,
+    /// fields: &ValueSet<'_>)` takes one: a value a scope frame's region
+    /// holds fills it there (#1591), where one at `'static`, as
+    /// `&Metadata<'static>`, takes only the arena's.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    regional: Box<[u32]>,
     /// A method's receiver is `&'static self`: only a static fills it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lasting_receiver: bool,
@@ -591,6 +598,7 @@ impl Signature {
             opaques: Box::new([]),
             lends: Box::new([]),
             statics: Box::new([]),
+            regional: Box::new([]),
             lasting_receiver: false,
         }
     }
@@ -686,6 +694,17 @@ impl Signature {
     #[must_use]
     pub fn statics(&self) -> &[u32] {
         &self.statics
+    }
+
+    pub(crate) fn with_regional(mut self, regional: Box<[u32]>) -> Self {
+        self.regional = regional;
+        self
+    }
+
+    /// The inputs, by position, that a region's value may fill.
+    #[must_use]
+    pub fn regional(&self) -> &[u32] {
+        &self.regional
     }
 
     pub(crate) fn with_lasting_receiver(mut self, lasting: bool) -> Self {

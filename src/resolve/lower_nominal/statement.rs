@@ -577,16 +577,27 @@ impl<'a> Parser<'a> {
     /// out of `frame_effects`: tokens taken to be parsed later are noted
     /// as they are parsed, where they run.
     pub(super) fn unnoted<T>(&mut self, take: impl FnOnce(&mut Self) -> T) -> T {
-        let noted = self
-            .frame_effects
+        let noted = self.noted_effects();
+        let taken = take(self);
+        self.unnote(noted);
+        taken
+    }
+
+    /// How many calls and assignments each statement being parsed has noted
+    /// so far, for `unnote`.
+    pub(super) fn noted_effects(&self) -> Vec<usize> {
+        self.frame_effects
             .iter()
             .map(|(_, effects)| effects.len())
-            .collect::<Vec<_>>();
-        let taken = take(self);
+            .collect()
+    }
+
+    /// Leaves out of `frame_effects` each call or assignment noted since
+    /// `noted_effects` gave `noted`.
+    pub(super) fn unnote(&mut self, noted: Vec<usize>) {
         for ((_, effects), noted) in self.frame_effects.iter_mut().zip(noted) {
             effects.truncate(noted);
         }
-        taken
     }
 
     /// Starts collecting the scope frames of a statement.
