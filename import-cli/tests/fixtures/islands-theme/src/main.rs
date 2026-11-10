@@ -6,8 +6,8 @@
 mod grid;
 mod home;
 mod inbox;
-// Marked builders `rawr check` checks; native code calls none of them, as
-// a marked boxed iterator can't cross to native code yet.
+// Marked builders as inboard's, over boxed iterators of elements: native
+// code builds one through their chain, and `rawr check` checks the rest.
 #[allow(dead_code)]
 mod sidebar;
 mod style;
@@ -202,6 +202,35 @@ fn main() {
     println!("sidebar {} {:?}", group.draw(&theme), group.message());
     let strip = grid::strip("strip");
     println!("sidebar {} {:?}", strip.draw(&theme), strip.message());
+    // inboard's own chain: marked builders keep the elements native code
+    // gives them in a `Box<dyn Iterator>` they make, which native code
+    // holds and pulls from one at a time, as marked code does between
+    // (#1600).
+    let mut tools = sidebar::header::<grid::Message>(
+        "tools",
+        [
+            small_row("add", grid::Message::Tile(15)),
+            small_row("more", grid::Message::Tile(16)),
+            small_row("last", grid::Message::Tile(17)),
+        ],
+    )
+    .content([small_row("first", grid::Message::Tile(18))])
+    .spacing(4);
+    if let Some(header) = &mut tools.header {
+        let pulled = header.actions.next();
+        println!("pulled {:?}", pulled.map(|action| action.draw(&theme)));
+    }
+    let marked = tools.next_action();
+    println!("pulled {:?}", marked.map(|action| action.message()));
+    if let Some(header) = &mut tools.header {
+        println!("pulled {} more", header.actions.by_ref().count());
+    }
+    let first = tools.content.content.next();
+    println!(
+        "pulled {:?} of {}",
+        first.map(|item| item.draw(&theme)),
+        tools.header.map_or("none", |header| header.title)
+    );
     println!("clones {}", theme::clones());
     // Run on, as a running program does, till told to stop: each tick
     // calls the marked generic through the native helper.

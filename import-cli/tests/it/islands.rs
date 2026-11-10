@@ -912,8 +912,11 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// with an `impl Into<Pixels>` and by `&mut self`, read by `&self` and
 /// turned into an element, at two of native code's message types, and a
 /// marked `From<Group<'a, Message>> for Element<'a, Message>` gives an
-/// element by `.into()` (D869). `rawr check` passes as `cargo check`
-/// does, and `rawr run` prints what `cargo run` prints.
+/// element by `.into()` (D869). inboard's `sidebar::header(..).content(
+/// ..).spacing(4)` keeps native code's elements in a `Box<dyn Iterator>`
+/// marked code makes, which native code pulls from (#1600). `rawr check`
+/// passes as `cargo check` does, and `rawr run` prints what `cargo run`
+/// prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -997,6 +1000,17 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     // path from the crate root names (`grid::tiles`).
     assert!(
         printed.contains("\nsidebar strip row styled 0 Some(Strip(13))\n"),
+        "{printed}"
+    );
+    // inboard's `sidebar::header(..).content(..).spacing(4)`: the marked
+    // builders keep native code's elements in a `Box<dyn Iterator>` they
+    // make, which native code pulls from one at a time, and a marked `&mut
+    // self` method pulls from in between (#1600).
+    assert!(
+        printed.contains(
+            "\npulled Some(\"add row styled 0\")\npulled Some(Some(Tile(16)))\npulled 1 more\n\
+             pulled Some(\"first row styled 0\") of tools\n"
+        ),
         "{printed}"
     );
     // The one clone is `theme.clone()` in `main`.

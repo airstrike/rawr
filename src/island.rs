@@ -100,27 +100,73 @@ pub(crate) fn settled(value: &Dynamic) -> Option<Result<Settled, String>> {
     SETTLE.get()?(value)
 }
 
+/// The slot of the native value a script value holds: its arena, index and
+/// generation, which every script value holding that native value shares.
+pub type Identify = fn(&Dynamic) -> Option<[u64; 3]>;
+
+static IDENTIFY: OnceLock<Identify> = OnceLock::new();
+
+/// Name how the runner tells which native value a script value holds
+/// (#1600). Set once.
+pub fn identifies(identify: Identify) {
+    let _ = IDENTIFY.set(identify);
+}
+
 /// Drop what a call left of an argument given for it alone: the native
 /// value it is, as a by-value `View<'a>` of borrows (#1225), or each one
 /// inside its `Option`s, arrays and tuples, as an `Option<Element<'a,
 /// Message>>` (#1224). One the call moved on, as into a native function
-/// that took it, has nothing left to drop.
-fn drop_left(value: &Dynamic) {
+/// that took it, has nothing left to drop, and nor has one in `kept`, the
+/// native values of what native code holds by a handle the call gave it,
+/// as the elements of the program's iterator a marked `Header::new` keeps
+/// (#1600), which live as long as native code holds it.
+fn drop_left(value: &Dynamic, kept: &[[u64; 3]]) {
     if let Some(inner) = crate::option::read(value) {
         if let Some(inner) = inner {
-            drop_left(&inner);
+            drop_left(&inner, kept);
         }
         return;
     }
     if let Some(items) = value.read_lock::<crate::Array>() {
         for item in items.iter() {
-            drop_left(item);
+            drop_left(item, kept);
         }
+        return;
+    }
+    if IDENTIFY
+        .get()
+        .and_then(|identify| identify(value))
+        .is_some_and(|identity| kept.contains(&identity))
+    {
         return;
     }
     if let Some(Ok(left)) = moved(value) {
         drop(left);
     }
+}
+
+thread_local! {
+    /// The handles [`kept_handle`] gave out on this thread, in order, which
+    /// a call's arguments given for it alone keep their native values for
+    /// ([`drop_left`]).
+    static GIVEN_HANDLES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The native values each value kept under a handle given out since
+/// `start` holds ([`GIVEN_HANDLES`]), those handles forgotten.
+fn kept_since(start: usize) -> Vec<[u64; 3]> {
+    let handles = GIVEN_HANDLES.with_borrow_mut(|given| given.split_off(start.min(given.len())));
+    let Some(identify) = IDENTIFY.get() else {
+        return Vec::new();
+    };
+    let mut natives = Vec::new();
+    for handle in handles {
+        let value = kept(|kept| kept.values.get(&handle).and_then(|held| held.value.clone()));
+        if let Some(mut value) = value {
+            value.deep_scan(|held| natives.extend(identify(held)));
+        }
+    }
+    natives
 }
 
 /// An arena of one call's own, on a thread that doesn't own the program, as
@@ -421,6 +467,69 @@ fn keep(value: Dynamic) -> u64 {
     })
 }
 
+/// Whether `value`, where a member's type is a trait object of std's, holds
+/// a native value rather than the program's own (#1600): one native code
+/// gave, lent or a crate call made.
+pub(crate) fn native(value: &Dynamic) -> bool {
+    match &value.0 {
+        crate::types::dynamic::Union::Variant(..) => true,
+        crate::types::dynamic::Union::Shared(..) => native(&value.flatten_clone()),
+        _ => false,
+    }
+}
+
+/// The handle native code holds the program value `value` by, as std's
+/// trait object (#1600): the one it is kept under already, when native code
+/// lent it where it is ([`kept_shared`]), and else a handle of its own.
+pub(crate) fn kept_handle(value: &Dynamic) -> u64 {
+    if let crate::types::dynamic::Union::Shared(cell, ..) = &value.0 {
+        let known = kept(|kept| {
+            kept.values
+                .iter()
+                .find_map(|(handle, held)| match held.value.as_ref() {
+                    Some(Dynamic(crate::types::dynamic::Union::Shared(kept, ..)))
+                        if crate::Shared::ptr_eq(kept, cell) =>
+                    {
+                        Some(*handle)
+                    }
+                    _ => None,
+                })
+        });
+        if let Some(handle) = known {
+            return handle;
+        }
+    }
+    let handle = keep(value.clone());
+    GIVEN_HANDLES.with_borrow_mut(|given| given.push(handle));
+    handle
+}
+
+/// The program value native code held under `handle` and gave back whole,
+/// let go of by the handle (#1600).
+pub(crate) fn unkeep(handle: u64) -> Result<Dynamic, String> {
+    let held = kept(|kept| kept.values.remove(&handle));
+    held.and_then(|held| held.value)
+        .map(Dynamic::flatten)
+        .ok_or_else(|| "a kept program value native code gave back is gone".to_owned())
+}
+
+/// The program value native code holds under `handle`, lent where it is
+/// (#1600): shared with the table, so what the call does to it, as pulling
+/// items, is what native code pulls on from.
+pub(crate) fn kept_shared(handle: u64) -> Result<Dynamic, String> {
+    kept(|kept| {
+        let value = kept
+            .values
+            .get_mut(&handle)
+            .and_then(|held| held.value.as_mut())
+            .ok_or("a kept program value native code lent is gone or in use")?;
+        if !value.is_shared() {
+            *value = value.take().into_shared();
+        }
+        Ok(value.clone())
+    })
+}
+
 /// `value`, of the program's type at `owner`, as the native trait object
 /// `Box<dyn trait_name>`: the value is kept under a handle, and the
 /// stand-in rawr's copy of the crate declares for `owner` holds it and
@@ -579,6 +688,46 @@ pub fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> V
             .unwrap_or_else(|message| failure(&message));
     }
     failure(&format!("rawr: no runner serves the traits of `{owner}`"))
+}
+
+/// The next item of the program's iterator native code holds under
+/// `handle` as std's `Box<dyn Iterator<Item = T>>` (#1600), pulled one at a
+/// time, so the program's iterator runs only as far as native code pulls.
+/// The reply starts with `0` and holds the `Option` of the item, written
+/// as `T` crosses, its native values moved to `natives`, or starts with `1`
+/// and holds a message to panic with.
+#[unsafe(no_mangle)]
+pub fn __rawr_island_next_v1(handle: u64, natives: &mut Natives) -> Vec<u8> {
+    if current().is_some() {
+        let _entry = crate::future::trampoline();
+        if let Some(current) = current() {
+            let catalog = current.bootstrap.catalog();
+            let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
+                catalog
+                    .invoke_item(function, arguments)
+                    .map_err(|error| error.to_string())
+            };
+            return current
+                .calls
+                .next(handle, catalog.authority().model(), &invoke, natives)
+                .unwrap_or_else(|message| failure(&message));
+        }
+    }
+    #[cfg(feature = "sync")]
+    if let Some((calls, shared)) = elsewhere() {
+        let _entry = crate::future::entry();
+        let _arena = ARENA.get().map(|arena| arena());
+        let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
+            shared
+                .authority
+                .invoke_bound(function, arguments, shared.runtime.clone())
+                .map_err(|error| error.to_string())
+        };
+        return calls
+            .next(handle, shared.authority.model(), &invoke, natives)
+            .unwrap_or_else(|message| failure(&message));
+    }
+    failure("rawr: no runner serves a program's iterator native code pulls from")
 }
 
 /// End the call `borrow` gave `value`, the program value of `handle`: a
@@ -1576,9 +1725,11 @@ impl Calls {
         natives: &mut Natives,
     ) -> Result<Vec<u8>, String> {
         let mut scoped = Vec::new();
+        let start = GIVEN_HANDLES.with_borrow(Vec::len);
         let reply = self.call_with(call, given, lent, natives, &mut scoped);
+        let kept = kept_since(start);
         for value in &scoped {
-            drop_left(value);
+            drop_left(value, &kept);
         }
         reply
     }
@@ -1947,6 +2098,56 @@ impl Calls {
 }
 
 impl Calls {
+    /// The reply of `__rawr_island_next_v1`: the next item of the program
+    /// value of `handle`, taken `&mut` while it is pulled.
+    fn next(
+        &self,
+        handle: u64,
+        model: &program::model::Model,
+        invoke: &Invoke<'_>,
+        natives: &mut Natives,
+    ) -> Result<Vec<u8>, String> {
+        let mut value = take_kept(handle, Borrow::Mutable)?;
+        let item = self.pull(&mut value, invoke);
+        put_kept(handle, Borrow::Mutable, value);
+        let mut reply = vec![0];
+        match item? {
+            None => reply.push(program::model::island::NONE),
+            Some(item) => {
+                reply.push(program::model::island::SOME);
+                model
+                    .island_write_in(&item, None, &mut reply, natives, 0)
+                    .map_err(|error| {
+                        format!("rawr: an item native code pulls can't cross: {error}")
+                    })?;
+            }
+        }
+        Ok(reply)
+    }
+
+    /// The next item of `value`, the program's iterator: a kept iterator
+    /// of the program's is the array of the items it has left (`Ty::Iter`),
+    /// and a marked type that implements `Iterator` runs its own `next`.
+    fn pull(&self, value: &mut Dynamic, invoke: &Invoke<'_>) -> Result<Option<Dynamic>, String> {
+        if let Ok(mut items) = value.as_array_mut() {
+            return Ok((!items.is_empty()).then(|| items.remove(0)));
+        }
+        let next = program::model::island::owner_path(value)
+            .and_then(|owner| self.items.get(&(true, format!("{owner}::Iterator::next"))))
+            .ok_or_else(|| {
+                format!(
+                    "rawr: native code pulls from a `{}`, whose `next` it can't call yet",
+                    value.type_name()
+                )
+            })?;
+        let mut arguments = [std::mem::take(value)];
+        let output = invoke(next, &mut arguments);
+        *value = std::mem::take(&mut arguments[0]);
+        let output = output.map_err(|error| format!("rawr: `Iterator::next` failed: {error}"))?;
+        crate::option::read(&output)
+            .ok_or_else(|| "rawr: an `Iterator::next` gave no `Option`".to_owned())
+    }
+
     /// The answer to `asked` (`__rawr_island_trait_v1`), the program's
     /// functions run by `invoke`.
     fn ask(

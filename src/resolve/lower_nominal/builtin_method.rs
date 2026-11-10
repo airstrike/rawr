@@ -1579,7 +1579,17 @@ impl<'a> Parser<'a> {
                 let model = self.models.definition(*id).clone();
                 self.require_capability(&model, capability::Kind::Default, span)?;
                 // A hand-written `impl Default` runs.
-                if let Some(definition) = self.models.std_impl(*id, "Default", "default") {
+                if let Some(definition) = self.models.std_impl(*id, "Default", "default").cloned() {
+                    // An impl compiled per instantiation, as native code's
+                    // mention of `Content<grid::Message>` makes `impl<'a,
+                    // Message> Default for Content<'a, Message>` (D869), runs
+                    // its instance at the type's arguments (D629).
+                    #[cfg(feature = "rust-import")]
+                    let definition = {
+                        let substitution =
+                            self.method_substitution(&definition, Some(&ty), span)?;
+                        self.bind_method_instance(definition, &substitution, span)?
+                    };
                     return Ok(origin::Fragment::call(method_name(definition.id()), []));
                 }
                 // A derived `Default` with a field whose `Default` runs code

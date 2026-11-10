@@ -67,6 +67,16 @@ pub(crate) const HASHED_MAP: u8 = 27;
 /// length of native code's own text, which a crate call that borrows the
 /// program's copy for its output borrows instead (`scope::Pins::pin`).
 pub(crate) const KEPT_TEXT: u8 = 28;
+/// A program value native code holds as std's trait object, as the
+/// `Box<dyn Iterator<Item = T>>` a marked `Header::new` keeps the program's
+/// iterator in (#1600): its handle among the kept values. The runner writes
+/// it where a member declared so holds the program's own value, and native
+/// code holds the value by it; native code that gives it back gives the
+/// value back whole, and the runner lets go of the handle.
+pub(crate) const KEPT: u8 = 29;
+/// A [`KEPT`] value native code lends where it is: the call shares it with
+/// native code, which goes on from where the call left it.
+pub(crate) const KEPT_LENT: u8 = 30;
 
 /// The first byte of a call's header: the function is a member of the
 /// type before its last segment.
@@ -375,6 +385,17 @@ fn path(identity: &type_def::Identity) -> Option<String> {
     )
 }
 
+/// The path from the crate root of the script type of `value`, a struct
+/// or an enum: what its impls' functions are found by.
+pub(crate) fn owner_path(value: &Dynamic) -> Option<String> {
+    match &value.0 {
+        Union::Struct(nominal, ..) => path(nominal.identity()),
+        Union::Enum(nominal, ..) => path(nominal.identity()),
+        Union::Shared(..) => owner_path(&value.flatten_clone()),
+        _ => None,
+    }
+}
+
 impl Model {
     /// `lhs` and `rhs` ordered as a derived `PartialOrd` orders them, for a
     /// native trait object's stand-in (#1301): numbers, strings, chars,
@@ -633,6 +654,8 @@ impl Model {
                         .ok_or("a lent value the call has no place for")?,
                 )
             }
+            KEPT => crate::island::unkeep(u64::from_le_bytes(reader.array()?))?,
+            KEPT_LENT => crate::island::kept_shared(u64::from_le_bytes(reader.array()?))?,
             WHOLE => {
                 let index = reader.count()?;
                 let whole = *lent
@@ -806,8 +829,17 @@ impl Model {
                     out,
                 );
                 count(value.fields().len(), out);
-                for field in value.fields() {
-                    self.island_write_with(field, writing, out, natives, depth)?;
+                let declared = match self
+                    .definitions
+                    .get(value.identity())
+                    .map(|definition| &definition.shape)
+                {
+                    Some(Shape::Struct(fields)) => &fields[..],
+                    _ => &[],
+                };
+                for (index, field) in value.fields().iter().enumerate() {
+                    let ty = declared.get(index);
+                    self.island_write_member(field, ty, writing, out, natives, depth)?;
                 }
             }
             Union::Enum(value, ..) => {
@@ -818,8 +850,19 @@ impl Model {
                 );
                 text(value.variant().name(), out);
                 count(value.payload().len(), out);
-                for item in value.payload() {
-                    self.island_write_with(item, writing, out, natives, depth)?;
+                let declared = match self
+                    .definitions
+                    .get(value.identity())
+                    .map(|definition| &definition.shape)
+                {
+                    Some(Shape::Enum(variants)) => variants
+                        .get(value.variant())
+                        .map_or(&[][..], |payload| &payload[..]),
+                    _ => &[],
+                };
+                for (index, item) in value.payload().iter().enumerate() {
+                    let ty = declared.get(index);
+                    self.island_write_member(item, ty, writing, out, natives, depth)?;
                 }
             }
             Union::Shared(..) => {
@@ -887,5 +930,32 @@ impl Model {
             _ => return Err(format!("a `{}` can't cross yet", value.type_name())),
         }
         Ok(())
+    }
+
+    /// [`Model::island_write_with`] of a member of a struct or a variant,
+    /// declared `ty`: a `Box<dyn Iterator<Item = T>>` that holds the
+    /// program's own iterator, as inboard's `Header::actions` holds the
+    /// `Box::new(actions.into_iter())` its marked `new` made, is kept under
+    /// a handle, which native code pulls from (#1600). A native one moves
+    /// as any native value does.
+    fn island_write_member(
+        &self,
+        value: &Dynamic,
+        ty: Option<&crate::resolve::type_ref::Type>,
+        writing: Writing<'_>,
+        out: &mut Vec<u8>,
+        natives: &mut Natives,
+        depth: usize,
+    ) -> Result<(), String> {
+        let pulled = ty
+            .and_then(crate::resolve::type_ref::Type::box_element)
+            .and_then(crate::resolve::type_ref::Type::iterator_item)
+            .is_some_and(|(_, into)| !into);
+        if pulled && !crate::island::native(value) {
+            out.push(KEPT);
+            out.extend_from_slice(&crate::island::kept_handle(value).to_le_bytes());
+            return Ok(());
+        }
+        self.island_write_with(value, writing, out, natives, depth)
     }
 }

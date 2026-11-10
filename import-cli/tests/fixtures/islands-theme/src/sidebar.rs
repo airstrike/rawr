@@ -45,6 +45,15 @@ impl<'a, Message: 'a> Sidebar<'a, Message> {
         self
     }
 
+    /// The header's next action, pulled by marked code from the iterator
+    /// native code holds and pulls on from after.
+    pub fn next_action(&mut self) -> Option<Element<'a, Message>> {
+        match &mut self.header {
+            Some(header) => header.actions.next(),
+            None => None,
+        }
+    }
+
     #[allow(clippy::wrong_self_convention)]
     pub fn to_element(&mut self) -> Element<'a, Message> {
         match &mut self.header {
