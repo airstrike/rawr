@@ -10,7 +10,8 @@
       {"text":"A crate's callable value, such as the `impl Fn` that iced's `Function::with` gives, fills a generic callable that the call's output type names, as in `self.grid.view().map(Message::Grid.with(version))` in iced's game_of_life.","issues":[1060]},
       {"text":"A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin(\"..\")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again.","issues":[991]},
       {"text":"A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner.","issues":[1073]},
-      {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]}
+      {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]},
+      {"text":"A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them.","issues":[1638]}
     ]
   },
   "releases": [

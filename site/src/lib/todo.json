@@ -17,7 +17,8 @@
         {"text":"A crate's callable value, such as the `impl Fn` that iced's `Function::with` gives, fills a generic callable that the call's output type names, as in `self.grid.view().map(Message::Grid.with(version))` in iced's game_of_life.","issues":[1060]},
         {"text":"A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin(\"..\")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again.","issues":[991]},
         {"text":"A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner.","issues":[1073]},
-        {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]}
+        {"text":"`{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool.","issues":[1658],"refs":[990]},
+        {"text":"A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them.","issues":[1638]}
       ]
     },
     "releases": [
@@ -3613,7 +3614,7 @@
     {"issue":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1636,"title":"A demand round built and sealed a new bundle even when an earlier round built the same crates","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1637,"title":"rawr run shows nothing about what preparing a run did","state":"closed","category":"No glue (D593)","release":"0.3.178"},
-    {"issue":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"open","category":"No glue (D593)"},
+    {"issue":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"closed","category":"No glue (D593)"},
     {"issue":1639,"title":"The project's Cargo.lock is read with the 1 MiB manifest limit, so a larger lock fails the resolution","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1640,"title":"A deeply nested crate type fails rawr check with a sidecar recursion-limit error","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open","category":"No glue (D593)"},
@@ -3635,7 +3636,9 @@
     {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed","category":"Divergences from rustc"},
     {"issue":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"open","category":"Divergences from rustc"},
     {"issue":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"open","category":"Divergences from rustc"},
-    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open","category":"Divergences from rustc"}
+    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open","category":"Divergences from rustc"},
+    {"issue":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open","category":"No glue (D593)"},
+    {"issue":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4680,7 +4683,7 @@
             {"number":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"closed"},
             {"number":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open"},
             {"number":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"closed"},
-            {"number":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"open"},
+            {"number":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"closed"},
             {"number":1639,"title":"The project's Cargo.lock is read with the 1 MiB manifest limit, so a larger lock fails the resolution","state":"closed"},
             {"number":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open"},
             {"number":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed"},
@@ -4692,7 +4695,9 @@
             {"number":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed"},
             {"number":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed"},
             {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"},
-            {"number":397,"title":"Show the full package report for a resident source error","state":"closed"}
+            {"number":397,"title":"Show the full package report for a resident source error","state":"closed"},
+            {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
+            {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"}
           ]
         }
       ]

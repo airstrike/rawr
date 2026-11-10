@@ -11,6 +11,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate value whose type elides a lifetime, such as iced's `Pin<&str>` from `pin("..")`, passes to a generic crate function such as `container`, and the program builds and runs. iced's layout example builds again. (#991)
 - A crate function that takes a future and a closure over its output, such as iced's `Task::perform(tokio::time::sleep(..), move |_| ..)`, runs with a crate future or an async block beside a capturing closure. iced's toast example now builds and starts its runner. (#1073)
 - `{:?}` of a crate value prints the crate values held by a program value inside it, as cargo does: `Action { message_to_publish: Some(Curve { from: Point { .. }, .. }) }` in iced's bezier_tool. (#1658; part of #990)
+- A new `rawr run` runner recompiles only the marked files that changed since the last runner, and reads the parses rawr already made instead of parsing those files again. A start with no edits compiles none of them. (#1638)
 
 ## 0.3.180 (2026-11-10)
 
