@@ -60,6 +60,10 @@ struct Generics {
     /// parameter that is its value: `application(..)`'s `impl Program<State
     /// = S>` gives `P::State` to a call its value fills `P` of.
     associated: Box<[Associated]>,
+    /// How many type arguments a path may write that the type drops, as
+    /// `canvas::Geometry<Renderer>` writes the defaulted parameter of an
+    /// alias whose type names none of them.
+    dropped: usize,
 }
 
 /// An associated type an opaque type binds: its trait's definition
@@ -418,6 +422,7 @@ impl Definition {
                 Box::new(Generics {
                     defaults,
                     associated: Box::default(),
+                    dropped: 0,
                 })
             }),
             layout: None,
@@ -508,6 +513,24 @@ impl Definition {
         &self.projections
     }
 
+    /// The type, with the `dropped` type arguments a path may write that it
+    /// drops.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_dropped(mut self, dropped: usize) -> Self {
+        if dropped != 0 {
+            self.generics.get_or_insert_default().dropped = dropped;
+        }
+        self
+    }
+
+    /// How many type arguments a path may write that the type drops: an
+    /// alias's defaulted parameters the type it names names none of.
+    pub(crate) fn dropped(&self) -> usize {
+        self.generics
+            .as_ref()
+            .map_or(0, |generics| generics.dropped)
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn with_associated(mut self, associated: Box<[Associated]>) -> Self {
         if !associated.is_empty() {
@@ -562,6 +585,7 @@ impl Definition {
             && self.projections == other.projections
             && self.exact_arity == other.exact_arity
             && self.defaults() == other.defaults()
+            && self.dropped() == other.dropped()
     }
 
     pub(crate) fn contract(&self) -> Contract {

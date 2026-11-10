@@ -1222,7 +1222,9 @@ fn a_borrowed_crate_value_fills_an_impl_into_parameter() {
 /// one-shot closure the crate lends a `&mut Builder`, as bezier_tool's does
 /// (#477). `Frame::with_save(&mut self, f: impl FnOnce(&mut Frame) -> R)`
 /// lends its own receiver to the closure and gives back its output, as
-/// iced's clock calls it (#586). The output is `cargo run`'s.
+/// iced's clock calls it (#586). `Geometry<Renderer>`, written with the
+/// alias's defaulted argument as sandpiles writes it, is the same type
+/// (#317). The output is `cargo run`'s.
 #[test]
 fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     let (rawr, cargo) = both_printed("canvas.rs", "");
@@ -1230,7 +1232,8 @@ fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     assert_eq!(
         rawr,
         "sketch circle,line\ncleared []\nboard frame\nprimary arc\nprimary hand\n\
-         primary dial\nprimary face\nboard frame,dial\ngrouped group\nfresh fresh 3\n\
+         primary dial\nprimary face\nboard frame,dial\n\
+         primary sand\nprimary pile\nprimary grain\ngrouped group\nfresh fresh 3\n\
          Some(7) captured true\nnote 3\npath 1,2\n\
          frame face@0,hour@1,second@2,rim@0 hands 2"
     );

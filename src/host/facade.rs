@@ -878,13 +878,15 @@ impl Builder {
             Box::default(),
             shape,
             None,
+            0,
             allocation,
         )
     }
 
     /// [`imported_type`](Self::imported_type) of an opaque `impl Trait`
     /// type, with the associated types it binds, or of a struct rustc lays
-    /// out as `layout`.
+    /// out as `layout`, which a path may write with `dropped` type
+    /// arguments it drops.
     #[cfg(feature = "rust-import")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn imported_opaque_type(
@@ -897,6 +899,7 @@ impl Builder {
         associated: Box<[host::type_def::Associated]>,
         shape: crate::Shared<host::type_def::Shape>,
         layout: Option<host::type_def::layout::Layout>,
+        dropped: usize,
         allocation: &mut impl host::ImportAllocation,
     ) -> Result<&mut Self, host::Error> {
         let relative = host::path::Path::parse_imported(path, allocation)?;
@@ -911,7 +914,8 @@ impl Builder {
             shape,
         )?
         .with_associated(associated)
-        .with_layout(layout);
+        .with_layout(layout)
+        .with_dropped(dropped);
         self.insert_type(definition)?;
         Ok(self)
     }

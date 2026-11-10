@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 161;
+const CLASSIFIER_VERSION: u32 = 162;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4948,14 +4948,13 @@ impl<P: api::Phase> Context<'_, P> {
         }
     }
 
-    /// The type a non-generic alias of a non-generic struct or enum names.
+    /// The type a non-generic alias of a non-generic struct or enum names,
+    /// or an alias whose parameters it names none of (`dropped_parameters`).
     fn alias_target(&self, definition: &model::Definition) -> Option<&model::Definition> {
         let model::Kind::TypeAlias { ty, generics } = definition.kind() else {
             return None;
         };
-        if generics.parameters().len() != 0 || generics.predicates().len() != 0 {
-            return None;
-        }
+        dropped_parameters(ty, generics)?;
         let model::Type::Definition { id, arguments } = ty else {
             return None;
         };
@@ -7453,10 +7452,13 @@ impl<P: api::Phase> Context<'_, P> {
                 self.constant(ty, value).map(Representability::Constant)
             }
             // The only name of the type it names is a type of its own.
-            model::Kind::TypeAlias { ty, .. }
+            model::Kind::TypeAlias { ty, generics }
                 if self.instance_aliases().contains(&definition_index) =>
             {
-                Ok(Representability::Struct(self.instance_alias_plan(ty)))
+                Ok(Representability::Struct(
+                    self.instance_alias_plan(ty)
+                        .with_dropped(dropped_parameters(ty, generics).unwrap_or(0)),
+                ))
             }
             model::Kind::TypeAlias { ty, generics } => {
                 self.value(ty, generics).map(Representability::Value)
@@ -11543,6 +11545,36 @@ pub(crate) fn projection_candidates(
     concrete
 }
 
+/// How many parameters the alias whose target is `ty` declares, when each
+/// is a defaulted type parameter `ty` names none of and no predicate bounds
+/// them, as iced's `canvas::Geometry<Renderer = crate::Renderer>` names
+/// `<Renderer as geometry::Renderer>::Geometry` at its default: Rust code
+/// writes the alias with none of them or with them all, and the type is
+/// the same. `None` for an alias with any other parameter.
+pub(crate) fn dropped_parameters(ty: &model::Type, generics: &model::Generics) -> Option<u32> {
+    if generics.predicates().len() != 0 {
+        return None;
+    }
+    let mut named = BTreeSet::new();
+    type_parameter_indices(ty, &mut named);
+    if !named.is_empty() {
+        return None;
+    }
+    generics
+        .parameters()
+        .all(|parameter| {
+            matches!(
+                parameter.kind(),
+                model::ParameterKind::Type {
+                    default: model::Default::Present(_),
+                    ..
+                }
+            )
+        })
+        .then(|| u32::try_from(generics.parameters().len()).ok())
+        .flatten()
+}
+
 /// The indices of the type parameters `ty` names.
 fn type_parameter_indices(ty: &model::Type, found: &mut BTreeSet<u32>) {
     match ty {
@@ -11584,7 +11616,7 @@ pub(crate) fn instance_aliases(graph: &api::Graph<impl api::Phase>) -> Box<[usiz
                     model::Kind::TypeAlias {
                         ty: target @ model::Type::Definition { id, arguments },
                         generics,
-                    } if generics.parameters().len() == 0
+                    } if dropped_parameters(target, generics).is_some()
                         && !matches!(id.unit().crate_name(), "core" | "alloc" | "std")
                         && graph
                             .definition_index(id)
@@ -11595,7 +11627,6 @@ pub(crate) fn instance_aliases(graph: &api::Graph<impl api::Phase>) -> Box<[usiz
                                     model::Kind::Struct { .. } | model::Kind::Enum { .. }
                                 )
                             })
-                        && generics.predicates().len() == 0
                         && arguments
                             .iter()
                             .any(|argument| matches!(argument, model::Argument::Type(_)))

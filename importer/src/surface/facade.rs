@@ -14,7 +14,7 @@ mod reexport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 59;
+const SCHEMA: u32 = 60;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -634,6 +634,11 @@ struct TypeBody {
     /// (D865).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<crate::api::model::Layout>,
+    /// How many type arguments Rust code may write that the type drops, as
+    /// `canvas::Geometry<Renderer>` writes the defaulted parameter of an
+    /// alias whose type names none (`structure::Plan::dropped`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    dropped: u32,
     shape: Shape,
 }
 
@@ -1731,6 +1736,7 @@ impl Plan {
                                 error: false,
                                 opaque: true,
                                 layout: None,
+                                dropped: 0,
                                 shape: Shape::Struct {
                                     form: Form::Record,
                                     constructor: None,
@@ -2261,6 +2267,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
                 opaque: false,
                 associated: Box::default(),
                 layout: None,
+                dropped: 0,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -2348,6 +2355,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                     opaque: false,
                     associated: Box::default(),
                     layout: None,
+                    dropped: 0,
                     shape: Shape::Struct {
                         form: Form::Unit,
                         constructor: None,
@@ -2401,6 +2409,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
             opaque: false,
             associated: Box::default(),
             layout: None,
+            dropped: 0,
             shape: Shape::Struct {
                 form: Form::Unit,
                 constructor: None,
@@ -2556,6 +2565,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                     error: false,
                     opaque: false,
                     layout: None,
+                    dropped: 0,
                     shape: Shape::Struct {
                         form: Form::Unit,
                         constructible: constructor.is_some(),
@@ -3651,6 +3661,12 @@ impl TypeDefinition {
     pub fn lifetimes(&self) -> u32 {
         self.body.lifetimes
     }
+    /// Return how many type arguments Rust code may write that the type
+    /// drops, as `canvas::Geometry<Renderer>` writes an alias's defaulted
+    /// parameter the type names none of.
+    pub fn dropped(&self) -> u32 {
+        self.body.dropped
+    }
     /// Return whether the native type is covariant in each of its
     /// lifetimes.
     pub fn covariant(&self) -> bool {
@@ -4034,6 +4050,10 @@ fn written_type_definition(
         Representability::Struct(plan) => plan.layout().cloned(),
         _ => None,
     };
+    let dropped = match outcome.representability() {
+        Representability::Struct(plan) => plan.dropped(),
+        _ => 0,
+    };
     let given = match outcome.representability() {
         Representability::Struct(plan) => plan.given(),
         Representability::Enum(plan) => plan.given(),
@@ -4139,6 +4159,7 @@ fn written_type_definition(
             opaque: false,
             associated: Box::default(),
             layout,
+            dropped,
             shape,
         },
     )))

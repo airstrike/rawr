@@ -118,7 +118,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // of a body once, in its leading `ids`, and names it by index elsewhere.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 67;
+const PROTOCOL_SCHEMA: u32 = 68;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3505,15 +3505,15 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 thread_local: self.tcx.is_thread_local_static(def_id),
             },
             // An alias that names an associated type is the type it gives
-            // at its defaults, with no parameters: Rust code writes it with
-            // none, and rustc normalizes it to that type.
+            // at its defaults, with the alias's own defaulted parameters,
+            // which the type names none of: Rust code writes it with none
+            // of them or with them all, as sandpiles writes
+            // `canvas::Geometry<Renderer>`, and rustc normalizes it to that
+            // type.
             DefKind::TyAlias if let Some(instance) = projected_alias_instance(self.tcx, def_id) => {
                 Shape::TypeAlias {
                     ty: self.type_of(instance, def_id, 0)?,
-                    generics: Generics {
-                        parameters: Vec::new(),
-                        predicates: Vec::new(),
-                    },
+                    generics: self.generics(def_id)?,
                 }
             }
             DefKind::TyAlias => Shape::TypeAlias {

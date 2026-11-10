@@ -9,8 +9,11 @@
 // The alias's defaulted parameter is what a later use fixes. `Path::new`
 // takes a closure that traces on a builder it lends, and `Frame::with_save`
 // lends the frame it's called on to a closure whose output it gives back.
+// `Geometry<Renderer>` writes the alias's defaulted parameter, as iced's
+// sandpiles does.
 
 use events::canvas::{self, Cache, Frame, Geometry, Note, Path};
+use events::widgets::Renderer;
 
 #[derive(Default)]
 struct Sketch {
@@ -20,6 +23,14 @@ struct Sketch {
 struct Board {
     cache: Cache,
     shapes: Vec<Geometry>,
+}
+
+fn drawn(labels: &[&str]) -> Vec<Geometry<Renderer>> {
+    labels.iter().map(|label| canvas::sketch(label)).collect()
+}
+
+fn one(label: &str) -> canvas::Geometry<Renderer> {
+    canvas::sketch(label)
 }
 
 fn note(value: i64) -> Note<'static> {
@@ -50,6 +61,12 @@ fn main() {
         println!("{}", canvas::describe(shape));
     }
     println!("board {}", board.cache.drawn());
+    // The alias written with its defaulted argument (#317).
+    let mut written = drawn(&["sand", "pile"]);
+    written.push(one("grain"));
+    for shape in &written {
+        println!("{}", canvas::describe(shape));
+    }
     // An associated function through the module and the alias, as
     // the_matrix's `canvas::Cache::with_group(group)`.
     let grouped: canvas::Cache = canvas::Cache::new();
