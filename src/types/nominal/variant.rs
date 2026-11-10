@@ -5,6 +5,7 @@ use std::fmt;
 
 /// A source-stable enum variant identifier.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Id(ImmutableString);
 
 impl fmt::Display for Id {

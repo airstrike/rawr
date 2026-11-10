@@ -4,7 +4,10 @@ use std::any::TypeId;
 
 /// A runtime identity that can only originate from a linked Rust type.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Identity(TypeId);
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub struct Identity(
+    #[cfg_attr(feature = "rust-import", serde(with = "crate::stored::type_id"))] TypeId,
+);
 
 impl Identity {
     pub(super) fn of<T: 'static>() -> Self {

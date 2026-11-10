@@ -122,6 +122,7 @@ pub(super) const SHAPED_OPTION: u8 = 8;
 /// The runtime primitives of `Option<T>` and `Result<T, E>`;
 /// every method composes them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum PreludeOp {
     Some,
     None,
@@ -1873,6 +1874,7 @@ pub(super) fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
     clippy::large_enum_variant,
     reason = "intrinsic and structural proofs are most executable ops; boxing them would allocate per op"
 )]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum ExecutableOp {
     #[cfg(feature = "rust-import")]
     Sequence(sequence::Constructor),
@@ -1913,6 +1915,8 @@ pub(super) enum ExecutableOp {
         definition: type_def::Definition,
     },
     Default {
+        /// A kept lowering makes it again (`renewed`).
+        #[cfg_attr(feature = "rust-import", serde(skip))]
         value: Dynamic,
         definition: type_def::Definition,
     },
@@ -2010,12 +2014,14 @@ pub(super) struct ProjectionOperation {
 /// (`intrinsic::Type::witness_parameter`), instantiated once per tuple of
 /// witnesses its calls pass after their operands.
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct WitnessedOp {
     pub(super) template: ExecutableOp,
     /// The template with each parameter as `()`: what the load checks,
     /// since a binding and its attestations never depend on a script type.
     pub(super) placeholder: ExecutableOp,
     pub(super) witnesses: usize,
+    #[cfg_attr(feature = "rust-import", serde(skip))]
     pub(super) instances: Shared<crate::Locked<WitnessedInstances>>,
 }
 

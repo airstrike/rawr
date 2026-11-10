@@ -12,6 +12,7 @@ use super::*;
 /// Which of std's thread and channel types a `Ty::Thread` is, with the
 /// errors their methods give.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Kind {
     JoinHandle,
     Sender,

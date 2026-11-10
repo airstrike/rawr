@@ -11,6 +11,7 @@ use num_traits::float::FloatCore as Float;
 /// Exported under the `internals` feature only.
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd)]
 #[must_use]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct FloatWrapper<F>(F);
 
 impl Hash for FloatWrapper<crate::FLOAT> {

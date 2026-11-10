@@ -9,9 +9,11 @@ use super::location;
 // Nominal expression parsing is recursive. Keep each parser frame pointer-sized
 // while the proof bundle grows independently on the heap.
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Fragment(Box<Parts>);
 
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Parts {
     text: String,
     sites: Shared<Sites>,
@@ -19,6 +21,7 @@ struct Parts {
 }
 
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Sites {
     // Appended fragments remain relative child trees. No append walks or copies
     // the child's complete origin set; `finish` flattens the tree once.
@@ -27,6 +30,7 @@ struct Sites {
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Child {
     offset: usize,
     len: usize,
@@ -34,6 +38,7 @@ struct Child {
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Origin {
     generated: Range<usize>,
     original: Span,

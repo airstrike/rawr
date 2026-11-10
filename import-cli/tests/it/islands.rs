@@ -1417,6 +1417,86 @@ fn a_save_parses_only_the_file_it_changed() {
     );
 }
 
+/// A runner keeps each marked source's lowering and readings under the
+/// project's `target/rawr`, so the next runner's start lowers and reads
+/// only the sources whose key changed. A corrupt file is a miss, made
+/// again and written over (#1638).
+#[test]
+fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-start");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let lowered = root.join("target/rawr/lowered");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_dir_all(&lowered);
+    copy(Path::new(THEME), &root);
+    // One run to its first tick and its end: what its runner's start
+    // parsed, revealed and lowered.
+    let started = || {
+        let _ = fs::remove_file(&events);
+        let _ = fs::remove_file(&stop);
+        let mut run = start(
+            &root,
+            &[
+                ("ISLANDS_STOP", stop.clone()),
+                ("RAWR_MCP_EVENTS", events.clone()),
+                ("RAWR_VERBOSE", "1".into()),
+            ],
+        );
+        run.until(|line| line.starts_with("tick ") && line.contains(" styled 0"));
+        fs::write(&stop, "").unwrap();
+        run.told(&events, |text| {
+            text.contains("{\"event\":\"ended\",\"status\":0}")
+        });
+        run.child.kill().unwrap();
+        run.wait();
+        let seen = run.seen.join("\n");
+        let counts = run
+            .seen
+            .iter()
+            .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
+            .map(|line| {
+                let (parsed, rest) = line.split_once(" sources, revealed ").unwrap();
+                let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
+                let lowered = rest.strip_suffix(" files").unwrap();
+                [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(counts.len(), 1, "{seen}");
+        (counts[0], seen)
+    };
+    let ([_, revealed, first], seen) = started();
+    assert!(revealed > 0 && first > 0, "{seen}");
+    // Nothing changed: the start reads every source `rawr` parsed from its
+    // parse, and lowers and reads nothing again.
+    let (counts, seen) = started();
+    assert_eq!(counts, [0, 0, 0], "{seen}");
+    // A body's edit: its file alone.
+    edit(
+        &root.join("src/widget/sidebar.rs"),
+        "\"{label} row\"",
+        "\"{label} item\"",
+    );
+    let (counts, seen) = started();
+    assert_eq!(counts, [0, 1, 1], "{seen}");
+    // A corrupt file is lowered again and written over.
+    let mut bodies = fs::read_dir(&lowered)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "bodies")
+        })
+        .collect::<Vec<_>>();
+    bodies.sort();
+    assert!(!bodies.is_empty(), "{seen}");
+    fs::write(&bodies[0], "RKLW not a lowering").unwrap();
+    let (counts, seen) = started();
+    assert_eq!(counts, [0, 0, 1], "{seen}");
+    assert!(fs::read(&bodies[0]).unwrap().len() > 100, "{seen}");
+}
+
 /// A marked function that panics in a call from native `main` prints the
 /// panic Cargo's build prints: its place in the marked file and its
 /// message, with nothing of rawr's (#1657).

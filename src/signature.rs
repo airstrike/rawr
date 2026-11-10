@@ -12,17 +12,20 @@ use std::hash::{Hash, Hasher};
 /// digest, a wire format, or a cross-version compatibility promise. The parts
 /// are shared: cloning never copies them, and clones compare equal by identity.
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Fingerprint(crate::Shared<Parts>);
 
 #[derive(Clone)]
 // Only the imported event mapper digests, a rust-import build's.
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Parts {
     authority: Box<[Part]>,
     atoms: Box<[Atom]>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum Part {
     Marker(Marker),
     Count(usize),
@@ -33,6 +36,7 @@ enum Part {
 #[derive(Clone, Debug)]
 // Only the imported event mapper digests, a rust-import build's.
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum Atom {
     Marker(Marker),
     Count(usize),
@@ -43,6 +47,7 @@ enum Atom {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum Marker {
     Version1,
     Free,

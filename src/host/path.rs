@@ -5,6 +5,7 @@ use crate::{host, ImmutableString};
 use std::fmt;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Path(Box<[ImmutableString]>);
 
 impl Path {

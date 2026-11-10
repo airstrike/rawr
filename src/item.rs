@@ -8,6 +8,7 @@ pub mod type_ref;
 
 /// The semantic kind of a declared Rawr item.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Kind {
     /// A nominal struct declaration.
     Struct,
@@ -28,6 +29,7 @@ pub enum Kind {
 /// Package, module path, optional owner, declared name, and semantic kind all
 /// participate in identity. Dense resolver IDs never enter this key.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Key {
     path: program::Path,
     owner: Option<type_def::Identity>,
@@ -168,6 +170,7 @@ impl Key {
 /// [`program::Authority`](crate::program::Authority) from a concrete compiled
 /// generation.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Value {
     key: Key,
     kind: Kind,
@@ -183,6 +186,7 @@ pub struct Value {
 /// only to itself (and its clones): two closures are the same callable only
 /// when they hold the same captures.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Bound(crate::Shared<[crate::Dynamic]>);
 
 impl Bound {
@@ -316,6 +320,7 @@ impl Value {
 /// let _ = rawr::item::Id(0);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Id(usize);
 
 impl Id {
@@ -330,6 +335,7 @@ impl Id {
 
 /// A source name and its exact span.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Name {
     /// Name text.
     pub text: ImmutableString,
@@ -339,6 +345,7 @@ pub struct Name {
 
 /// Common metadata for an item or associated-function header.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Header {
     /// Attributes preceding the item.
     pub attributes: Box<[Attribute]>,
@@ -400,6 +407,7 @@ pub(crate) fn is_attribute_path(path: &type_ref::Path, name: &str) -> bool {
 
 /// A parsed source attribute.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Attribute {
     /// Attribute path.
     pub path: type_ref::Path,
@@ -703,6 +711,7 @@ pub struct Struct {
 /// How a struct declares its fields, which decides how it is built and
 /// matched: `S { a: x }`, `S(x)`, or the unit value `S`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum StructForm {
     /// `struct S { a: T }`, also `struct S {}`.
     Named,

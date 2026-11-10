@@ -12,6 +12,7 @@ struct WitnessParameter;
 
 /// One sealed, fully instantiated runtime type proof.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Type {
     Unit,
     /// `[T; N]`: an array of exactly `length` elements; a slice `&[T]`
@@ -57,6 +58,7 @@ pub(crate) enum Type {
     },
     Host {
         path: ImmutableString,
+        #[cfg_attr(feature = "rust-import", serde(with = "crate::stored::type_id"))]
         identity: TypeId,
         arguments: Box<[Type]>,
         owner: Option<host::facade::Dependency>,
@@ -76,11 +78,13 @@ pub(crate) enum Type {
 /// semantic proof. The exact witness remains available to the original runtime
 /// proof and cannot be reconstructed from the marker.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Representation(RepresentationValue);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum RepresentationValue {
-    Exact(TypeId),
+    Exact(#[cfg_attr(feature = "rust-import", serde(with = "crate::stored::type_id"))] TypeId),
 }
 
 impl Representation {

@@ -19,6 +19,7 @@ pub mod native;
 
 /// Stable compile identity for a linked or symbolic imported host type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Identity {
     /// A native type whose runtime identity is linked into this process.
     Linked(native::Identity),
@@ -28,6 +29,7 @@ pub enum Identity {
 
 /// Compiler metadata for one registered host type.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Definition {
     path: host::path::Path,
     identity: Identity,
@@ -51,6 +53,7 @@ pub struct Definition {
 
 /// The rarely present parts of a [`Definition`]'s parameters.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 struct Generics {
     /// Each parameter's default (`Hsl<S = Srgb, T = f32>`), which a type
     /// written without the argument takes. Empty when none has one.
@@ -73,6 +76,7 @@ pub type Associated = ([u8; 32], ImmutableString, usize);
 
 /// The exact structural contract of one facade type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Contract {
     path: host::path::Path,
     identity: Identity,
@@ -87,6 +91,7 @@ pub struct Contract {
 
 /// Truthful compiler-visible structure for one host type.
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Shape {
     /// No field or variant operations are promised.
     #[default]
@@ -112,6 +117,7 @@ pub enum Shape {
 
 /// Closed source constructor grammar for compiler-visible structure.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Form {
     /// A bare unit constructor.
     Unit,
@@ -123,6 +129,7 @@ pub enum Form {
 
 /// One readable imported struct or enum field.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Field {
     name: ImmutableString,
     ty: host::type_ref::Type,
@@ -133,6 +140,7 @@ pub struct Field {
 
 /// One source-visible imported enum variant.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Variant {
     name: ImmutableString,
     fields: Box<[Field]>,
@@ -146,6 +154,7 @@ pub struct Variant {
 /// A public field of an imported struct or variant whose type rawr can't
 /// hold, as the crate writes it: why a literal can't build the value.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Unsupported {
     /// The field's name.
     pub field: ImmutableString,
@@ -155,6 +164,7 @@ pub struct Unsupported {
 
 /// Whether a facade type may be named by checked Rawr source.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Visibility {
     /// The type is part of the facade's source-visible contract.
     #[default]
@@ -165,6 +175,7 @@ pub enum Visibility {
 
 /// Where a facade-authenticated value may exist in checked source.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Storage {
     /// An ordinary owned value may follow its proven capabilities.
     #[default]
@@ -175,6 +186,7 @@ pub enum Storage {
 
 /// Compiler-authenticated semantic role of one facade type.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Role {
     /// An ordinary facade-owned value type.
     #[default]
@@ -187,6 +199,7 @@ pub enum Role {
 
 /// An opaque exported facade-type proof for authenticated dependencies.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Export {
     facade_root: host::path::Path,
     facade: host::facade::Fingerprint,
@@ -195,6 +208,7 @@ pub struct Export {
 
 /// One validated direct structural projection owned by its source type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Projection {
     target: Target,
     arguments: Box<[Argument]>,
@@ -202,6 +216,7 @@ pub struct Projection {
 
 /// One exact target argument in a direct facade projection.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Argument {
     /// Substitute one named parameter from the source type.
     Source(ImmutableString),
@@ -210,6 +225,7 @@ pub enum Argument {
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 enum Target {
     Local(Contract),
     External(Export),

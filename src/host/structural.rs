@@ -7,6 +7,7 @@ use crate::{host, Dynamic, EvalAltResult, ImmutableString, RawrResult, Span};
 
 /// Exact generated structural operation family.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Kind {
     Constructor,
     Field {
@@ -73,6 +74,7 @@ impl Kind {
 
 /// One generated-adapter admission retained by the compiler and runtime.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Definition {
     owner: host::facade::Dependency,
     path: ImmutableString,
@@ -87,6 +89,7 @@ pub(crate) struct Definition {
 
 /// One fully instantiated private structural operation.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Proof {
     definition: Definition,
     operands: Box<[Operand]>,
@@ -97,6 +100,7 @@ pub(crate) struct Proof {
 
 /// One exact structural operand and its observable-use proof.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Operand {
     ty: host::runtime::type_ref::Type,
     span: Span,

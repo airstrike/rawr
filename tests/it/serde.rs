@@ -1,7 +1,7 @@
 #![cfg(feature = "serde")]
 
 use rawr::{
-    Dynamic, Engine, INT, ImmutableString, Scope,
+    Dynamic, Engine, INT, Scope,
     serde::{from_dynamic, to_dynamic},
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -499,7 +499,7 @@ fn test_serde_de_untagged_enum() {
 #[test]
 #[cfg(feature = "metadata")]
 fn test_serde_json() -> serde_json::Result<()> {
-    let s: ImmutableString = "hello".into();
+    let s: rawr::ImmutableString = "hello".into();
     assert_eq!(serde_json::to_string(&s).unwrap(), r#""hello""#);
 
     let mut map = Map::new();

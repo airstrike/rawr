@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 
 /// One reusable semantic projection edge owned by its source facade.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Key {
     owner: host::facade::Dependency,
     source: host::type_def::Contract,
@@ -16,11 +17,13 @@ pub(crate) struct Key {
 
 /// One exact instantiated projection selected at a source location.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Site {
     key: Key,
     source: Type,
     target: Type,
     span: Span,
+    #[cfg_attr(feature = "rust-import", serde(skip))]
     bound: host::runtime::Bound,
 }
 

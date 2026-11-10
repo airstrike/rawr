@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 // Large through a path's `Target::Host`; see `Target` for why it stays unboxed.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Type {
     Unit(Span),
     Tuple {
@@ -24,6 +25,7 @@ pub(crate) enum Type {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Path {
     pub name: ImmutableString,
     pub target: Target,
@@ -35,6 +37,7 @@ pub(crate) struct Path {
 // types are built while resolving, not per call.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Target {
     Builtin,
     Host {
@@ -65,6 +68,7 @@ pub(crate) enum Target {
 /// A type alias's parameters and its target, resolved once in the module
 /// that declares it. The target is `None` until it resolves.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Alias {
     pub params: Box<[ImmutableString]>,
     pub target: Option<Box<Type>>,
@@ -220,6 +224,7 @@ fn substitute(ty: &mut Type, params: &[ImmutableString], arguments: &[Type], at:
 // Large through a path's `Target::Host`; see `Target` for why it stays unboxed.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Argument {
     Type(Type),
     Lifetime(Span),

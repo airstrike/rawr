@@ -201,6 +201,7 @@ impl<'a> Parser<'a> {
 /// `char`.
 /// `std::num::ParseIntError` and its kin, the errors of `str::parse`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum ParseError {
     Int,
     Float,

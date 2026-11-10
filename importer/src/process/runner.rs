@@ -94,6 +94,9 @@ impl ProgressState {
 pub struct Owner {
     root: PathBuf,
     project: PathBuf,
+    /// The project's `target/rawr`, where a runner keeps what it compiled
+    /// for the next one (#1638).
+    rawr: PathBuf,
     lifecycle: Lifecycle,
     program: Option<Arguments>,
 }
@@ -234,6 +237,7 @@ impl Owner {
         }
         Ok(Self {
             root,
+            rawr: crate::location::rawr_directory_here(&runtime_root),
             project: runtime_root,
             lifecycle,
             program: None,
@@ -332,6 +336,7 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             .env("RAWR_GENERATION_KEY", hex(key.as_bytes()))
             .env("RAWR_RUNNER_LIFECYCLE", process.lifecycle.code())
             .env("RAWR_PROJECT_ROOT", &process.project)
+            .env("RAWR_DIRECTORY", &process.rawr)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

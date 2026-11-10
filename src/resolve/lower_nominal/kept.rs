@@ -20,6 +20,7 @@
 //! same way, under what each pass over the program reads of it.
 
 use super::constant::{included, Place};
+use super::disk::{self, Disk};
 use super::entry::Lowered;
 use super::imported::ImplUse;
 use super::models::Models;
@@ -49,7 +50,7 @@ pub(super) type Charge = (Option<usize>, Option<usize>);
 /// What a lowering read outside the program while it compiled: a file
 /// `include_str!` or `include_bytes!` read, a variable `env!` read. A kept
 /// lowering is reused only while each of its reads reads the same.
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(super) enum Read {
     File {
         path: std::path::PathBuf,
@@ -115,6 +116,7 @@ impl Models {
 }
 
 /// What one part's lowering made, under the key it was made at.
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(super) struct Kept {
     key: [u8; 32],
     pub(super) lowered: Box<[Lowered]>,
@@ -124,7 +126,7 @@ pub(super) struct Kept {
 }
 
 /// What one part's lowering did outside the program as it lowered it.
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(super) struct Outside {
     /// The allocations it charged, in order.
     pub(super) charges: Box<[Charge]>,
@@ -158,7 +160,7 @@ impl Outside {
 
 /// What reveal's reading of one body found (`instance_round`,
 /// `body_templates`).
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 pub(super) struct Found {
     /// Each call of a template the body makes: the template, the types
     /// the call gives, and the call's span.
@@ -171,7 +173,7 @@ pub(super) struct Found {
 
 /// What reveal's reading of one body found, kept under its key with what
 /// the reading did outside the program.
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct Scanned {
     found: Found,
     outside: Outside,
@@ -191,6 +193,8 @@ pub(crate) struct Lowerings {
     /// How many sources' bodies this compiler's reveals read rather than
     /// reusing what an earlier reveal read.
     revealed: usize,
+    /// Where a runner keeps them for the next runner (#1638).
+    disk: Option<Disk>,
 }
 
 impl Lowerings {
@@ -202,7 +206,14 @@ impl Lowerings {
             outlines: BTreeMap::new(),
             lowered: 0,
             revealed: 0,
+            disk: None,
         }
+    }
+
+    /// Keep each lowering and reading in `disk` as well, where this
+    /// compiler's first compile finds what an earlier runner kept.
+    pub(crate) fn store(&mut self, disk: Disk) {
+        self.disk = Some(disk);
     }
 
     /// How many sources this compiler's compiles lowered so far.
@@ -226,7 +237,17 @@ pub(super) struct Readings<'e> {
     earlier: BTreeMap<[u8; 32], Scanned>,
     kept: BTreeMap<[u8; 32], Scanned>,
     read: BTreeSet<source::Id>,
+    /// Whether this is the compiler's first reveal, which reads what an
+    /// earlier runner kept on disk (#1638).
+    first: bool,
+    /// The sources whose readings it read from disk.
+    loaded: BTreeSet<source::Id>,
+    /// The keys of each source's readings this reveal.
+    keys: BTreeMap<source::Id, BTreeSet<[u8; 32]>>,
 }
+
+/// A source's readings on disk hold each one's own key (`Readings::read`).
+const READINGS: [u8; 32] = [0; 32];
 
 /// What a reveal's pass over the program reads of it.
 struct Pass {
@@ -254,9 +275,12 @@ impl<'e> Readings<'e> {
         Some(Self {
             engine,
             pass: None,
+            first: earlier.is_empty(),
             earlier,
             kept: BTreeMap::new(),
             read: BTreeSet::new(),
+            loaded: BTreeSet::new(),
+            keys: BTreeMap::new(),
         })
     }
 
@@ -271,7 +295,8 @@ impl<'e> Readings<'e> {
 
     /// What reading `body` finds (`read`): what an earlier reading under
     /// the same key found, when each of its reads outside the program
-    /// reads the same, charged again to `allocation`.
+    /// reads the same, charged again to `allocation`. A compiler's first
+    /// reveal finds the earlier readings of a source in its file.
     pub(super) fn read(
         &mut self,
         body: Reading<'_>,
@@ -283,6 +308,19 @@ impl<'e> Readings<'e> {
             return read(allocation);
         };
         let key = pass.key(body);
+        if self.first && self.loaded.insert(body.source) {
+            let entry = disk::Entry {
+                identity: body.program.source.identity_at(body.source),
+                kind: disk::Kind::Readings,
+                key: &READINGS,
+            };
+            let stored = lock(self.engine)
+                .disk
+                .as_mut()
+                .and_then(|disk| disk.read::<Vec<([u8; 32], Scanned)>>(self.engine, entry));
+            self.earlier.extend(stored.into_iter().flatten());
+        }
+        self.keys.entry(body.source).or_default().insert(key);
         if let Some(earlier) = self.earlier.remove(&key) {
             self.kept.entry(key).or_insert(earlier);
         }
@@ -311,10 +349,29 @@ impl<'e> Readings<'e> {
         Ok(found)
     }
 
-    /// The reveal succeeded: what the earlier one kept and this one didn't
-    /// reuse is gone.
-    pub(super) fn succeeded(&mut self) {
+    /// The reveal of `program` succeeded: what the earlier one kept and
+    /// this one didn't reuse is gone. Each source it read a body of again
+    /// keeps its readings on disk.
+    pub(super) fn succeeded(&mut self, program: &Program) {
         self.earlier.clear();
+        let mut lowerings = lock(self.engine);
+        let Some(disk) = lowerings.disk.as_mut() else {
+            return;
+        };
+        for source in &self.read {
+            let readings = self
+                .keys
+                .get(source)
+                .into_iter()
+                .flatten()
+                .filter_map(|key| self.kept.get(key).map(|scanned| (key, scanned)));
+            let entry = disk::Entry {
+                identity: program.source.identity_at(*source),
+                kind: disk::Kind::Readings,
+                key: &READINGS,
+            };
+            disk.write(self.engine, entry, &readings.collect::<Vec<_>>());
+        }
     }
 }
 
@@ -384,6 +441,29 @@ pub(super) struct Session<'e> {
     earlier: BTreeMap<(source::Id, Part), Kept>,
     kept: BTreeMap<(source::Id, Part), Kept>,
     lowered: BTreeSet<source::Id>,
+    /// Whether this is the compiler's first compile, which reads what an
+    /// earlier runner kept on disk (#1638).
+    first: bool,
+}
+
+/// The key `part` of `source` is kept under (`Session::key`).
+#[derive(Clone, Copy)]
+pub(super) struct Key<'a> {
+    part: Part,
+    source: source::Id,
+    /// The source's path, which names its file on disk.
+    identity: &'a str,
+    digest: [u8; 32],
+}
+
+impl Key<'_> {
+    fn entry(&self) -> disk::Entry<'_> {
+        disk::Entry {
+            identity: self.identity,
+            kind: disk::Kind::Part(self.part),
+            key: &self.digest,
+        }
+    }
 }
 
 impl<'e> Session<'e> {
@@ -406,6 +486,7 @@ impl<'e> Session<'e> {
         Some(Self {
             engine,
             interface,
+            first: earlier.is_empty(),
             earlier,
             kept: BTreeMap::new(),
             lowered: BTreeSet::new(),
@@ -414,13 +495,13 @@ impl<'e> Session<'e> {
 
     /// The key of `part` of `source`, whose bodies' texts are `texts`:
     /// `None` when nothing is kept.
-    pub(super) fn key(
+    pub(super) fn key<'p>(
         &self,
         part: Part,
         source: source::Id,
-        program: &Program,
+        program: &'p Program,
         texts: &[&str],
-    ) -> Option<[u8; 32]> {
+    ) -> Option<Key<'p>> {
         let interface = self.interface.as_ref()?;
         let mut digest = Sha256::new();
         digest.update(b"rawr.lowering.source/v3");
@@ -434,31 +515,37 @@ impl<'e> Session<'e> {
         for text in texts {
             framed(&mut digest, text);
         }
-        Some(digest.finalize().into())
+        Some(Key {
+            part,
+            source,
+            identity: program.source.identity_at(source),
+            digest: digest.finalize().into(),
+        })
     }
 
-    /// What the earlier compile kept of `part` of `source` under `key`,
-    /// when each of its reads outside the program reads the same.
-    pub(super) fn reuse(
-        &mut self,
-        part: Part,
-        source: source::Id,
-        key: [u8; 32],
-        access: &crate::Access,
-    ) -> Option<&Kept> {
-        let kept = self.earlier.remove(&(source, part)).filter(|kept| {
-            kept.key == key && kept.outside.reads.iter().all(|read| read.holds(access))
-        })?;
-        Some(self.kept.entry((source, part)).or_insert(kept))
+    /// What the earlier compile kept of its part under `key`, when each
+    /// of its reads outside the program reads the same. A compiler's first
+    /// compile finds it in the part's file.
+    pub(super) fn reuse(&mut self, key: Key<'_>, access: &crate::Access) -> Option<&Kept> {
+        let place = (key.source, key.part);
+        let earlier = match self.earlier.remove(&place) {
+            Some(kept) => Some(kept),
+            None if self.first => lock(self.engine)
+                .disk
+                .as_mut()
+                .and_then(|disk| disk.read::<Kept>(self.engine, key.entry())),
+            None => None,
+        };
+        let kept = earlier.filter(|kept| kept.key == key.digest && kept.outside.holds(access))?;
+        Some(self.kept.entry(place).or_insert(kept))
     }
 
-    /// Keep what `part` of `source` lowered to under `key`, when there is
-    /// one.
+    /// Keep what a part of `source` lowered to under `key`, when there is
+    /// one, in memory and in its file.
     pub(super) fn keep(
         &mut self,
-        part: Part,
         source: source::Id,
-        key: Option<[u8; 32]>,
+        key: Option<Key<'_>>,
         lowered: &[Lowered],
         uses: &[ImportedUse],
         dependencies: &BTreeSet<host::facade::Dependency>,
@@ -468,16 +555,17 @@ impl<'e> Session<'e> {
         let Some(key) = key else {
             return;
         };
-        self.kept.insert(
-            (source, part),
-            Kept {
-                key,
-                lowered: lowered.to_vec().into_boxed_slice(),
-                uses: uses.to_vec().into_boxed_slice(),
-                dependencies: dependencies.clone(),
-                outside,
-            },
-        );
+        let kept = Kept {
+            key: key.digest,
+            lowered: lowered.to_vec().into_boxed_slice(),
+            uses: uses.to_vec().into_boxed_slice(),
+            dependencies: dependencies.clone(),
+            outside,
+        };
+        if let Some(disk) = lock(self.engine).disk.as_mut() {
+            disk.write(self.engine, key.entry(), &kept);
+        }
+        self.kept.insert((source, key.part), kept);
     }
 
     /// The compile succeeded: what the earlier one kept and this one

@@ -5,6 +5,7 @@ use std::fmt;
 
 /// The canonical path shared by stable semantic keys.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Path {
     package: ImmutableString,
     modules: Box<[ImmutableString]>,

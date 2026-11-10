@@ -14,6 +14,7 @@ use std::{
 ///
 /// Advancing beyond the maximum line length or maximum number of lines is not an error but has no effect.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Position {
     /// Line number: 0 = none
     line: u16,
@@ -229,6 +230,7 @@ impl AddAssign for Position {
 
 /// A span consisting of starting and ending [positions][Position].
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Span {
     /// Starting [position][Position].
     start: Position,

@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Eq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct HostTyProof {
     pub(super) definition: crate::host::type_def::Definition,
     pub(super) alias: Option<crate::host::type_def::Definition>,
@@ -106,6 +107,7 @@ pub(super) fn host_ty_proof_allocations() -> usize {
 
 /// Rust's keyed collections (`Ty::Keyed`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Keyed {
     HashMap,
     BTreeMap,
@@ -151,6 +153,7 @@ impl Keyed {
 /// `Var` is a literal's `{integer}`, bound by inference
 /// (`Inference::resolve`) and `i32` when nothing binds it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Int {
     I8,
     I16,
@@ -322,6 +325,7 @@ impl Int {
 
 /// Rust's float types, an `f64` at runtime; `Var` is a literal's `{float}`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Float {
     F32,
     F64,
@@ -355,6 +359,7 @@ pub(super) fn numeric_type(name: &str) -> Option<Ty> {
 
 /// `std::time`'s types, as `Ty::Time` names them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Time {
     Duration,
     Instant,
@@ -373,6 +378,7 @@ impl Time {
 /// borrowed, `Cell`, whose value is copied in and out, or `Mutex`, whose
 /// value one thread at a time locks, as a `RefCell` borrows it mutably.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum CellKind {
     RefCell,
     Cell,
@@ -454,6 +460,7 @@ impl Pointer {
 /// Which counted pointer a `Ty::Counted` or `Ty::Weak` is: `std::rc`'s or
 /// `std::sync`'s.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Counter {
     Rc,
     Arc,
@@ -510,6 +517,11 @@ pub(super) struct Unplaced {
     pub(super) assigned: Option<ImmutableString>,
 }
 
+/// The path of a std struct rawr knows (`core::str::iter::Chars`), held
+/// while the program runs. A stored one is read back as the copy the
+/// process holds (`stored::text`).
+type Std = &'static str;
+
 /// Which `PartialEq` impl an `==` resolves to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PartialEqImpl {
@@ -521,6 +533,7 @@ pub(super) enum PartialEqImpl {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Ty {
     Never,
     Unit,
@@ -674,7 +687,17 @@ pub(super) enum Ty {
     /// items at runtime. With the std struct it is, when rawr knows it
     /// (`core::str::iter::Chars` of `s.chars()`), whose own inherent
     /// methods it also has; an adaptor's chain is any iterator.
-    Iter(Box<Ty>, Option<&'static str>),
+    Iter(
+        Box<Ty>,
+        #[cfg_attr(
+            feature = "rust-import",
+            serde(
+                serialize_with = "crate::stored::text::serialize_optional",
+                deserialize_with = "crate::stored::text::deserialize_optional"
+            )
+        )]
+        Option<Std>,
+    ),
     /// `dyn Trait`, behind `&` or `Box`: a value of some type implementing
     /// the trait, whose methods dispatch by the value's runtime type.
     /// With its associated type bindings by name (`dyn Shape<Output =
@@ -1206,6 +1229,49 @@ impl Ty {
             | Self::Infer(_)
             | Self::Unknown => Some(TypeId::of::<Dynamic>()),
         }
+    }
+
+    /// Each type [`Self::native_type_id`] gives but a host type's: what a
+    /// runner's kept lowering on disk may name besides its facades' linked
+    /// types (#1638).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn native_type_ids() -> impl Iterator<Item = TypeId> {
+        [
+            TypeId::of::<Dynamic>(),
+            TypeId::of::<()>(),
+            TypeId::of::<crate::item::Value>(),
+            TypeId::of::<crate::FnPtr>(),
+            TypeId::of::<crate::Array>(),
+            TypeId::of::<std::cmp::Reverse<Dynamic>>(),
+            TypeId::of::<cow::Value>(),
+            TypeId::of::<cell::Cell>(),
+            #[cfg(feature = "sync")]
+            TypeId::of::<crate::eval::threads::Handle>(),
+            TypeId::of::<thread::Sender>(),
+            TypeId::of::<thread::Receiver>(),
+            TypeId::of::<thread::SendError>(),
+            TypeId::of::<thread::Panic>(),
+            TypeId::of::<crate::option::Value>(),
+            TypeId::of::<crate::result::Value>(),
+            TypeId::of::<bool>(),
+            TypeId::of::<char>(),
+            TypeId::of::<INT>(),
+            TypeId::of::<crate::FLOAT>(),
+            TypeId::of::<ImmutableString>(),
+            TypeId::of::<std::ops::RangeInclusive<INT>>(),
+            TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>(),
+            TypeId::of::<std::ops::Range<INT>>(),
+            TypeId::of::<std::ops::Range<crate::FLOAT>>(),
+            TypeId::of::<std::ops::RangeInclusive<Dynamic>>(),
+            TypeId::of::<std::time::Duration>(),
+            TypeId::of::<crate::Instant>(),
+            TypeId::of::<counted::Counted>(),
+            TypeId::of::<counted::Weak>(),
+            TypeId::of::<nominal::Struct>(),
+            TypeId::of::<nominal::Enum>(),
+            TypeId::of::<error_object::ErrorObject>(),
+        ]
+        .into_iter()
     }
 
     pub(super) fn invocation(&self) -> Option<&crate::host::type_def::Definition> {

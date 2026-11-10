@@ -5,6 +5,7 @@ use crate::{host, Dynamic, EvalAltResult, ImmutableString, RawrResult, Span};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Operand {
     ty: Type,
     span: Span,
@@ -12,6 +13,7 @@ pub(super) struct Operand {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Proof {
     facade: host::facade::Fingerprint,
     owner: host::facade::Dependency,

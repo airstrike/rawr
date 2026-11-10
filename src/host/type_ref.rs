@@ -4,6 +4,7 @@ use crate::host;
 
 /// A Rawr builtin available in host signature metadata.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Builtin {
     /// `bool`.
     Bool,
@@ -112,6 +113,7 @@ impl Builtin {
 
 /// Which of Rust's sequence types a host's array is.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Sequence {
     /// `[T; N]`, of its length.
     Array(usize),
@@ -127,9 +129,15 @@ pub(crate) enum Sequence {
 
 /// A validated structural type in a static host signature.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Type(Shape);
 
+/// A collection's name, `HashMap` or `BTreeSet`, held while the program runs.
+/// A stored one is read back as the copy the process holds (`stored::text`).
+type Collection = &'static str;
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Shape {
     Unit,
     Tuple(Box<[Type]>),
@@ -164,7 +172,10 @@ pub(crate) enum Shape {
     /// std's `HashMap`, `HashSet`, `BTreeMap` or `BTreeSet`, by its name,
     /// of its key (and value) types: rawr's collection of that kind, an
     /// array sorted by key at runtime (#777).
-    Keyed(&'static str, Box<[Type]>),
+    Keyed(
+        #[cfg_attr(feature = "rust-import", serde(with = "crate::stored::text"))] Collection,
+        Box<[Type]>,
+    ),
     /// Rust's `std::ops::RangeInclusive<T>` of a type parameter `T`:
     /// Rawr's `RangeInclusive<f64>` or `RangeInclusive<i64>` at runtime as
     /// `T` is a float or an integer.

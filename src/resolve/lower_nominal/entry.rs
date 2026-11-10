@@ -331,8 +331,8 @@ fn lower_part(
         let key = session
             .as_ref()
             .and_then(|(session, part)| session.key(*part, unit.source, unit.program, &texts));
-        if let (Some((session, part)), Some(key)) = (session.as_mut(), key)
-            && let Some(reused) = session.reuse(*part, unit.source, key, &unit.models.access)
+        if let (Some((session, _)), Some(key)) = (session.as_mut(), key)
+            && let Some(reused) = session.reuse(key, &unit.models.access)
             && let Some(renewed) = reused
                 .lowered
                 .iter()
@@ -385,9 +385,8 @@ fn lower_part(
                 assembly.place(unit, &mut counts, *body, lowered);
             }
         }
-        if let Some((session, part)) = session {
+        if let Some((session, _)) = session {
             session.keep(
-                part,
                 unit.source,
                 key,
                 &lowerings,
@@ -846,6 +845,7 @@ pub(super) fn trait_objects(engine: &Engine, source: &crate::program::Source) ->
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct Lowered {
     pub(super) source: String,
     pub(super) locations: Vec<location::Output>,

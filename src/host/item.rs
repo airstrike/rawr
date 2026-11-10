@@ -6,6 +6,7 @@ pub(crate) type ImportedSelector = crate::host::type_def::ImportedSelector;
 
 /// The semantic kind of a static host item.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Kind {
     /// A compile-time value declaration.
     Value,
@@ -43,9 +44,11 @@ impl Kind {
 /// source writes it, and the path `$crate` reads as (the dependency's root
 /// and the defining crate's segment). It is parsed into rules once, at its
 /// first expansion.
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct MacroRules {
     source: ImmutableString,
     krate: ImmutableString,
+    #[cfg_attr(feature = "rust-import", serde(skip))]
     rules: once_cell::sync::OnceCell<Result<crate::resolve::macro_rules::Rules, ImmutableString>>,
 }
 
@@ -98,6 +101,7 @@ impl Eq for MacroRules {}
 
 /// One validated static host item declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Definition {
     path: host::path::Path,
     kind: Kind,
@@ -135,6 +139,7 @@ pub struct Definition {
 /// value at runtime is a place each read and store of calls the method
 /// again (`crate::island::place`).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Guard {
     /// Read through `Deref`: the call gives a copy of the target.
     Shared,
@@ -151,6 +156,7 @@ pub enum Guard {
 /// What the scope frame an imported call opens holds borrowed while its
 /// output lives (D558 tier 1).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Frame {
     /// What the call takes besides its receiver, which it borrows for the
     /// call alone, as `Parser::new(&text)` and jiff's `strftime(&self,
@@ -162,6 +168,7 @@ pub enum Frame {
 
 /// A deterministic proof of a host item's complete callable contract.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Fingerprint {
     path: ImmutableString,
     kind: Kind,
