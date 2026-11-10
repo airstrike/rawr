@@ -130,6 +130,7 @@ impl Continuation {
     /// Build the captured graph, from the stored API product when deferred.
     pub(crate) fn materialize(self) -> Result<Materialized, node::Error> {
         let graph = build(&self.product, self.graph)?;
+        crate::progress::read(graph.definitions().len());
         Ok(Materialized {
             product: self.product,
             graph,

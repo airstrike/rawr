@@ -118,23 +118,33 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
-        self.compile_imported_applied(contract, snapshot, &limits, &[])
+        self.compile_imported_applied(contract, snapshot, &limits, &[], None)
             .map(|compiled| compiled.demand)
     }
 
     /// Compile against a contract with the proof-backed applications its
     /// program's imported calls need (D650). Each was proved locally from
     /// intrinsic facts; a call none answers fails with the call to prove.
+    /// `facade` is the contract's cached facade node, whose plan the check
+    /// reads instead of generating it a second time (#1618).
+    #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn compile_imported_with_applications(
         &self,
         contract: &rawr_import::Contract<rawr_import::Classified>,
+        facade: &rawr_import::surface::facade::Cached,
         snapshot: crate::reload::source::Snapshot,
         applications: &[rawr_import::surface::application::Application],
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
-        self.compile_imported_applied(contract, snapshot, &limits, applications)
-            .map(|compiled| compiled.demand)
+        self.compile_imported_applied(
+            contract,
+            snapshot,
+            &limits,
+            applications,
+            Some(facade.bytes()),
+        )
+        .map(|compiled| compiled.demand)
     }
 
     fn compile_imported_applied(
@@ -143,6 +153,7 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
         limits: &rawr_import::limits::Limits,
         applications: &[rawr_import::surface::application::Application],
+        facade: Option<&[u8]>,
     ) -> Result<CompiledImported, super::Error> {
         snapshot
             .revalidate()
@@ -168,9 +179,19 @@ impl crate::Engine {
             .allocation(limits)
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        let facade = rawr_import::surface::facade::Plan::encode(contract)
-            .map_err(Error::from)
-            .map_err(super::Error::import)?;
+        let facade = match facade {
+            Some(facade) => {
+                let mut retained = Vec::new();
+                retained
+                    .try_reserve_exact(facade.len())
+                    .map_err(|_| super::Error::import(Error::Allocation))?;
+                retained.extend_from_slice(facade);
+                retained.into_boxed_slice()
+            }
+            None => rawr_import::surface::facade::Plan::encode(contract)
+                .map_err(Error::from)
+                .map_err(super::Error::import)?,
+        };
         allocation
             .retain(1, facade.len())
             .map_err(Error::from)

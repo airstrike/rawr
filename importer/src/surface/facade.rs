@@ -1168,6 +1168,7 @@ impl Plan {
         graph: &crate::api::Graph<impl crate::api::Phase>,
         outcomes: impl ExactSizeIterator<Item = crate::classify::Outcome<'a>>,
     ) -> Result<Box<[u8]>, super::Error> {
+        crate::progress::generated(outcomes.len());
         let mut facades = Vec::<Facade>::new();
         // Each re-exported variant: its root, its path, its enum and its
         // name, named through a path to the enum once every type is in.

@@ -3715,6 +3715,7 @@ impl<P: api::Phase> api::Graph<P> {
         authority: Authority,
     ) -> Result<(ClassifiedParts, usize), Error> {
         let semantic_api = *self.semantic_fingerprint().as_bytes();
+        crate::progress::classified(self.definitions().len());
         let context = Context::new(self, authority)?;
         let result = (|| {
             let mut outcomes = Vec::new();
