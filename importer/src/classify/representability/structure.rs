@@ -89,6 +89,12 @@ pub struct Plan {
     /// rustc's layout of the type, for a cycle of body statics (D865).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<crate::api::model::Layout>,
+    /// How many defaulted parameters the alias that names the type
+    /// declares and the type names none of, as iced's `canvas::Geometry<
+    /// Renderer = crate::Renderer>`: Rust code writes the type with none
+    /// or with them all (`classify::dropped_parameters`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    dropped: u32,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -179,7 +185,21 @@ impl Plan {
             error: false,
             unsupported: None,
             layout: None,
+            dropped: 0,
         }
+    }
+
+    /// The plan, with the alias's `dropped` parameters.
+    pub(crate) const fn with_dropped(mut self, dropped: u32) -> Self {
+        self.dropped = dropped;
+        self
+    }
+
+    /// How many defaulted parameters the alias that names the type
+    /// declares and the type names none of.
+    #[must_use]
+    pub const fn dropped(&self) -> u32 {
+        self.dropped
     }
 
     /// The plan, with rustc's layout of the type.

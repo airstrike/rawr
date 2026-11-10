@@ -894,6 +894,16 @@ fn resolve_path(
                 source: span,
             });
         }
+        // An alias's defaulted parameters its type names none of, as
+        // `canvas::Geometry<Renderer>` writes: the type is the same with
+        // them or without, as builtins drop defaulted arguments.
+        let written = arguments
+            .iter()
+            .filter(|argument| matches!(argument, Argument::Type(_)))
+            .count();
+        if written <= definition.dropped() {
+            arguments.retain(|argument| !matches!(argument, Argument::Type(_)));
+        }
         defaulted_arguments(definition, owner.as_ref(), &mut arguments, host, span);
         let actual = arguments
             .iter()

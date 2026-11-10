@@ -853,6 +853,7 @@ fn build(
                     .collect(),
                 shape,
                 ty.layout().map(layout),
+                ty.dropped() as usize,
                 allocation,
             )
             .map_err(|source| entry_error(facade.root(), ty.path(), source.into()))?;
@@ -1183,7 +1184,8 @@ pub(crate) fn imported_type(
         shape,
     )?
     .with_associated(associated)
-    .with_layout(ty.layout().map(layout)))
+    .with_layout(ty.layout().map(layout))
+    .with_dropped(ty.dropped() as usize))
 }
 
 /// rustc's layout of a struct, as the importer gives it.
