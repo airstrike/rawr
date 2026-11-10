@@ -13,6 +13,7 @@ use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 pub(crate) mod cached;
 mod family;
 mod frame;
+mod object;
 mod place;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
@@ -3256,6 +3257,15 @@ fn reach_lent<T: 'static>(
     mutable: bool,
     visit: &mut dyn FnMut(Reached<'_>),
 ) -> Result<(), Error> {
+    // A static's place, of a body or of native code (D862), is lent where
+    // it is, as rustc lends `&STATIC`; it is never lent mutably (E0596).
+    if let Some(lasting) = __rawr_internal::place::statics::lasting::<T>(&value) {
+        if mutable {
+            return Err(Error::Value("cannot borrow a static item as mutable (E0596)".to_owned()));
+        }
+        visit(Reached::Shared(lasting));
+        return Ok(());
+    }
     // A value its slot has leased to lend shared, as a pattern through
     // `&T` lends its fields, is shared where the lend holds it; borrowing
     // it mutably meanwhile is the conflict rustc reports.
@@ -15360,6 +15370,13 @@ fn render_rust_type(
                     .as_bytes(),
             )
             .map_err(request::unwritable),
+        convert::Type::Object(object) => output
+            .write_all(
+                object::rust_type(object)
+                    .ok_or_else(|| request::drift("a trait object's type"))?
+                    .as_bytes(),
+            )
+            .map_err(request::unwritable),
         convert::Type::Inferred => output.write_all(b"_").map_err(request::unwritable),
         convert::Type::Unit | convert::Type::Never => {
             output.write_all(b"()").map_err(request::unwritable)
@@ -16750,6 +16767,11 @@ fn render_take_input(
             output,
         );
     }
+    // A crate's trait object, as a `&dyn Trait` input a program's `&x as
+    // &dyn Trait` fills (D872).
+    if let object @ convert::Type::Object(_) = substituted(ty, signature, substitutions)? {
+        return render_take(local, index, &object, output);
+    }
     // A `&T` the call fills with a program value, as a `&dyn Debug` of a
     // marked `Option` is: the value itself, lent as `Value`, which the
     // program formats only when native code does.
@@ -17261,6 +17283,14 @@ fn render_lease(
     } else {
         ("PlaceHeld", "lease_place")
     };
+    // A static's place, of a body or of native code (D862), is lent where
+    // it is, as rustc lends `&STATIC`.
+    let lasting = (!*mutable && !future && !carries_lifetime(ty)).then(|| {
+        format!(
+            "if let Some(lasting) = arguments.values.get({index}).and_then(|value| __rawr_internal::place::statics::lasting::<{rust}>(value)) {{ lasting }} else "
+        )
+    });
+    let lasting = lasting.as_deref().unwrap_or_default();
     if LENT_ARGUMENTS.get() && !carries_lifetime(ty) {
         // Or a value native code lent a marked function (D558.3), reached
         // through its accessor, which the call runs inside.
@@ -17279,6 +17309,18 @@ fn render_lease(
             argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};
             {borrow}argument_{local}_held.get_mut()
         }}
+    }};"
+        )
+        .map_err(request::unwritable);
+    }
+    if !lasting.is_empty() {
+        return writeln!(
+            output,
+            "    #[allow(unused_mut)]
+    let mut argument_{local}_held: {held}<{rust}>;
+    let argument_{local}: &{rust} = {lasting}{{
+        argument_{local}_held = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.{lease}(handle)? }};
+        &*argument_{local}_held.get_mut()
     }};"
         )
         .map_err(request::unwritable);
@@ -17906,6 +17948,21 @@ fn render_take(
         }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
+        // A crate's trait object (D872): lent for the call, or made.
+        convert::Type::Object(object)
+            if object.pointer() == crate::classify::representability::object::Pointer::Shared =>
+        {
+            return object::render_lent_input(local, index, object, output);
+        }
+        convert::Type::Object(object) => {
+            let mut converted = String::new();
+            object::render_owned(object, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+            )
+            .map_err(request::unwritable);
+        }
         // Rawr's float or integer range, as the range of the number the
         // instance gives.
         // An `Rc` or `Arc` the call takes by value, with copies of the
@@ -18116,6 +18173,20 @@ fn render_give(
                 "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
             )
         }
+        // A crate's trait object native code gives (D872): held as itself.
+        // A borrowed one lives no longer than its call.
+        convert::Type::Object(object)
+            if object.pointer()
+                != crate::classify::representability::object::Pointer::Shared =>
+        {
+            writeln!(
+                output,
+                "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
+            )
+        }
+        convert::Type::Object(_) => {
+            return Err(request::drift("a borrowed trait object given back"))
+        }
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
             writeln!(output, "    int_into({value}).map(Dynamic::from)")
         }
@@ -18206,6 +18277,17 @@ fn render_from_dynamic(
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
         convert::Type::ConstArray { .. } => {
             return Err(unlengthed())
+        }
+        // A crate's trait object (D872), which a value owns or a static's
+        // place is. A borrowed one is lent where the call takes it.
+        convert::Type::Object(object)
+            if object.pointer()
+                != crate::classify::representability::object::Pointer::Shared =>
+        {
+            return object::render_owned(object, value, depth, output);
+        }
+        convert::Type::Object(_) => {
+            return Err(request::drift("a borrowed trait object made from a value"))
         }
         convert::Type::Unit | convert::Type::Never => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
@@ -18631,6 +18713,19 @@ fn render_to_dynamic(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
         ),
+        // A crate's trait object native code gives (D872): held as itself.
+        convert::Type::Object(object)
+            if object.pointer()
+                != crate::classify::representability::object::Pointer::Shared =>
+        {
+            write!(
+                output,
+                "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
+            )
+        }
+        convert::Type::Object(_) => {
+            return Err(request::drift("a borrowed trait object given back"))
+        }
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
             write!(output, "int_into({value}).map(Dynamic::from)")
         }
@@ -18835,6 +18930,7 @@ fn names_script(ty: &convert::Type) -> bool {
         convert::Type::FunctionItem { input, output } => {
             names_script(input) || names_script(output)
         }
+        convert::Type::Object(object) => object.types().any(names_script),
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)
@@ -19282,6 +19378,17 @@ fn instantiated(
         {
             convert::Type::Builtin(convert::Builtin::Str)
         }
+        // `&P` of a `&dyn Trait` input the call fills with a trait object
+        // (`object_inputs`) is that object (D872).
+        convert::Type::Borrowed { mutable: false, ty }
+            if matches!(**ty, convert::Type::Parameter(_))
+                && matches!(
+                    substitution(ty, signature, substitutions),
+                    Some(convert::Type::Object(_))
+                ) =>
+        {
+            substitution(ty, signature, substitutions)?.clone()
+        }
         convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
             mutable: *mutable,
             ty: one(ty)?,
@@ -19321,6 +19428,11 @@ fn instantiated(
         },
         convert::Type::Inferred => ty.clone(),
         convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
+        convert::Type::Object(object) => convert::Type::Object(Box::new(
+            object
+                .try_map(|ty| instantiated(ty, signature, substitutions).ok_or(()))
+                .ok()?,
+        )),
     })
 }
 
@@ -21387,6 +21499,7 @@ fn names_parameter(ty: &convert::Type) -> bool {
         convert::Type::FunctionItem { input, output } => {
             names_parameter(input) || names_parameter(output)
         }
+        convert::Type::Object(object) => object.types().any(names_parameter),
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)
@@ -22311,6 +22424,7 @@ impl TypePaths {
         family::clear();
         PROXIES.with_borrow_mut(std::collections::BTreeMap::clear);
         PROXY_CRATE.with_borrow_mut(|named| *named = None);
+        object::install(facade);
         Self
     }
 }
@@ -22318,6 +22432,7 @@ impl TypePaths {
 impl Drop for TypePaths {
     fn drop(&mut self) {
         place::clear();
+        object::clear();
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
@@ -22362,6 +22477,7 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
             output_names(input, index) || output_names(output, index)
         }
         convert::Type::ProfileMessage { payload, .. } => output_names(payload, index),
+        convert::Type::Object(object) => object.types().any(|ty| output_names(ty, index)),
     }
 }
 
@@ -22530,6 +22646,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
         convert::Type::Inferred => "_".to_owned(),
         convert::Type::Unit | convert::Type::Never => "()".to_owned(),
+        convert::Type::Object(object) => object::rust_type(object)?,
         convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
             "String".to_owned()
         }
@@ -22915,6 +23032,9 @@ fn render_generic_arguments(
                         | convert::Type::Sequence { .. }
                         | convert::Type::ConstArray { .. }
                         | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
+                        // A trait object, which Rust infers from the
+                        // argument it fills (D872).
+                        convert::Type::Object(_) => b"_",
                         // `&[u8]` or `&str`, as `Reader<&'a [u8]>` takes
                         // (D558 tier 1).
                         convert::Type::Borrowed { .. } if concrete.is_some() => {
@@ -23323,6 +23443,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         | convert::Type::Tuple(_)
         | convert::Type::FunctionItem { .. }
         | convert::Type::Borrowed { .. }
+        | convert::Type::Object(_)
         | convert::Type::Parameter(_) => {
             return Err(request::drift("generated execution producer input"));
         }

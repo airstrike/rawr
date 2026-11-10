@@ -194,6 +194,11 @@ impl Held {
         self.trait_header_at(index)
     }
 
+    /// Each trait header that resolves, in the facade's order.
+    pub(crate) fn trait_headers(&self) -> impl Iterator<Item = &host::facade::TraitHeader> {
+        (0..self.view().trait_headers()).filter_map(|index| self.trait_header_at(index))
+    }
+
     /// The impls of the trait `identity` that resolve, in the facade's
     /// order.
     pub(crate) fn impl_headers(&self, identity: &[u8; 32]) -> Vec<&host::facade::ImplHeader> {

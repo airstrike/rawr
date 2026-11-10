@@ -10,6 +10,7 @@ mod erasure;
 mod expand;
 mod inspect;
 mod islands;
+mod objects;
 mod panes;
 mod plain;
 mod scope;

@@ -395,6 +395,24 @@ impl<'a> Parser<'a> {
                 value.lvalue = None;
                 return Ok(None);
             }
+            // A number, `bool`, `char` or crate value the crate implements
+            // the trait for, borrowed or boxed (D872): the value as it is,
+            // tagged with its type, which the runner's adapter coerces
+            // where native code takes the object.
+            #[cfg(feature = "rust-import")]
+            if type_ref::is_native_trait(&trait_name)
+                && !matches!(target, Ty::Counted(..))
+                && let Some(tag) =
+                    self.native_implementor(&concrete, &trait_name, &dyn_arguments(&bindings))
+            {
+                let source = std::mem::take(&mut value.source);
+                value.source =
+                    self.prelude_op(PreludeOp::NativeCoerce, [source, format!("{tag:?}").into()]);
+                value.source.cover(value.span);
+                value.ty = target;
+                value.lvalue = None;
+                return Ok(None);
+            }
             // Making a native trait's object of anything else, a borrow or
             // a counted pointer of the program's type, is not done yet.
             if type_ref::is_native_trait(&trait_name) {

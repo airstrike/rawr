@@ -144,6 +144,10 @@ pub mod layer;
 /// Resolved inherent method metadata.
 pub mod method;
 mod module;
+/// A program's value coerced to a crate's trait object (D872).
+#[cfg(feature = "rust-import")]
+#[doc(hidden)]
+pub mod object;
 mod optimizer;
 /// Rawr's `Option<T>` at runtime, and its round trip to Rust's `Option<T>`.
 pub mod option;

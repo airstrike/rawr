@@ -304,6 +304,25 @@ pub(super) fn imported_surface_type(
                 inference, models, item, operation, imported,
             )?]),
         },
+        // A crate's trait object (D872): `dyn Trait` itself where a `&T`
+        // takes it, as the `&dyn Trait` input a call reads as `&impl
+        // Trait` is, and `Box<dyn Trait>`.
+        Ty::Dyn(name, bindings) if crate::resolve::type_ref::is_native_trait(name) => {
+            native_object(inference, models, name, bindings, operation, imported)?
+        }
+        Ty::Boxed(inner)
+            if matches!(inference.resolved_ref(inner),
+                Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name)) =>
+        {
+            let Type::Object(object) =
+                imported_surface_type(inference, models, inner, operation, imported)?
+            else {
+                return Err(unsupported_type_argument(ty.name(models), operation));
+            };
+            Type::Object(Box::new(object.behind(
+                rawr_import::classify::representability::object::Pointer::Boxed,
+            )))
+        }
         // A `Box<T>`: alloc's, which a crate's signature names (D711
         // step 5).
         Ty::Boxed(inner) => Type::Nominal {
@@ -464,6 +483,64 @@ pub(super) fn imported_surface_type(
 /// A host type's identity in the runner: an imported crate's own, or one
 /// of std's types Rawr's std holds as its Rust value, as `PathBuf` is
 /// std's native `PathBuf` (D683.3).
+/// `dyn Trait<..>` of the crate trait `name` with `bindings`, as a crate's
+/// type argument (D872): the trait by its identity, at its positional
+/// arguments. One that binds an associated type isn't one yet.
+#[cfg(feature = "rust-import")]
+fn native_object(
+    inference: &Inference,
+    models: &Models,
+    name: &ImmutableString,
+    bindings: &[(ImmutableString, Ty)],
+    operation: Span,
+    imported: &mut ImportedContext<'_>,
+) -> Result<rawr_import::classify::representability::convert::Type, Error> {
+    let unsupported = || unsupported_type_argument(format!("dyn {name}").into(), operation);
+    let identity = native_object_identity(models, name, bindings).ok_or_else(unsupported)?;
+    let positional = super::dyn_arguments(bindings);
+    let mut arguments = imported.entries(positional.len())?;
+    for argument in &positional {
+        arguments.push(imported_surface_type(
+            inference, models, argument, operation, imported,
+        )?);
+    }
+    Ok(shared_object(identity, arguments.into_boxed_slice()))
+}
+
+/// The identity of the crate trait `name` that an object of it with
+/// `bindings` names, when the object binds no associated type (D872).
+#[cfg(feature = "rust-import")]
+fn native_object_identity(
+    models: &Models,
+    name: &str,
+    bindings: &[(ImmutableString, Ty)],
+) -> Option<[u8; 32]> {
+    if bindings
+        .iter()
+        .any(|(binding, _)| binding.parse::<usize>().is_err())
+    {
+        return None;
+    }
+    let path = crate::host::path::Path::parse(name).ok()?;
+    Some(models.host.trait_header(&path)?.identity)
+}
+
+/// `dyn Trait<arguments>` of the crate trait `identity`, where a `&T`
+/// takes it (D872).
+#[cfg(feature = "rust-import")]
+fn shared_object(
+    identity: [u8; 32],
+    arguments: Box<[rawr_import::classify::representability::convert::Type]>,
+) -> rawr_import::classify::representability::convert::Type {
+    use rawr_import::classify::representability::{convert, object};
+    convert::Type::Object(Box::new(object::Object::new(
+        object::Pointer::Shared,
+        rawr_import::surface::identity::Definition::authenticated(identity),
+        arguments,
+        Vec::new(),
+    )))
+}
+
 #[cfg(feature = "rust-import")]
 pub(super) fn host_surface_definition(
     definition: &crate::host::type_def::Definition,
@@ -851,6 +928,27 @@ pub(super) fn instance_surface_type(
                 .map(|argument| instance_surface_type(inference, models, argument))
                 .collect::<Option<_>>()?,
         },
+        // A crate's trait object, as `imported_surface_type` has it (D872).
+        Ty::Dyn(name, bindings) if crate::resolve::type_ref::is_native_trait(name) => {
+            shared_object(
+                native_object_identity(models, name, bindings)?,
+                super::dyn_arguments(bindings)
+                    .iter()
+                    .map(|argument| instance_surface_type(inference, models, argument))
+                    .collect::<Option<_>>()?,
+            )
+        }
+        Ty::Boxed(inner)
+            if matches!(inference.resolved_ref(inner),
+                Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name)) =>
+        {
+            let Type::Object(object) = instance_surface_type(inference, models, inner)? else {
+                return None;
+            };
+            Type::Object(Box::new(object.behind(
+                rawr_import::classify::representability::object::Pointer::Boxed,
+            )))
+        }
         Ty::Boxed(inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::boxed(),
             arguments: Box::new([instance_surface_type(inference, models, inner)?]),
@@ -1025,6 +1123,7 @@ pub(super) fn holds_value(ty: &rawr_import::classify::representability::convert:
         | Type::ConstArray { element, .. } => holds_value(element),
         Type::Result(ok, err) => holds_value(ok) || holds_value(err),
         Type::ProfileMessage { payload, .. } => holds_value(payload),
+        Type::Object(object) => object.types().any(holds_value),
         Type::Inferred
         | Type::Unit
         | Type::Never
@@ -1050,6 +1149,10 @@ pub(super) fn holds_crate_value(
         | Type::Sequence { element, .. }
         | Type::ConstArray { element, .. } => holds_crate_value(element),
         Type::Result(ok, err) => holds_crate_value(ok) || holds_crate_value(err),
+        // An object native code gave is held as itself (D872).
+        Type::Object(object) => {
+            object.pointer() != rawr_import::classify::representability::object::Pointer::Shared
+        }
         Type::Script { .. }
         | Type::Borrowed { .. }
         | Type::Range(_)
@@ -1085,6 +1188,7 @@ pub(super) fn is_erased(ty: &rawr_import::classify::representability::convert::T
         | Type::ConstArray { element, .. } => is_erased(element),
         Type::Result(ok, err) => is_erased(ok) || is_erased(err),
         Type::ProfileMessage { payload, .. } => is_erased(payload),
+        Type::Object(object) => object.types().any(is_erased),
         Type::Inferred => false,
         Type::Unit
         | Type::Never

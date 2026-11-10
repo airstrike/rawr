@@ -2025,6 +2025,43 @@ impl<'a> Parser<'a> {
                 owner,
                 originating,
             )?)),
+            // A crate's trait object (D872): `&dyn Trait` or `Box<dyn
+            // Trait>` of the trait by its name, each type argument a
+            // positional binding, as a program's `dyn Convert<i64>` has.
+            #[cfg(feature = "rust-import")]
+            Shape::Object {
+                pointer,
+                identity,
+                arguments,
+            } => {
+                let name = self.models.host.trait_name(identity).ok_or_else(|| {
+                    unnamed_signature_type(operation, span, Some("a trait object's trait"))
+                })?;
+                let mut bindings = Vec::new();
+                for (position, argument) in arguments.iter().enumerate() {
+                    bindings.push((
+                        ImmutableString::from(position.to_string()),
+                        self.instantiate_host_type(
+                            argument,
+                            parameters,
+                            operation,
+                            span,
+                            owner,
+                            originating,
+                        )?,
+                    ));
+                }
+                let object = Box::new(Ty::Dyn(name, bindings.into_boxed_slice()));
+                match pointer {
+                    rawr_import::classify::representability::object::Pointer::Boxed => {
+                        Ty::Boxed(object)
+                    }
+                    _ => Ty::Reference {
+                        mutable: false,
+                        target: object,
+                    },
+                }
+            }
             // std's map or set in a crate's signature: rawr's (#777).
             Shape::Keyed(name, members) => Ty::Keyed(
                 Keyed::from_name(name).ok_or_else(|| {

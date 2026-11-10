@@ -535,6 +535,10 @@ impl Type {
             // Message>` field is: a callable the program made, of any of
             // its forms.
             Self::Object(name) if crate::item::type_ref::is_fn_type(name) => Ok(()),
+            // A crate's trait object (D872): a program's value coerced to it,
+            // or one native code gave, which the adapter takes at its exact
+            // type.
+            Self::Object(name) if crate::resolve::type_ref::is_native_trait(name) => Ok(()),
             Self::Object(_) => {
                 if value.read_lock::<crate::types::nominal::Struct>().is_some()
                     || value.read_lock::<crate::types::nominal::Enum>().is_some()

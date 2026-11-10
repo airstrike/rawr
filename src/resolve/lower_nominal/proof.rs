@@ -799,6 +799,10 @@ impl<'a> Parser<'a> {
                     operation: span,
                 });
             }
+            // A crate's trait object (D872): a program's value coerced to
+            // it, or one native code gave, which the adapter takes at its
+            // exact type.
+            Ty::Dyn(name, _) if type_ref::is_native_trait(&name) => intrinsic::Type::Object(name),
             Ty::Param(_) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }

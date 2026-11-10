@@ -938,8 +938,18 @@ impl<'a> Parser<'a> {
                 (None, _) => written.to_owned(),
             };
             let parsed = crate::host::path::Path::parse(&path).ok()?;
-            (type_ref::is_native_trait(&path) && self.models.host.trait_header(&parsed).is_some())
-                .then(|| path.into())
+            if !type_ref::is_native_trait(&path) {
+                return None;
+            }
+            // One trait reached through several crates' paths is one trait
+            // (D872), as tracing's `field::Value` is tracing-core's.
+            let header = self.models.host.trait_header(&parsed)?;
+            Some(
+                self.models
+                    .host
+                    .trait_name(&header.identity)
+                    .unwrap_or_else(|| path.into()),
+            )
         }
         #[cfg(not(feature = "rust-import"))]
         None

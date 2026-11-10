@@ -217,6 +217,9 @@ pub enum Type {
     /// `Renderer` of `run` are, which the view's widget gives: rustc infers
     /// it where the bridge calls the item (D594).
     Inferred,
+    /// A trait object of a crate's trait behind a pointer, as tracing's
+    /// `Identifier(&'static dyn Callsite)` holds (D872).
+    Object(Box<super::object::Object>),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

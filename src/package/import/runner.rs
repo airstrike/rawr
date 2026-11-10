@@ -1542,6 +1542,15 @@ pub(crate) fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
         facade::Type::Tuple(members) => {
             host::type_ref::Type::tuple(members.iter().map(ty).collect::<Result<Vec<_>, _>>()?)?
         }
+        facade::Type::Object {
+            pointer,
+            identity,
+            arguments,
+        } => host::type_ref::Type::object(
+            *pointer,
+            *identity,
+            arguments.iter().map(ty).collect::<Result<_, _>>()?,
+        ),
     })
 }
 

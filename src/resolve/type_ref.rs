@@ -1215,7 +1215,13 @@ fn native_trait(
             .collect::<Vec<_>>()
             .join("::");
         let path = host::path::Path::parse(&written).ok()?;
-        host.trait_header(&path).map(|_| written.into())
+        // One trait reached through several crates' paths is one trait
+        // (D872), as tracing's `field::Value` is tracing-core's.
+        let header = host.trait_header(&path)?;
+        Some(
+            host.trait_name(&header.identity)
+                .unwrap_or_else(|| written.into()),
+        )
     }
     #[cfg(not(feature = "rust-import"))]
     None

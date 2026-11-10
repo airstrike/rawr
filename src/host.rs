@@ -1554,6 +1554,22 @@ impl Registry {
         found(path).or_else(|| found(&self.canonical(path)?))
     }
 
+    /// The name a trait object of the crate trait `identity` has (D872):
+    /// the first path, in order, of the headers the facades write for it,
+    /// held ones too, so one trait reached through several crates' paths
+    /// is one trait.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn trait_name(&self, identity: &[u8; 32]) -> Option<ImmutableString> {
+        let held = self.held.iter().flat_map(|(held, _)| held.trait_headers());
+        self.trait_headers
+            .iter()
+            .chain(held)
+            .filter(|header| header.identity == *identity)
+            .map(|header| header.path.to_string())
+            .min()
+            .map(ImmutableString::from)
+    }
+
     /// The crates' impls of the trait whose identity is `identity` (D604).
     #[cfg(feature = "rust-import")]
     pub(crate) fn impl_headers(

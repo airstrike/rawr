@@ -5,6 +5,60 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// The tag a value of `ty` crosses with as an object of the crate's
+    /// trait `trait_name` at `arguments` (D872), when an impl of the trait
+    /// for `ty` itself, with no parameters of its own, is among the
+    /// crate's: a number, `bool` or `char`, or a crate type with no
+    /// parameters (`object::tag`). `None` otherwise.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn native_implementor(
+        &mut self,
+        ty: &Ty,
+        trait_name: &str,
+        arguments: &[Ty],
+    ) -> Option<String> {
+        use rawr_import::classify::representability::convert::{Builtin, Type};
+        if !arguments.is_empty() {
+            return None;
+        }
+        let converted = match self.inference.resolve(ty) {
+            Ty::Bool => Type::Builtin(Builtin::Bool),
+            Ty::Char => Type::Builtin(Builtin::Char),
+            Ty::Float(Float::F32) => Type::Builtin(Builtin::F32),
+            Ty::Float(_) => Type::Builtin(Builtin::F64),
+            Ty::Int(kind) => Type::Builtin(match kind {
+                Int::I8 => Builtin::I8,
+                Int::I16 => Builtin::I16,
+                Int::I32 | Int::Var(_) => Builtin::I32,
+                Int::I64 => Builtin::I64,
+                Int::Isize => Builtin::Isize,
+                Int::U8 => Builtin::U8,
+                Int::U16 => Builtin::U16,
+                Int::U32 => Builtin::U32,
+                Int::U64 => Builtin::U64,
+                Int::Usize => Builtin::Usize,
+                Int::I128 | Int::U128 => return None,
+            }),
+            Ty::Host { proof, arguments } if arguments.is_empty() => Type::Nominal {
+                definition: super::surface::host_surface_definition(&proof.definition)?,
+                arguments: Box::default(),
+            },
+            _ => return None,
+        };
+        let tag = rawr_import::classify::representability::object::tag(&converted)?;
+        let path = crate::host::path::Path::parse(trait_name).ok()?;
+        let identity = self.models.host.trait_header(&path)?.identity;
+        self.models
+            .host
+            .impl_headers(identity)
+            .any(|header| {
+                header.parameters.is_empty()
+                    && header.arguments.is_empty()
+                    && implementor_tag(&header.self_type).as_ref() == Some(&tag)
+            })
+            .then_some(tag)
+    }
+
     /// Fixes the open type parameters of `ty` by the one impl of the trait
     /// `identity` at `arguments` that fits it, then by that impl's
     /// where-clause bounds (D604). An impl for any type (`impl<T> Trait for
@@ -1497,4 +1551,42 @@ impl<'a> Parser<'a> {
                     .contains_key(&(id, member.clone()))
         })
     }
+}
+
+/// The tag of an impl's self type `ty`, as `object::tag` tags the type a
+/// program's value is coerced from (D872).
+#[cfg(feature = "rust-import")]
+fn implementor_tag(ty: &crate::host::type_ref::Type) -> Option<String> {
+    use crate::host::type_ref::{Builtin as Host, Shape};
+    use rawr_import::classify::representability::convert::{Builtin, Type};
+    let converted = match ty.shape() {
+        Shape::Builtin(builtin) => Type::Builtin(match builtin {
+            Host::Bool => Builtin::Bool,
+            Host::Char => Builtin::Char,
+            Host::F64 => Builtin::F64,
+            Host::F32 => Builtin::F32,
+            Host::I64 => Builtin::I64,
+            Host::I8 => Builtin::I8,
+            Host::I16 => Builtin::I16,
+            Host::I32 => Builtin::I32,
+            Host::Isize => Builtin::Isize,
+            Host::U8 => Builtin::U8,
+            Host::U16 => Builtin::U16,
+            Host::U32 => Builtin::U32,
+            Host::U64 => Builtin::U64,
+            Host::Usize => Builtin::Usize,
+            _ => return None,
+        }),
+        Shape::Imported {
+            identity,
+            arguments,
+        } if arguments.is_empty() => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::authenticated(
+                *identity.as_bytes(),
+            ),
+            arguments: Box::default(),
+        },
+        _ => return None,
+    };
+    rawr_import::classify::representability::object::tag(&converted)
 }
