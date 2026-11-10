@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use crate::classify::representability::convert;
 use crate::surface::{adapter, identity};
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// Borrowed compiler facts for one use, without diagnostic source locations.
 /// A selector that names its item is the use's identity: the path, which
@@ -38,6 +38,10 @@ pub struct Use<'a, P = &'a str> {
     /// uses that differ only in them are two instances, as two Rust
     /// function items are two types.
     pub slots: &'a [crate::surface::instance::Slot],
+    /// The script's impls that cross with its script types (D594): a save
+    /// that changes one's shape, as a function it adds or a signature it
+    /// changes, needs a runner that writes the new shape (#326).
+    pub impls: &'a [crate::surface::instance::ScriptImpl],
 }
 
 /// Borrowed exact static function operand at one formal position, its path
@@ -161,13 +165,14 @@ where
 impl<P: Serialize> Serialize for Use<'_, P> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
-        let mut fields = serializer.serialize_struct("Use", 6)?;
+        let mut fields = serializer.serialize_struct("Use", 7)?;
         fields.serialize_field("path", &unnamed(self.selector).then_some(&self.path))?;
         fields.serialize_field("selector", self.selector)?;
         fields.serialize_field("endpoint", &self.endpoint)?;
         fields.serialize_field("types", self.types)?;
         fields.serialize_field("constants", self.constants)?;
         fields.serialize_field("slots", self.slots)?;
+        fields.serialize_field("impls", self.impls)?;
         fields.end()
     }
 }
@@ -534,6 +539,7 @@ impl Selected<'_> {
                 types: self.identity.types(),
                 constants: self.identity.constants(),
                 slots: self.identity.slots(),
+                impls: self.identity.impls(),
             },
             functions: Sequence(
                 self.functions
@@ -793,6 +799,7 @@ fn endpoint_facts(
             types: &[],
             constants: &[],
             slots: &[],
+            impls: &[],
         },
         functions: Sequence(std::iter::empty::<Function<'_>>()),
         mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
@@ -1018,6 +1025,7 @@ mod tests {
             types: &[],
             constants: &[],
             slots: &[],
+            impls: &[],
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -1092,6 +1100,7 @@ mod tests {
             types: &[],
             constants: &[],
             slots: &[],
+            impls: &[],
         };
         let moved_functions = moved.entries[0]
             .identity()
@@ -1193,6 +1202,7 @@ mod tests {
             types: &types,
             constants: &[],
             slots: &[],
+            impls: &[],
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -1295,6 +1305,7 @@ mod tests {
             types: &types,
             constants: &[],
             slots: &[],
+            impls: &[],
         };
         let facts = Facts {
             used,
@@ -1372,6 +1383,7 @@ mod tests {
                 types: &[],
                 constants: &[],
                 slots: &[],
+                impls: &[],
             },
             functions: Sequence(std::iter::empty::<Function<'_>>()),
             mappers: Sequence(std::iter::empty::<Mapper<'_>>()),

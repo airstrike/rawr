@@ -2686,6 +2686,45 @@ fn an_edit_to_a_script_impl_takes_effect_at_its_next_call() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A save that changes a script impl's shape, here a function it adds to
+/// override the trait's provided `update` with no native use of its own,
+/// reaches native code: it calls the new function, not the provided one
+/// the running build was written with (#326).
+#[test]
+fn an_edit_to_a_script_impls_shape_reaches_native_code() {
+    let program = CROSSING.read("variants/program.rs");
+    let update = "    fn update(&self, state: &mut Self::State, event: &Event, bounds: Bounds) -> Option<Message> {\n        state.count += 1;\n        match event {\n            Event::Pressed(label) if bounds.area() > 0 => Some(Message::Pressed(label.clone())),\n            Event::Pressed(_) => None,\n        }\n    }\n\n";
+    assert!(program.contains(update), "{program}");
+    let root = CROSSING.lease(&[("src/main.rs", &program.replace(update, ""))]);
+    let main = root.join("src/main.rs");
+    let mut run = start(
+        &root,
+        &[
+            ("EVENTS_COUNT", PathBuf::from("600")),
+            ("EVENTS_STOP", root.join("stop")),
+        ],
+    );
+    // The presses a `N view canvas[primary plain P#..` line shows.
+    let presses = |line: &str| {
+        line.split_once(" view canvas[primary plain ")
+            .and_then(|(_, rest)| rest.split(['#', ' ']).next())
+            .and_then(|presses| presses.parse::<i64>().ok())
+    };
+    let before = run.until(|line| line.starts_with("3 view canvas["));
+    assert_eq!(presses(&before), Some(0), "{}", run.seen.join("\n"));
+
+    // Each press now gives a message of five letters, through no native
+    // use the running build lacks.
+    let pressing = "    fn update(&self, state: &mut Self::State, _event: &Event, _bounds: Bounds) -> Option<Message> {\n        state.count += 1;\n        Some(Message::Pressed(\"press\".to_owned()))\n    }\n\n";
+    fs::write(&main, program.replace(update, pressing)).unwrap();
+    let pressed = run.until(|line| presses(line).is_some_and(|presses| presses > 0));
+    assert!(presses(&pressed) > Some(0), "{}", run.seen.join("\n"));
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// `event` and the count a `N view count X` line shows.
 fn parse(line: &str) -> Option<(i64, i64)> {
     let (event, count) = line.split_once(" view count ")?;

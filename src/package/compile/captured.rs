@@ -137,6 +137,10 @@ impl Output {
             // carrier names it: `iced::__rawr_crate_iced_widget_<id>::Column`
             // is `iced_widget::Column`.
             let path = host::path::public(&used.path);
+            // The impls that cross with its script types, as the runner
+            // was built with them: a changed shape is a use it doesn't
+            // cover (#326).
+            let impls = package::import::crossing_impls(&used.types, &self.imported.impls);
             let matched = carrier.cover(
                 coverage::Use {
                     path: &*path,
@@ -145,6 +149,7 @@ impl Output {
                     types: &used.types,
                     constants: &used.constants,
                     slots: &used.slots,
+                    impls: &impls,
                 },
                 used.functions.iter().map(|function| coverage::Function {
                     position: function.position,
