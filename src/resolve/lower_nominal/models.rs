@@ -41,6 +41,9 @@ pub(super) struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     pub(super) access: crate::Access,
+    /// What the lowering read outside the program so far (`Models::read`).
+    #[cfg(feature = "rust-import")]
+    pub(super) reads: std::sync::Mutex<Vec<super::kept::Read>>,
     /// Whether the program builds as `rustc --test` builds it: `cfg(test)`
     /// holds.
     pub(super) test: bool,
@@ -792,6 +795,8 @@ impl Models {
             runtime,
             host,
             access: engine.access().clone(),
+            #[cfg(feature = "rust-import")]
+            reads: std::sync::Mutex::default(),
             test: engine.test(),
             features: program.features().clone(),
             imports,

@@ -113,6 +113,12 @@ impl ui::Design for Theme {
     }
 }
 
+/// The theme's mark, read from a file in the project as inboard's
+/// `theme.rs` reads its logo.
+pub fn mark() -> &'static str {
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/mark.txt"))
+}
+
 pub fn dark() -> Theme {
     Theme::from(palette::Theme::dark())
 }

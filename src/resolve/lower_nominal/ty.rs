@@ -14,7 +14,6 @@ use std::any::TypeId;
 use std::collections::BTreeMap;
 #[cfg(feature = "rust-import")]
 use std::collections::BTreeSet;
-use std::rc::Rc;
 
 #[derive(Clone, Debug, Eq)]
 pub(super) struct HostTyProof {
@@ -84,10 +83,10 @@ impl HostTyProof {
         definition: crate::host::type_def::Definition,
         alias: Option<crate::host::type_def::Definition>,
         owner: Option<crate::host::facade::Dependency>,
-    ) -> Rc<Self> {
+    ) -> crate::Shared<Self> {
         #[cfg(all(test, feature = "rust-import"))]
         HOST_TY_PROOF_ALLOCATIONS.with(|allocations| allocations.set(allocations.get() + 1));
-        Rc::new(Self {
+        crate::Shared::new(Self {
             definition,
             alias,
             owner,
@@ -581,7 +580,7 @@ pub(super) enum Ty {
     /// its candidates so a host callable can take each exact item. At
     /// runtime, `[index, fn pointer]`.
     FnChoice {
-        keys: Rc<Vec<crate::item::Key>>,
+        keys: crate::Shared<Vec<crate::item::Key>>,
         inputs: Box<[Ty]>,
         output: Box<Ty>,
     },
@@ -636,7 +635,7 @@ pub(super) enum Ty {
         target: Box<Ty>,
     },
     Host {
-        proof: Rc<HostTyProof>,
+        proof: crate::Shared<HostTyProof>,
         arguments: Box<[Ty]>,
     },
     /// A script struct or enum, with its type arguments when generic.

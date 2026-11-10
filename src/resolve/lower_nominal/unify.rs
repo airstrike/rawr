@@ -417,7 +417,7 @@ impl<'a> Parser<'a> {
             })
             .collect::<Option<Box<[_]>>>()?;
         Some(Ty::Host {
-            proof: Rc::clone(target_proof),
+            proof: crate::Shared::clone(target_proof),
             arguments,
         })
         .map(|projected| {

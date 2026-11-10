@@ -332,14 +332,14 @@ fn lower_part(
             .as_ref()
             .and_then(|(session, part)| session.key(*part, unit.source, unit.program, &texts));
         if let (Some((session, part)), Some(key)) = (session.as_mut(), key)
-            && let Some(reused) = session.reuse(*part, unit.source, key)
+            && let Some(reused) = session.reuse(*part, unit.source, key, &unit.models.access)
             && let Some(renewed) = reused
                 .lowered
                 .iter()
                 .map(|lowered| lowered.renewed(unit.models))
                 .collect::<Option<Vec<_>>>()
         {
-            for &(items, bytes) in &reused.charges {
+            for &(items, bytes) in &reused.outside.charges {
                 imported
                     .retain_checked(items, bytes)
                     .map_err(|error| LoweringFailure::original(unit.source, error.into()))?;
@@ -360,6 +360,8 @@ fn lower_part(
         let mut uses = Vec::new();
         let mut dependencies = BTreeSet::new();
         let mut lowerings = Vec::new();
+        // What this part reads outside the program is kept with it.
+        unit.models.take_reads();
         {
             let mut context = ImportedContext {
                 native: imported.native,
@@ -391,7 +393,7 @@ fn lower_part(
                 &lowerings,
                 &uses,
                 &dependencies,
-                recording.charges,
+                kept::Outside::new(recording.charges, unit.models.take_reads()),
             );
         }
         imported.uses.append(&mut uses);

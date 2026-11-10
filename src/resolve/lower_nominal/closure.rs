@@ -13,7 +13,6 @@ use crate::resolve::{borrowck, BindingSite, Error};
 use crate::tokenizer::Token;
 use crate::{ImmutableString, Position, Span};
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 /// A closure passed to the host: it becomes its own generated function, an
 /// item the host invokes like a named function, after the values it
@@ -46,7 +45,7 @@ pub(crate) struct Callable {
 
 /// The host type a host callable returns, and how many type arguments it
 /// takes.
-pub(super) type Output = (Rc<HostTyProof>, usize);
+pub(super) type Output = (crate::Shared<HostTyProof>, usize);
 
 /// A host callable parameter's input types, when known, and its output.
 pub(super) type Hint = (Option<Box<[Ty]>>, Option<Output>);

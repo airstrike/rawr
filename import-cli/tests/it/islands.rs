@@ -1278,7 +1278,9 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 /// watch from the running build, so a body edit stages no watcher root. A
 /// save costs the same however many dependencies the program has (#1604).
 /// The runner lowers that file again and reuses every other file's
-/// lowering (#1646). `RAWR_VERBOSE` says what each save did, in the owner
+/// lowering, one that reads a file and a variable outside the program
+/// included, as inboard's `theme.rs` reads its logo (#1646).
+/// `RAWR_VERBOSE` says what each save did, in the owner
 /// and in the runner.
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
@@ -1304,6 +1306,10 @@ fn a_save_parses_only_the_file_it_changed() {
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
     edit(&sidebar, "\"{label} item\"", "\"{label} entry\"");
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick entry styled 0"));
+    // A method's body: the other files' lowering reads its impl's
+    // declarations, not its body.
+    edit(&sidebar, "\"{title} sidebar\"", "\"{title} panel\"");
+    run.until(|line| line.starts_with("tock ") && line.contains("[bar panel styled 0, "));
     // The program ends; `rawr run` keeps watching for the next save.
     fs::write(&stop, "").unwrap();
     run.told(&events, |text| {
@@ -1333,34 +1339,33 @@ fn a_save_parses_only_the_file_it_changed() {
             "stderr: rawr-import: a save parsed ",
             ", Cargo resolutions 0, API tables loaded 0, facades registered 0, watch roots staged 0"
         ),
-        2,
+        3,
         "{seen}"
     );
-    // The runner lowers again only the file the save changed: the edit is
-    // to a body, which nothing another file lowers reads (#1646).
+    // The runner reads for its instances and lowers again only the file
+    // the save changed: the edit is to a body, which nothing another file
+    // reads (#1646).
     let runner = run
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr runner: a save parsed "))
         .map(|line| {
-            let (parsed, rest) = line.split_once(" sources, lowered ").unwrap();
+            let (parsed, rest) = line.split_once(" sources, revealed ").unwrap();
+            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
             let (lowered, rest) = rest.split_once(" files").unwrap();
             assert_eq!(rest, ", registered 0 facades", "{seen}");
-            (
-                parsed.parse::<usize>().unwrap(),
-                lowered.parse::<usize>().unwrap(),
-            )
+            [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
         })
         .collect::<Vec<_>>();
     assert!(
-        runner
-            .iter()
-            .all(|(parsed, lowered)| *parsed <= 1 && lowered == parsed),
+        runner.iter().all(|[parsed, revealed, lowered]| *parsed <= 1
+            && revealed == parsed
+            && lowered == parsed),
         "{runner:?}\n{seen}"
     );
     assert_eq!(
-        runner.iter().map(|(parsed, _)| parsed).sum::<usize>(),
-        2,
+        runner.iter().map(|[parsed, ..]| parsed).sum::<usize>(),
+        3,
         "{seen}"
     );
 }
