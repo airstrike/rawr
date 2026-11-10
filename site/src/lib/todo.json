@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A check parses the program once and keeps the parse across its demand rounds, where each round used to parse every source again. `RAWR_VERBOSE=1` also prints, per round, the harnesses bound, build outputs copied, bundles sealed and sources parsed.","issues":[1634],"refs":[1618]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.177",
@@ -3554,7 +3559,8 @@
     {"issue":1630,"title":"A crate macro including a file relative to a native module, as wgpu::include_wgsl!, can't find it","state":"closed","category":"No glue (D593)","release":"0.3.177"},
     {"issue":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open","category":"Divergences from rustc"},
     {"issue":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"open","category":"Divergences from rustc"},
-    {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open","category":"Divergences from rustc"}
+    {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open","category":"Divergences from rustc"},
+    {"issue":1634,"title":"A check parsed every program source again in each demand round","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
