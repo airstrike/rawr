@@ -722,7 +722,7 @@ impl<'a> Parser<'a> {
             return None;
         };
         Some(Ty::FnChoice {
-            keys: Rc::new(keys),
+            keys: crate::Shared::new(keys),
             inputs,
             output,
         })

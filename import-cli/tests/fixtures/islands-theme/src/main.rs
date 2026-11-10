@@ -87,6 +87,7 @@ fn main() {
         typeface.size(),
         typeface.family()
     );
+    println!("mark {}", theme::mark().trim());
     println!("{}", home::heading());
     println!("{}", home::framed().draw(&theme));
     println!("{}", home::label().draw(&dark));

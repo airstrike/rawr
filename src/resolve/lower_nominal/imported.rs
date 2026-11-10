@@ -8,7 +8,7 @@ use super::ty::Ty;
 use super::ty::{Float, Int};
 #[cfg(feature = "rust-import")]
 use super::{
-    body_source, contains_open_literal, holds_value, impl_surface_type, lifetime_text,
+    body_source, contains_open_literal, holds_value, impl_surface_type, kept, lifetime_text,
     mentions_parameter, reaches_param, sequence, source_span, ImportedContext, ImportedUse, Parser,
 };
 use crate::resolve::type_ref;
@@ -236,7 +236,10 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
     allocation: &mut A,
 ) -> Result<(), crate::resolve::ImportedFailure> {
     instance_templates(program);
-    let instancing = body_templates(engine, program, host, allocation)?;
+    // A runner's compiler reads again only the bodies whose reading reads
+    // something that changed (#1646).
+    let mut readings = kept::Readings::open(engine);
+    let instancing = body_templates(engine, program, host, allocation, readings.as_mut())?;
     #[derive(Clone, Copy)]
     enum Pending {
         Function(usize),
@@ -275,7 +278,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
     loop {
         let added = if instancing && instance_rounds < MAX_INSTANCE_ROUNDS {
             instance_rounds += 1;
-            instance_round(engine, program, host, allocation)?
+            instance_round(engine, program, host, allocation, readings.as_mut())?
         } else {
             Vec::new()
         };
@@ -476,6 +479,9 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
             }
         }
         pending = waiting;
+    }
+    if let Some(readings) = &mut readings {
+        readings.succeeded();
     }
     Ok(())
 }
@@ -884,6 +890,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
     program: &mut Program,
     host: &Shared<crate::host::Registry>,
     allocation: &mut A,
+    mut readings: Option<&mut kept::Readings<'_>>,
 ) -> Result<bool, crate::resolve::ImportedFailure> {
     // A method of an impl of the program's own trait is one too, as the
     // blanket `impl<'a, T, Message> IntoContent<'a, Message> for T` whose
@@ -987,87 +994,107 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
                 .mirroring(program, host);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
+        if let Some(readings) = readings.as_deref_mut() {
+            readings.begin(program, &models);
+        }
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
-            let mut uses = Vec::new();
-            let mut dependencies = BTreeSet::new();
-            // An erased body may fail where a crate's item takes its
-            // parameter; it fails again where it is lowered, if it isn't
-            // compiled per instantiation.
-            let mut allocation_failure = None;
             let source = match *candidate {
                 Added::Function(index) => program.items[index].source,
                 Added::Method(index) => method_at(program, index).source(),
             };
-            let context = ImportedContext {
-                native: None,
-                allocation: &mut *allocation,
-                failure: &mut allocation_failure,
-                source,
-                uses: &mut uses,
-                dependencies: &mut dependencies,
-            };
-            let reaches = match *candidate {
-                Added::Function(index) => {
-                    let shell = &program.items[index];
-                    let item::Kind::Function(definition) = &shell.kind else {
-                        continue;
-                    };
-                    let body_source = body_source(
-                        definition
-                            .body
-                            .text
-                            .as_deref()
-                            .unwrap_or_else(|| program.source.text_at(shell.source)),
-                        &definition.body,
-                    );
-                    let mut parser = Parser::for_function(
-                        engine,
-                        &body_source,
-                        models.for_source(shell.source),
-                        definition,
-                        key.clone(),
-                        0,
-                        0,
-                        Some(context),
-                    );
-                    parser.symbolic_only = true;
-                    parser.collecting_instances = true;
-                    let _ = parser
-                        .expect_output(definition.output.as_ref())
-                        .and_then(|()| parser.parse_function_body(definition));
-                    reaches_host(&mut parser)
-                }
-                Added::Method(index) => {
-                    let definition = method_at(program, index);
-                    let body_source = source_span(
-                        definition
-                            .body_text()
-                            .unwrap_or_else(|| program.source.text_at(definition.source())),
-                        definition.body(),
-                    );
-                    match Parser::for_method(
-                        engine,
-                        &body_source,
-                        models.for_source(definition.source()),
-                        definition,
-                        0,
-                        0,
-                        Some(context),
-                    ) {
-                        Ok(mut parser) => {
-                            parser.symbolic_only = true;
-                            parser.collecting_instances = true;
-                            let _ = parser
-                                .expect_output(Some(definition.output()))
-                                .and_then(|()| parser.parse_method_body(definition));
-                            reaches_host(&mut parser)
-                        }
-                        Err(_) => false,
+            let read = |allocation: &mut dyn crate::host::ImportAllocation| {
+                let mut uses = Vec::new();
+                let mut dependencies = BTreeSet::new();
+                // An erased body may fail where a crate's item takes its
+                // parameter; it fails again where it is lowered, if it
+                // isn't compiled per instantiation.
+                let mut allocation_failure = None;
+                let context = ImportedContext {
+                    native: None,
+                    allocation,
+                    failure: &mut allocation_failure,
+                    source,
+                    uses: &mut uses,
+                    dependencies: &mut dependencies,
+                };
+                let reaches = match *candidate {
+                    Added::Function(index) => {
+                        let shell = &program.items[index];
+                        let item::Kind::Function(definition) = &shell.kind else {
+                            return Ok(kept::Found::default());
+                        };
+                        let body_source = body_source(
+                            definition
+                                .body
+                                .text
+                                .as_deref()
+                                .unwrap_or_else(|| program.source.text_at(shell.source)),
+                            &definition.body,
+                        );
+                        let mut parser = Parser::for_function(
+                            engine,
+                            &body_source,
+                            models.for_source(shell.source),
+                            definition,
+                            key.clone(),
+                            0,
+                            0,
+                            Some(context),
+                        );
+                        parser.symbolic_only = true;
+                        parser.collecting_instances = true;
+                        let _ = parser
+                            .expect_output(definition.output.as_ref())
+                            .and_then(|()| parser.parse_function_body(definition));
+                        reaches_host(&mut parser)
                     }
-                }
+                    Added::Method(index) => {
+                        let definition = method_at(program, index);
+                        let body_source = source_span(
+                            definition
+                                .body_text()
+                                .unwrap_or_else(|| program.source.text_at(definition.source())),
+                            definition.body(),
+                        );
+                        match Parser::for_method(
+                            engine,
+                            &body_source,
+                            models.for_source(definition.source()),
+                            definition,
+                            0,
+                            0,
+                            Some(context),
+                        ) {
+                            Ok(mut parser) => {
+                                parser.symbolic_only = true;
+                                parser.collecting_instances = true;
+                                let _ = parser
+                                    .expect_output(Some(definition.output()))
+                                    .and_then(|()| parser.parse_method_body(definition));
+                                reaches_host(&mut parser)
+                            }
+                            Err(_) => false,
+                        }
+                    }
+                };
+                Ok(kept::Found {
+                    reaches,
+                    ..kept::Found::default()
+                })
             };
-            if reaches {
+            let reading = kept::Reading {
+                program,
+                source,
+                key,
+                purpose: kept::Purpose::Erased,
+            };
+            let read = match readings.as_deref_mut() {
+                Some(readings) => readings.read(reading, &models, allocation, read),
+                None => read(allocation),
+            }
+            .map_err(crate::resolve::ImportedFailure::Surface)?;
+            if read.reaches {
                 promoted.push(key.clone());
             }
         }
@@ -1308,6 +1335,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
     program: &mut Program,
     host: &Shared<crate::host::Registry>,
     allocation: &mut A,
+    mut readings: Option<&mut kept::Readings<'_>>,
 ) -> Result<Vec<Added>, crate::resolve::ImportedFailure> {
     let templates = program
         .instances
@@ -1320,6 +1348,9 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
                 .mirroring(program, host);
         let models = Models::new(program, runtime, Shared::clone(host), engine);
+        if let Some(readings) = readings.as_deref_mut() {
+            readings.begin(program, &models);
+        }
         // Each call, by the body that makes it: the template and its types.
         let mut found = Vec::<(crate::item::Key, crate::item::Key, Vec<Ty>, Span)>::new();
         let mut impl_uses = Vec::new();
@@ -1333,48 +1364,64 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             if templates.contains(&key) {
                 continue;
             }
-            let body_source = body_source(
-                definition
-                    .body
-                    .text
-                    .as_deref()
-                    .unwrap_or_else(|| program.source.text_at(shell.source)),
-                &definition.body,
-            );
-            let mut uses = Vec::new();
-            let mut dependencies = BTreeSet::new();
-            let mut allocation_failure = None;
-            let mut parser = Parser::for_function(
-                engine,
-                &body_source,
-                models.for_source(shell.source),
-                definition,
-                key.clone(),
-                0,
-                0,
-                Some(ImportedContext {
-                    native: None,
-                    allocation,
-                    failure: &mut allocation_failure,
-                    source: shell.source,
-                    uses: &mut uses,
-                    dependencies: &mut dependencies,
-                }),
-            );
-            parser.symbolic_only = true;
-            parser.collecting_instances = true;
-            // A body that fails here fails again where it is lowered.
-            let _ = parser.parse_function_body(definition);
+            let read = |allocation: &mut dyn crate::host::ImportAllocation| {
+                let body_source = body_source(
+                    definition
+                        .body
+                        .text
+                        .as_deref()
+                        .unwrap_or_else(|| program.source.text_at(shell.source)),
+                    &definition.body,
+                );
+                let mut uses = Vec::new();
+                let mut dependencies = BTreeSet::new();
+                let mut allocation_failure = None;
+                let mut parser = Parser::for_function(
+                    engine,
+                    &body_source,
+                    models.for_source(shell.source),
+                    definition,
+                    key.clone(),
+                    0,
+                    0,
+                    Some(ImportedContext {
+                        native: None,
+                        allocation,
+                        failure: &mut allocation_failure,
+                        source: shell.source,
+                        uses: &mut uses,
+                        dependencies: &mut dependencies,
+                    }),
+                );
+                parser.symbolic_only = true;
+                parser.collecting_instances = true;
+                // A body that fails here fails again where it is lowered.
+                let _ = parser.parse_function_body(definition);
+                let found = kept::Found {
+                    calls: take_instance_calls(&mut parser),
+                    impl_uses: take_impl_uses(&mut parser),
+                    reaches: false,
+                };
+                drop(parser);
+                allocation_failure.map_or(Ok(found), Err)
+            };
+            let reading = kept::Reading {
+                program,
+                source: shell.source,
+                key: &key,
+                purpose: kept::Purpose::Calls,
+            };
+            let read = match readings.as_deref_mut() {
+                Some(readings) => readings.read(reading, &models, allocation, read),
+                None => read(allocation),
+            }
+            .map_err(crate::resolve::ImportedFailure::Surface)?;
             found.extend(
-                take_instance_calls(&mut parser)
+                read.calls
                     .into_iter()
                     .map(|(template, types, call)| (key.clone(), template, types, call)),
             );
-            impl_uses.extend(take_impl_uses(&mut parser));
-            drop(parser);
-            if let Some(error) = allocation_failure {
-                return Err(crate::resolve::ImportedFailure::Surface(error));
-            }
+            impl_uses.extend(read.impl_uses);
         }
         // A builtin type's methods too, as an impl for every type of a bound
         // `IntoIterator`, whose instance calls `Content::with_children`.
@@ -1382,43 +1429,59 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             if templates.contains(definition.key()) {
                 continue;
             }
-            let body_source = source_span(
-                definition
-                    .body_text()
-                    .unwrap_or_else(|| program.source.text_at(definition.source())),
-                definition.body(),
-            );
-            let mut uses = Vec::new();
-            let mut dependencies = BTreeSet::new();
-            let mut allocation_failure = None;
-            let parser = Parser::for_method(
-                engine,
-                &body_source,
-                models.for_source(definition.source()),
-                definition,
-                0,
-                0,
-                Some(ImportedContext {
-                    native: None,
-                    allocation,
-                    failure: &mut allocation_failure,
-                    source: definition.source(),
-                    uses: &mut uses,
-                    dependencies: &mut dependencies,
+            let read = |allocation: &mut dyn crate::host::ImportAllocation| {
+                let body_source = source_span(
+                    definition
+                        .body_text()
+                        .unwrap_or_else(|| program.source.text_at(definition.source())),
+                    definition.body(),
+                );
+                let mut uses = Vec::new();
+                let mut dependencies = BTreeSet::new();
+                let mut allocation_failure = None;
+                let parser = Parser::for_method(
+                    engine,
+                    &body_source,
+                    models.for_source(definition.source()),
+                    definition,
+                    0,
+                    0,
+                    Some(ImportedContext {
+                        native: None,
+                        allocation,
+                        failure: &mut allocation_failure,
+                        source: definition.source(),
+                        uses: &mut uses,
+                        dependencies: &mut dependencies,
+                    }),
+                );
+                let mut found = kept::Found::default();
+                if let Ok(mut parser) = parser {
+                    parser.symbolic_only = true;
+                    parser.collecting_instances = true;
+                    let _ = parser.parse_method_body(definition);
+                    found.calls = take_instance_calls(&mut parser);
+                    found.impl_uses = take_impl_uses(&mut parser);
+                }
+                allocation_failure.map_or(Ok(found), Err)
+            };
+            let reading = kept::Reading {
+                program,
+                source: definition.source(),
+                key: definition.key(),
+                purpose: kept::Purpose::Calls,
+            };
+            let read = match readings.as_deref_mut() {
+                Some(readings) => readings.read(reading, &models, allocation, read),
+                None => read(allocation),
+            }
+            .map_err(crate::resolve::ImportedFailure::Surface)?;
+            found.extend(
+                read.calls.into_iter().map(|(template, types, call)| {
+                    (definition.key().clone(), template, types, call)
                 }),
             );
-            if let Ok(mut parser) = parser {
-                parser.symbolic_only = true;
-                parser.collecting_instances = true;
-                let _ = parser.parse_method_body(definition);
-                found.extend(take_instance_calls(&mut parser).into_iter().map(
-                    |(template, types, call)| (definition.key().clone(), template, types, call),
-                ));
-                impl_uses.extend(take_impl_uses(&mut parser));
-            }
-            if let Some(error) = allocation_failure {
-                return Err(crate::resolve::ImportedFailure::Surface(error));
-            }
+            impl_uses.extend(read.impl_uses);
         }
         let mut added = Vec::<(crate::item::Key, Vec<ImmutableString>, Vec<Ty>)>::new();
         // Each instance native code calls a template at, named by the key

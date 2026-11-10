@@ -7,7 +7,6 @@ use super::{builtin_operator, instantiate, is_iterator_trait, Float, Int, Ty};
 use crate::resolve::type_ref;
 use crate::{type_def, ImmutableString, Shared};
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 #[derive(Debug, Default)]
 pub(super) struct Inference {
@@ -185,7 +184,7 @@ impl Inference {
                 .get(id)
                 .map_or_else(|| ty.clone(), |bound| self.resolve(bound)),
             Ty::Host { proof, arguments } => Ty::Host {
-                proof: Rc::clone(proof),
+                proof: crate::Shared::clone(proof),
                 arguments: arguments
                     .iter()
                     .map(|argument| self.resolve(argument))

@@ -5117,14 +5117,16 @@ mod __rawr_profile {
     ) -> Result<__rawr_internal::package::import::resident::Outcome, __rawr_internal::package::import::resident::Error> {
         let parsed = engine.resident_parsed();
         let lowered = engine.resident_lowered();
+        let revealed = engine.resident_revealed();
         let registered = __rawr_internal::Engine::registered_facades();
         let compiled = engine.compile_package_snapshot_resident_plain(snapshot);
         // `RAWR_VERBOSE` says what the save's compile did again (#1604,
         // #1646).
         if std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0") {
             eprintln!(
-                "rawr runner: a save parsed {} sources, lowered {} files, registered {} facades",
+                "rawr runner: a save parsed {} sources, revealed {} files, lowered {} files, registered {} facades",
                 engine.resident_parsed() - parsed,
+                engine.resident_revealed() - revealed,
                 engine.resident_lowered() - lowered,
                 __rawr_internal::Engine::registered_facades() - registered,
             );

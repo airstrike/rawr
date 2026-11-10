@@ -369,42 +369,18 @@ impl<'a> Parser<'a> {
         path.is_file().then_some(path)
     }
 
-    /// A compile-time environment variable: `CARGO_MANIFEST_DIR` is the
-    /// directory of the project the file is in; any other is the
-    /// environment's.
+    /// A compile-time environment variable (`Place::variable`). A runner's
+    /// compiler keeps it with the lowering that read it (#1646).
     pub(super) fn environment_variable(&self, name: &str) -> Option<String> {
-        // A program granted no environment has none: every variable is
-        // undefined, as rustc reports one.
-        if !self.models.access.env() {
-            return None;
-        }
-        {
-            // What Cargo sets for the crate this file is in.
-            if name.starts_with("CARGO_")
-                && let (Some(file), Some(entry)) = (self.source_file(), self.entry_file())
-                && let Some(value) = cargo_env::variable(&file, &entry, name)
-            {
-                return value;
-            }
-            if name == "CARGO_MANIFEST_DIR" {
-                let file = self.source_file()?;
-                let manifest = file
-                    .ancestors()
-                    .skip(1)
-                    .find(|directory| directory.join("Cargo.toml").is_file())
-                    .or_else(|| {
-                        file.ancestors()
-                            .skip(1)
-                            .find(|directory| {
-                                directory.file_name().is_some_and(|name| name == "src")
-                            })
-                            .and_then(std::path::Path::parent)
-                    })
-                    .or_else(|| file.parent())?;
-                return Some(manifest.to_string_lossy().into_owned());
-            }
-            std::env::var(name).ok()
-        }
+        let place = Place {
+            file: self.source_file(),
+            entry: self.entry_file(),
+        };
+        let value = place.variable(&self.models.access, name);
+        #[cfg(feature = "rust-import")]
+        self.models
+            .read(super::kept::Read::variable(place, name, value.as_deref()));
+        value
     }
 
     /// The bytes of the file `path` names, relative to this code's file.
@@ -419,24 +395,21 @@ impl<'a> Parser<'a> {
         if let Some((_, bytes)) = crate::resolve::bundled(path) {
             return Ok(bytes.to_vec());
         }
-        {
-            let Some(file) = self.source_file() else {
-                return Err(error(format!(
-                    "`{path}` is read relative to a file on disk; this code is not in one"
-                )));
-            };
-            let target = file.parent().map_or_else(
-                || std::path::PathBuf::from(path),
-                |directory| directory.join(path),
-            );
-            self.models
-                .access
-                .read(&target)
-                .and_then(|()| std::fs::read(&target))
-                .map_err(|failure| {
-                    error(format!("couldn't read `{}`: {failure}", target.display()))
-                })
-        }
+        let Some(file) = self.source_file() else {
+            return Err(error(format!(
+                "`{path}` is read relative to a file on disk; this code is not in one"
+            )));
+        };
+        let target = file.parent().map_or_else(
+            || std::path::PathBuf::from(path),
+            |directory| directory.join(path),
+        );
+        let bytes = included(&self.models.access, &target)
+            .map_err(|failure| error(format!("couldn't read `{}`: {failure}", target.display())))?;
+        // A runner's compiler keeps it with the lowering that read it.
+        #[cfg(feature = "rust-import")]
+        self.models.read(super::kept::Read::file(target, &bytes));
+        Ok(bytes)
     }
 
     pub(super) fn float_constant(&mut self, value: f64, single: bool, at: Span) -> ParsedExpr {
@@ -494,4 +467,55 @@ impl<'a> Parser<'a> {
         }
         .retain_origin()
     }
+}
+
+/// Where code reads its compile-time variables: its file and its
+/// program's root file, each when it is a file on disk.
+#[derive(Clone)]
+pub(super) struct Place {
+    file: Option<std::path::PathBuf>,
+    entry: Option<std::path::PathBuf>,
+}
+
+impl Place {
+    /// The compile-time environment variable `name` here: what Cargo sets
+    /// for the crate the file is in, `CARGO_MANIFEST_DIR` being the
+    /// directory of the project the file is in, and else the
+    /// environment's. A program granted no environment has none: every
+    /// variable is undefined, as rustc reports one.
+    pub(super) fn variable(&self, access: &crate::Access, name: &str) -> Option<String> {
+        if !access.env() {
+            return None;
+        }
+        if name.starts_with("CARGO_")
+            && let (Some(file), Some(entry)) = (&self.file, &self.entry)
+            && let Some(value) = cargo_env::variable(file, entry, name)
+        {
+            return value;
+        }
+        if name == "CARGO_MANIFEST_DIR" {
+            let file = self.file.as_deref()?;
+            let manifest = file
+                .ancestors()
+                .skip(1)
+                .find(|directory| directory.join("Cargo.toml").is_file())
+                .or_else(|| {
+                    file.ancestors()
+                        .skip(1)
+                        .find(|directory| directory.file_name().is_some_and(|name| name == "src"))
+                        .and_then(std::path::Path::parent)
+                })
+                .or_else(|| file.parent())?;
+            return Some(manifest.to_string_lossy().into_owned());
+        }
+        std::env::var(name).ok()
+    }
+}
+
+/// The bytes of the file at `target`, when the program may read it.
+pub(super) fn included(
+    access: &crate::Access,
+    target: &std::path::Path,
+) -> std::io::Result<Vec<u8>> {
+    access.read(target).and_then(|()| std::fs::read(target))
 }

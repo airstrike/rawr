@@ -236,7 +236,6 @@ use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
 use std::iter::Peekable;
-use std::rc::Rc;
 use std::vec::IntoIter;
 #[cfg(feature = "rust-import")]
 use surface::{

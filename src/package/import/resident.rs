@@ -98,6 +98,14 @@ impl Engine {
         lock(&self.resident_lowerings).lowered()
     }
 
+    /// How many sources' bodies this runner's compiles read again to reveal
+    /// what their calls instantiate, rather than reusing an earlier
+    /// compile's reading (#1646).
+    #[doc(hidden)]
+    pub fn resident_revealed(&self) -> usize {
+        lock(&self.resident_lowerings).revealed()
+    }
+
     /// The package graph of `snapshot`. A runner's compiler, which compiles
     /// the program again on each save, reads each source whose text its
     /// last compile parsed from that parse, and parses only the sources
