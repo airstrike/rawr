@@ -500,6 +500,7 @@ fn prepare(
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
         ROUNDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        rawr_import::progress::begin_round();
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
         // The record a retry stored names types of its own (D869).
@@ -588,7 +589,7 @@ fn prepare(
                     &policy,
                     expected,
                     &limits,
-                    |contract, _profile, _facade| {
+                    |contract, _profile, facade| {
                         let mut snapshot = Some(snapshot);
                         loop {
                             let snapshot = snapshot.take().unwrap_or_else(|| {
@@ -603,6 +604,7 @@ fn prepare(
                             engine.set_access(rawr::Access::all());
                             let error = match engine.compile_imported_with_applications(
                                 contract,
+                                facade,
                                 snapshot,
                                 &applications,
                             ) {

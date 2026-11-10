@@ -167,6 +167,9 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
                 crate::plain::rounds(),
                 rawr_import::progress::work()
             );
+            for (index, round) in rawr_import::progress::rounds().iter().enumerate() {
+                eprintln!("rawr-import: round {}: {round}", index + 1);
+            }
         }
         let checked = owner::settle_checked(checked, cargo.as_ref(), &target, &Plain);
         let checked = checked.as_deref().map_err(Option::as_ref);

@@ -224,6 +224,7 @@ pub(crate) fn built() {
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn probed() {
     PROBED.fetch_add(1, Ordering::Relaxed);
+    count_round(|round| &mut round.probed, 1);
 }
 
 /// What this process has done to read its dependencies' API so far.
@@ -274,6 +275,73 @@ pub fn work() -> Work {
     }
 }
 
+/// What one round of a check did at each stage: how many units the
+/// nightly compiled, whether the probe ran, how many definitions the round
+/// read from the API and classified, and how many classified paths it
+/// generated bindings for. A stage a cache answered counts nothing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Round {
+    compiled: usize,
+    probed: usize,
+    read: usize,
+    classified: usize,
+    generated: usize,
+}
+
+impl std::fmt::Display for Round {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "compiled {}, probes {}, read {}, classified {}, generated {}",
+            self.compiled, self.probed, self.read, self.classified, self.generated
+        )
+    }
+}
+
+/// Each round this process began ([`begin_round`]), in order.
+static ROUNDS: Mutex<Vec<Round>> = Mutex::new(Vec::new());
+
+/// Begin one round of a check: the stages that follow count toward it.
+pub fn begin_round() {
+    rounds_lock().push(Round::default());
+}
+
+/// The rounds this process began, each with what its stages did.
+#[must_use]
+pub fn rounds() -> Vec<Round> {
+    rounds_lock().clone()
+}
+
+fn rounds_lock() -> std::sync::MutexGuard<'static, Vec<Round>> {
+    ROUNDS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Add to the current round's count of one stage; outside a round,
+/// nothing is counted.
+fn count_round(stage: impl FnOnce(&mut Round) -> &mut usize, amount: usize) {
+    if let Some(round) = rounds_lock().last_mut() {
+        *stage(round) += amount;
+    }
+}
+
+/// Count `definitions` read from the API in this round.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn read(definitions: usize) {
+    count_round(|round| &mut round.read, definitions);
+}
+
+/// Count `definitions` classified in this round.
+pub(crate) fn classified(definitions: usize) {
+    count_round(|round| &mut round.classified, definitions);
+}
+
+/// Count the classified paths bindings were generated for in this round.
+pub(crate) fn generated(outcomes: usize) {
+    count_round(|round| &mut round.generated, outcomes);
+}
+
 /// How many lines this process has printed above the status line: a
 /// command that did nothing printed none.
 pub fn said() -> usize {
@@ -318,7 +386,11 @@ pub(crate) fn observe(stdout: bool, chunk: &[u8]) {
             draw(&mut state);
         }
     } else {
-        state.compiling += count(chunk, b"Compiling ");
+        let compiling = count(chunk, b"Compiling ");
+        state.compiling += compiling;
+        if state.phase == Some(EXTRACTING) {
+            count_round(|round| &mut round.compiled, compiling);
+        }
     }
 }
 

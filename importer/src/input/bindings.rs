@@ -317,7 +317,12 @@ impl Inputs {
                                         name == key && Some(output.as_ref()) == value.as_deref()
                                     })
                             }));
-                    if generated {
+                    // The roots rawr's wrapper records (D866) are rawr's own
+                    // variable, set for every check of this request: they
+                    // decide where a record is written and are in the unit's
+                    // fingerprint, but no compiled API reads them. A
+                    // generated crate's table is bound by its files.
+                    if generated || key.as_ref() == crate::record::ROOTS {
                         continue;
                     }
                     if current.environment.get(key.as_ref()).map(String::as_str) != value.as_deref()
@@ -685,6 +690,29 @@ mod tests {
             Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap_err(),
             Unshared::Environment("UNEXPLAINED_OUTPUT".to_owned())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A generated crate's unit reads the roots rawr's wrapper records
+    /// (D866), which only rawr's own build sets: its table is staged for the
+    /// next demand round as any project crate's is (#660), and replays with
+    /// its files unchanged.
+    #[test]
+    fn the_record_roots_rawr_sets_are_no_input_of_a_staged_table() {
+        let (root, mut baseline, build, current) = fixture();
+        let mut recipes = std::mem::take(&mut baseline.recipes).into_vec();
+        recipes.push(proof::Recipe::Environment {
+            package_id: PACKAGE.into(),
+            execution: "library.d".into(),
+            key: crate::record::ROOTS.into(),
+            value: Some(root.join("project").to_str().unwrap().into()),
+        });
+        baseline.recipes = recipes.into_boxed_slice();
+        assert!(!current.environment.contains_key(crate::record::ROOTS));
+        let staged =
+            Inputs::capture_staged(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        assert!(!staged.environment.contains_key(crate::record::ROOTS));
+        assert!(staged.validate(&current).is_some());
         fs::remove_dir_all(root).unwrap();
     }
 

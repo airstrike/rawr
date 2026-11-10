@@ -1110,6 +1110,24 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         ),
         "{said}"
     );
+    // Each round says what its stages did: the first reads no API, and
+    // each demand round probes once and reads, classifies and generates
+    // the whole API it grew to (#1618).
+    let round = |number: usize| {
+        said.lines()
+            .find_map(|line| line.strip_prefix(&format!("rawr-import: round {number}: ")))
+            .unwrap_or_else(|| panic!("no round {number}: {said}"))
+            .to_owned()
+    };
+    assert!(
+        round(1).ends_with("probes 0, read 0, classified 0, generated 0"),
+        "{said}"
+    );
+    for number in 2..=4 {
+        let stages = round(number);
+        assert!(stages.contains(", probes 1, read "), "{said}");
+        assert!(!stages.contains("read 0,"), "{said}");
+    }
     let mut run = start(&root, &[]);
     for expected in printed.lines() {
         let line = run.until(|_| true);
