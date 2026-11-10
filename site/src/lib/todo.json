@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-10",
-  "version": "0.3.178",
+  "version": "0.3.179",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,20 +9,22 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A `Box<dyn Fn>`, a `&dyn Fn` or a `&Box<dyn Fn>` fills a function's `impl Fn` or `F: Fn` input, as in Rust, so a boxed style closure given to iced's `container::style` checks and runs. An `Rc` or `Arc` of one stays an error, as in rustc. Messages name a box or reference of a function `dyn Fn(..)`, and a crate method on a borrowed receiver can call back a closure the receiver holds.","issues":[1650],"refs":[222]},
-        {"text":"A type alias of an associated type takes its defaulted parameters written, so `fn f() -> canvas::Geometry<Renderer>` checks and runs, as iced's sandpiles writes it.","issues":[317]},
-        {"text":"A crate function's or method's type parameter that only an argument's std-trait bound names is inferred from std's impl for the argument's type, as in rustc. `Link` of iced's `rich_text(spans)` given a `Vec<Span<'static, ()>>`, an array or a slice is `()`, through `AsRef`, `Borrow` and the other std impls.","issues":[1651]},
-        {"text":"A crate function a `use` names can be called with a turbofish, as `span::<()>(\"e\")`.","issues":[1652]},
-        {"text":"An expression nests and a function recurses as deep as a debug build of Rust allows. There is no expression-depth limit, and the call depth is 100 000.","issues":[962,1624]},
-        {"text":"A spawned thread's panic, and a runner's main panic, name the file, line and column where they panicked.","issues":[948]},
-        {"text":"`collect()` into a `Result` or an `Option` of a map or a set runs.","issues":[937]},
-        {"text":"`rawr test` runs `cargo check` on the tests beside it and reports what only rustc rejects.","issues":[929]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.179",
+        "date": "2026-11-10",
+        "entries": [
+          {"text":"A `Box<dyn Fn>`, a `&dyn Fn` or a `&Box<dyn Fn>` fills a function's `impl Fn` or `F: Fn` input, as in Rust, so a boxed style closure given to iced's `container::style` checks and runs. An `Rc` or `Arc` of one stays an error, as in rustc. Messages name a box or reference of a function `dyn Fn(..)`, and a crate method on a borrowed receiver can call back a closure the receiver holds.","issues":[1650],"refs":[222]},
+          {"text":"A type alias of an associated type takes its defaulted parameters written, so `fn f() -> canvas::Geometry<Renderer>` checks and runs, as iced's sandpiles writes it.","issues":[317]},
+          {"text":"A crate function's or method's type parameter that only an argument's std-trait bound names is inferred from std's impl for the argument's type, as in rustc. `Link` of iced's `rich_text(spans)` given a `Vec<Span<'static, ()>>`, an array or a slice is `()`, through `AsRef`, `Borrow` and the other std impls.","issues":[1651]},
+          {"text":"A crate function a `use` names can be called with a turbofish, as `span::<()>(\"e\")`.","issues":[1652]},
+          {"text":"An expression nests and a function recurses as deep as a debug build of Rust allows. There is no expression-depth limit, and the call depth is 100 000.","issues":[962,1624]},
+          {"text":"A spawned thread's panic, and a runner's main panic, name the file, line and column where they panicked.","issues":[948]},
+          {"text":"`collect()` into a `Result` or an `Option` of a map or a set runs.","issues":[937]},
+          {"text":"`rawr test` runs `cargo check` on the tests beside it and reports what only rustc rejects.","issues":[929]}
+        ]
+      },
       {
         "version": "0.3.178",
         "date": "2026-11-10",
@@ -2269,7 +2271,7 @@
     {"issue":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.6"},
     {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.179"},
     {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.28"},
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.140"},
     {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.22"},
@@ -2881,7 +2883,7 @@
     {"issue":926,"title":"A path to a type's method as a function value: `.flat_map(HashMap::values)`","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
     {"issue":927,"title":"`try_into()` into `Result<Color, _>` leaves the error type uninferred","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":928,"title":"`Rc<T>` doesn't meet a `T: Display` bound","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
-    {"issue":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"closed","category":"Divergences from rustc"},
+    {"issue":929,"title":"`rawr test` runs `cargo check --tests` beside it","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":930,"title":"Five rawr-cli integration tests fail on main","state":"closed","category":"Health"},
     {"issue":931,"title":"Every rawr process rebuilds the std bindings from the std table, seconds before a program answers","state":"closed","category":"Health","release":"0.3.136"},
     {"issue":932,"title":"Rawr accepts an integer literal out of range for its type, which rustc refuses","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
@@ -2889,7 +2891,7 @@
     {"issue":934,"title":"rawr infers types where rustc needs an annotation or reports a mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.137"},
     {"issue":935,"title":"rustlings harness compares rustc's first coded error, not its first error","state":"closed","category":"Health"},
     {"issue":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed","category":"Divergences from rustc","release":"0.3.140"},
-    {"issue":937,"title":"collect() into a Result or Option of a map or set","state":"closed","category":"Divergences from rustc"},
+    {"issue":937,"title":"collect() into a Result or Option of a map or set","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":938,"title":"A `&self` method changing a std collection is a type mismatch, not E0596","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":939,"title":"mcp inspect test asserts one line of a running loop","state":"closed","category":"Health"},
     {"issue":940,"title":"background cargo check test waits on a deadline, not an event","state":"closed","category":"Health"},
@@ -2900,7 +2902,7 @@
     {"issue":945,"title":"`-` on an unsigned value or literal is E0600","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"open","category":"Divergences from rustc"},
     {"issue":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"open","category":"Divergences from rustc"},
-    {"issue":948,"title":"A spawned thread's panic message lacks its file:line:col","state":"closed","category":"Divergences from rustc"},
+    {"issue":948,"title":"A spawned thread's panic message lacks its file:line:col","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":949,"title":"Mutex methods besides lock().unwrap(), and LockResult as a value","state":"open","category":"Divergences from rustc"},
     {"issue":950,"title":"mpsc try_recv, recv_timeout, sync_channel; thread::scope and Builder","state":"open","category":"Divergences from rustc"},
     {"issue":951,"title":"The generated runner reads a crate struct's borrowing field by reference: Stroke.line_dash escapes its closure (E0521)","state":"closed","category":"Divergences from rustc","release":"0.3.145"},
@@ -2914,7 +2916,7 @@
     {"issue":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed","category":"Health","release":"0.3.141"},
     {"issue":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed","category":"Health","release":"0.3.149"},
     {"issue":961,"title":"Macro calls where an item, a type or a pattern goes","state":"open","category":"Divergences from rustc"},
-    {"issue":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"closed","category":"Divergences from rustc"},
+    {"issue":962,"title":"Deep macro recursion overflows the debug build's stack before rustc's recursion limit","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"closed","category":"Health","release":"0.3.149"},
     {"issue":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open","category":"Health"},
     {"issue":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open","category":"Divergences from rustc"},
@@ -3576,7 +3578,7 @@
     {"issue":1621,"title":"&format_args!(..) needed as &dyn Value where a crate call takes &dyn Value","state":"closed","category":"No glue (D593)","release":"0.3.177"},
     {"issue":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"closed","category":"No glue (D593)","release":"0.3.177"},
     {"issue":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
-    {"issue":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"closed","category":"Divergences from rustc"},
+    {"issue":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
     {"issue":1627,"title":"A marked module that names tracing only through another crate's re-export fails with unknown member Level::le","state":"closed","category":"No glue (D593)","release":"0.3.177"},
@@ -3601,9 +3603,9 @@
     {"issue":1647,"title":"A method with elided lifetimes whose output borrows self is refused as higher-ranked","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1648,"title":"An if/else whose arms box different closures into an annotated Box<dyn Fn> is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
     {"issue":1649,"title":"A save of one marked file lowered every marked file again","state":"closed","category":"No glue (D593)","release":"0.3.178"},
-    {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open","category":"Divergences from rustc"},
-    {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"open","category":"Divergences from rustc"},
-    {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"open","category":"Divergences from rustc"},
+    {"issue":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
+    {"issue":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
+    {"issue":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
@@ -4650,9 +4652,9 @@
             {"number":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open"},
             {"number":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed"},
             {"number":1646,"title":"A save resolves and lowers every marked file again","state":"open"},
-            {"number":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"open"},
-            {"number":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"open"},
-            {"number":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"open"}
+            {"number":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed"},
+            {"number":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed"},
+            {"number":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed"}
           ]
         }
       ]
