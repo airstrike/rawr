@@ -4896,6 +4896,18 @@ pub mod __rawr_island {
         ONCE.call_once(|| unsafe { __rawr_island_objects_v1(MAKERS) });
     }
 
+    /// The panic of a failed `reply`: a marked function's panic, which the
+    /// runner printed as Rust prints it at its place in the marked file,
+    /// unwinds with its message (`2`); rawr's own failure panics with its
+    /// message.
+    fn failed(reply: &[u8]) -> ! {
+        let message = ::std::string::String::from_utf8_lossy(reply.get(1..).unwrap_or_default()).into_owned();
+        match reply.first() {
+            ::std::option::Option::Some(2) => ::std::panic::resume_unwind(::std::boxed::Box::new(message)),
+            _ => ::std::panic!("{message}"),
+        }
+    }
+
     /// The handle of the program value a stand-in holds, let go of when
     /// the stand-in is dropped, and the results of its `&self` calls that
     /// borrow it, as `fn label(&self) -> &str`'s (#1305).
@@ -5010,10 +5022,7 @@ pub mod __rawr_island {
                 reply.remove(0);
                 reply
             }
-            _ => ::std::panic!(
-                "{}",
-                ::std::string::String::from_utf8_lossy(reply.get(1..).unwrap_or_default())
-            ),
+            _ => failed(&reply),
         }
     }
 
@@ -5749,7 +5758,7 @@ pub mod __rawr_island {
                     let item = self.item;
                     reply.read(|input| input.option(item))
                 }
-                Some(_) => ::std::panic!("{}", ::std::string::String::from_utf8_lossy(&reply[1..])),
+                Some(_) => failed(&reply),
                 None => ::std::panic!("rawr: no answer to `Iterator::next`"),
             }
         }
@@ -7070,10 +7079,7 @@ pub mod __rawr_island {
                     places: self.lent.iter().map(|lent| lent.2).collect(),
                     texts: self.values.2.take().unwrap_or_default(),
                 },
-                Some(_) => {
-                    let message = ::std::string::String::from_utf8_lossy(&reply[1..]).into_owned();
-                    ::std::panic!("{message}")
-                }
+                Some(_) => failed(&reply),
                 None => ::std::panic!("rawr: no answer to `{}`", self.path),
             }
         }

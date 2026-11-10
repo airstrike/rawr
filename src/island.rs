@@ -31,6 +31,7 @@ use crate::reload::installation::Bootstrap;
 use crate::{item, program, type_def, Dynamic, ImmutableString};
 
 pub mod lend;
+mod panic;
 pub mod place;
 
 /// The native `main` the program registered, for the runner to start.
@@ -650,7 +651,9 @@ struct Asked<'a> {
 /// a clone under a handle of its own, `eq`, a hash, a `Default` under a
 /// handle of its own, `partial_cmp` or `cmp`. The reply starts with `0`
 /// and holds the answer, or starts with `1` and holds a message to panic
-/// with. The value is borrowed as a `&self` call borrows it.
+/// with, or with `2` and the message of the program's panic, which this
+/// printed, to unwind with (#1657). The value is borrowed as a `&self`
+/// call borrows it.
 #[unsafe(no_mangle)]
 pub fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> Vec<u8> {
     let asked = Asked {
@@ -663,29 +666,33 @@ pub fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> V
         let _entry = crate::future::trampoline();
         if let Some(current) = current() {
             let catalog = current.bootstrap.catalog();
+            let caught = panic::Caught::default();
             let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
                 catalog
                     .invoke_item(function, arguments)
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| caught.text(&error))
             };
-            return current
+            let reply = current
                 .calls
                 .ask(&asked, catalog.authority().model(), &invoke)
                 .unwrap_or_else(|message| failure(&message));
+            return caught.reply(reply);
         }
     }
     #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         let _entry = crate::future::entry();
+        let caught = panic::Caught::default();
         let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
             shared
                 .authority
                 .invoke_bound(function, arguments, shared.runtime.clone())
-                .map_err(|error| error.to_string())
+                .map_err(|error| caught.text(&error))
         };
-        return calls
+        let reply = calls
             .ask(&asked, shared.authority.model(), &invoke)
             .unwrap_or_else(|message| failure(&message));
+        return caught.reply(reply);
     }
     failure(&format!("rawr: no runner serves the traits of `{owner}`"))
 }
@@ -695,37 +702,42 @@ pub fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> V
 /// time, so the program's iterator runs only as far as native code pulls.
 /// The reply starts with `0` and holds the `Option` of the item, written
 /// as `T` crosses, its native values moved to `natives`, or starts with `1`
-/// and holds a message to panic with.
+/// and holds a message to panic with, or with `2` and the message of the
+/// program's panic, which this printed, to unwind with (#1657).
 #[unsafe(no_mangle)]
 pub fn __rawr_island_next_v1(handle: u64, natives: &mut Natives) -> Vec<u8> {
     if current().is_some() {
         let _entry = crate::future::trampoline();
         if let Some(current) = current() {
             let catalog = current.bootstrap.catalog();
+            let caught = panic::Caught::default();
             let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
                 catalog
                     .invoke_item(function, arguments)
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| caught.text(&error))
             };
-            return current
+            let reply = current
                 .calls
                 .next(handle, catalog.authority().model(), &invoke, natives)
                 .unwrap_or_else(|message| failure(&message));
+            return caught.reply(reply);
         }
     }
     #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         let _entry = crate::future::entry();
         let _arena = ARENA.get().map(|arena| arena());
+        let caught = panic::Caught::default();
         let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
             shared
                 .authority
                 .invoke_bound(function, arguments, shared.runtime.clone())
-                .map_err(|error| error.to_string())
+                .map_err(|error| caught.text(&error))
         };
-        return calls
+        let reply = calls
             .next(handle, shared.authority.model(), &invoke, natives)
             .unwrap_or_else(|message| failure(&message));
+        return caught.reply(reply);
     }
     failure("rawr: no runner serves a program's iterator native code pulls from")
 }
@@ -773,7 +785,9 @@ pub fn __rawr_island_start_v1(entry: fn() -> i32) {
 ///
 /// The reply starts with `0` and holds the result and each argument the
 /// call could change, each native value among them moved to `natives`, or
-/// starts with `1` and holds a message to panic with.
+/// starts with `1` and holds a message to panic with, or with `2` and the
+/// message of the program's panic, which this printed at its place in
+/// the program's files, to unwind with (#1657).
 ///
 /// [`__rawr_scope_claim_v1`] and [`__rawr_scope_release_v1`] are what the
 /// accessors claim a lend by.
@@ -806,11 +820,12 @@ pub fn __rawr_island_call_v4(
         // The call's native values live in an arena of its own, which
         // ends once its reply holds what it gives back.
         let _arena = ARENA.get().map(|arena| arena());
+        let caught = panic::Caught::default();
         let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
             shared
                 .authority
                 .invoke_bound(function, arguments, shared.runtime.clone())
-                .map_err(|error| error.to_string())
+                .map_err(|error| caught.text(&error))
         };
         let call = Call {
             path,
@@ -818,7 +833,8 @@ pub fn __rawr_island_call_v4(
             model: shared.authority.model(),
             invoke: &invoke,
         };
-        return calls.answer(&call, given, &lent, natives);
+        let reply = calls.answer(&call, given, &lent, natives);
+        return caught.reply(reply);
     }
     failure(&format!("rawr: no runner serves the call of `{path}`"))
 }
@@ -1788,10 +1804,11 @@ impl Current {
         natives: &mut Natives,
     ) -> Vec<u8> {
         let catalog = self.bootstrap.catalog();
+        let caught = panic::Caught::default();
         let invoke = |function: &item::Value, arguments: &mut [Dynamic]| {
             catalog
                 .invoke_item(function, arguments)
-                .map_err(|error| error.to_string())
+                .map_err(|error| caught.text(&error))
         };
         let call = Call {
             path,
@@ -1799,7 +1816,8 @@ impl Current {
             model: catalog.authority().model(),
             invoke: &invoke,
         };
-        self.calls.answer(&call, given, lent, natives)
+        let reply = self.calls.answer(&call, given, lent, natives);
+        caught.reply(reply)
     }
 }
 

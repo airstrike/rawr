@@ -418,12 +418,12 @@ pub(super) fn attempt(
         }
         resident::Outcome::NeedsPreparation | resident::Outcome::Unstarted => Ok(Attempt::Settled),
         resident::Outcome::Obsolete => obsolete(adapter, watch_request, diagnostic),
-        resident::Outcome::Source(reason) | resident::Outcome::Resource(reason) => {
-            if !adapter.gate().request_is_current(watch_request) {
-                return Ok(Attempt::Settled);
-            }
-            Err(super::framework(reason, diagnostic.clone()))
-        }
+        _ if !adapter.gate().request_is_current(watch_request) => Ok(Attempt::Settled),
+        // The error the runner's compile found, in its own file, as the
+        // owner's own compile reports it (#397).
+        resident::Outcome::Source(report) => Err(rawr::diagnostic::Report::decode(&report)
+            .unwrap_or_else(|error| super::framework(error, diagnostic.clone()))),
+        resident::Outcome::Resource(reason) => Err(super::framework(reason, diagnostic.clone())),
     }
 }
 

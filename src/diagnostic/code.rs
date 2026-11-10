@@ -59,19 +59,21 @@ impl fmt::Display for Tag {
 }
 
 macro_rules! codes {
-    ($category:ident; $(($name:ident, $value:literal, $docs:literal)),+ $(,)?) => {
+    ($category:ident in $family:ident; $(($name:ident, $value:literal, $docs:literal)),+ $(,)?) => {
         $(
             #[doc = $docs]
             pub const $name: Code = Code::new($value, Category::$category);
         )+
+        /// Every code of the family.
+        const $family: &[Code] = &[$($name),+];
     };
 }
 
-codes!(Parse;
+codes!(Parse in PARSE;
     (PARSE_SYNTAX, "", "A syntax error, which rustc reports without a code."),
 );
 
-codes!(Resolve;
+codes!(Resolve in RESOLVE;
     (RESOLVE_ENUM_PATTERN, "RAWR-RESOLVE-ENUM-PATTERN", "Invalid registered-enum switch pattern."),
     (RESOLVE_RECEIVER, "RAWR-RESOLVE-RECEIVER", "Invalid associated-method receiver grammar."),
     (RESOLVE_TYPE_SHAPE, "RAWR-RESOLVE-TYPE-SHAPE", "Invalid structural type grammar."),
@@ -168,7 +170,7 @@ codes!(Resolve;
     (RESOLVE_PACKAGE_IDENTITY, "RAWR-RESOLVE-PACKAGE-IDENTITY", "Conflicting stable package identity."),
 );
 
-codes!(Framework;
+codes!(Framework in FRAMEWORK;
     (FRAMEWORK_MISSING_ENTRY, "RAWR-FRAMEWORK-MISSING-ENTRY", "Missing application entry."),
     (FRAMEWORK_EXTENSION, "RAWR-FRAMEWORK-EXTENSION", "Missing or conflicting extension."),
     (FRAMEWORK_RUNTIME_BINDING, "RAWR-FRAMEWORK-RUNTIME-BINDING", "Invalid native runtime binding."),
@@ -182,14 +184,14 @@ codes!(Framework;
     (FRAMEWORK_SNAPSHOT, "RAWR-FRAMEWORK-SNAPSHOT", "Deterministic snapshot failure."),
 );
 
-codes!(Runtime;
+codes!(Runtime in RUNTIME;
     (RUNTIME_EVALUATION, "RAWR-RUNTIME-EVALUATION", "Script evaluation failure."),
     (RUNTIME_THROW, "RAWR-RUNTIME-THROW", "Script throw failure."),
     (RUNTIME_VIEW, "RAWR-RUNTIME-VIEW", "Application view failure."),
     (RUNTIME_UPDATE, "RAWR-RUNTIME-UPDATE", "Application update failure."),
 );
 
-codes!(Environment;
+codes!(Environment in ENVIRONMENT;
     (ENVIRONMENT_CURRENT_DIRECTORY, "RAWR-ENVIRONMENT-CURRENT-DIRECTORY", "Current-directory access failure."),
     (ENVIRONMENT_INPUT_NOT_FOUND, "RAWR-ENVIRONMENT-INPUT-NOT-FOUND", "Requested path does not exist."),
     (ENVIRONMENT_PROJECT_NOT_FOUND, "RAWR-ENVIRONMENT-PROJECT-NOT-FOUND", "Rawr project discovery failure."),
@@ -206,6 +208,19 @@ codes!(Environment;
     (ENVIRONMENT_PACKAGE_MANIFEST, "RAWR-ENVIRONMENT-PACKAGE-MANIFEST", "Invalid Rawr package manifest."),
     (ENVIRONMENT_PACKAGE_RESOURCE, "RAWR-ENVIRONMENT-PACKAGE-RESOURCE", "Unreadable Rawr package resource."),
 );
+
+/// Every code Rawr declares, by family.
+const DECLARED: [&[Code]; 5] = [PARSE, RESOLVE, FRAMEWORK, RUNTIME, ENVIRONMENT];
+
+/// The declared code whose printable code is `value` in `category`'s
+/// family: the code a report read back from its text had.
+pub(super) fn declared(value: &str, category: Category) -> Option<Code> {
+    DECLARED
+        .iter()
+        .flat_map(|family| family.iter())
+        .find(|code| code.value == value && code.category == category)
+        .copied()
+}
 
 /// The code of a borrow error with rustc's code `rustc`.
 pub(crate) fn borrow(rustc: &str) -> Code {

@@ -1338,14 +1338,19 @@ fn a_save_parses_only_the_file_it_changed() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|event| event["event"] == "failed")
         .unwrap();
-    // The runner's error names its line and column; the report names the
-    // crate's root as its file (#397).
+    // The runner's error is rustc's, in its own file, at its line and
+    // column (#397).
+    let rendered = failed["rendered"].as_str().unwrap_or_default();
     assert!(
-        failed["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("`unknown_row`"))
+        failed["message"] == "cannot find value `unknown_row` in this scope"
+            && failed["file"] == sidebar.to_string_lossy().as_ref()
             && failed["line"] == line
-            && failed["column"] == 13,
+            && failed["column"] == 13
+            && failed["diagnostics"][0]["code"] == "E0425"
+            && rendered
+                .starts_with("error[E0425]: cannot find value `unknown_row` in this scope\n")
+            && rendered.contains(&format!("src/widget/sidebar.rs:{line}:13-{line}:24\n"))
+            && rendered.contains("let _ = unknown_row;"),
         "{failed}"
     );
     // The program ends; `rawr run` keeps watching for the next save.
@@ -1409,6 +1414,80 @@ fn a_save_parses_only_the_file_it_changed() {
             .map(|count| sum[count] + counts[count])),
         [5, 5, 4],
         "{runner:?}\n{seen}"
+    );
+}
+
+/// A marked function that panics in a call from native `main` prints the
+/// panic Cargo's build prints: its place in the marked file and its
+/// message, with nothing of rawr's (#1657).
+#[test]
+fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-panic");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    edit(
+        &root.join("src/widget/sidebar.rs"),
+        "    ui::label(&format!(\"{label} row\"))",
+        "    if label == \"tick\" {\n        panic!(\"no tick line\");\n    }\n    ui::label(&format!(\"{label} row\"))",
+    );
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env("ISLANDS_STOP", &stop)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RUST_BACKTRACE")
+        .output()
+        .unwrap();
+    assert_eq!(native.status.code(), Some(101));
+    let stderr = String::from_utf8_lossy(&native.stderr);
+    // Current nightly's thread id is #36's.
+    let panicked = stderr
+        .lines()
+        .map(|line| match line.split_once("thread 'main' (") {
+            Some(("", rest)) => rest.split_once(") ").map_or_else(
+                || line.to_owned(),
+                |(_, rest)| format!("thread 'main' {rest}"),
+            ),
+            _ => line.to_owned(),
+        })
+        .skip_while(|line| !line.starts_with("thread 'main' panicked at "))
+        .collect::<Vec<_>>();
+    assert!(
+        panicked.first().is_some_and(
+            |line| line.starts_with("thread 'main' panicked at src/widget/sidebar.rs:")
+        ) && panicked.get(1).is_some_and(|line| line == "no tick line"),
+        "{stderr}"
+    );
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":101}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+    let printed = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: "))
+        .skip_while(|line| !line.starts_with("thread 'main' panicked at "))
+        .take(panicked.len())
+        .collect::<Vec<_>>();
+    let seen = run.seen.join("\n");
+    assert_eq!(printed, panicked, "{seen}");
+    assert!(
+        !seen.contains("failed: ") && !seen.contains("(line "),
+        "{seen}"
     );
 }
 
