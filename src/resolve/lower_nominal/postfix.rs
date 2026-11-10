@@ -706,6 +706,39 @@ impl<'a> Parser<'a> {
                 let Ty::Dyn(trait_name, _) = &object else {
                     unreachable!("matched a trait object");
                 };
+                // A native trait's method on its object is the crate's
+                // function of the object (`surface::object`), whose first
+                // input is the receiver: native code calls it through the
+                // trait, which dispatches it by the object's vtable (#1593).
+                #[cfg(feature = "rust-import")]
+                if type_ref::is_native_trait(trait_name)
+                    && matches!(self.peek(), Token::LeftParen | Token::Unit)
+                {
+                    let path = rawr_import::surface::object::path(trait_name, &member);
+                    if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) {
+                        let owner = self.models.item_owner(&path).cloned();
+                        let start = value.span.start();
+                        let (arguments, end) =
+                            self.parse_call_arguments("trait object method arguments")?;
+                        let mut inputs = Vec::with_capacity(arguments.len() + 1);
+                        // A `Box<dyn Trait>` is lent as the `&dyn Trait`
+                        // the method takes, as rustc derefs it.
+                        if !matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) {
+                            value.ty = Ty::Reference {
+                                mutable: false,
+                                target: Box::new(object.clone()),
+                            };
+                            value.lvalue = None;
+                        }
+                        inputs.push(value);
+                        for mut argument in arguments {
+                            self.move_local(&mut argument)?;
+                            inputs.push(argument);
+                        }
+                        value = self.call_host_function(&items, owner, inputs, span(start, end))?;
+                        continue;
+                    }
+                }
                 // A native trait's methods are the crate's, which rawr
                 // doesn't call through a trait object yet.
                 if type_ref::is_native_trait(trait_name) {

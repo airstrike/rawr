@@ -1381,11 +1381,16 @@ fn imported_paths<'contract>(
                 });
                 continue;
             }
-            // A member of a trait's impl for a number, `bool` or `char` is
-            // reached beside the trait (`surface::scalar`).
-            if let Some(scalar) = rawr_import::surface::scalar::of(associated.representability()) {
-                let associated_path =
-                    rawr_import::surface::scalar::path(&path, scalar, associated.name());
+            // A member of a trait's impl for a number, `bool` or `char`,
+            // and a trait's method on its object, are reached beside the
+            // trait (`surface::scalar`, `surface::object`).
+            let beside = rawr_import::surface::scalar::of(associated.representability())
+                .map(|scalar| rawr_import::surface::scalar::path(&path, scalar, associated.name()))
+                .or_else(|| {
+                    rawr_import::surface::object::of(associated.representability())
+                        .then(|| rawr_import::surface::object::path(&path, associated.name()))
+                });
+            if let Some(associated_path) = beside {
                 allocation.retain(1, associated_path.len())?;
                 entries.push(ImportedPath {
                     path: associated_path.into_boxed_str(),
@@ -1494,8 +1499,9 @@ struct Facade<'contract> {
     /// their impls for `&str`, each at its path (`surface::text`).
     text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The members the traits the program names give a number, `bool` or
-    /// `char` through their impls for it, each a function at its path
-    /// (`surface::scalar`).
+    /// `char` through their impls for it, and their methods on their
+    /// objects, each a function at its path (`surface::scalar`,
+    /// `surface::object`).
     scalar_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The methods of the traits the program names that take `self` by
     /// value, each a function generic over the trait's `Self` at its path,
@@ -1767,16 +1773,19 @@ fn install(
                 .implementations()
                 .flat_map(rawr_import::classify::ImplementationOutcome::associated)
             {
-                let Some(scalar) = rawr_import::surface::scalar::of(associated.representability())
-                else {
-                    continue;
+                let representability = associated.representability();
+                let path = match rawr_import::surface::scalar::of(representability) {
+                    Some(scalar) => {
+                        rawr_import::surface::scalar::path(&relative, scalar, associated.name())
+                    }
+                    None if rawr_import::surface::object::of(representability) => {
+                        rawr_import::surface::object::path(&relative, associated.name())
+                    }
+                    None => continue,
                 };
                 let members = &mut facades[index].scalar_members;
                 members.try_reserve(1).map_err(|_| Error::Allocation)?;
-                members.push((
-                    rawr_import::surface::scalar::path(&relative, scalar, associated.name()),
-                    associated,
-                ));
+                members.push((path, associated));
             }
             if let Some(definition) = outcome.identity().definition() {
                 for associated in outcome
@@ -2632,11 +2641,9 @@ fn build(
         }
     }
     // A trait's member its impl for a number, `bool` or `char` gives it: a
-    // function of the scalar (`surface::scalar`).
+    // function of the scalar (`surface::scalar`); and a trait's method on
+    // its object, a function of the object (`surface::object`).
     for (path, member) in &facade.scalar_members {
-        let Representability::Function(plan) = member.representability() else {
-            continue;
-        };
         if left_out(path, *member) || !names_declared(*member, resolved) {
             continue;
         }
@@ -2646,6 +2653,33 @@ fn build(
                 .checked_add(unqualified_path_bytes(path)?)?
                 .checked_add(selector)
         });
+        // A method on an object takes it as `&impl Trait`, as any `&dyn`
+        // input is read, which the object fills (`surface::object`).
+        if let Representability::FunctionItem(plan) = member.representability()
+            && rawr_import::surface::object::of(member.representability())
+            && callable_generic(plan)
+        {
+            allocation.retain_checked(Some(1), bytes)?;
+            builder.item(
+                host::item::Definition::function(
+                    path,
+                    callable_signature(
+                        &types,
+                        plan.signature(),
+                        plan.call(),
+                        plan.crossings(),
+                        allocation,
+                    )?,
+                )?
+                .imported(member.identity().selector().try_clone()?)
+                .lending_static(lent_static(plan.signature()))
+                .lending(lends(plan.signature())),
+            )?;
+            continue;
+        }
+        let Representability::Function(plan) = member.representability() else {
+            continue;
+        };
         allocation.retain_checked(Some(1), bytes)?;
         builder.item(
             host::item::Definition::function(

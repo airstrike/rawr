@@ -76,6 +76,10 @@ fn trait_objects_of_a_crates_trait_are_made_by_native_code_as_cargo_makes_them()
     assert_eq!(
         runs_as_cargo("trait-objects"),
         "held 9 true\n\
+         path 9\n\
+         called 9\n\
+         given 25 back 25\n\
+         coerced 1003\n\
          static 9\n\
          int 5\n\
          u8 1007\n\

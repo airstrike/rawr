@@ -13,6 +13,13 @@ fn main() {
     static SQUARE: shapes::Square = shapes::Square { side: 3 };
     let held = shapes::Held(&SQUARE);
     println!("held {} {}", held.area(), held.holds(&SQUARE));
+    // An object's methods, called from marked code (#1593).
+    println!("path {}", shapes::Shape::area(held.0));
+    println!("called {}", held.0.area());
+    let given = shapes::boxed(5);
+    println!("given {} back {}", given.area(), shapes::boxed_area(given));
+    let count: &dyn shapes::Shape = &3u8;
+    println!("coerced {}", count.area());
     println!("static {}", shapes::area_of(&SQUARE));
     let n = 5i64;
     println!("int {}", shapes::area_of(&n as &dyn shapes::Shape));

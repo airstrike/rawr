@@ -619,8 +619,11 @@ fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> 
         host::type_ref::Shape::Result(ok, err) => {
             copy_scalar(ok, facade) && copy_scalar(err, facade)
         }
-        // A shared borrow, as iced's `LineDash::segments: &'a [f32]`.
+        // A shared borrow, as iced's `LineDash::segments: &'a [f32]`, and a
+        // `&dyn Trait`, as `Held(&'static dyn Shape)` holds (#1593).
         host::type_ref::Shape::Reference { mutable: false, .. } => true,
+        #[cfg(feature = "rust-import")]
+        host::type_ref::Shape::Object { pointer, .. } => !pointer.owns(),
         // An array of a length of Copy values, as `position: [f32; 2]`.
         host::type_ref::Shape::Array {
             element,

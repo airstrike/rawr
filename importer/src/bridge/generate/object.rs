@@ -115,6 +115,12 @@ fn implementor(ty: &crate::surface::facade::Type) -> Option<Implementor> {
     })
 }
 
+/// `(dyn Trait<..> + auto)`, as the object names its trait where a type
+/// path names it, as `<(dyn Shape) as Shape>::area` does.
+pub(super) fn dyn_type(object: &Object) -> Option<String> {
+    object_type(object).map(|dynamic| format!("({dynamic})"))
+}
+
 /// `dyn Trait<..> + auto`, as the object names its trait.
 fn object_type(object: &Object) -> Option<String> {
     let mut text = String::from("dyn ");
