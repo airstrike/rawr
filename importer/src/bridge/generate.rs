@@ -10682,6 +10682,40 @@ fn opaque_operand(
     Ok(None)
 }
 
+/// The argument index of each input of `plan` whose type is the opaque
+/// type `key` itself, past the receiver of a method.
+fn same_opaque_inputs(plan: &Plan, key: &convert::Type) -> Result<Vec<usize>, request::Error> {
+    let (signature, substitutions, mut runtime, functions) = match plan.operation() {
+        Operation::Method {
+            signature,
+            substitutions,
+            functions,
+            ..
+        } => (signature, substitutions, 1, functions),
+        Operation::Function {
+            signature,
+            substitutions,
+            functions,
+            ..
+        } => (signature, substitutions, 0, functions),
+        _ => return Ok(Vec::new()),
+    };
+    let mut positions = Vec::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if functions
+            .iter()
+            .any(|function| usize::try_from(function.position()).ok() == Some(position))
+        {
+            continue;
+        }
+        if same_opaque(&substituted(input, signature, substitutions)?, key) {
+            positions.push(runtime);
+        }
+        runtime += 1;
+    }
+    Ok(positions)
+}
+
 /// The calls in `cohort` that take a value holding the opaque type `key`,
 /// in a fixed order: each one's index in the table such a value carries.
 fn opaque_consumers<'p>(
@@ -10902,13 +10936,21 @@ fn opaque_table_source(
         } else {
             body
         };
-        // The operand is taken at the type of the value this call made.
-        let body = body.replace(
+        // The operand is taken at the type of the value this call made, and
+        // so is each other input of that type, as `hover(a, b)` takes two
+        // (#1368).
+        let mut body = body.replace(
             &format!("take_native(arguments, {position})"),
             &format!("take_like(arguments, {position}, _w)"),
         );
+        for other in same_opaque_inputs(consumer, &key)? {
+            body = body.replace(
+                &format!("take_native(arguments, {other})"),
+                &format!("take_like(arguments, {other}, _w)"),
+            );
+        }
         let body = if holding {
-            shape_witnesses(&body, position)
+            shape_witnesses(&body, position, only_opaque_holes(&operand, &key))
         } else {
             body
         };
@@ -10955,7 +10997,10 @@ fn opaque_table_source(
 /// table's opaque type, as `boxed` takes the `Map<impl Widget, ..>` that
 /// `map` gave, taken at that type: the witness of the opaque type, made
 /// the witness of the type that holds it where `_` spells the opaque type.
-fn shape_witnesses(body: &str, position: usize) -> String {
+/// A type with several holes is shaped so only when `only` says each one
+/// is the opaque type, as `Hover<_, _>` of `hover(a, b)` is for two values
+/// of it (#1368).
+fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
     let take = format!(" = take_like(arguments, {position}, _w)?;");
     let mut shaped = String::with_capacity(body.len());
     for line in body.split_inclusive('\n') {
@@ -10971,11 +11016,19 @@ fn shape_witnesses(body: &str, position: usize) -> String {
             continue;
         };
         let holes = opaque_holes(ty);
-        let [hole] = holes[..] else {
+        if holes.is_empty() || (holes.len() > 1 && !only) {
             shaped.push_str(line);
             continue;
-        };
-        let (holding, lifetimes) = named_lifetimes(&format!("{}T{}", &ty[..hole], &ty[hole + 1..]));
+        }
+        let mut generic = String::with_capacity(ty.len());
+        let mut from = 0;
+        for hole in holes {
+            generic.push_str(&ty[from..hole]);
+            generic.push('T');
+            from = hole + 1;
+        }
+        generic.push_str(&ty[from..]);
+        let (holding, lifetimes) = named_lifetimes(&generic);
         shaped.push_str(&line.replacen(
             &take,
             &format!(
@@ -10985,6 +11038,24 @@ fn shape_witnesses(body: &str, position: usize) -> String {
         ));
     }
     shaped
+}
+
+/// Whether each type `ty` leaves Rust to infer, as `concrete_type` writes
+/// it `_`, is the opaque type `key`.
+fn only_opaque_holes(ty: &convert::Type, key: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Inferred => false,
+        convert::Type::Nominal { definition, .. } if is_opaque(definition) => same_opaque(ty, key),
+        convert::Type::Nominal { arguments, .. } | convert::Type::Tuple(arguments) => arguments
+            .iter()
+            .all(|argument| only_opaque_holes(argument, key)),
+        convert::Type::Option(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Range(inner)
+        | convert::Type::Sequence { element: inner, .. } => only_opaque_holes(inner, key),
+        convert::Type::Result(ok, err) => only_opaque_holes(ok, key) && only_opaque_holes(err, key),
+        _ => true,
+    }
 }
 
 /// The Rust type `ty`, which `concrete_type` wrote for a body, as an item
@@ -12642,7 +12713,10 @@ enum Ending {
 /// one string per text however often the call runs (D694), and the output
 /// is a plain arena value, so no scope frame opens for it. A call that
 /// copies arrays in, makes a value for a `&T`, or takes a value carrying
-/// a lifetime keeps its frame.
+/// a lifetime keeps its frame. In a slot's region or the rest of a scope
+/// frame (`scope::joined`), the call makes its output there instead, so
+/// `Column::with_children([left, right])` takes `span(&name)` and
+/// `span("right")` at one lifetime, as rustc infers it (#1335).
 fn render_static_opening(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
@@ -12675,7 +12749,7 @@ fn render_static_opening(
     render_to_dynamic(returned, "made", 0, &mut owned)?;
     writeln!(
         output,
-        "    if lent_static(arguments, &[{texts}]) {{
+        "    if lent_static(arguments, &[{texts}]) && __rawr_internal::scope::joined().is_none() {{
 {taken}        let pins: &'static __rawr_internal::scope::Pins = {{ static PINS: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant(); &PINS }};{pinned}
         let made = lend(arguments.arena, || {call});
         return {owned};
@@ -13372,27 +13446,23 @@ fn render_scoped_receiver(
         Some(family) if ops && family.named().is_some() => Some((call.clone(), family)),
         _ => None,
     };
-    let (call, converted) = match made {
+    // What the call changed of a `&mut` array it took goes back after its
+    // value, as the arena's call gives it (#913), once the call's borrow of
+    // it has ended (#1369).
+    let (call, converted, copied) = match made {
         Some((made, family)) => (
             made,
             format!(
                 "Ok::<Dynamic, Error>(Dynamic::from(region.{}))",
                 family.call(family::Reach::Insert, "output")
             ),
+            String::new(),
         ),
         None => {
             let _region = InRegion::enter();
             let mut converted = String::new();
             render_to_dynamic(&returned, "output", 0, &mut converted)?;
-            // What the call changed of a `&mut` array it took goes back
-            // after its value, as the arena's call gives it (#913).
-            let copied = copied_back(signature, substitutions)?;
-            if !copied.is_empty() {
-                converted = format!(
-                    "{{ let given = ({converted})?; Ok::<Dynamic, Error>(Dynamic::from_array(vec![given{copied}])) }}"
-                );
-            }
-            (call, converted)
+            (call, converted, copied_back(signature, substitutions)?)
         }
     };
     // A method that calls a script closure back at once, as `Element<'a,
@@ -13438,6 +13508,13 @@ fn render_scoped_receiver(
     // In the region the adapter's body already runs in, which an argument
     // of the call is in too.
     if REGION_ARGUMENTS.get() {
+        let converted = if copied.is_empty() {
+            converted
+        } else {
+            format!(
+                "{{ let given = ({converted})?; Ok::<Dynamic, Error>(Dynamic::from_array(vec![given{copied}])) }}"
+            )
+        };
         return writeln!(
             output,
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
@@ -13449,16 +13526,26 @@ fn render_scoped_receiver(
         )
         .map_err(encoding);
     }
+    // The region's closure borrows a copied `&mut` argument for the call,
+    // so the copy goes back after the closure, never in it.
+    let (given, returned) = if copied.is_empty() {
+        ("return", String::new())
+    } else {
+        (
+            "let given =",
+            format!("?;\n        return Ok(Dynamic::from_array(vec![given{copied}]))"),
+        )
+    };
     writeln!(
         output,
         "    if let Some(scoped) = scoped_value(arguments, 0) {{
-        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+        {given} __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
             #[allow(unused_mut)]
             let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
             let output = {call};
             {converted}
         }})
-        .map_err(|error| Error::Lent(scoped.name(), error))?;
+        .map_err(|error| Error::Lent(scoped.name(), error))?{returned};
     }}"
     )
     .map_err(encoding)
@@ -24163,7 +24250,7 @@ mod tests {
             [34]
         );
         let body = "    let argument_0: Map<_, Box<dyn Fn(String) -> crate::Message>, String> = take_like(arguments, 0, _w)?;\n    let receiver: _ = take_like(arguments, 0, _w)?;\n";
-        let shaped = super::shape_witnesses(body, 0);
+        let shaped = super::shape_witnesses(body, 0, false);
         assert!(
             shaped.contains("= take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(String) -> crate::Message>, String>> { std::marker::PhantomData } shape(_w) })?;"),
             "{shaped}"

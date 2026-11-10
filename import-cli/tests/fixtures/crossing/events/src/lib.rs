@@ -806,6 +806,13 @@ pub mod widgets {
     pub type Element<'a, Message, Theme = crate::Theme, Renderer = crate::widgets::Renderer> =
         element::Element<'a, Message, Theme, Renderer>;
 
+    /// The labels `element` shows, one after another, borrowing it.
+    pub fn shown_by_ref<Message>(element: &Element<'_, Message>) -> String {
+        let mut labels = Vec::new();
+        element.labels(&mut labels);
+        labels.join(" ")
+    }
+
     /// The labels `element` shows, one after another.
     pub fn shown<Message>(element: Element<'_, Message>) -> String {
         let mut labels = Vec::new();

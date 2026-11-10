@@ -6,7 +6,8 @@ fn bracketed(look: &Look) -> String {
 }
 
 fn main() {
-    println!("{:?}", looks::labels(&Look::all(), Look::to_string));
+    println!("{:?}", looks::labels(&Look::ALL, Look::to_string));
+    println!("{:?} {:?}", Look::ALL[1], Look::both());
     println!("{:?}", looks::labels(&Look::all(), bracketed));
     let names: Vec<&str> = Look::all().iter().map(Look::name).collect();
     let shades: Vec<u8> = Look::all().into_iter().map(Look::shade).collect();

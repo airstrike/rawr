@@ -70,6 +70,25 @@ impl<'a> Parser<'a> {
                     first_span.start(),
                 );
             }
+            // `Counted::<u16>::doubled(x)`: a crate trait a `use` names,
+            // which Rawr names as a module, with the trait's arguments, as
+            // `<_ as Counted<u16>>::doubled(x)` is (#1282).
+            if let [(name, trait_span)] = &segments[..]
+                && matches!(self.peek_second(), Token::LessThan)
+                && self.imported_trait(name)
+            {
+                let (name, trait_span) = (name.clone(), *trait_span);
+                self.next();
+                let explicit = self.parse_trait_path_arguments()?;
+                self.expect(Token::DoubleColon, "'::' after a trait's arguments")?;
+                return self.parse_trait_path_call(
+                    None,
+                    name,
+                    trait_span,
+                    Some(explicit),
+                    first_span.start(),
+                );
+            }
             // `path::f::<T>(..)`: the called function's type arguments.
             if matches!(self.peek_second(), Token::LessThan) {
                 self.next();

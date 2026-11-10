@@ -1557,7 +1557,10 @@ fn an_opaque_output_of_an_opaque_output_that_borrows_is_held_boxed() {
 /// call, and two of what `explain` gives on it, passed to another (#1335):
 /// Rust infers one lifetime for both borrows. In a view both are made in
 /// the view's region; out of one, the first `let` opens a scope frame and
-/// the second joins its region, so the call takes both at one lifetime.
+/// the second joins its region, a literal's too, so the call takes both at
+/// one lifetime. The element the frame holds is lent to a crate function
+/// by `&` and to its own `labels(&mut Vec<String>)` (#1366, #1369), and two
+/// values of one opaque type go to one call, `hover(below, above)` (#1368).
 /// The output is `cargo run`'s.
 #[test]
 fn two_lets_of_an_invariant_or_opaque_type_go_to_one_call() {
@@ -1565,7 +1568,10 @@ fn two_lets_of_an_invariant_or_opaque_type_go_to_one_call() {
     assert_eq!(rawr, cargo);
     assert!(
         rawr.starts_with(
-            "main pad 0 'left' 'right'\nmain pad 0 explain #0000ff 'left' explain #00ff00 'right'\n"
+            "main pad 0 'left' 'right' [\"pad 0\", \"'left'\", \"'right'\"]\n\
+             main pad 0 'left' 'right'\n\
+             main hover explain #0000ff rule 1 explain #00ff00 rule 2\n\
+             main pad 0 explain #0000ff 'left' explain #00ff00 'right'\n"
         ),
         "{rawr}"
     );
