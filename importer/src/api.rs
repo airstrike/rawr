@@ -1373,9 +1373,18 @@ impl Graph<Captured> {
                     .implementations
                     .binary_search_by(|implementation| implementation.id().cmp(owner))
                 else {
+                    // Name the member whose impl is missing, as a hash
+                    // alone names nothing a reader can find.
+                    let path = definition.display_path().collect::<Vec<_>>().join("::");
                     return Err(Error::Extraction {
                         code: "implementation-owner-cardinality",
-                        reason: owner.def_path_hash().into(),
+                        reason: format!(
+                            "{} (the impl of `{}` in crate `{}`)",
+                            owner.def_path_hash(),
+                            path,
+                            owner.unit().crate_name()
+                        )
+                        .into(),
                     });
                 };
                 let implementation = &self.implementations[index];

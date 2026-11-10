@@ -106,10 +106,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // for an implementation's bound that fixes a parameter's associated type.
 // Schema 61 gives a struct its layout: its pointers that may hold a
 // static's address, for a cycle of body statics (D865). Schema 63 gives a
-// `dyn Trait` its trait's impls for numbers and std types (#1561).
+// `dyn Trait` its trait's impls for numbers and std types (#1561). Schema
+// 65 leaves out a std trait's impls for scalars.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 64;
+const PROTOCOL_SCHEMA: u32 = 65;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2750,6 +2751,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // the scalar, which no type of a crate's holds, as num-traits'
             // `impl NumCast for u64` gives `u64` its `to_u32`
             // (`surface::scalar`).
+            // A std trait's impls for scalars are std's, which Rawr's own
+            // std gives them; extracting them, as core's `impl From<u8> for
+            // u64` of a program that names `From`, brought their members
+            // without the sysroot impls that own them.
+            ImplementationWork::Trait if self.is_sysroot_crate(def_id.krate)? => {}
             ImplementationWork::Trait => {
                 let mut scalars = Vec::new();
                 for implementation in self.implementations(def_id)? {
