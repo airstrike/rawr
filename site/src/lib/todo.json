@@ -26,7 +26,8 @@
         {"text":"`rawr check` on a large workspace joins each loaded crate's artifact to its unit once, walking the build graph once per check instead of once for each crate that loads it. In inboard this was 46% of the check's single-threaded time after an install.","issues":[1610],"refs":[1604]},
         {"text":"`rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking.","issues":[1611],"refs":[1604]},
         {"text":"inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner.","issues":[1583,1612],"refs":[766]},
-        {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]}
+        {"text":"Real `tracing::warn!(\"..\")` and `info!(\"..\")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`.","issues":[1561,1602,1603]},
+        {"text":"`rawr check` classifies a crate's API without re-reading a trait's implementations for every implementation and function that bounds one of its associated types, and finds a type's definition through an index instead of hashing every definition. In inboard's post-bump check this work was about 40% of rawr-import's single-threaded time.","issues":[1616],"refs":[1604]}
       ]
     },
     "releases": [
@@ -3509,7 +3510,8 @@
     {"issue":1612,"title":"The runner's handle identity names u64::from, which a crate trait's own from makes ambiguous (E0034)","state":"open","category":"No glue (D593)"},
     {"issue":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"open","category":"Divergences from rustc"},
-    {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open","category":"Divergences from rustc"}
+    {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"open","category":"Divergences from rustc"},
+    {"issue":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

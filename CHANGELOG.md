@@ -20,6 +20,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `rawr check` shows which phase it's in on one line, updated in place: resolving, extracting N of M, reading API, classifying, generating, checking. (#1611; part of #1604)
 - inboard's sidebar style builders run under `rawr run`. A crate calls marked style closures with the lent `&Theme` without copying it. An `impl Fn(&Theme, Status)` that a native function or `Ternary::with` gives is held boxed. A crate trait with its own `from` in scope no longer breaks the runner. (#1583, #1612; part of #766)
 - Real `tracing::warn!("..")` and `info!("..")` events, and `level_enabled!`, run in marked code and reach a native subscriber as cargo's build gives them, also through a crate's re-export, as inboard's `log::warn!` is. `format_args!` is `fmt::Arguments`: its `{:?}` is unquoted, and it coerces to a crate's `&dyn Value`. (#1561, #1602, #1603)
+- `rawr check` classifies a crate's API without re-reading a trait's implementations for every implementation and function that bounds one of its associated types, and finds a type's definition through an index instead of hashing every definition. In inboard's post-bump check this work was about 40% of rawr-import's single-threaded time. (#1616; part of #1604)
 
 ## 0.3.175 (2026-11-09)
 
