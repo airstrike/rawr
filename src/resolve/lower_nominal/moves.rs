@@ -41,21 +41,22 @@ impl<'a> Parser<'a> {
         {
             return self.move_part(value);
         }
-        // An owned `self` moves out of the method's receiver, with drop
-        // glue in the crate: its drop is its new owner's.
+        // An owned `self` moves out of the method's receiver, which the
+        // move check follows. With drop glue in the crate, its drop is its
+        // new owner's.
         if value.lvalue.is_none()
             && value.prelude.is_empty()
             && value.source.as_str() == "self"
-            && self.drops()
             && self.closures.is_empty()
-            && self.bindings.get("self").is_some_and(|binding| {
-                matches!(binding.kind, BindingKind::Receiver { .. })
-                    && !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
-            })
-            && self.needs_drop(&value.ty, value.span)?
+            && self.owned_receiver()
         {
-            value.source =
-                origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
+            if self.moves_by_value(&value.ty) {
+                self.flow().moved(value.span.start());
+            }
+            if self.drops() && self.needs_drop(&value.ty, value.span)? {
+                value.source =
+                    origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
+            }
             return Ok(());
         }
         let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue else {
@@ -245,11 +246,20 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Whether the method's receiver is an owned `self` (or `mut self`),
+    /// which the borrow facts hold as a local of the body.
+    pub(super) fn owned_receiver(&self) -> bool {
+        self.bindings.get("self").is_some_and(|binding| {
+            matches!(binding.kind, BindingKind::Receiver { .. })
+                && !matches!(self.inference.resolve(&binding.ty), Ty::Reference { .. })
+        })
+    }
+
     /// A by-value use of a part of the receiver below its fields
-    /// (`self.content.items`), which the borrow facts don't hold as a
-    /// local: an owned `self` gives it up, as `move_field` moves out one
-    /// field, and `&self` or `&mut self` can't (rustc's E0507). `None`
-    /// when `nested` is not such a part.
+    /// (`self.content.items`) where the borrow facts don't hold the
+    /// receiver as a local: in a closure, an owned `self` gives it up, as
+    /// `move_field` moves out one field, and `&self` or `&mut self` can't
+    /// (rustc's E0507). `None` when `nested` is not such a part.
     fn move_receiver_part(
         &mut self,
         value: &ParsedExpr,
@@ -670,6 +680,7 @@ impl<'a> Parser<'a> {
             moved: self.name_span(moved, name),
             reference: self.name_span(reference, name),
             borrowed,
+            partial: false,
             cause: Some(self.move_cause(name, binding)),
             previous_iteration: false,
         }

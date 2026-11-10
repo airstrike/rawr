@@ -259,6 +259,7 @@ impl<'a> Parser<'a> {
                 moved,
                 reference: moved,
                 borrowed: false,
+                partial: false,
                 cause: Some(self.move_cause(name, binding)),
                 previous_iteration: true,
             });

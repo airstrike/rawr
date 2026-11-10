@@ -419,11 +419,13 @@ impl fmt::Display for ParseErrorType {
                     name,
                     moved,
                     borrowed,
+                    partial,
                     ..
                 } => write!(
                     f,
-                    "{} of moved value '{name}'; it was already moved at {moved}",
-                    if *borrowed { "Borrow" } else { "Use" }
+                    "{} of {}moved value '{name}'; it was already moved at {moved}",
+                    if *borrowed { "Borrow" } else { "Use" },
+                    if *partial { "partially " } else { "" }
                 ),
                 crate::resolve::Error::InvalidConstruction { owner, reason, .. } => {
                     write!(f, "Invalid construction of '{owner}': {reason}")

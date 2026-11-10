@@ -743,7 +743,12 @@ impl<'a> Parser<'a> {
                         parameter: false,
                     });
                 };
-                let ty = binding.ty.clone();
+                let (ty, declaration) = (binding.ty.clone(), binding.declaration);
+                // An owned `self` is a local of the method's body, as rustc
+                // holds it: a move out of it or of a part of it is followed.
+                if self.closures.is_empty() && self.owned_receiver() {
+                    self.mention("self", declaration, &ty, token_span);
+                }
                 // A closure reads `self` through the local its outermost
                 // closure binds (`parse_closure`): the runtime binds `this`
                 // only in the method's own body.
