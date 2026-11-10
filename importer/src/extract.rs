@@ -3608,8 +3608,7 @@ impl Candidate {
             .map(|(id, sourced)| (id, sourced.value))
             .collect();
         for export in imports {
-            // `use Item as _` of anything but a trait brings nothing into
-            // scope, as in rustc, so it adds no anonymous import.
+            // Only a trait's `use Trait as _` brings anything into scope.
             let Some(import) = anonymous_import(export, &definitions, &spellings)? else {
                 continue;
             };
@@ -5950,8 +5949,21 @@ fn anonymous_import(
             target.def_path_hash(),
         ));
     };
-    if !matches!(definition.kind(), model::Kind::Trait { .. }) {
-        return Ok(None);
+    match definition.kind() {
+        model::Kind::Trait { .. } => {}
+        // A declaration whose shape failed closed may be a trait, whose
+        // methods an underscore import brings into scope: refuse it, naming
+        // the item, rather than drop the methods.
+        model::Kind::Rejected { .. } => {
+            let named = spellings
+                .get(target)
+                .map(|path| path.join("::"))
+                .unwrap_or_else(|| target.def_path_hash().to_string());
+            return Err(extraction("anonymous-import-kind", &named));
+        }
+        // `use Item as _` brings only a trait's methods into scope, so any
+        // other item adds nothing, as in rustc.
+        _ => return Ok(None),
     }
     if export.aliases.is_empty() {
         return Err(extraction("anonymous-import-alias", target.def_path_hash()));
