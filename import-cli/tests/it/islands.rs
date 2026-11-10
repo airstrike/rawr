@@ -1084,19 +1084,27 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(printed.contains("\nwidened Some(9)\n"), "{printed}");
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
+    // A check from no kept state: its first build records the instances
+    // the shadow crate's table lacks and stops before its probe, and two
+    // demand rounds follow. Cargo resolves once, and each round's demand
+    // is probed once (#446).
+    let _ = fs::remove_dir_all(root.join("target/rawr"));
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
+        .env("RAWR_VERBOSE", "1")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
         .output()
         .unwrap();
+    let said = String::from_utf8_lossy(&check.stderr);
+    assert!(check.status.success(), "{said}");
     assert!(
-        check.status.success(),
-        "{}",
-        String::from_utf8_lossy(&check.stderr)
+        said.contains(
+            "rawr-import: check rounds 4, Cargo resolutions 1, nightly builds 4, probes 3\n"
+        ),
+        "{said}"
     );
     let mut run = start(&root, &[]);
     for expected in printed.lines() {

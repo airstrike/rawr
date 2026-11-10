@@ -2556,7 +2556,15 @@ fn discoverable_replay_preserves_first_genuine_failure_without_executing() {
 
 #[test]
 fn discoverable_replay_preserves_nested_account_and_operational_failures() {
-    let failures: [fn() -> Error; 10] = [
+    let failures: [fn() -> Error; 11] = [
+        // The installed driver is another version: no rebuild can fix it.
+        || {
+            Error::Importer(Box::new(crate::Error::Toolchain {
+                field: "metadata probe driver version",
+                expected: "rawr-import-driver 1 63 fixture\n".into(),
+                actual: "rawr-import-driver 1 64 fixture\n".into(),
+            }))
+        },
         || {
             Error::Importer(Box::new(crate::Error::Limit {
                 resource: "fixture retained request bytes",

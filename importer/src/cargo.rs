@@ -225,6 +225,11 @@ pub struct Request {
     /// The generated crates whose check records the native instances of
     /// marked generics, by their manifest directories (D866).
     recorded: Box<[PathBuf]>,
+    /// The record the generated crates' table was written from, when a
+    /// new one is to stop the build before its probe (D869). It is no
+    /// input of the product: a build that records the same one goes on.
+    #[cfg(feature = "rustc-driver")]
+    kept: Option<crate::record::Record>,
 }
 
 /// A currently validated semantic resolution owner ready for API publication.
@@ -241,6 +246,7 @@ impl Prepared {
         match &mut self.owner {
             resolution::owner::Resolved::Owner(owner) => owner.settlement(),
             resolution::owner::Resolved::Shared(shared) => shared.settlement(),
+            resolution::owner::Resolved::Recorded(_) => crate::bindings::Settlement::default(),
         }
     }
 
@@ -254,21 +260,27 @@ impl Prepared {
                 Some(crate::expand::Basis::of(owner.expansion()))
                     .filter(|basis| !basis.externs.is_empty())
             }
-            resolution::owner::Resolved::Shared(_) => None,
+            resolution::owner::Resolved::Shared(_) | resolution::owner::Resolved::Recorded(_) => {
+                None
+            }
         }
     }
 
     /// The instances native code calls marked generics at, as this run's
     /// check recorded them beside each selected crate's artifact (D866):
     /// only a generated crate's check records any. `None` when shared
-    /// bindings replayed and no check ran.
+    /// bindings replayed and no check ran. A build whose check recorded
+    /// other instances than the request kept stopped before its probe
+    /// ([`Request::kept_instances`]), and has its record and no API.
     ///
     /// # Errors
     ///
     /// A record can't be read.
     pub fn recorded_instances(&self) -> std::io::Result<Option<crate::record::Record>> {
-        let resolution::owner::Resolved::Owner(owner) = &self.owner else {
-            return Ok(None);
+        let owner = match &self.owner {
+            resolution::owner::Resolved::Owner(owner) => owner,
+            resolution::owner::Resolved::Shared(_) => return Ok(None),
+            resolution::owner::Resolved::Recorded(record) => return Ok(Some(record.clone())),
         };
         let basis = crate::expand::Basis::of(owner.expansion());
         let mut instances = Vec::new();
@@ -293,6 +305,7 @@ impl Prepared {
             resolution::owner::Resolved::Shared(_) => {
                 unreachable!("shared bindings publish through the retained API, never `publish`")
             }
+            resolution::owner::Resolved::Recorded(_) => Err(stopped()),
         }
     }
 
@@ -301,7 +314,17 @@ impl Prepared {
         match self.owner {
             resolution::owner::Resolved::Owner(owner) => owner.retain_api(limits),
             resolution::owner::Resolved::Shared(shared) => (*shared).retain_api(limits),
+            resolution::owner::Resolved::Recorded(_) => Err(stopped()),
         }
+    }
+}
+
+/// The API of a build that stopped for its new record of instances: there
+/// is none, as its crates are written and checked again first.
+#[cfg(feature = "rustc-driver")]
+fn stopped() -> Error {
+    Error::Request {
+        reason: "the generated crates recorded new instances and are checked again first".into(),
     }
 }
 
@@ -483,6 +506,28 @@ struct Harness {
 struct Built {
     harness: Harness,
     build: crate::input::build::Build,
+}
+
+#[cfg(feature = "rustc-driver")]
+impl Built {
+    /// The instances this build's check recorded beside each selected
+    /// crate's artifact (D866), as [`Prepared::recorded_instances`] reads
+    /// them after the probe. `None` when an artifact or record can't be
+    /// read: the probe and its completion find out why.
+    fn recorded_instances(&self, limits: &Limits) -> Option<crate::record::Record> {
+        let mut allocation = crate::extract::Allocation::new(limits);
+        let selected = self
+            .build
+            .selected_artifacts(&self.harness.initial, &mut allocation)
+            .ok()?;
+        let mut instances = Vec::new();
+        for artifact in &selected {
+            if let Some(record) = crate::record::Record::read(&artifact.rmeta).ok()? {
+                instances.extend_from_slice(record.instances());
+            }
+        }
+        Some(crate::record::Record::new(instances))
+    }
 }
 
 struct Documents {
@@ -864,6 +909,18 @@ impl Request {
         Ok(closure)
     }
 
+    /// This request, whose recorded crates' table holds `kept` (D869): a
+    /// cold build whose check records other instances stops before its
+    /// probe, as the crates are written and checked again with them first
+    /// ([`Prepared::recorded_instances`]). The record is no input of the
+    /// resolution: a build that records the same instances goes on.
+    #[cfg(feature = "rustc-driver")]
+    #[must_use]
+    pub fn kept_instances(mut self, kept: crate::record::Record) -> Self {
+        self.kept = Some(kept);
+        self
+    }
+
     /// Prepare the complete semantic owner before extraction, reusing an
     /// attested bundle when all current inputs still agree.
     #[cfg(feature = "rustc-driver")]
@@ -960,6 +1017,7 @@ impl Request {
         limits: &Limits,
         cached: Option<&CachedToolchain>,
     ) -> Result<Resolution> {
+        crate::progress::resolved();
         let native = native.production();
         let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
@@ -2396,6 +2454,8 @@ impl Builder {
             internal,
             demand: self.demand.into_iter().collect(),
             recorded: self.recorded.into_boxed_slice(),
+            #[cfg(feature = "rustc-driver")]
+            kept: None,
         })
     }
 }

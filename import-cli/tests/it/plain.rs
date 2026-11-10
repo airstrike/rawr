@@ -374,6 +374,24 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
         "first",
         "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn right() -> bool {\n    use facts_c::Right;\n    facts_a::both().choose()\n}\nfn bumped() -> i64 {\n    use facts_c::BumpLeft;\n    let mut both = facts_a::both();\n    both.bump()\n}\nfn taken() -> i64 {\n    use facts_c::TakeLeft;\n    facts_a::both().spend()\n}\nfn main() {\n    println!(\"{} {} {} {}\", left(), right(), bumped(), taken());\n}\n",
     );
+    // Four calls to prove: the first starts the check again under the
+    // facts' key, which proves the other three in place (#446).
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&first)
+        .env("RAWR_HOME", &home)
+        .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+        .env("RAWR_VERBOSE", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "{}", text(&check.stderr));
+    assert!(
+        text(&check.stderr).contains("rawr-import: check rounds 2,"),
+        "{}",
+        text(&check.stderr)
+    );
     run(&first, "11 true 41 51\n");
     let shared = published(&first);
     assert_eq!(

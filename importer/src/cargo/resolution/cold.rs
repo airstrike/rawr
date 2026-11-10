@@ -134,6 +134,7 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
     ) -> Result<cargo::Built> {
+        crate::progress::built();
         let native = self.native_for_harness_in(cached, layout, &harness, cargo_limits)?;
         let native = native.production();
         let paths = layout.final_form();
@@ -316,6 +317,7 @@ impl Request {
                             Ok(reuse.candidate.clone())
                         }
                         (cargo::MetadataPhase::Provisional, None) => {
+                            crate::progress::resolved();
                             let bytes = provisional_metadata(&native, self, layout, limits)?;
                             produced.0 = Some(bytes.clone());
                             Ok(bytes)
@@ -375,6 +377,7 @@ impl Request {
                 cargo::write_atomic(paths.manifest(), &manifest)?;
                 cargo::write_atomic(paths.source(), &source)?;
                 cargo::write_atomic(paths.lock(), &locked)?;
+                crate::progress::resolved();
                 let bytes = metadata(&native, self, layout, true, limits)?;
                 self.revalidate(limits, "reserved locked persisted metadata")?;
                 cargo::require_exact_file(

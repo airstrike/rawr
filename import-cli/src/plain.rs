@@ -53,6 +53,15 @@ impl profile::Checked for Checked {
 const IDENTITY: &str = "rawr.plain";
 const VERSION: u32 = 1;
 
+/// How many rounds this process's checks ran: each reads the dependencies'
+/// API once and checks the program against it.
+static ROUNDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many rounds this process's checks ran.
+pub(crate) fn rounds() -> usize {
+    ROUNDS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The plain profile. A program whose imported calls were proved from
 /// intrinsic facts (D650) is checked under those facts too: the union's
 /// identity joins the profile's, so a check cached under other facts is
@@ -484,9 +493,13 @@ fn prepare(
     let mut applications = Vec::new();
     // Whether the check ran again for a new record of native instances.
     let mut instances_retried = false;
+    // Why the call a check stopped at has no application, when the check
+    // tried to prove it in place.
+    let mut unproved = None;
     // A cache entry that goes stale while this run uses it is `Error::Stale`,
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
+        ROUNDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
         // The record a retry stored names types of its own (D869).
@@ -514,6 +527,13 @@ fn prepare(
             Err(error) => return Err(Error::other(error)),
         };
         remembered = false;
+        // A first build whose check records instances the table lacks stops
+        // before its probe: its API is read once, after the retry.
+        let request = if instances_retried {
+            request
+        } else {
+            request.kept_instances(rawr::package::instances::kept(&project))
+        };
         rawr_import::progress::phase("resolving");
         let mut prepared = request
             .prepare_cached_in(&limits, scope)
@@ -569,17 +589,50 @@ fn prepare(
                     expected,
                     &limits,
                     |contract, _profile, _facade| {
-                        // Async code compiles against the core's future
-                        // (D513.3), whose facade the runner installs too.
-                        // `rawr run` and `rawr check` read the program as
-                        // Cargo builds it: with everything (D683.4).
-                        let mut engine = rawr::future::facade::engine();
-                        engine.set_access(rawr::Access::all());
-                        let demand = engine
-                            .compile_imported_with_applications(contract, snapshot, &applications)
-                            .map_err(Error::Rawr)?;
-                        let checked = Checked(*demand.contract_fingerprint().as_bytes());
-                        Ok((demand, checked))
+                        let mut snapshot = Some(snapshot);
+                        loop {
+                            let snapshot = snapshot.take().unwrap_or_else(|| {
+                                rawr::reload::source::Snapshot::from_graph(&source)
+                            });
+                            // Async code compiles against the core's future
+                            // (D513.3), whose facade the runner installs
+                            // too. `rawr run` and `rawr check` read the
+                            // program as Cargo builds it: with everything
+                            // (D683.4).
+                            let mut engine = rawr::future::facade::engine();
+                            engine.set_access(rawr::Access::all());
+                            let error = match engine.compile_imported_with_applications(
+                                contract,
+                                snapshot,
+                                &applications,
+                            ) {
+                                Ok(demand) => {
+                                    let checked =
+                                        Checked(*demand.contract_fingerprint().as_bytes());
+                                    return Ok((demand, checked));
+                                }
+                                Err(error) => error,
+                            };
+                            // A check keyed by the crates' facts already
+                            // proves each call it needs in place: a proof
+                            // changes only the check (#446). The first
+                            // proof of an unkeyed check starts it again
+                            // under the facts' key, below.
+                            let (Some(_), Some(call)) = (keyed, error.rust_application()) else {
+                                return Err(Error::Rawr(error));
+                            };
+                            if inventory.is_none() {
+                                inventory =
+                                    Some(acquire(&graph, &limits, &input, &mut settlement)?);
+                            }
+                            let facts = inventory
+                                .as_ref()
+                                .ok_or_else(|| Error::other("the crates' facts were not loaded"))?;
+                            if let Err(proof) = prove(&graph, facts, &call, &mut applications) {
+                                unproved = Some(proof);
+                                return Err(Error::Rawr(error));
+                            }
+                        }
                     },
                 );
                 let completed = match completed {
@@ -598,16 +651,23 @@ fn prepare(
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if error.rust_application().is_some() =>
                     {
-                        let call = error.rust_application().ok_or_else(|| {
-                            Error::other("the failed check names no imported call")
-                        })?;
-                        if inventory.is_none() {
-                            inventory = Some(acquire(&graph, &limits, &input, &mut settlement)?);
-                        }
-                        let facts = inventory
-                            .as_ref()
-                            .ok_or_else(|| Error::other("the crates' facts were not loaded"))?;
-                        match prove(&graph, facts, &call, &mut applications) {
+                        let proved = match unproved.take() {
+                            Some(proof) => Err(proof),
+                            None => {
+                                let call = error.rust_application().ok_or_else(|| {
+                                    Error::other("the failed check names no imported call")
+                                })?;
+                                if inventory.is_none() {
+                                    inventory =
+                                        Some(acquire(&graph, &limits, &input, &mut settlement)?);
+                                }
+                                let facts = inventory.as_ref().ok_or_else(|| {
+                                    Error::other("the crates' facts were not loaded")
+                                })?;
+                                prove(&graph, facts, &call, &mut applications)
+                            }
+                        };
+                        match proved {
                             Ok(()) => {
                                 // The check now depends on proved facts:
                                 // the next attempt is keyed by them already,
