@@ -53,6 +53,23 @@ fn text(bytes: &[u8]) -> String {
 
 /// The pinned nightly's check build directory, shared by every project
 /// that uses `home` (D700).
+/// `kind` (`bindings` or `inventories`) of the newest extraction protocol's
+/// format under `home`, where rawr keeps each protocol's shared stores
+/// (`formats/<protocol>`).
+fn home_format(home: &Path, kind: &str) -> PathBuf {
+    let formats = home.join("formats");
+    let newest = fs::read_dir(&formats)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .max();
+    match newest {
+        Some(protocol) => formats.join(protocol.to_string()).join(kind),
+        None => formats.join("none").join(kind),
+    }
+}
+
 fn nightly_directory(home: &Path) -> PathBuf {
     home.join("nightly")
         .join(rawr_import::cargo::toolchain::CHANNEL)
@@ -651,7 +668,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
         entries
     };
     let first = project("first");
-    let shared = entries(&home.join("inventories"));
+    let shared = entries(&home_format(&home, "inventories"));
     assert_eq!(
         shared
             .iter()
@@ -672,7 +689,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     }
     let second = project("second");
     assert_eq!(
-        entries(&home.join("inventories")),
+        entries(&home_format(&home, "inventories")),
         shared,
         "the second project reads the shared entries back"
     );
@@ -802,7 +819,7 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
 #[test]
 fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() {
     let home = crate::support::scratch().join("checked-sharing-home");
-    let _ = fs::remove_dir_all(home.join("bindings"));
+    let _ = fs::remove_dir_all(home_format(&home, "bindings"));
     let projects =
         ["first", "second"].map(|name| crate::support::scratch().join(format!("checked-{name}")));
     for root in &projects {
@@ -836,7 +853,7 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
         !first.join("target/rawr/runner").exists(),
         "a check builds no runner"
     );
-    let published = fs::read_dir(home.join("bindings"))
+    let published = fs::read_dir(home_format(&home, "bindings"))
         .unwrap()
         .filter(|entry| {
             let meta = entry.as_ref().unwrap().path().join("meta.json");
@@ -941,8 +958,9 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
 #[test]
 fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home() {
     let home = crate::support::scratch().join("module-sharing-home");
-    let bindings = home.join("bindings");
-    let _ = fs::remove_dir_all(&bindings);
+    // Each protocol's bindings live under `formats/<protocol>`; the first
+    // check makes the current one.
+    let _ = fs::remove_dir_all(home.join("formats"));
     let projects =
         ["first", "second"].map(|name| crate::support::scratch().join(format!("module-{name}")));
     for root in &projects {
@@ -972,7 +990,7 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
     };
     // The shared table of the crate named `crate_name`, and its key.
     let shared = |crate_name: &str| {
-        fs::read_dir(&bindings)
+        fs::read_dir(home_format(&home, "bindings"))
             .unwrap()
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
@@ -1108,7 +1126,7 @@ fn a_shared_table_names_no_crate_outside_its_closure() {
     let quiet = project("quiet", "");
     // The `meters` tables in the home's bindings.
     let shared = |home: &Path| {
-        fs::read_dir(home.join("bindings"))
+        fs::read_dir(home_format(&home, "bindings"))
             .unwrap()
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
@@ -1442,7 +1460,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         1,
         "{diagnostic}"
     );
-    let published = fs::read_dir(home.join("bindings"))
+    let published = fs::read_dir(home_format(&home, "bindings"))
         .into_iter()
         .flatten()
         .filter_map(|entry| {
@@ -2899,7 +2917,7 @@ fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
     );
 
     // The first project's `events` is still its own, and still fresh.
-    fs::remove_dir_all(home.join("bindings")).unwrap();
+    fs::remove_dir_all(home_format(&home, "bindings")).unwrap();
     fs::remove_dir_all(first.join("target/rawr")).unwrap();
     let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&first, &home), "alpha 1.2.3\n");
@@ -2935,7 +2953,7 @@ fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
 
     // A miss in the second project, as after a change to the bindings'
     // format: the nightly runs and compiles nothing.
-    fs::remove_dir_all(home.join("bindings")).unwrap();
+    fs::remove_dir_all(home_format(&home, "bindings")).unwrap();
     let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&second, &home), "1.2.3 1\n");
     assert!(
