@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 166;
+const CLASSIFIER_VERSION: u32 = 167;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2408,15 +2408,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // `Task::sip` takes `impl FnOnce(<S as Future>::Output) -> T`
             // with `S: sipper::Core`.
             let called = position >= declared;
-            if (!called
-                && !in_output
-                && (self.is_core_trait(&trait_id, "Future")
-                    || generics.predicates().any(|predicate| {
-                        matches!(predicate, model::Predicate::Bound {
-                            ty: model::Type::Parameter { index: bounded, .. },
-                            bound: model::Bound::Trait { trait_id, .. },
-                        } if *bounded == index && self.is_core_trait(trait_id, "Future"))
-                    })))
+            let future_parameter = generics.predicates().any(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound: model::Bound::Trait { trait_id, .. },
+                } if *bounded == index && self.is_core_trait(trait_id, "Future"))
+            });
+            // A future parameter's own `S::Output` is its synthetic wherever
+            // it is named, the output future's `Output` too, as an adapter's
+            // `impl Future<Output = S::Output>` gives it. Only a blanket
+            // trait's projection there, as `Fut1::Ok` of a `Fut1: TryFuture`,
+            // takes one of its own (#1674).
+            let own_output = future_parameter && self.is_core_trait(&trait_id, "Future");
+            if own_output
+                || (!called
+                    && (self.is_core_trait(&trait_id, "Future") || !in_output && future_parameter))
                 || matches!(
                     self.definition_name(&trait_id),
                     Some("Fn" | "FnMut" | "FnOnce")

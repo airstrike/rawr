@@ -1927,6 +1927,18 @@ fn a_closure_beside_a_future_parameter_takes_the_futures_output() {
     assert_eq!(rawr, "Some(Close(7))\nSome(Waited(8, 10))");
 }
 
+/// A crate function whose output future's `Output` names its future
+/// parameter's `S::Output`, as futures' adapters keep their input's output:
+/// that projection is the future's own synthetic `SOutput`, not a second
+/// one of the same name (E0403 in inboard's Bind). The output is `cargo
+/// run`'s.
+#[test]
+fn a_future_parameters_output_named_in_the_output_future_is_its_own() {
+    let (rawr, cargo) = both_printed("passed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Waited(4, 15))");
+}
+
 /// iced's game_of_life (#1659): `Task::perform(task, Message::Grid.with(version))`
 /// takes the `impl Future + use<>` a program method gives from an async
 /// block beside a crate callable value, and a capturing closure in its

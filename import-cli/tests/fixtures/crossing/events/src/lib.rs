@@ -336,6 +336,13 @@ pub fn sleep(ticks: u32) -> Sleep {
     Sleep(ticks)
 }
 
+/// A future that gives what `future` gives, as an adapter of futures'
+/// keeps its input's output: `S::Output` of a future parameter `S`, named
+/// inside the output future's own `Output`.
+pub fn passed<S: std::future::Future>(future: S) -> impl std::future::Future<Output = S::Output> {
+    future
+}
+
 /// The future `sleep` gives.
 pub struct Sleep(u32);
 
