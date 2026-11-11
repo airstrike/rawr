@@ -2367,7 +2367,10 @@ impl Builder {
         let policy = self
             .policy
             .expect("each request is built with its exclusion policy");
-        let internal = internal::Seed::transform(&crate::host::root()?)?;
+        // The harness reads Rawr's crate as Cargo does, from the host's
+        // Cargo view, so a Rawr of other sources but the same manifests
+        // resolves the same harness (#1696).
+        let internal = internal::Seed::transform(&crate::host::cargo_root()?)?;
         let mut dependencies = Vec::with_capacity(self.dependencies.len().saturating_add(1));
         for dependency in self.dependencies {
             dependencies.push(dependency.seal(&project_root)?);

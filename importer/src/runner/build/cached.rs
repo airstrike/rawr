@@ -325,6 +325,14 @@ fn compile<B>(
             .map_or(&[][..], |file| file.bytes())
     };
     let (generated_manifest, generated_lock) = (file_of("Cargo.toml"), file_of("Cargo.lock"));
+    // The resolution named rawr's crate at the host's Cargo view, which has
+    // no sources; the runner compiles it from the host.
+    let relocated = std::str::from_utf8(generated_manifest)
+        .ok()
+        .and_then(crate::host::relocated);
+    let generated_manifest = relocated
+        .as_deref()
+        .map_or(generated_manifest, str::as_bytes);
     // rawr's own runtime, compiled once per machine, unless this runner
     // can't link it (D620).
     let mut runtime = crate::runner::runtime::prepare(context, generated_manifest, generated_lock)?;

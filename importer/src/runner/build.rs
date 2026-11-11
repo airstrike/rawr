@@ -149,7 +149,16 @@ impl<B> super::Manifest<super::Generated, B> {
                     source,
                 })?;
             }
-            fs::write(&path, file.bytes()).map_err(|source| Error::Io {
+            // The runner compiles rawr's crate from the host, not from the
+            // Cargo view its resolution read.
+            let relocated = match file.path() {
+                "Cargo.toml" => std::str::from_utf8(file.bytes())
+                    .ok()
+                    .and_then(crate::host::relocated),
+                _ => None,
+            };
+            let bytes = relocated.as_deref().map_or(file.bytes(), str::as_bytes);
+            fs::write(&path, bytes).map_err(|source| Error::Io {
                 operation: "write generated runner file",
                 path,
                 source,

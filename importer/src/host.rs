@@ -11,6 +11,17 @@
 //! `.lock-<pid>` file in the host that it holds locked, and pruning skips a
 //! leased host without waiting for it (D608.7). Unleased hosts go by their
 //! last use, beyond the few most recently used.
+//!
+//! A resolution harness reads less than its host holds. Rawr's crate is a
+//! build dependency of the harness, which builds no unit of it (D609.2), so
+//! Cargo reads only the manifests, the lockfile and which target files
+//! exist. The harness therefore names Rawr's crate at the host's Cargo view
+//! ([`cargo_root`]): those manifests and that lockfile, with each target
+//! file present and empty, in `manifests/<digest>` under Rawr's home, named
+//! for what it holds. Builds whose sources differ but whose manifests agree
+//! share it, and with it the harness, Cargo's resolution and the bundle,
+//! while the runner that compiles Rawr names the host itself
+//! ([`relocated`]).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -36,18 +47,7 @@ pub fn root() -> crate::Result<PathBuf> {
         touch(&lease.root);
         return Ok(lease.root.clone());
     }
-    let home = match std::env::var_os("CARGO_HOME") {
-        Some(home) => PathBuf::from(home),
-        None => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| {
-            crate::Error::Request {
-                reason: "Cargo couldn't find your home directory: neither `CARGO_HOME` nor `HOME` \
-                         is set"
-                    .into(),
-            }
-        })?)
-        .join(".cargo"),
-    };
-    let hosts = crate::store::runtime_home(&home).join("hosts");
+    let hosts = crate::store::runtime_home(&cargo_home()?).join("hosts");
     let lease = Lease::take(&hosts, &DIGEST, FILES).map_err(|source| crate::Error::Io {
         operation: "write",
         path: hosts.clone(),
@@ -55,6 +55,199 @@ pub fn root() -> crate::Result<PathBuf> {
     })?;
     prune(&hosts, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
     Ok(ROOT.get_or_init(|| lease).root.clone())
+}
+
+/// The root a resolution harness names Rawr's crate at: the checkout,
+/// which Cargo reads as it stands.
+#[cfg(not(feature = "embedded-host"))]
+pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
+    root()
+}
+
+/// The root a resolution harness names Rawr's crate at: the host's Cargo
+/// view in Rawr's home, written once per process when it is not there. A
+/// view or host whose path [`relocated`] can't rewrite as text has no view
+/// apart from the host, so its harness names the host itself.
+#[cfg(feature = "embedded-host")]
+pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
+    static ROOT: std::sync::OnceLock<Option<Lease>> = std::sync::OnceLock::new();
+    if let Some(leased) = ROOT.get() {
+        return match leased {
+            Some(lease) => {
+                touch(&lease.root);
+                Ok(lease.root.clone())
+            }
+            None => root(),
+        };
+    }
+    let views = crate::store::home(&cargo_home()?).join(VIEWS);
+    let view = View::of(FILES);
+    let lease =
+        Lease::take(&views, &view.digest, &view.files).map_err(|source| crate::Error::Io {
+            operation: "write",
+            path: views.clone(),
+            source,
+        })?;
+    prune(&views, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
+    let host = root()?;
+    let leased = ROOT.get_or_init(|| (plain(&lease.root) && plain(&host)).then_some(lease));
+    match leased {
+        Some(lease) => Ok(lease.root.clone()),
+        None => Ok(host),
+    }
+}
+
+/// The identity of what a resolution harness reads of Rawr: the digest of
+/// the Cargo view it names, or of the sources for a build that has none.
+#[must_use]
+pub(crate) fn cargo_digest() -> [u8; 32] {
+    #[cfg(feature = "embedded-host")]
+    {
+        static VIEW: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+        *VIEW.get_or_init(|| View::of(FILES).digest)
+    }
+    #[cfg(not(feature = "embedded-host"))]
+    {
+        DIGEST
+    }
+}
+
+/// `text`, a runner's manifest generated from a resolution harness, with
+/// Rawr's crate at the host instead of the Cargo view the harness named:
+/// its path and the package ids that spell it. `None` when the text names
+/// no view, as a development build's never does.
+pub(crate) fn relocated(text: &str) -> Option<String> {
+    let view = canonical(&cargo_root().ok()?);
+    let host = canonical(&root().ok()?);
+    rewritten(text, view.to_str()?, host.to_str()?)
+}
+
+/// `text` with each path at or below `old` moved to `new`, or `None` when
+/// it names none. A directory whose name only starts with `old`'s is kept.
+fn rewritten(text: &str, old: &str, new: &str) -> Option<String> {
+    if old == new {
+        return None;
+    }
+    let mut moved = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut found = false;
+    while let Some(index) = rest.find(old) {
+        let after = &rest[index + old.len()..];
+        let whole = after
+            .chars()
+            .next()
+            .is_none_or(|next| matches!(next, '/' | '"' | '\'' | '#'));
+        moved.push_str(&rest[..index]);
+        moved.push_str(if whole { new } else { old });
+        found |= whole;
+        rest = after;
+    }
+    moved.push_str(rest);
+    found.then_some(moved)
+}
+
+/// Where the Cargo views of hosts live, under Rawr's home. Rawr's home,
+/// not the runtime home hosts may share: the resolutions that name a view
+/// live in the home and the projects that use it.
+#[cfg(feature = "embedded-host")]
+const VIEWS: &str = "manifests";
+
+/// A host's files as a resolution harness's Cargo reads them: every
+/// manifest and the lockfile as they are, and each file Cargo looks for to
+/// find a package's targets present and empty. Nothing else of the host is
+/// read before a unit of Rawr is built, and the harness builds none.
+#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
+struct View<'files> {
+    files: Vec<(&'files str, &'files [u8])>,
+    digest: [u8; 32],
+}
+
+#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
+impl<'files> View<'files> {
+    /// The view of the host written from `files`, whose paths are sorted.
+    fn of(files: &[(&'files str, &'files [u8])]) -> Self {
+        use sha2::Digest as _;
+
+        let packages: Vec<&str> = files
+            .iter()
+            .filter_map(|(path, _)| manifest_package(path))
+            .collect();
+        let target = |path: &str| {
+            packages.iter().any(|package| {
+                let inside = match *package {
+                    "" => Some(path),
+                    package => path
+                        .strip_prefix(package)
+                        .and_then(|rest| rest.strip_prefix('/')),
+                };
+                inside.is_some_and(|file| TARGETS.contains(&file))
+            })
+        };
+        let mut view = Vec::new();
+        let mut digest = sha2::Sha256::new();
+        digest.update(b"rawr.host.cargo-view/v1");
+        for (path, bytes) in files {
+            let kept: &[u8] = if *path == "Cargo.lock" || manifest_package(path).is_some() {
+                bytes
+            } else if target(path) {
+                b""
+            } else {
+                continue;
+            };
+            digest.update((path.len() as u64).to_le_bytes());
+            digest.update(path.as_bytes());
+            digest.update((kept.len() as u64).to_le_bytes());
+            digest.update(kept);
+            view.push((*path, kept));
+        }
+        Self {
+            files: view,
+            digest: digest.finalize().into(),
+        }
+    }
+}
+
+/// The package directory of a manifest's path, `""` for the root's, or
+/// `None` for another file.
+fn manifest_package(path: &str) -> Option<&str> {
+    match path {
+        "Cargo.toml" => Some(""),
+        path => path.strip_suffix("/Cargo.toml"),
+    }
+}
+
+/// The files Cargo looks for, under a package's root, to find its targets.
+const TARGETS: [&str; 3] = ["build.rs", "src/lib.rs", "src/main.rs"];
+
+/// Cargo's home, as Cargo finds it.
+#[cfg(feature = "embedded-host")]
+fn cargo_home() -> crate::Result<PathBuf> {
+    match std::env::var_os("CARGO_HOME") {
+        Some(home) => Ok(PathBuf::from(home)),
+        None => Ok(PathBuf::from(std::env::var_os("HOME").ok_or_else(|| {
+            crate::Error::Request {
+                reason: "Cargo couldn't find your home directory: neither `CARGO_HOME` nor `HOME` \
+                         is set"
+                    .into(),
+            }
+        })?)
+        .join(".cargo")),
+    }
+}
+
+/// `path` with every symlink resolved, as a harness names it.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Whether `path`, resolved, is spelled alike in a manifest, in Cargo's
+/// JSON and in a package id's URL.
+#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
+fn plain(path: &Path) -> bool {
+    canonical(path).to_str().is_some_and(|text| {
+        text.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
+    })
 }
 
 /// A host this process uses, held locked through its own `.lock-<pid>` file
@@ -197,6 +390,13 @@ pub fn clean(cargo_home: &Path) {
         HOST_IDLE,
         HOSTS_KEPT,
     );
+    #[cfg(feature = "embedded-host")]
+    prune(
+        &crate::store::home(cargo_home).join(VIEWS),
+        &[],
+        HOST_IDLE,
+        HOSTS_KEPT,
+    );
     crate::runner::runtime::clean(cargo_home);
     crate::deps::clean_nightly(&crate::store::home(cargo_home));
     #[cfg(feature = "rustc-driver")]
@@ -316,6 +516,81 @@ mod tests {
             ]
         );
         fs::remove_dir_all(hosts.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_hosts_cargo_view_moves_with_its_manifests_and_not_its_sources() {
+        let host = |library: &'static [u8], manifest: &'static [u8]| {
+            [
+                ("Cargo.lock", &b"lock"[..]),
+                ("Cargo.toml", manifest),
+                ("README.md", b"readme"),
+                ("codegen/Cargo.toml", b"[package]\nname = \"codegen\"\n"),
+                ("codegen/src/lib.rs", b"pub fn codegen() {}\n"),
+                ("codegen/src/parse.rs", b"fn parse() {}\n"),
+                ("src/lib.rs", library),
+                ("src/runtime.rs", b"pub fn run() {}\n"),
+            ]
+        };
+        let manifest: &[u8] = b"[package]\nname = \"rawr\"\nversion = \"1.0.0\"\n";
+        let files = host(b"pub mod runtime;\n", manifest);
+        let view = super::View::of(&files);
+        // The manifests and the lockfile as they are; each target root
+        // there, empty; no other source.
+        assert_eq!(
+            view.files,
+            [
+                ("Cargo.lock", &b"lock"[..]),
+                ("Cargo.toml", manifest),
+                ("codegen/Cargo.toml", b"[package]\nname = \"codegen\"\n"),
+                ("codegen/src/lib.rs", b""),
+                ("src/lib.rs", b""),
+            ]
+        );
+        // A build of other sources reads the same view, so it resolves the
+        // same harness; its runner compiles the sources from its own host.
+        let edited = host(b"/// The runtime.\npub mod runtime;\n", manifest);
+        assert_eq!(super::View::of(&edited).digest, view.digest);
+        let bumped = host(
+            b"pub mod runtime;\n",
+            b"[package]\nname = \"rawr\"\nversion = \"1.0.1\"\n",
+        );
+        assert_ne!(
+            super::View::of(&bumped).digest,
+            view.digest,
+            "a manifest Cargo reads names another view"
+        );
+        let mut grown = files.to_vec();
+        grown.insert(5, ("codegen/src/main.rs", b"fn main() {}\n"));
+        assert_ne!(
+            super::View::of(&grown).digest,
+            view.digest,
+            "a new target root names another view"
+        );
+    }
+
+    #[test]
+    fn a_runner_manifest_moves_from_the_view_to_the_host() {
+        let view = "/home/x/.cargo/rawr/manifests/0123456789abcdef";
+        let host = "/home/x/.cargo/rawr/hosts/fedcba9876543210";
+        let manifest = format!(
+            "[dependencies]\n__rawr_internal = {{ package = \"rawr\", path = \"{view}\" }}\n\
+             [profile.dev.package.\"path+file://{view}#rawr@1.0.0\"]\nopt-level = 3\n\
+             [patch.crates-io]\ncodegen = {{ path = \"{view}/codegen\" }}\n\
+             other = {{ path = \"{view}0/other\" }}\n"
+        );
+        let moved = super::rewritten(&manifest, view, host).unwrap();
+        assert_eq!(
+            moved,
+            format!(
+                "[dependencies]\n__rawr_internal = {{ package = \"rawr\", path = \"{host}\" }}\n\
+                 [profile.dev.package.\"path+file://{host}#rawr@1.0.0\"]\nopt-level = 3\n\
+                 [patch.crates-io]\ncodegen = {{ path = \"{host}/codegen\" }}\n\
+                 other = {{ path = \"{view}0/other\" }}\n"
+            )
+        );
+        assert_eq!(super::rewritten(&moved, view, host), None);
+        assert_eq!(super::rewritten(&manifest, view, view), None);
     }
 
     #[test]
