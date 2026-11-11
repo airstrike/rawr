@@ -127,10 +127,11 @@ impl Source {
         &self.table
     }
 
-    /// Each derive's expansion with the source its item is in: the
-    /// expansion's items are the item's module's, as rustc reads them, so
-    /// they name what that source does (#593).
-    pub(crate) fn expansions(&self) -> Vec<(Id, Id)> {
+    /// Each derive's expansion with the source its item is in and where
+    /// the derive is there: the expansion's items are the item's module's,
+    /// as rustc reads them, so they name what that source does (#593), and
+    /// what the blocks around the derive do.
+    pub(crate) fn expansions(&self) -> Vec<(Id, Id, crate::Span)> {
         let sources = &self.table.0.sources;
         sources
             .iter()
@@ -140,7 +141,7 @@ impl Source {
                 let item = sources.iter().position(|candidate| {
                     candidate.origin().is_none() && candidate.identity() == origin.source.identity()
                 })?;
-                Some((Id(index), Id(item)))
+                Some((Id(index), Id(item), origin.span))
             })
             .collect()
     }

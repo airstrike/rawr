@@ -26,6 +26,17 @@ impl Key {
         Self(program::Path::new(package, modules, name))
     }
 
+    /// This key for the `block`th block type of its name in its module.
+    pub(crate) fn in_block(self, block: Option<u32>) -> Self {
+        Self(self.0.in_block(block))
+    }
+
+    /// For a type declared in a block, its place among its module's block
+    /// items of its name.
+    pub(crate) const fn block(&self) -> Option<u32> {
+        self.0.block()
+    }
+
     /// Return the canonical package component.
     #[must_use]
     pub fn package(&self) -> &str {

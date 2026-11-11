@@ -4,8 +4,9 @@
 use super::inference::AssociatedTypes;
 use super::ty::Ty;
 use super::{
-    function_name, inherit_names, instance_text, is_iterator_trait, item_generics, lex_rust,
-    mentions_parameter, sequence, source_span, trait_objects, use_blocks, ImplArguments,
+    function_name, inherit_block_names, inherit_names, instance_text, is_iterator_trait,
+    item_generics, lex_rust, mentions_parameter, sequence, source_span, trait_objects, use_blocks,
+    ImplArguments,
 };
 use crate::resolve::{item, type_ref, Program};
 use crate::{capability, method, type_def, Engine, ImmutableString, Position, Shared, Span};
@@ -29,6 +30,11 @@ pub(super) struct Models {
     #[cfg(test)]
     pub(super) _meter: Meter,
 }
+
+/// What blocks bind, by source and name, each with its block: a name read
+/// in a block is the innermost enclosing block's that binds it, else the
+/// module's (`Models::in_block`).
+pub(super) type Blocks<T> = BTreeMap<(crate::program::source::Id, ImmutableString), Vec<(Span, T)>>;
 
 /// The program-wide lowering tables, built once per lowering.
 pub(super) struct Tables {
@@ -55,6 +61,12 @@ pub(super) struct Tables {
     /// in its source: rustc scopes a block's `use` to the block (#7).
     pub(super) block_scopes: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[Span]>>,
     pub(super) by_name: BTreeMap<(crate::program::source::Id, ImmutableString), Nominal>,
+    /// The types blocks declare or import, each with its block (#1631).
+    pub(super) block_nominals: Blocks<Nominal>,
+    /// The functions and constants blocks declare or import.
+    pub(super) block_functions: Blocks<ScriptFunction>,
+    /// The imports of blocks' `use`s.
+    pub(super) block_imports: Blocks<crate::resolve::item::Binding>,
     /// The source that declares each script type.
     pub(super) declared_in: BTreeMap<type_def::Id, crate::program::source::Id>,
     /// The enum variants each source imports by name (`use Shape::*;`), with
@@ -381,6 +393,9 @@ impl Models {
         let mut functions = BTreeMap::new();
         let mut functions_by_key = BTreeMap::new();
         let mut imports = BTreeMap::<_, item::Binding>::new();
+        let mut block_nominals = Blocks::new();
+        let mut block_functions = Blocks::new();
+        let mut block_imports = Blocks::<item::Binding>::new();
 
         for shell in program.items.iter() {
             let nominal = match &shell.kind {
@@ -397,7 +412,16 @@ impl Models {
                 | item::Kind::Trait(_)
                 | item::Kind::Function(_) => continue,
             };
-            by_name.insert((shell.source, nominal.name().into()), nominal.clone());
+            let key = (shell.source, nominal.name().into());
+            match shell.scope() {
+                Some(block) => block_nominals
+                    .entry(key)
+                    .or_default()
+                    .push((block, nominal.clone())),
+                None => {
+                    by_name.insert(key, nominal.clone());
+                }
+            }
             declared_in.insert(nominal.definition().id(), shell.source);
             by_definition.insert(nominal.definition().id(), nominal.clone());
             by_identity.insert(nominal.identity(), nominal);
@@ -415,7 +439,16 @@ impl Models {
                     definition: function.clone(),
                     generated: function_name(shell.id).into(),
                 };
-                functions.insert((shell.source, function.name.text.clone()), script.clone());
+                let name = (shell.source, function.name.text.clone());
+                match shell.scope() {
+                    Some(block) => block_functions
+                        .entry(name)
+                        .or_default()
+                        .push((block, script.clone())),
+                    None => {
+                        functions.insert(name, script.clone());
+                    }
+                }
                 functions_by_key.insert(key, script);
             }
         }
@@ -455,27 +488,57 @@ impl Models {
                 // A module and a function of its name, bound in their own
                 // namespaces, read as one name.
                 let key = (shell.source, binding.name.text.clone());
-                let joined = match imports.remove(&key) {
+                let join = |previous: Option<item::Binding>| match previous {
                     Some(previous) if previous.target.namespace() != binding.target.namespace() => {
                         item::Binding::join(previous, binding.clone())
                     }
                     _ => binding.clone(),
                 };
-                imports.insert(key, joined);
+                // A block's `use` binds its names in its block.
+                match item.header.scope {
+                    Some(block) => {
+                        let bound = block_imports.entry(key.clone()).or_default();
+                        let previous = bound
+                            .iter()
+                            .position(|(scope, _)| *scope == block)
+                            .map(|index| bound.remove(index).1);
+                        bound.push((block, join(previous)));
+                    }
+                    None => {
+                        let joined = join(imports.remove(&key));
+                        imports.insert(key.clone(), joined);
+                    }
+                }
                 match &binding.target {
                     item::Import::ScriptType { identity, .. } => {
                         let nominal = by_identity
                             .get(identity)
                             .expect("resolved script imports retain nominal identity")
                             .clone();
-                        by_name.insert((shell.source, binding.name.text.clone()), nominal);
+                        match item.header.scope {
+                            Some(block) => block_nominals
+                                .entry(key)
+                                .or_default()
+                                .push((block, nominal)),
+                            None => {
+                                by_name.insert(key, nominal);
+                            }
+                        }
                     }
-                    item::Import::ScriptItem { key } => {
+                    item::Import::ScriptItem { key: item_key } => {
                         let function = functions_by_key
-                            .get(key)
+                            .get(item_key)
                             .expect("resolved script item imports retain callable identity")
                             .clone();
-                        functions.insert((shell.source, binding.name.text.clone()), function);
+                        match item.header.scope {
+                            Some(block) => block_functions
+                                .entry(key)
+                                .or_default()
+                                .push((block, function)),
+                            None => {
+                                functions.insert(key, function);
+                            }
+                        }
                     }
                     item::Import::Variant { identity, .. } => {
                         imported_variants.push((
@@ -810,7 +873,10 @@ impl Models {
         }
         // A derive's expansion names what its item's source does (#593).
         let mut aliases = program.aliases.clone();
-        for (expansion, item) in program.source.expansions() {
+        for (expansion, item, derive) in program.source.expansions() {
+            inherit_block_names(&block_nominals, &mut by_name, item, derive, expansion);
+            inherit_block_names(&block_functions, &mut functions, item, derive, expansion);
+            inherit_block_names(&block_imports, &mut imports, item, derive, expansion);
             inherit_names(&mut by_name, item, expansion);
             inherit_names(&mut functions, item, expansion);
             inherit_names(&mut imports, item, expansion);
@@ -840,6 +906,9 @@ impl Models {
             lexical: program.lexical.clone(),
             block_scopes,
             by_name,
+            block_nominals,
+            block_functions,
+            block_imports,
             declared_in,
             variants,
             host_variants,
@@ -980,9 +1049,26 @@ impl Models {
     }
 
     pub(super) fn get(&self, name: &str) -> Option<&Nominal> {
-        self.by_name
-            .get(&(self.context, name.into()))
-            .filter(|_| self.in_scope(name, self.at))
+        self.in_block(&self.block_nominals, name).or_else(|| {
+            self.by_name
+                .get(&(self.context, name.into()))
+                .filter(|_| self.in_scope(name, self.at))
+        })
+    }
+
+    /// What the innermost block around the lowering's place binds `name`
+    /// to in `blocks`, when one does: rustc names a block's item
+    /// throughout its block, and in the items nested there.
+    fn in_block<'t, T>(&self, blocks: &'t Blocks<T>, name: &str) -> Option<&'t T> {
+        if self.at.is_none() || blocks.is_empty() {
+            return None;
+        }
+        blocks
+            .get(&(self.context, name.into()))?
+            .iter()
+            .filter(|(block, _)| crate::resolve::block::contains(*block, self.at))
+            .max_by_key(|(block, _)| block.start())
+            .map(|(_, bound)| bound)
     }
 
     /// Whether `name` is in scope at `at` in this source as far as `use`s
@@ -1280,9 +1366,11 @@ impl Models {
     }
 
     pub(super) fn function(&self, name: &str) -> Option<&ScriptFunction> {
-        self.functions
-            .get(&(self.context, name.into()))
-            .filter(|_| self.in_scope(name, self.at))
+        self.in_block(&self.block_functions, name).or_else(|| {
+            self.functions
+                .get(&(self.context, name.into()))
+                .filter(|_| self.in_scope(name, self.at))
+        })
     }
 
     pub(super) fn qualified_function(&self, span: Span) -> Option<&ScriptFunction> {
@@ -1311,9 +1399,11 @@ impl Models {
         {
             return None;
         }
-        self.imports
-            .get(&(self.context, name.into()))
-            .filter(|_| self.in_scope(name, self.at))
+        self.in_block(&self.block_imports, name).or_else(|| {
+            self.imports
+                .get(&(self.context, name.into()))
+                .filter(|_| self.in_scope(name, self.at))
+        })
     }
 
     pub(super) fn for_source(&self, source: crate::program::source::Id) -> Self {

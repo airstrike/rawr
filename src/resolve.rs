@@ -1,5 +1,6 @@
 //! Promotion of parsed Rawr units into opaque resolved programs.
 
+pub(crate) mod block;
 pub(crate) mod borrowck;
 mod error;
 pub(crate) mod extern_prelude;
@@ -643,13 +644,14 @@ fn resolve_with_evidence_and_namespace(
             continue;
         }
         package::write_renamed_modules(&mut parsed, &modules);
+        let types = symbols.types_at(parsed.scope());
         items.push(resolve_item(
             symbols.item_id(source_index),
             program::source::Id::ROOT,
             symbols.item_key(source_index).cloned(),
             symbols.resolved_use(source_index).cloned(),
             parsed,
-            &symbols.types,
+            types,
             host,
             #[cfg(feature = "rust-import")]
             None,
@@ -911,6 +913,9 @@ struct Symbols {
     item_ids: Vec<crate::item::Id>,
     item_keys: Vec<Option<crate::item::Key>>,
     types: BTreeMap<ImmutableString, type_ref::Target>,
+    /// The names each block that binds a type sees: its own over those of
+    /// the blocks it is nested in, over the module's `types`.
+    block_types: BTreeMap<Span, BTreeMap<ImmutableString, type_ref::Target>>,
     declarations: Vec<type_def::Declaration>,
     uses: Vec<Option<item::Use>>,
 }
@@ -922,18 +927,20 @@ impl Symbols {
         allocation_order: AllocationOrder,
         host: &host::Registry,
     ) -> Result<Self, Error> {
-        let mut declarations = BTreeMap::<ImmutableString, Span>::new();
+        // Each scope's declarations, the module's under `None`: a block's
+        // item may share a name with another scope's.
+        let mut declarations = BTreeMap::<Option<Span>, BTreeMap<ImmutableString, Span>>::new();
         let mut item_ids = vec![None; items.len()];
         let mut item_keys = vec![None; items.len()];
-        let mut types = BTreeMap::new();
+        let mut declared = BTreeMap::<Option<Span>, BTreeMap<_, _>>::new();
         let mut type_declarations = Vec::new();
 
         for parsed in items {
             let Some((name, _, _)) = named_declaration(parsed) else {
                 continue;
             };
-
-            if let Some(previous_declaration) = declarations.get(name.text.as_str()) {
+            let scope = declarations.entry(parsed.scope()).or_default();
+            if let Some(previous_declaration) = scope.get(name.text.as_str()) {
                 return Err(Error::DuplicateItem {
                     name: name.text.clone(),
                     declaration: name.span,
@@ -941,22 +948,26 @@ impl Symbols {
                 });
             }
 
-            declarations.insert(name.text.clone(), name.span);
+            scope.insert(name.text.clone(), name.span);
         }
         for parsed in items {
             let crate::item::Parsed::TypeAlias(alias) = parsed else {
                 continue;
             };
             let name = &alias.name;
-            if let Some(previous_declaration) = declarations.get(name.text.as_str()) {
+            let scope = declarations.entry(parsed.scope()).or_default();
+            if let Some(previous_declaration) = scope.get(name.text.as_str()) {
                 return Err(Error::DuplicateItem {
                     name: name.text.clone(),
                     declaration: name.span,
                     previous_declaration: *previous_declaration,
                 });
             }
-            declarations.insert(name.text.clone(), name.span);
-            types.insert(name.text.clone(), unresolved_alias(alias));
+            scope.insert(name.text.clone(), name.span);
+            declared
+                .entry(parsed.scope())
+                .or_default()
+                .insert(name.text.clone(), unresolved_alias(alias));
         }
 
         let mut source_indices: Vec<_> = (0..items.len()).collect();
@@ -965,6 +976,7 @@ impl Symbols {
             source_indices.reverse();
         }
 
+        let ordinals = block::ordinals(items);
         for (dense_index, source_index) in source_indices.into_iter().enumerate() {
             let item_id = crate::item::Id::from_index(dense_index);
             item_ids[source_index] = Some(item_id);
@@ -973,18 +985,23 @@ impl Symbols {
                 continue;
             };
 
-            item_keys[source_index] = Some(namespace.item_key(&name.text, item_kind));
+            let ordinal = ordinals[source_index];
+            item_keys[source_index] =
+                Some(namespace.item_key(&name.text, item_kind).in_block(ordinal));
 
             if let Some(kind) = type_kind {
                 let id = type_def::Id::from_index(type_declarations.len());
-                let key = namespace.type_key(&name.text);
-                types.insert(
-                    name.text.clone(),
-                    type_ref::Target::Script {
-                        definition: id,
-                        identity: type_def::Identity::Script(key.clone()),
-                    },
-                );
+                let key = namespace.type_key(&name.text).in_block(ordinal);
+                declared
+                    .entry(items[source_index].scope())
+                    .or_default()
+                    .insert(
+                        name.text.clone(),
+                        type_ref::Target::Script {
+                            definition: id,
+                            identity: type_def::Identity::Script(key.clone()),
+                        },
+                    );
                 type_declarations.push(type_def::Declaration::new(
                     id,
                     item_id,
@@ -996,10 +1013,60 @@ impl Symbols {
             }
         }
 
-        let uses = resolve_imports(items, host, &declarations, &mut types)?;
-        module_header_types(items, &uses, host, &mut types);
-        if let Some(error) = resolve_aliases(items, &mut types, host) {
-            return Err(error);
+        let mut uses = vec![None; items.len()];
+        let members = |scope: Option<Span>| {
+            items
+                .iter()
+                .enumerate()
+                .filter(|(_, parsed)| parsed.scope() == scope)
+                .collect::<Vec<_>>()
+        };
+        let empty = BTreeMap::new();
+        let mut types = declared.remove(&None).unwrap_or_default();
+        bind_scope(
+            &members(None),
+            host,
+            declarations.get(&None).unwrap_or(&empty),
+            &[],
+            &mut types,
+            &mut uses,
+        )?;
+
+        // Each block's names over those of the scopes it is nested in,
+        // outermost first. A block that binds no type sees its parent's.
+        let mut block_types = BTreeMap::new();
+        for scope in block::scopes(items) {
+            let members = members(Some(scope));
+            let binds_type = declared.contains_key(&Some(scope))
+                || members
+                    .iter()
+                    .any(|(_, parsed)| matches!(parsed, crate::item::Parsed::Use(_)));
+            if !binds_type {
+                continue;
+            }
+            let mut scoped = block::innermost(&block_types, scope)
+                .unwrap_or(&types)
+                .clone();
+            scoped.extend(declared.remove(&Some(scope)).unwrap_or_default());
+            // The `use`s of the scopes it is nested in, innermost first.
+            let outer = (0..items.len())
+                .rev()
+                .filter(|index| {
+                    items[*index]
+                        .scope()
+                        .is_none_or(|outer| outer != scope && block::encloses(outer, scope))
+                })
+                .filter_map(|index| uses[index].clone())
+                .collect::<Vec<_>>();
+            bind_scope(
+                &members,
+                host,
+                declarations.get(&Some(scope)).unwrap_or(&empty),
+                &outer,
+                &mut scoped,
+                &mut uses,
+            )?;
+            block_types.insert(scope, scoped);
         }
 
         Ok(Self {
@@ -1009,9 +1076,17 @@ impl Symbols {
                 .collect(),
             item_keys,
             types,
+            block_types,
             declarations: type_declarations,
             uses,
         })
+    }
+
+    /// The names an item declared in `scope` sees.
+    fn types_at(&self, scope: Option<Span>) -> &BTreeMap<ImmutableString, type_ref::Target> {
+        scope
+            .and_then(|block| block::innermost(&self.block_types, block))
+            .unwrap_or(&self.types)
     }
 
     fn item_id(&self, source_index: usize) -> crate::item::Id {
@@ -1062,6 +1137,38 @@ impl Symbols {
             })
             .collect())
     }
+}
+
+/// Bind the imports and aliases of one scope's `members`, by their indices
+/// among the module's items, into `types`, which holds what the scope sees
+/// already; `outer` are the imports of the scopes it is nested in, which
+/// its own `use`s may start from.
+fn bind_scope(
+    members: &[(usize, &crate::item::Parsed)],
+    host: &host::Registry,
+    declarations: &BTreeMap<ImmutableString, Span>,
+    outer: &[item::Use],
+    types: &mut BTreeMap<ImmutableString, type_ref::Target>,
+    uses: &mut [Option<item::Use>],
+) -> Result<(), Error> {
+    let parsed = members
+        .iter()
+        .map(|(_, parsed)| *parsed)
+        .collect::<Vec<_>>();
+    let resolved = resolve_imports(&parsed, host, declarations, outer, types)?;
+    let visible = resolved
+        .iter()
+        .cloned()
+        .chain(outer.iter().cloned().map(Some))
+        .collect::<Vec<_>>();
+    module_header_types(&parsed, &visible, host, types);
+    if let Some(error) = resolve_aliases(&parsed, types, host) {
+        return Err(error);
+    }
+    for ((index, _), used) in members.iter().zip(resolved) {
+        uses[*index] = used;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1172,14 +1279,14 @@ fn unresolved_alias(alias: &crate::item::TypeAlias) -> type_ref::Target {
 /// names them. An alias may name another alias declared after it, so the
 /// targets resolve until none is left or none more resolves. Returns the
 /// first error of an alias that does not resolve.
-fn resolve_aliases(
-    items: &[crate::item::Parsed],
+fn resolve_aliases<P: std::borrow::Borrow<crate::item::Parsed>>(
+    items: &[P],
     types: &mut BTreeMap<ImmutableString, type_ref::Target>,
     host: &host::Registry,
 ) -> Option<Error> {
     let mut pending = items
         .iter()
-        .filter_map(|parsed| match parsed {
+        .filter_map(|parsed| match parsed.borrow() {
             crate::item::Parsed::TypeAlias(alias) => Some(alias),
             _ => None,
         })
@@ -1232,9 +1339,10 @@ fn resolve_aliases(
 }
 
 fn resolve_imports(
-    parsed_items: &[crate::item::Parsed],
+    parsed_items: &[&crate::item::Parsed],
     host: &host::Registry,
     local_declarations: &BTreeMap<ImmutableString, Span>,
+    outer: &[item::Use],
     types: &mut BTreeMap<ImmutableString, type_ref::Target>,
 ) -> Result<Vec<Option<item::Use>>, Error> {
     let mut occupied = local_declarations.clone();
@@ -1268,8 +1376,16 @@ fn resolve_imports(
         .collect::<std::collections::BTreeSet<_>>();
     // A `use` may start at a module another `use` imported, as Rust allows:
     // after `use iced::keyboard;`, `use keyboard::key;` names
-    // `iced::keyboard::key`.
+    // `iced::keyboard::key`. One of an enclosing scope counts, the
+    // innermost first.
     let mut modules = BTreeMap::<ImmutableString, ImmutableString>::new();
+    for binding in outer.iter().flat_map(|used| used.bindings.iter()) {
+        if matches!(host.entry(&binding.qualified), Some(host::Entry::Module)) {
+            modules
+                .entry(binding.name.text.clone())
+                .or_insert_with(|| binding.qualified.clone());
+        }
+    }
     for parsed in parsed_items {
         let crate::item::Parsed::Use(parsed) = parsed else {
             continue;
@@ -1564,15 +1680,15 @@ fn resolve_imports(
 
 /// Header types named through an imported host module, as Rust allows:
 /// after `use iced::widget::button;`, `button::Status` is a type path.
-fn module_header_types(
-    parsed_items: &[crate::item::Parsed],
+fn module_header_types<P: std::borrow::Borrow<crate::item::Parsed>>(
+    parsed_items: &[P],
     uses: &[Option<item::Use>],
     host: &host::Registry,
     types: &mut BTreeMap<ImmutableString, type_ref::Target>,
 ) {
     let mut paths = Vec::new();
     for parsed in parsed_items {
-        package::collect_item_type_paths(parsed, &mut paths);
+        package::collect_item_type_paths(parsed.borrow(), &mut paths);
     }
     for path in paths {
         let [first, ..] = &*path.segments else {

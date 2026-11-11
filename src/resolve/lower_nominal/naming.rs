@@ -33,16 +33,28 @@ pub(super) fn function_name(id: crate::item::Id) -> String {
     format!("{FUNCTION_SENTINEL}{}", id.index())
 }
 
+/// A private function's generated name: its path, and a block item's
+/// place among its module's block items of its name, which no user reads
+/// (`function_display_name`).
 pub(crate) fn private_function_name(key: &crate::item::Key) -> ImmutableString {
-    format!("{PRIVATE_FUNCTION}{key}").into()
+    match key.block() {
+        Some(block) => format!("{PRIVATE_FUNCTION}{key}{BLOCK_ITEM}{block}").into(),
+        None => format!("{PRIVATE_FUNCTION}{key}").into(),
+    }
 }
 
 pub(super) const PRIVATE_FUNCTION: &str = "\0rawr.function.";
 
+/// What separates a block item's place from its path in its generated name.
+const BLOCK_ITEM: char = '\0';
+
 /// A function's name as a user reads it: a private function's path in its
 /// crate (`main::geometry::area`), and any other name as it is.
 pub(crate) fn function_display_name(name: &str) -> &str {
-    name.strip_prefix(PRIVATE_FUNCTION).unwrap_or(name)
+    match name.strip_prefix(PRIVATE_FUNCTION) {
+        Some(path) => path.split(BLOCK_ITEM).next().unwrap_or(path),
+        None => name,
+    }
 }
 
 pub(super) fn private_method_name(definition: &method::Definition) -> String {

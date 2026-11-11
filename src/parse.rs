@@ -158,14 +158,46 @@ mod tests {
         assert!(imports
             .windows(2)
             .all(|pair| pair[0].span.start() < pair[1].span.start()));
-        // Existing resolution retains its compatibility view; evidence never does.
-        assert_eq!(
+        // Each block's import is an item of its block.
+        let scopes = unit
+            .items()
+            .iter()
+            .filter(|item| matches!(item, item::Parsed::Use(_)))
+            .map(item::Parsed::scope)
+            .collect::<Vec<_>>();
+        assert_eq!(scopes.len(), 5);
+        assert!(imports.iter().all(|used| scopes.contains(&used.scope)));
+    }
+
+    #[test]
+    fn block_items_are_declared_in_their_innermost_blocks() {
+        // A body's `const`, `struct` and `fn` are items of their blocks
+        // (#1631); a module's stay the module's.
+        let source = "const N: u32 = 1; fn main() { const N: u32 = 2; { struct P; } fn f() { const M: u32 = 3; } }";
+        let unit = Engine::new().parse_unit(source).unwrap();
+        let scope = |name: &str| {
             unit.items()
                 .iter()
-                .filter(|item| matches!(item, item::Parsed::Use(_)))
-                .count(),
-            1
+                .filter_map(|item| match item {
+                    item::Parsed::Function(function) if function.name.text == name => {
+                        Some(item.scope())
+                    }
+                    item::Parsed::Struct(declared) if declared.name.text == name => {
+                        Some(item.scope())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let body = span(
+            source,
+            "{ const N: u32 = 2; { struct P; } fn f() { const M: u32 = 3; } }",
         );
+        assert_eq!(scope("N"), [None, Some(body)]);
+        assert_eq!(scope("P"), [Some(span(source, "{ struct P; }"))]);
+        assert_eq!(scope("f"), [Some(body)]);
+        assert_eq!(scope("M"), [Some(span(source, "{ const M: u32 = 3; }"))]);
+        assert_eq!(scope("main"), [None]);
     }
 
     #[test]

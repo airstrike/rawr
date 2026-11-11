@@ -22,8 +22,9 @@ pub(super) struct ParsedFile {
 type ParsedItems = (Box<[crate::item::Parsed]>, Vec<Span>);
 
 std::thread_local! {
-    /// The `fn` items and `use` imports declared inside function bodies of
-    /// the file being parsed. They join the file's items, as Rawr hoists them.
+    /// The items and `use` imports declared inside function bodies of the
+    /// file being parsed. They join the file's items, each declared in its
+    /// innermost block (`Header::scope`).
     static NESTED: core::cell::RefCell<Vec<crate::item::Parsed>> =
         const { core::cell::RefCell::new(Vec::new()) };
     static INNER: core::cell::RefCell<Vec<crate::item::Attribute>> =
@@ -76,19 +77,10 @@ pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseR
         })
         .collect::<Vec<_>>();
     imports.sort_by_key(|used| used.span.start());
+    // A body's items join the file's, each declared in its block.
     if !nested.is_empty() {
         let mut all = items.into_vec();
-        for item in nested {
-            // One import written in several bodies is hoisted once.
-            if let crate::item::Parsed::Use(used) = &item
-                && all.iter().any(|existing| {
-                    matches!(existing, crate::item::Parsed::Use(other) if other.hoist_key() == used.hoist_key())
-                })
-            {
-                continue;
-            }
-            all.push(item);
-        }
+        all.extend(nested);
         items = all.into_boxed_slice();
     }
     // `use rawr::preview;` names the attribute for rustc. Rawr knows the
@@ -214,19 +206,14 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                 if input.peek().is_some_and(|(token, _)| is_name(token)) {
                     let name = parse_name(input, "after 'const'")?;
                     if matches!(input.peek(), Some((Token::Equals, _))) {
-                        return Err(PERR::Unexpected {
-                            message: "missing type for `const` item".into(),
-                            label: "provide a type for the constant".into(),
-                            help: None,
-                            span: name.span,
-                        }
-                        .into_err(name.span.start()));
+                        return Err(missing_const_type(&name));
                     }
                     if matches!(input.peek(), Some((Token::Colon, _))) {
                         let header = crate::item::Header {
                             attributes: Box::default(),
                             visibility: None,
                             span: Span::NONE,
+                            scope: None,
                         };
                         items.push(crate::item::Parsed::Function(parse_const_rest(
                             input, header, start, name,
@@ -938,6 +925,7 @@ fn parse_macro_rules(
             attributes,
             visibility,
             span: Span::new(start, end),
+            scope: None,
         },
         name,
         span: Span::new(rules_start, end),
@@ -964,6 +952,7 @@ fn parse_type_alias(
             attributes,
             visibility,
             span: Span::new(start, end),
+            scope: None,
         },
         name,
         generics: generics.into_boxed_slice(),
@@ -1000,6 +989,7 @@ fn parse_static(
                 attributes,
                 visibility,
                 span: Span::NONE,
+                scope: None,
             },
             start,
             name,
@@ -1035,6 +1025,7 @@ fn parse_const_item(
             attributes,
             visibility,
             span: Span::NONE,
+            scope: None,
         },
         start,
         name,
@@ -1070,6 +1061,7 @@ fn parse_extern_crate(
             attributes,
             visibility,
             span,
+            scope: None,
         },
         tree: crate::item::UseTree::Path(
             type_ref::Path {
@@ -1167,6 +1159,7 @@ fn parse_module(
             attributes,
             visibility,
             span: Span::new(start, end),
+            scope: None,
         },
         name,
         span: Span::new(start, end),
@@ -1760,6 +1753,7 @@ fn parse_use(
         attributes,
         visibility,
         span: Span::new(start, end),
+        scope: None,
     };
     for tree in extra_uses {
         let used = crate::item::Use {
@@ -1798,6 +1792,7 @@ fn parse_struct(
                 attributes,
                 visibility,
                 span: Span::new(start, end),
+                scope: None,
             },
             name,
             generics: generics.into_boxed_slice(),
@@ -1840,6 +1835,7 @@ fn parse_struct(
                 attributes,
                 visibility,
                 span: Span::new(start, end),
+                scope: None,
             },
             name,
             generics: generics.into_boxed_slice(),
@@ -1887,6 +1883,7 @@ fn parse_struct(
             attributes,
             visibility,
             span: Span::new(start, header_end),
+            scope: None,
         },
         name,
         generics: generics.into_boxed_slice(),
@@ -2067,6 +2064,7 @@ fn parse_enum(
             attributes,
             visibility,
             span: Span::new(start, header_end),
+            scope: None,
         },
         name,
         generics: generics.into_boxed_slice(),
@@ -2206,6 +2204,7 @@ fn parse_impl(
             attributes,
             visibility,
             span: Span::new(start, header_end),
+            scope: None,
         },
         generics: generics.into_boxed_slice(),
         lifetimes,
@@ -2428,6 +2427,7 @@ fn parse_trait(
             attributes,
             visibility,
             span: Span::new(start, header_end),
+            scope: None,
         },
         name,
         functions: functions.into_boxed_slice(),
@@ -2467,6 +2467,7 @@ fn parse_function(
             attributes,
             visibility,
             span: Span::NONE,
+            scope: None,
         },
         start,
         name,
@@ -3297,6 +3298,7 @@ fn parse_associated_const(
         attributes,
         visibility,
         span: Span::NONE,
+        scope: None,
     };
     expect(input, Token::Colon, "after a constant name")?;
     let output = parse_type(input)?;
@@ -3421,6 +3423,17 @@ fn parse_const_rest(
         asynchronous: false,
         span,
     })
+}
+
+/// rustc's report for `const NAME = value;`.
+fn missing_const_type(name: &crate::item::Name) -> crate::ParseError {
+    PERR::Unexpected {
+        message: "missing type for `const` item".into(),
+        label: "provide a type for the constant".into(),
+        help: None,
+        span: name.span,
+    }
+    .into_err(name.span.start())
 }
 
 fn malformed_receiver<T>(input: &mut TokenStream) -> ParseResult<T> {
@@ -4673,6 +4686,34 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
             continue;
         }
+        // `const NAME: T = value;` is an item of its block, as in Rust: the
+        // block names it before its declaration too, and so do the items
+        // nested there (#1631). A macro's tokens are its own.
+        if let Some(start) = const_start
+            && macros.is_empty()
+            && let Some((Token::Identifier(word), _)) = input.peek()
+            && !matches!(word.as_str(), "unsafe" | "extern")
+        {
+            const_start = None;
+            tokens.pop();
+            let name = parse_name(input, "after 'const'")?;
+            if matches!(input.peek(), Some((Token::Equals, _))) {
+                return Err(missing_const_type(&name));
+            }
+            let header = crate::item::Header {
+                attributes: Box::default(),
+                visibility: None,
+                span: Span::NONE,
+                scope: None,
+            };
+            let constant = parse_const_rest(input, header, start, name)?;
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(constant)));
+            // A statement may start after the item, as after its `;`.
+            boundary = true;
+            ends_expression = false;
+            after_name = false;
+            continue;
+        }
         // `struct`, `enum`, `impl`, `trait` and `type` items inside a body,
         // with their attributes, join the file's items as `fn` items do.
         if boundary
@@ -4913,11 +4954,7 @@ fn parse_body_syntax(
             let scope = Span::new(start, after(position, 1));
             NESTED.with_borrow_mut(|nested| {
                 for item in &mut nested[first..] {
-                    if let crate::item::Parsed::Use(used) = item
-                        && used.scope.is_none()
-                    {
-                        used.scope = Some(scope);
-                    }
+                    item.enclose(scope);
                 }
             });
         }
@@ -4996,6 +5033,7 @@ fn parse_private_function(
         attributes: Box::default(),
         visibility: None,
         span: Span::NONE,
+        scope: None,
     };
     let generics = if matches!(input.peek(), Some((Token::LessThan, _))) {
         parse_generics(input)?
