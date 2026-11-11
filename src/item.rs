@@ -447,6 +447,52 @@ pub struct Attribute {
     pub text: ImmutableString,
 }
 
+/// The attributes that leave what a program does as it is: documentation,
+/// lints, and hints to rustc's code generation and its warnings. Rawr reads
+/// none of them, and they change no more than a warning of the native build
+/// of the Rust it writes for a marked file, so a save that adds, edits or
+/// removes one changes nothing another file's lowering reads and needs no
+/// new native build (#1646).
+const INERT: &[&str] = &[
+    "doc",
+    "allow",
+    "warn",
+    "deny",
+    "forbid",
+    "expect",
+    "inline",
+    "cold",
+    "must_use",
+    "deprecated",
+];
+
+/// The tools whose attributes (`#[rustfmt::skip]`, `#[clippy::msrv]`)
+/// rustc leaves to them.
+const INERT_TOOLS: &[&str] = &["rustfmt", "clippy"];
+
+/// Whether the attribute whose path has `segments` is inert (`INERT`).
+pub(crate) fn inert<'a>(mut segments: impl Iterator<Item = &'a str>) -> bool {
+    match (segments.next(), segments.next()) {
+        (Some(name), None) => INERT.contains(&name),
+        (Some(tool), Some(_)) => INERT_TOOLS.contains(&tool),
+        (None, _) => false,
+    }
+}
+
+#[cfg(feature = "rust-import")]
+impl Attribute {
+    /// Whether it leaves what the program does as it is (`INERT`).
+    pub(crate) fn inert(&self) -> bool {
+        !self.path.global
+            && inert(
+                self.path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.text.as_str()),
+            )
+    }
+}
+
 /// A parsed top-level Rawr item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Parsed {

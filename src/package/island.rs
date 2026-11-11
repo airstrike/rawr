@@ -154,8 +154,10 @@ pub(crate) struct Shadow {
 }
 
 /// What native code sees of a crate's marked modules: each item's path
-/// and generated text. Two shapes are equal exactly when the generated
-/// files are, so an unchanged shape needs no new native build.
+/// and generated text as rustc builds it (`built`). Two shapes are equal
+/// exactly when the generated files differ at most in their comments,
+/// their layout and their inert attributes, which rustc builds the same,
+/// so an unchanged shape needs no new native build (#1646).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Shape(BTreeMap<String, Entry>);
 
@@ -520,7 +522,15 @@ pub(crate) fn shadow<'a>(
     Shadow {
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         files,
-        shape: Shape(shape),
+        shape: Shape(
+            shape
+                .into_iter()
+                .map(|(path, Entry { kind, text })| {
+                    let text = built(&text);
+                    (path, Entry { kind, text })
+                })
+                .collect(),
+        ),
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         refused,
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
@@ -3842,6 +3852,150 @@ fn append(shape: &mut BTreeMap<String, Entry>, path: &str, text: &str) {
     if let Some(entry) = shape.get_mut(path) {
         entry.text.push_str(text);
     }
+}
+
+/// What rustc builds of the generated `text`: it without comments and inert
+/// attributes (`crate::item::inert`), a space only between two words, and
+/// its literals as written. Two texts that differ only in what this leaves
+/// out build the same native code: a doc comment, a lint, or a signature
+/// written over more lines (#1646).
+fn built(text: &str) -> String {
+    let is_word = |character: char| character.is_alphanumeric() || character == '_';
+    let mut built = String::with_capacity(text.len());
+    let mut spaced = false;
+    let mut rest = text;
+    while let Some(first) = rest.chars().next() {
+        let length = if rest.starts_with("//") {
+            spaced = true;
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/*") {
+            spaced = true;
+            block_comment(rest)
+        } else if first.is_whitespace() {
+            spaced = true;
+            first.len_utf8()
+        } else if let Some(length) = rest.strip_prefix('#').and_then(inert_attribute) {
+            spaced = true;
+            length + 1
+        } else {
+            let length = literal(rest).unwrap_or_else(|| {
+                if is_word(first) {
+                    rest.find(|character: char| !is_word(character))
+                        .unwrap_or(rest.len())
+                } else {
+                    first.len_utf8()
+                }
+            });
+            if spaced && built.ends_with(is_word) && rest.starts_with(is_word) {
+                built.push(' ');
+            }
+            spaced = false;
+            built.push_str(&rest[..length]);
+            length
+        };
+        rest = &rest[length..];
+    }
+    built
+}
+
+/// How long the block comment `text` starts with is, nested ones in it.
+fn block_comment(text: &str) -> usize {
+    let mut depth = 0_usize;
+    let mut at = 0;
+    while at < text.len() {
+        if text[at..].starts_with("/*") {
+            depth += 1;
+            at += 2;
+        } else if text[at..].starts_with("*/") {
+            depth -= 1;
+            at += 2;
+            if depth == 0 {
+                return at;
+            }
+        } else {
+            at += text[at..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    text.len()
+}
+
+/// How long the string or character literal `text` starts with is, its
+/// prefix (`b`, `r#`) with it; `None` when it starts none.
+fn literal(text: &str) -> Option<usize> {
+    let prefix = text
+        .find(|character: char| !matches!(character, 'b' | 'c' | 'r'))
+        .filter(|prefix| *prefix <= 2)?;
+    let after = &text[prefix..];
+    if text[..prefix].contains('r') {
+        let hashes = after.bytes().take_while(|byte| *byte == b'#').count();
+        let open = &after[hashes..];
+        open.starts_with('"').then_some(())?;
+        let close = format!("\"{}", "#".repeat(hashes));
+        return Some(
+            open[1..]
+                .find(&close)
+                .map_or(text.len(), |end| prefix + hashes + 1 + end + close.len()),
+        );
+    }
+    let quote = after.chars().next()?;
+    if quote == '"' {
+        let mut escaped = false;
+        for (at, character) in after.char_indices().skip(1) {
+            match character {
+                '"' if !escaped => return Some(prefix + at + 1),
+                '\\' => escaped = !escaped,
+                _ => escaped = false,
+            }
+        }
+        return Some(text.len());
+    }
+    // A character, not a lifetime: `'x'` or `'\n'`.
+    if quote == '\'' {
+        let mut characters = after.char_indices().skip(1);
+        let (_, first) = characters.next()?;
+        if first == '\\' {
+            // After the quote, the backslash and the character it escapes.
+            return after.get(3..)?.find('\'').map(|end| prefix + 3 + end + 1);
+        }
+        let (at, close) = characters.next()?;
+        return (close == '\'').then_some(prefix + at + 1);
+    }
+    None
+}
+
+/// How long the inert attribute `text`, after its `#`, is through its `]`
+/// (`crate::item::inert`); `None` when it is no inert attribute.
+fn inert_attribute(text: &str) -> Option<usize> {
+    let inside = text.strip_prefix('!').unwrap_or(text);
+    let opened = text.len() - inside.len();
+    let inside = inside.strip_prefix('[')?;
+    let written = inside.trim_start();
+    let path = written
+        .find(|character: char| {
+            !(character.is_alphanumeric() || character == '_' || character == ':')
+        })
+        .map_or(written, |end| &written[..end]);
+    if !crate::item::inert(path.split("::")) {
+        return None;
+    }
+    let mut depth = 1_usize;
+    let mut at = 0;
+    while at < inside.len() {
+        let rest = &inside[at..];
+        if let Some(length) = literal(rest) {
+            at += length;
+            continue;
+        }
+        let character = rest.chars().next()?;
+        match character {
+            '[' => depth += 1,
+            ']' if depth == 1 => return Some(opened + 1 + at + 1),
+            ']' => depth -= 1,
+            _ => {}
+        }
+        at += character.len_utf8();
+    }
+    None
 }
 
 /// `modules::name`, from the crate root.
@@ -7509,6 +7663,39 @@ mod tests {
         assert_eq!(
             before.shape.change(&signature.shape).as_deref(),
             Some("`physics::fall` changed its signature")
+        );
+        // A doc comment, a lint and a signature over more lines build the
+        // same native code (#1646).
+        let inert = generate(
+            "// rawr\n/// A ball.\n#[allow(dead_code)]\npub struct Ball {\n    \
+             #[doc = \"Across.\"] pub x: f64\n}\nconst G: f64 = 9.8;\n\n\
+             #[inline]\n#[must_use = \"a fall\"]\npub fn fall(\n    ball: &mut Ball // the ball\n) {\n    \
+             ball.x -= G;\n}\n",
+        );
+        assert_eq!(before.shape.change(&inert.shape), None);
+        let derived = generate(
+            "// rawr\n#[derive(Clone)]\npub struct Ball { pub x: f64 }\nconst G: f64 = 9.8;\n\
+             pub fn fall(ball: &mut Ball) { ball.x -= G; }\n",
+        );
+        assert_eq!(
+            before.shape.change(&derived.shape).as_deref(),
+            Some("`physics::Ball` changed its fields")
+        );
+    }
+
+    #[test]
+    fn what_rustc_builds_of_a_text_keeps_its_words_and_literals() {
+        assert_eq!(
+            built("pub fn f<'a>(\n    x: &'a str, // x\n) -> &'a str /* y */ {"),
+            "pub fn f<'a>(x:&'a str,)->&'a str{"
+        );
+        assert_eq!(
+            built("#[doc = \"a ] b\"]\n#[rustfmt::skip] #[derive(Clone)] struct S;"),
+            "#[derive(Clone)]struct S;"
+        );
+        assert_eq!(
+            built("f(\"a  //b\", '\\'', r#\"c \"d\"#)"),
+            "f(\"a  //b\",'\\'',r#\"c \"d\"#)"
         );
     }
 

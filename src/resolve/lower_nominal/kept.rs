@@ -8,10 +8,12 @@
 //! and method bodies, the instances their calls take and the paths they
 //! resolve: their declarations, the outputs reveal gave opaque types, the
 //! instance tables, constants' bodies, `IndexMut` bodies and the trait
-//! objects the sources name, and the program's item numbering. A
-//! declaration's place is read by its line among the lines that hold its
-//! source's declarations (`Outline`), so a line a save adds to a body, or
-//! a blank or comment line, keeps every other source's lowering. What a
+//! objects the sources name, and the program's item numbering. Inert
+//! attributes (`#[doc]`, `#[allow]`, `crate::item::inert`) are left out,
+//! and a declaration's place is read by how many of its source's
+//! declarations' tokens come before it (`Outline`), so a line a save adds
+//! anywhere, a comment, a lint or a declaration written over more lines
+//! keeps every other source's lowering. What a
 //! source's lowering read outside the program while it compiled (a file
 //! `include_str!` reads, a variable `env!` reads) is kept with it, and the
 //! lowering is reused only while each reads the same.
@@ -29,7 +31,8 @@ use super::surface::ImportedUse;
 use super::ty::Ty;
 use crate::program::source;
 use crate::resolve::{item, Program};
-use crate::types::position::Lines;
+use crate::tokenizer::Token;
+use crate::types::position::Places;
 use crate::{host, Engine, Position, Scope, Span};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -673,14 +676,14 @@ impl Interface {
 /// What each source's lowering reads of the program; `None` when it can't
 /// be written.
 ///
-/// Every position of a source is written at its line's number among the
-/// lines that hold the source's tokens outside its bodies (`Outline`): a
-/// save that adds or removes a line in a body, or a blank or comment line,
-/// moves the source's later declarations without changing what another
-/// source's lowering reads of them, which is never their place.
+/// Every position of a source is written as how many of its outline's
+/// tokens start before it (`Outline`): a save that adds or removes a line,
+/// a comment or an inert attribute, or writes a declaration over more
+/// lines, moves the source's later declarations without changing what
+/// another source's lowering reads of them, which is never their place.
 fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Interface> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v3");
+    written.0.update(b"rawr.lowering.interface/v4");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
@@ -691,8 +694,9 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         models.std_traits,
     )
     .ok()?;
-    // Each source's tokens, its bodies' aside: what a body's lowering
-    // reads of another source is never its bodies, but their constants'.
+    // Each source's tokens, its bodies' and its inert attributes' aside:
+    // what a body's lowering reads of another source is never its bodies,
+    // but their constants'.
     let outlines = outlines(engine, program);
     for (index, outline) in outlines.sources.iter().enumerate() {
         framed(
@@ -701,12 +705,11 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         );
         written.0.update(outline.tokens);
     }
-    let lines = |source: source::Id| {
+    let places = |source: source::Id| {
         outlines
             .sources
             .get(source.index())
-            .map(|outline| outline.lines.clone())
-            .unwrap_or_default()
+            .map(|outline| &outline.places)
     };
     let sources = program
         .items
@@ -714,56 +717,35 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         .map(|shell| (shell.id, shell.source))
         .collect::<BTreeMap<_, _>>();
     // The program, its functions' and its impls' methods' bodies' tokens
-    // aside: a body's spans and its text when Rawr wrote it stay. A
-    // trait's provided bodies stay, as each impl that doesn't override one
-    // receives it.
+    // and its inert attributes aside (`outlined`).
     for shell in program.items.iter() {
-        let cleared;
-        let kind = match &shell.kind {
-            item::Kind::Function(function) if !function.body.constant => {
-                let mut function = function.clone();
-                function.body.syntax = crate::item::BodySyntax::default();
-                cleared = item::Kind::Function(function);
-                &cleared
-            }
-            item::Kind::Impl(implementation) => {
-                let mut implementation = implementation.clone();
-                for function in &mut implementation.functions {
-                    if !function.body.constant {
-                        function.body.syntax = crate::item::BodySyntax::default();
-                    }
-                }
-                cleared = item::Kind::Impl(implementation);
-                &cleared
-            }
-            kind => kind,
-        };
-        lines(shell.source)
-            .writing(|| {
-                write!(
-                    written,
-                    "{:?}|{:?}|{:?}|{:?}|{:?}|{kind:?}",
-                    shell.id, shell.source, shell.key, shell.span, shell.facades,
-                )
-            })
-            .ok()?;
+        let kind = outlined(&shell.kind);
+        writing(places(shell.source), || {
+            write!(
+                written,
+                "{:?}|{:?}|{:?}|{:?}|{:?}|{kind:?}",
+                shell.id, shell.source, shell.key, shell.span, shell.facades,
+            )
+        })
+        .ok()?;
     }
     for definition in program.types.iter() {
-        let lines = sources
+        let places = sources
             .get(&definition.item())
-            .map(|source| lines(*source))
-            .unwrap_or_default();
-        lines.writing(|| write!(written, "{definition:?}|")).ok()?;
+            .and_then(|source| places(*source));
+        writing(places, || write!(written, "{definition:?}|")).ok()?;
     }
     for definition in program.methods.iter().chain(&program.builtin_methods) {
-        lines(definition.source())
-            .writing(|| write!(written, "{definition:?}|"))
-            .ok()?;
+        writing(places(definition.source()), || {
+            write!(written, "{definition:?}|")
+        })
+        .ok()?;
     }
     for ((source, name), alias) in &program.aliases {
-        lines(*source)
-            .writing(|| write!(written, "{source:?}|{name:?}|{alias:?}|"))
-            .ok()?;
+        writing(places(*source), || {
+            write!(written, "{source:?}|{name:?}|{alias:?}|")
+        })
+        .ok()?;
     }
     write!(
         written,
@@ -790,23 +772,15 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
     let instances = &program.instances;
     write!(written, "{:?}|", instances.templates).ok()?;
     for (key, types) in &instances.types {
-        let lines = callers
-            .get(key)
-            .map(|source| lines(*source))
-            .unwrap_or_default();
-        lines
-            .writing(|| write!(written, "{key:?}|{types:?}|"))
-            .ok()?;
+        let places = callers.get(key).and_then(|source| places(*source));
+        writing(places, || write!(written, "{key:?}|{types:?}|")).ok()?;
     }
     for (index, instances) in &instances.impls {
-        let lines = program
+        let places = program
             .items
             .get(*index)
-            .map(|shell| lines(shell.source))
-            .unwrap_or_default();
-        lines
-            .writing(|| write!(written, "{index}|{instances:?}|"))
-            .ok()?;
+            .and_then(|shell| places(shell.source));
+        writing(places, || write!(written, "{index}|{instances:?}|")).ok()?;
     }
     #[cfg(not(target_arch = "wasm32"))]
     write!(written, "{:?}|", instances.natives).ok()?;
@@ -817,6 +791,75 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         program: written.0.finalize().into(),
         own: own(program, &callers)?,
     })
+}
+
+/// Run `write` with each position written by `places`, when there are
+/// some; else as it is.
+fn writing<T>(places: Option<&Places>, write: impl FnOnce() -> T) -> T {
+    match places {
+        Some(places) => places.writing(write),
+        None => write(),
+    }
+}
+
+/// What another source's lowering reads of `kind`: it, but for its
+/// functions' and its impls' methods' bodies' tokens and its inert
+/// attributes (`crate::item::inert`). A body's spans and its text when
+/// Rawr wrote it stay. A trait's provided bodies stay, as each impl that
+/// doesn't override one receives it.
+fn outlined(kind: &item::Kind) -> item::Kind {
+    let mut kind = kind.clone();
+    match &mut kind {
+        item::Kind::Use(declaration) => meaningful(&mut declaration.header.attributes),
+        item::Kind::Struct(declaration) => {
+            meaningful(&mut declaration.header.attributes);
+            for field in &mut declaration.fields {
+                meaningful(&mut field.attributes);
+            }
+        }
+        item::Kind::Enum(declaration) => {
+            meaningful(&mut declaration.header.attributes);
+            for variant in &mut declaration.variants {
+                meaningful(&mut variant.attributes);
+                for attributes in &mut variant.field_attributes {
+                    meaningful(attributes);
+                }
+            }
+        }
+        item::Kind::Impl(implementation) => {
+            meaningful(&mut implementation.header.attributes);
+            for function in &mut implementation.functions {
+                meaningful(&mut function.header.attributes);
+                if !function.body.constant {
+                    function.body.syntax = crate::item::BodySyntax::default();
+                }
+            }
+        }
+        item::Kind::Trait(declaration) => {
+            meaningful(&mut declaration.header.attributes);
+            for function in &mut declaration.functions {
+                meaningful(&mut function.header.attributes);
+            }
+        }
+        item::Kind::Function(function) => {
+            meaningful(&mut function.header.attributes);
+            if !function.body.constant {
+                function.body.syntax = crate::item::BodySyntax::default();
+            }
+        }
+    }
+    kind
+}
+
+/// `attributes` without the inert ones.
+fn meaningful(attributes: &mut Box<[crate::item::Attribute]>) {
+    if attributes.iter().any(crate::item::Attribute::inert) {
+        *attributes = attributes
+            .iter()
+            .filter(|attribute| !attribute.inert())
+            .cloned()
+            .collect();
+    }
 }
 
 /// The source of each function's and method's body, by its key.
@@ -888,12 +931,13 @@ fn of(
 }
 
 /// What another source's lowering reads of one source's text (#1646): its
-/// tokens outside its function and method bodies, and its lines, each
-/// numbered among the lines that hold one of those tokens.
+/// tokens outside its function and method bodies and its inert attributes
+/// (`item::inert`), and where each of them starts, which its positions are
+/// written by.
 #[derive(Clone)]
 struct Outline {
     tokens: [u8; 32],
-    lines: Lines,
+    places: Places,
 }
 
 impl Outline {
@@ -912,41 +956,72 @@ impl Outline {
                 _ => merged.push((start, end)),
             }
         }
-        let mut held = vec![false; text.matches('\n').count() + 1];
+        let tokens = super::lex_rust(engine, text);
+        let mut starts = Vec::new();
         let mut written = Written(Sha256::new());
         let mut next = 0;
-        for (token, position) in super::lex_rust(engine, text) {
-            if token == crate::tokenizer::Token::EOF {
+        let mut index = 0;
+        while let Some((token, position)) = tokens.get(index) {
+            if *token == Token::EOF {
                 break;
             }
-            while merged.get(next).is_some_and(|(_, end)| *end <= position) {
+            while merged.get(next).is_some_and(|(_, end)| end <= position) {
                 next += 1;
             }
-            if merged
-                .get(next)
-                .is_some_and(|(start, _)| *start <= position)
-            {
+            if merged.get(next).is_some_and(|(start, _)| start <= position) {
+                index += 1;
+                continue;
+            }
+            if let Some(length) = inert_attribute(&tokens[index..]) {
+                index += length;
                 continue;
             }
             // A token's `Debug` can't fail to write.
             let _ = write!(written, "{token:?}|");
-            if let Some(line) = position.line().and_then(|line| held.get_mut(line - 1)) {
-                *line = true;
-            }
+            starts.push(*position);
+            index += 1;
         }
-        let mut number = 0_u16;
-        let numbers = held
-            .into_iter()
-            .map(|held| {
-                number = number.saturating_add(u16::from(held));
-                number
-            })
-            .collect();
         Self {
             tokens: written.0.finalize().into(),
-            lines: Lines::new(numbers),
+            places: Places::new(starts),
         }
     }
+}
+
+/// How many tokens the inert attribute `tokens` starts with spans, through
+/// its `]` (`item::inert`); `None` when they start no inert attribute.
+fn inert_attribute(tokens: &[(Token, Position)]) -> Option<usize> {
+    let mut rest = tokens.iter().map(|(token, _)| token).enumerate();
+    let (_, Token::Hash) = rest.next()? else {
+        return None;
+    };
+    let mut next = rest.next()?;
+    if matches!(next, (_, Token::Bang)) {
+        next = rest.next()?;
+    }
+    let (_, Token::LeftBracket) = next else {
+        return None;
+    };
+    let mut path = Vec::new();
+    let mut depth = 1_usize;
+    let mut reading = true;
+    for (index, token) in rest {
+        match token {
+            Token::Identifier(name) if reading => path.push(name.as_str()),
+            Token::DoubleColon if reading && !path.is_empty() => {}
+            Token::LeftBracket => {
+                reading = false;
+                depth += 1;
+            }
+            Token::RightBracket if depth == 1 => {
+                return crate::item::inert(path.into_iter()).then_some(index + 1);
+            }
+            Token::RightBracket => depth -= 1,
+            Token::EOF => return None,
+            _ => reading = false,
+        }
+    }
+    None
 }
 
 /// The outlines of the program's sources and scripts. A compiler keeps the
