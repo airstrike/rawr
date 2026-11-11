@@ -82,6 +82,65 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// Native code built without a derive's impl doesn't call it: a native
+/// type's new derives swap in the running program, native code edited to
+/// call one builds again with it, and a derive that goes away builds again
+/// and says so (#1737).
+#[test]
+fn a_pub_type_s_new_derives_swap_and_a_native_use_or_lost_derive_builds_again() {
+    let root = crate::support::fresh("islands-pub-derives");
+    copy(Path::new(FIXTURE), &root);
+    let physics = root.join("src/physics.rs");
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+
+    // New derives, and a body edit that says the program runs the save,
+    // in one write.
+    let text = fs::read_to_string(&physics).unwrap();
+    fs::write(
+        &physics,
+        text.replace(
+            "pub struct Counter {",
+            "#[derive(Clone, Debug)]\npub struct Counter {",
+        )
+        .replace("const SCALE: i64 = 1;", "const SCALE: i64 = 100;"),
+    )
+    .unwrap();
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
+    let (tick, _) = parse(&swapped).unwrap();
+    let seen = run.seen.join("\n");
+    assert!(tick > 3, "{seen}");
+    assert!(
+        run.seen
+            .iter()
+            .all(|line| !line.contains("preparing again") && !line.contains("restarting")),
+        "{seen}"
+    );
+
+    // Native code that calls the new impl: a new native build has it.
+    edit(
+        &root.join("src/main.rs"),
+        "physics::Counter::new();",
+        "physics::Counter::new().clone();",
+    );
+    run.until(|line| parse(line) == Some((1, 100)));
+    let restarts = run.seen.len();
+
+    // A derive gone: native code may call it, so it builds again.
+    edit(&physics, "#[derive(Clone, Debug)]", "#[derive(Clone)]");
+    run.until(|line| parse(line) == Some((1, 100)));
+    let seen = run.seen.join("\n");
+    assert!(
+        run.seen[restarts..].iter().any(|line| line
+            == "stderr: rawr: `physics::Counter` no longer derives Debug; restarting the program"),
+        "{seen}"
+    );
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 /// A supervised run whose marked file fails its check says `failed` and
 /// waits for a save. A wait for the program's output ends there, with the
 /// error rustc gives, instead of waiting for that save (#1585).

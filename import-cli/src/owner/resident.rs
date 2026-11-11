@@ -104,6 +104,9 @@ impl Manifests {
             shape
                 .change(next_shape)
                 .or_else(native)
+                // A new derive needs a new native build only for a native
+                // use of its impl, as a marked call at a native bound.
+                .or_else(|| shape.derived(next_shape))
                 // No runner runs to compare with, or an earlier native
                 // build is still owed.
                 .unwrap_or_else(|| "the program needs a new native build".to_owned()),
