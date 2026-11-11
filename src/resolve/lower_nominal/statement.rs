@@ -247,7 +247,12 @@ impl<'a> Parser<'a> {
             self.consume_terminator(start)?;
         } else {
             // As in Rust, a block-like expression statement needs no `;`
-            // when it is not the tail, and its type must then be `()`.
+            // when it is not the tail, and its type must then be `()`. The
+            // statements a false `#[cfg(..)]` removes after it go first, as
+            // rustc removes them before it finds the tail.
+            if block_like {
+                self.skip_left_out_statements()?;
+            }
             let terminated = if block_like
                 && !matches!(
                     self.peek(),

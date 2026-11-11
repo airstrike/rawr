@@ -226,11 +226,6 @@ impl<'a> Parser<'a> {
     /// effect and are passed over too, except a `#[cfg(..)]` that is false,
     /// which leaves the statement out (`outer_attributes`).
     pub(super) fn skip_nested_item(&mut self) -> Result<(), Error> {
-        let start = self.position();
-        let unclosed = |position| Error::UnsupportedNominalSyntax {
-            construct: "an item inside a body without its end".into(),
-            source: span(start, position),
-        };
         let configured = self.outer_attributes()?;
         if !configured && !self.nested_item_ahead() {
             return self.skip_statement();
@@ -238,6 +233,16 @@ impl<'a> Parser<'a> {
         if !self.nested_item_ahead() {
             return Ok(());
         }
+        self.skip_item()
+    }
+
+    /// The tokens of one item ahead, through its `}` or `;`.
+    fn skip_item(&mut self) -> Result<(), Error> {
+        let start = self.position();
+        let unclosed = |position| Error::UnsupportedNominalSyntax {
+            construct: "an item inside a body without its end".into(),
+            source: span(start, position),
+        };
         let mut depth = 0usize;
         loop {
             match self.next() {
@@ -258,6 +263,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Each statement ahead that a false `#[cfg(..)]` leaves out, passed
+    /// over up to the first that stays. The attributes of the one that
+    /// stays are read too, as they have no other effect, so a block-like
+    /// expression followed only by left-out statements ends its block, as
+    /// pokedex's `#[cfg(not(target_arch = "wasm32"))] { .. }` before a
+    /// `#[cfg(target_arch = "wasm32")]` tail does.
+    pub(super) fn skip_left_out_statements(&mut self) -> Result<(), Error> {
+        while self.attribute_ahead() {
+            if self.outer_attributes()? {
+                return Ok(());
+            }
+            if self.nested_item_ahead() {
+                self.skip_item()?;
+            } else {
+                self.skip_statement()?;
+            }
+        }
+        Ok(())
+    }
+
     /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
     /// through the `}` that ends a block, `if`, `match` or loop.
     pub(super) fn skip_statement(&mut self) -> Result<(), Error> {
@@ -269,13 +294,17 @@ impl<'a> Parser<'a> {
         };
         let mut depth = 0usize;
         loop {
+            // A tail left out ends at its block's `}`, which stays.
+            if depth == 0 && matches!(self.peek(), Token::RightBrace) {
+                return Ok(());
+            }
             match self.next() {
                 (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
                     depth += 1;
                 }
                 (Token::RightParen | Token::RightBracket, _) => depth = depth.saturating_sub(1),
                 (Token::RightBrace, _) => {
-                    depth = depth.saturating_sub(1);
+                    depth -= 1;
                     if depth == 0 && braced && !matches!(self.peek(), Token::Else) {
                         return Ok(());
                     }

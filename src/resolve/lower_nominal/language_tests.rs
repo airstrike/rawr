@@ -9398,6 +9398,36 @@ fn language_cfg_on_fields_arms_elements_and_statements_follows_rustc() {
 }
 
 #[test]
+fn language_block_before_a_left_out_tail_is_the_tail() {
+    // iced's pokedex's `fetch_image` (#1684): rustc removes the `cfg`'d-out
+    // tail, so the block before it is the body's tail.
+    let value = run(r#"
+        fn fetch(n: i64) -> Result<i64, String> {
+            #[cfg(not(target_os = "nowhere"))]
+            {
+                let doubled = n * 2;
+                Ok(doubled)
+            }
+            #[cfg(target_os = "nowhere")]
+            Ok(n)
+        }
+        pub fn run() -> i64 {
+            let inner = {
+                #[cfg(not(target_os = "nowhere"))]
+                if true { 30 } else { 0 }
+                #[cfg(target_os = "nowhere")]
+                let _ = 1;
+                #[cfg(target_os = "nowhere")]
+                7
+            };
+            fetch(6).unwrap() + inner
+        }
+        run()
+    "#);
+    assert_eq!(value, 42);
+}
+
+#[test]
 fn language_phantom_data_is_a_field_of_no_value() {
     let value = run(r#"
         use std::marker::PhantomData;
