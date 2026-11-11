@@ -7824,6 +7824,7 @@ fn render_source(
     // call on what another such call gives is declared once that one is.
     for plan in plans {
         record_bounds(plan)?;
+        record_witness(plan)?;
     }
     let mut boxed = Vec::new();
     loop {
@@ -13887,6 +13888,128 @@ fn record_bounds(plan: &Plan) -> Result<(), request::Error> {
     Ok(())
 }
 
+/// Record the witness of the opaque type `plan` gives (`family::witness`),
+/// when it is a crate function's whose inputs Rust can write, as iced's
+/// `component(numeric_input(..))` gives one of a script value: the output
+/// of the function's item as a pointer of those inputs at `'static`, which
+/// rustc infers. A call outside any region takes its inputs from the arena
+/// at `'static`, so its output is the arena's value of that type.
+fn record_witness(plan: &Plan) -> Result<(), request::Error> {
+    let Operation::Function {
+        signature,
+        substitutions,
+        constants,
+        functions,
+        mappers,
+        container_parameters,
+        associated,
+        call,
+        slots,
+        crossings,
+    } = plan.operation()
+    else {
+        return Ok(());
+    };
+    // A crate function or a script closure an input takes has a type no
+    // Rust code writes.
+    if !functions.is_empty()
+        || !mappers.is_empty()
+        || call.is_some()
+        || !slots.is_empty()
+        || !crossings.is_empty()
+    {
+        return Ok(());
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let convert::Type::Nominal { definition, .. } = &returned else {
+        return Ok(());
+    };
+    if !is_opaque(definition) {
+        return Ok(());
+    }
+    let Some(key) = scoped_type(&returned) else {
+        return Ok(());
+    };
+    let mut inputs = Vec::new();
+    for input in signature.inputs() {
+        let input = substituted(input, signature, substitutions)?;
+        let Some(spelled) = scoped_spelling(&input).filter(|_| !holds_opaque(&input)) else {
+            return Ok(());
+        };
+        inputs.push(statically(&spelled));
+    }
+    let mut path = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        *associated,
+        &mut path,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        &mut path,
+    )?;
+    let path = String::from_utf8(path).map_err(request::unwritable)?;
+    family::witness(
+        key,
+        format!(
+            "{{ fn output<O>(_: fn({}) -> O) -> std::marker::PhantomData<O> {{ std::marker::PhantomData }} output({path}) }}",
+            inputs.join(", ")
+        ),
+    );
+    Ok(())
+}
+
+/// The witness of `ty`, a type that holds opaque types, as iced's
+/// `center(component(..))` gives `Container<'_, impl Widget, Theme>`: a
+/// `std::marker::PhantomData` of it at `'static`, the arena's type of a
+/// value of it made outside any region, made of the witness of each opaque
+/// type in it (`record_witness`). None when one has none.
+fn held_witness(ty: &convert::Type) -> Option<String> {
+    if !holds_opaque(ty) {
+        return None;
+    }
+    let mut witnesses = Vec::new();
+    let spelled = {
+        let mut spell = |opaque: &convert::Type| {
+            witnesses.push(family::witnessed(&scoped_type(opaque)?)?);
+            Some(family::Shape::parameter(witnesses.len() - 1))
+        };
+        spelled_scoped(ty, &mut Some(&mut spell))?
+    };
+    if let [witness] = &witnesses[..]
+        && spelled == family::Shape::parameter(0)
+    {
+        return Some(witness.clone());
+    }
+    let parameters = (0..witnesses.len())
+        .map(family::Shape::parameter)
+        .collect::<Vec<_>>();
+    let inputs = parameters
+        .iter()
+        .map(|parameter| format!("_: std::marker::PhantomData<{parameter}>"))
+        .collect::<Vec<_>>();
+    Some(format!(
+        "{{ fn shape<{}>({}) -> std::marker::PhantomData<{}> {{ std::marker::PhantomData }} shape({}) }}",
+        parameters.join(", "),
+        inputs.join(", "),
+        statically(&spelled),
+        witnesses.join(", ")
+    ))
+}
+
+/// `text`, a type spelled at `'x` or with lifetimes left to inference,
+/// `'_`, with each at `'static`, as the arena holds a value of it.
+fn statically(text: &str) -> String {
+    inferred_lifetimes(&text.replace("'x", "'static"), |_| "'static".to_owned())
+}
+
 /// The value at the first runtime position of `plan`, spelled at `'x`, and
 /// how the call takes it: a method's receiver, at its impl's instance or
 /// its container's arguments, or a function's first input. None when it
@@ -16254,7 +16377,15 @@ fn render_slot(
     // An output that borrows the inputs, as the bound writes it or as the
     // type the instance gives a synthetic output is (`W` of iced's
     // `ViewFn`, a `Column<'a, ..>`).
-    let family = if call.borrows() || carries_lifetime(&returned) {
+    // An output that holds an opaque type, as iced's `center(component(
+    // ..))` of script values, has no family a signature can write
+    // (`written_family`). Where its opaque types have witnesses
+    // (`held_witness`), the slot opens no region, so the output is the
+    // arena's value at `'static`, which borrows nothing: the slot is
+    // generic over its type, which the witness picks where the call takes
+    // the slot.
+    let witness = held_witness(&returned);
+    let family = if witness.is_none() && (call.borrows() || carries_lifetime(&returned)) {
         // The slot's signature names the output's type, which a wrapper's
         // family can't (`family`).
         Some(written_family(&returned).ok_or_else(|| drift("a slot's borrowing output"))?)
@@ -16499,10 +16630,18 @@ fn render_slot(
             )
         }
         None => {
-            let rust = concrete_type(&returned).ok_or_else(|| drift("a slot's output"))?;
             let mut converted = String::new();
-            render_from_dynamic(&returned, "value", 0, &mut converted)?;
-            let native_output = holds_native(&returned);
+            let (generics, rust) = if witness.is_some() {
+                converted.push_str("value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<T>(handle))");
+                ("<T: 'static>", "T".to_owned())
+            } else {
+                render_from_dynamic(&returned, "value", 0, &mut converted)?;
+                (
+                    "",
+                    concrete_type(&returned).ok_or_else(|| drift("a slot's output"))?,
+                )
+            };
+            let native_output = witness.is_some() || holds_native(&returned);
             let deferred = if deferred {
                 let names = (0..inputs.len())
                     .map(|position| format!("input_{position},"))
@@ -16548,7 +16687,7 @@ fn render_slot(
             );
             let (items, invoked) = lent_around(&lends, held_around(&held, invoked));
             (
-                "",
+                generics,
                 rust,
                 format!(
                     "{items}{deferred}{call_arena}let value = {{ {invoked} }};
@@ -16576,6 +16715,22 @@ fn render_slot(
     } else {
         String::new()
     };
+    // The slot at the type its witness names, by the bound the call's
+    // parameter's `Fn` takes it through.
+    let picked = match &witness {
+        Some(witness) => {
+            let inputs = parameters
+                .iter()
+                .map(|parameter| parameter.split_once(": ").map_or("", |(_, ty)| ty))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "
+    let slot_{local} = {{ fn picked<T, F: Fn({inputs}) -> T>(slot: F, _: std::marker::PhantomData<T>) -> F {{ slot }} picked(slot_{local}, {witness}) }};"
+            )
+        }
+        None => String::new(),
+    };
     writeln!(
         output,
         "    static SLOT_{local}: __rawr_internal::crossing::Slot = __rawr_internal::crossing::Slot::new();
@@ -16585,7 +16740,7 @@ fn render_slot(
     #[allow(unused_mut, clippy::needless_lifetimes)]
     fn slot_{local}{generics}({}) -> {rust} {{
         {body}
-    }}",
+    }}{picked}",
         parameters.join(", ")
     )
     .map_err(request::unwritable)
