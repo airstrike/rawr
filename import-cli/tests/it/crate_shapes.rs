@@ -716,11 +716,13 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
     assert_eq!(text(&native.stdout), expected);
 
     let directory = crate::support::scratch();
+    let out = directory.join("universe");
     let built = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env("RAWR_UNIVERSE_RUNNER", "1")
+        .env("RAWR_UNIVERSE_OUT", &out)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -729,8 +731,10 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
     assert!(built.status.success(), "{}", text(&built.stderr));
     assert_eq!(text(&built.stdout), expected, "{}", text(&built.stderr));
 
-    // The runner serves the file as ?play's server serves a snippet.
-    let runner = built_runner(&root.join("target/rawr/runner/target"));
+    // The runner is where its caller asked for it (#1752).
+    let runner = out.join("runner");
+    assert!(runner.is_file(), "no runner in {}", out.display());
+    // It serves the file as ?play's server serves a snippet.
     let socket = std::env::temp_dir().join(format!("rawr-1387-{}.sock", std::process::id()));
     let mut server = Command::new(&runner)
         .env_clear()
@@ -763,19 +767,4 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
     let ran = ran.unwrap();
     assert_eq!(ran.status, 0, "{}", text(&ran.stderr));
     assert_eq!(text(&ran.stdout), expected, "{}", text(&ran.stderr));
-}
-
-/// The runner Cargo built under `target`: in `debug/`, or in a target
-/// triple's `debug/` when the build names one.
-fn built_runner(target: &std::path::Path) -> std::path::PathBuf {
-    let triples = std::fs::read_dir(target)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path().join("debug"));
-    std::iter::once(target.join("debug"))
-        .chain(triples)
-        .flat_map(|debug| ["crate-shapes", "rawr-generated-runner"].map(|name| debug.join(name)))
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| panic!("no runner under {}", target.display()))
 }

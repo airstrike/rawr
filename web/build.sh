@@ -42,9 +42,9 @@ mkdir -p "$out"
   target/wasm/wasm32-unknown-unknown/release/rawr_web.wasm
 
 sh play/universe/web.sh "${RAWR_IMPORT:-rawr-import}"
-runner=target/wasm/universe/target/rawr/runner
-"$(bindgen "$runner/Cargo.lock")" --target web --no-typescript --remove-name-section \
-  --out-name universe --out-dir "$out" "$runner/target/wasm32-unknown-unknown/debug/play.wasm"
+# The universe's Cargo.lock names the wasm-bindgen its runner links.
+"$(bindgen target/wasm/universe/Cargo.lock)" --target web --no-typescript --remove-name-section \
+  --out-name universe --out-dir "$out" target/wasm/universe/target/universe/runner
 cp target/wasm/universe/Cargo.toml "$out/universe.toml"
 
 # pack FILE: write FILE.br, brotli at quality 11 with a 16 MiB window.

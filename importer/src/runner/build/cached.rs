@@ -459,7 +459,10 @@ fn compile<B>(
         // project replaces the executable.
         fs::create_dir_all(&destination)
             .and_then(|()| fs::copy(&executable, destination.join(name)))
-            .map(|_| first_exec(&destination.join(name)))
+            .map(|_| {
+                first_exec(&destination.join(name));
+                clear_uplifted(&work.join("target"), &executable);
+            })
             .map_err(|source| node::Error::Io {
                 operation: "copy the built runner into its bundle",
                 path: destination.join(name),
@@ -518,6 +521,31 @@ fn compile<B>(
     node::Bundled::validate(product, pending, |product, pending| {
         product.revalidate_pending(pending, inputs, budget)
     })
+}
+
+/// Remove the files Cargo copied out beside the runner's `executable` in
+/// `target`, the work directory's target directory, once the bundle holds
+/// its copy (#1752). The bundle's copy is the runner, so none of them is
+/// read, and one left there would be an older build's: an executable Cargo
+/// linked before a store hit, or one a runner named after the project's
+/// binary left (#1723). Cargo links them again at its next build, fresh or
+/// not, and its own `.cargo-lock` files stay.
+fn clear_uplifted(target: &Path, executable: &Path) {
+    let Some(directory) = executable
+        .parent()
+        .filter(|parent| parent.starts_with(target))
+    else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let cargo_own = entry.file_name().as_encoded_bytes().starts_with(b".");
+        if !cargo_own && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// The executable of the runner's binary target, from Cargo's

@@ -270,6 +270,7 @@ streaming    -15.49</span></div>
   <tr><td><code>Restarting</code></td><td>The new text can&rsquo;t replace the running one in this process, for example because a struct&rsquo;s fields changed. The last good text keeps running until the program starts again.</td></tr>
 </table>
 <p>A native call that the bindings don&rsquo;t cover is the program&rsquo;s compile error, where the program makes it. The bindings cover the calls the program made when they were generated. The <code class="nw">?play</code> bot runs every snippet this way, in a universe of iced, iced_test, tokio and ratatui.</p>
+<p>A universe runner is a generated runner built to serve such programs, as the bot&rsquo;s is. <code>RAWR_UNIVERSE_RUNNER=1 rawr-import run path</code> builds one for the package at <code>path</code>. Add <code>RAWR_UNIVERSE_OUT=dir</code> and <code>rawr-import</code> writes the runner to <code>dir/runner</code> each time it builds one or reuses one it built before. Take the runner from there, never from <code>target/rawr</code>, whose layout is rawr&rsquo;s own. Built for wasm32, as the browser&rsquo;s universe is, <code>dir/runner</code> is the WebAssembly module that wasm-bindgen takes. Then <code>run</code> still fails once the module is written, because a wasm32 module can&rsquo;t start on the host.</p>
 <p>Today a generated runner links the bindings. A <code>build.rs</code> step that links them into your own crate is not built yet, so a plain <code>cargo build</code> can&rsquo;t produce them.</p>
 
 <h2 id="export">Export your types</h2>

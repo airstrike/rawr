@@ -113,12 +113,16 @@ are called. The list names each iced example that runs under `rawr run`
 and needs no files, no network and no crate beyond the universe's; add one
 to it as it starts to run.
 
-Locally, after `sh play/universe/examples.sh` and
-`RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe`:
+`RAWR_UNIVERSE_OUT` names the directory `rawr-import` writes the runner
+to, as `runner`, each time it builds or reuses one (#1752). The image
+names `/out/universe`. Where rawr keeps the runner itself is its own
+business, so take it from there. Locally, after
+`sh play/universe/examples.sh` and
+`RAWR_UNIVERSE_RUNNER=1 RAWR_UNIVERSE_OUT=play/universe/target/universe rawr-import run play/universe`:
 
 ```sh
 PLAY_UNIVERSE=$PWD/play/universe \
-PLAY_UNIVERSE_RUNNER=$PWD/play/universe/target/rawr/runner/target/debug/play \
+PLAY_UNIVERSE_RUNNER=$PWD/play/universe/target/universe/runner \
   cargo run -p rawr-play -- snippet.rs -o -
 ```
 
