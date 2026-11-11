@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Bind classifies a project's definitions and exports across the machine's cores, with byte-identical contracts. An opaque type's left-out captures are now set by the function that gives it, whatever is classified first.","issues":[1669]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.181",
@@ -3651,8 +3656,9 @@
     {"issue":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
-    {"issue":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4715,11 +4721,12 @@
             {"number":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open"},
             {"number":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"open"},
             {"number":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed"},
-            {"number":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"open"},
+            {"number":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed"},
             {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open"},
             {"number":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed"},
             {"number":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed"},
-            {"number":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed"}
+            {"number":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed"},
+            {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"}
           ]
         }
       ]
