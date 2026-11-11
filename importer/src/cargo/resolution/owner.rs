@@ -575,11 +575,6 @@ fn evaluate(
             parts: Parts::Remembered(Box::new(remembered)),
         })));
     }
-    // A demand round of the build an earlier round of this process
-    // completed: its tables, grown by its probe run again (`carried`).
-    if let Some(parts) = state.carried_parts(&attestation) {
-        return Ok(remembered(state, parts, &attestation));
-    }
     let validator = Arc::clone(&state);
     let executor = Arc::clone(&state);
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
@@ -946,6 +941,19 @@ impl Evaluation {
             |accounts| {
                 if accounts.refused {
                     return Err(node::Error::State("resolution owner account refused"));
+                }
+                // A demand round the store lacks, of the build an earlier
+                // round of this process completed: its tables, grown by its
+                // probe run again (`carried`). A round the store holds is
+                // that node, as the next run reads it, so the store is asked
+                // first: a carried API in its place keys the check apart
+                // from the next run's (#400).
+                let attestation = self.cached.attestation.content().digest();
+                if let Some(parts) = self.carried_parts(&attestation.as_bytes())
+                    && let Ok(mut shared) = self.shared.lock()
+                {
+                    *shared = Some(parts);
+                    return Err(node::Error::State(SHARED));
                 }
 
                 (|| {
