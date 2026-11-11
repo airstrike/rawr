@@ -1,6 +1,6 @@
 [package]
 name = "rawr-reload"
-version = "0.3.186"
+version = "0.3.187"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false

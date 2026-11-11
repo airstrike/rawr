@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-11",
-  "version": "0.3.186",
+  "version": "0.3.187",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,16 +9,18 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`RAWR_VERBOSE` says what each start of the program ran: Cargo resolutions, nightly builds, probes, runner builds and the check's rounds.","issues":[1742],"refs":[1739]},
-        {"text":"A new pub item no native code names (a struct, fn, trait, impl or re-export) swaps into the running program instead of rebuilding native code. A new `Drop` impl, or a new impl of the crate's own trait that native code could hold as a `dyn` value, still rebuilds. An item taken away rebuilds, and the restart line names each one.","issues":[1741]},
-        {"text":"A new pub struct native code sees no longer makes the restarted runner lower every marked file; only the files that name it are lowered again.","issues":[1740]},
-        {"text":"A new build of rawr builds its own runner instead of reusing an older one, and the program ends with its `rawr run`: a killed run, or a run whose parent process ends, no longer leaves the program behind.","issues":[1712]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.187",
+        "date": "2026-11-11",
+        "entries": [
+          {"text":"`RAWR_VERBOSE` says what each start of the program ran: Cargo resolutions, nightly builds, probes, runner builds and the check's rounds.","issues":[1742],"refs":[1739]},
+          {"text":"A new pub item no native code names (a struct, fn, trait, impl or re-export) swaps into the running program instead of rebuilding native code. A new `Drop` impl, or a new impl of the crate's own trait that native code could hold as a `dyn` value, still rebuilds. An item taken away rebuilds, and the restart line names each one.","issues":[1741]},
+          {"text":"A new pub struct native code sees no longer makes the restarted runner lower every marked file; only the files that name it are lowered again.","issues":[1740]},
+          {"text":"A new build of rawr builds its own runner instead of reusing an older one, and the program ends with its `rawr run`: a killed run, or a run whose parent process ends, no longer leaves the program behind.","issues":[1712]}
+        ]
+      },
       {
         "version": "0.3.186",
         "date": "2026-11-11",
@@ -3789,7 +3791,7 @@
     {"issue":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
     {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
     {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
-    {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
     {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"closed","category":"Divergences from rustc","release":"0.3.185"},
     {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"},
     {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"},
@@ -3817,9 +3819,9 @@
     {"issue":1737,"title":"A derive change on a native-visible marked type prepares a native build and says \"changed its fields\"","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.186"},
     {"issue":1738,"title":"A std derive added to a marked type native code holds as a trait object rebuilds for its stand-in's impl","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1739,"title":"A restart that needs no native build takes 99 s on inboard, against 20 s before","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1740,"title":"A new pub struct no marked file names lowers every marked file after its native build","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1741,"title":"A new pub item no native code uses prepares a native build; it could swap as a new derive does","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1742,"title":"RAWR_VERBOSE says what each start ran: Cargo resolutions, nightly builds, probes, runner builds and rounds","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1740,"title":"A new pub struct no marked file names lowers every marked file after its native build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
+    {"issue":1741,"title":"A new pub item no native code uses prepares a native build; it could swap as a new derive does","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
+    {"issue":1742,"title":"RAWR_VERBOSE says what each start ran: Cargo resolutions, nightly builds, probes, runner builds and rounds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
     {"issue":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open","category":"Divergences from rustc"},
     {"issue":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed","category":"Shared dependency cache (D607)"}
@@ -5012,7 +5014,7 @@
           "start": 80,
           "size": 3,
           "state": "now",
-          "note": "A body edit in inboard swaps in place in 0.76 s and lowers 1 file (#1688). #1604 measured 3.1 to 3.6 s from save to queue. A doc comment, an inert attribute, a blank line or a reflowed signature lowers only its file (#1716). A new or changed declaration still lowers every marked file again. Per-item lowering dependencies are under way (#1718).",
+          "note": "On inboard, a body edit swaps in place in about 0.7 s and lowers 1 file (#1688). A doc comment, an inert attribute, a blank line or a reflowed signature lowers only its file (#1716). A new private fn or struct, a changed derive on a private or pub type, and a new pub struct each swap in under 0.8 s and lower 1 file (#1718, #1726, #1728, #1737, #1740, #1741). Removing a type restarts the program at once with no native build, back in about 16 s (#1728, #1739). A restart after a native build lowers only the files that name what changed (#1725).",
           "issues": [
             {"number":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"closed"},
             {"number":1489,"title":"A queued swap asks for a redraw only on macOS; Windows and Linux still wait for the next input","state":"open"},
