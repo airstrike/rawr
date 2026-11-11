@@ -12,7 +12,9 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"iced's `Task::sip`/`finish` shape works again: a closure takes `<S as Future>::Output` of an `S: Core`, because a crate trait whose one blanket implementation also needs a crate trait, as sipper's `Core` needs a stream, no longer reads as a plain future.","issues":[1699]}
+        {"text":"iced's `Task::sip`/`finish` shape works again: a closure takes `<S as Future>::Output` of an `S: Core`, because a crate trait whose one blanket implementation also needs a crate trait, as sipper's `Core` needs a stream, no longer reads as a plain future.","issues":[1699]},
+        {"text":"A closure over iced_test's lifetime-carrying `Candidate<'_>` fills a selector, as in `ui.click(|candidate: Candidate<'_>| ..)`, as rustc allows.","issues":[1694]},
+        {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]}
       ]
     },
     "releases": [
@@ -3719,13 +3721,13 @@
     {"issue":1691,"title":"A stored API replayed from shared tables decodes the whole tables document when only the handshakes are needed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
     {"issue":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
-    {"issue":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"open","category":"Divergences from rustc"},
+    {"issue":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"closed","category":"Divergences from rustc"},
     {"issue":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.183"},
     {"issue":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.183"},
     {"issue":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
     {"issue":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"open","category":"Divergences from rustc"},
+    {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed","category":"Divergences from rustc"},
     {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
@@ -4317,10 +4319,10 @@
             {"number":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"closed"},
             {"number":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"closed"},
             {"number":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"closed"},
-            {"number":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"open"},
+            {"number":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"closed"},
             {"number":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"closed"},
             {"number":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed"},
-            {"number":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"open"},
+            {"number":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed"},
             {"number":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed"}
           ],
           "milestone": "0.4"
