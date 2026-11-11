@@ -5,7 +5,7 @@
   "examples": {
     "running": 34,
     "total": 56,
-    "note": "0.3.160 sweep plus the_matrix, lazy, progress_bar, pane_grid and loupe: 34 run; gallery passes check, modal runs its crossing shape"
+    "note": "0.3.160 sweep plus the_matrix, lazy, progress_bar, pane_grid and loupe: 34 run. Checked headless since, not yet in a window: component builds and runs its view (#1075), pokedex runs its search path as cargo does (#1018), bezier_tool and counter match cargo through iced_test (#990, #1680); gallery passes check, modal runs its crossing shape"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
