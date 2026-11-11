@@ -117,9 +117,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // 65 leaves out a std trait's impls for scalars. Schema 67 writes each id
 // of a body once, in its leading `ids`, and names it by index elsewhere.
 // Schema 69 extracts only the names of a crate a plan that demands anything
-// names nothing of. `driver.rs`, `cargo/toolchain.rs` and
+// names nothing of. Schema 70 keeps a blanket implementation that sets a
+// projected associated type to one of its parameters, with that item.
+// `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 69;
+const PROTOCOL_SCHEMA: u32 = 70;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2285,6 +2287,55 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     self.request_implementation(implementation, obligation.relevance, associated)?;
                 }
                 return Ok(());
+            }
+            // A blanket implementation over a parameter of its own that sets
+            // the item to one of its parameters, as futures' `impl<F, T, E>
+            // TryFuture for F where F: Future<Output = Result<T, E>>` sets
+            // `Ok = T`: what the projection is for every type it applies to,
+            // so the classifier can read it from the implementation's bounds
+            // (#1674).
+            let mut blankets = Vec::new();
+            for implementation in self.implementations(obligation.trait_id)? {
+                self.budget.edge(1)?;
+                let impl_id = implementation.id();
+                if self.tcx.impl_polarity(impl_id) != ty::ImplPolarity::Positive {
+                    continue;
+                }
+                let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
+                    continue;
+                };
+                let over_parameter = matches!(
+                    reference
+                        .instantiate_identity()
+                        .skip_norm_wip()
+                        .self_ty()
+                        .kind(),
+                    ty::Param(_)
+                );
+                let Some(value) = self.tcx.impl_item_implementor_ids(impl_id).get(&trait_item)
+                else {
+                    continue;
+                };
+                let value = self
+                    .tcx
+                    .type_of(*value)
+                    .instantiate_identity()
+                    .skip_norm_wip();
+                if over_parameter && matches!(value.kind(), ty::Param(_)) {
+                    blankets.push(implementation);
+                }
+            }
+            blankets.sort_unstable_by_key(|implementation| {
+                self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()
+            });
+            let blanket = Some(AssociatedObligation {
+                kind: AssociatedDemandKind::SelectedMember,
+                trait_item: Some(trait_item),
+                arguments: Some(obligation.arguments),
+                param_env: obligation.param_env,
+            });
+            for implementation in blankets {
+                self.request_implementation(implementation, obligation.relevance, blanket)?;
             }
             self.find_aliases();
             let aliased = self

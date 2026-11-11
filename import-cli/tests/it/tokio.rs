@@ -268,3 +268,47 @@ fn a_crate_decodes_program_structs_on_a_worker_thread() {
          Ok(\"BULBASAUR A strange seed true\")\n"
     );
 }
+
+/// futures' `try_join(fetch, size(..)).await?` of an async block and an
+/// async fn's future, as iced's pokedex's `search` joins them (#1674):
+/// `Fut1: TryFuture` takes a script future, as the trait's one blanket
+/// impl `impl<F, T, E> TryFuture for F where F: Future<Output = Result<T,
+/// E>>` reads it, and `TryJoin`'s `Output` names `Fut1::Ok` and
+/// `Fut1::Error`. The output is `cargo run`'s.
+#[test]
+fn futures_try_join_takes_script_futures_through_its_blanket_trait() {
+    let program = DERIVES.read("joined.rs");
+    let root = DERIVES.lease(&[("src/main.rs", &program)]);
+    let cargo = Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let expected = String::from_utf8_lossy(&cargo.stdout);
+    assert!(
+        cargo.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cargo.stderr)
+    );
+    assert_eq!(
+        expected,
+        "Ok(\"BULBASAUR 4\")\n\
+         Err(\"invalid type: integer `1`, expected a string at line 1 column 1\")\n"
+    );
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(stdout, expected);
+}

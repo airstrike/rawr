@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 165;
+const CLASSIFIER_VERSION: u32 = 166;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1727,6 +1727,142 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         )
     }
 
+    /// `generics` with each parameter `P: Trait` of a crate's trait that
+    /// only one blanket implementation over futures gives, as futures'
+    /// `impl<F, T, E> TryFuture for F where F: Future<Output = Result<T,
+    /// E>>`, bounded as that implementation bounds its `F`: `P: Future`
+    /// with `Output = Result<P::Ok, P::Error>`, each of the
+    /// implementation's other parameters the projection of the associated
+    /// type it gives. So a script future fills `P` as it fills any future
+    /// parameter, and `P::Ok` is what the future gives inside its `Ok`, as
+    /// rustc reads the implementation (#1674). `None` when no parameter is
+    /// read so.
+    fn future_blankets(&self, generics: &model::Generics) -> Option<model::Generics> {
+        let mut predicates = Vec::new();
+        let mut changed = false;
+        for predicate in generics.predicates() {
+            let expanded = match predicate {
+                model::Predicate::Bound {
+                    ty: parameter @ model::Type::Parameter { .. },
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            binders,
+                        },
+                } if arguments.is_empty() && binders.is_empty() => {
+                    self.future_blanket_bounds(trait_id, parameter)
+                }
+                _ => None,
+            };
+            match expanded {
+                Some(bounds) => {
+                    predicates.extend(bounds);
+                    changed = true;
+                }
+                None => predicates.push(predicate.clone()),
+            }
+        }
+        changed.then(|| {
+            model::Generics::new(
+                generics.parameters().cloned().collect(),
+                predicates.into_boxed_slice(),
+            )
+        })
+    }
+
+    /// The bounds of [`Self::future_blankets`] for `parameter: trait_id`:
+    /// the predicates of the trait's one implementation, a blanket one for
+    /// every future, with its self type `parameter` and each other
+    /// parameter the projection `<parameter as Trait>::Name` of the
+    /// associated type the implementation sets to it. `None` for another
+    /// trait, or one whose implementation has a parameter no associated
+    /// type gives.
+    fn future_blanket_bounds(
+        &self,
+        trait_id: &api::identity::Definition,
+        parameter: &model::Type,
+    ) -> Option<Vec<model::Predicate>> {
+        let model::Kind::Trait { associated, .. } = self
+            .graph
+            .definition_index(trait_id)
+            .and_then(|index| self.graph.definitions().nth(index))?
+            .kind()
+        else {
+            return None;
+        };
+        let mut implementations = self.graph.implementations_of(trait_id);
+        let (Some(implementation), None) = (implementations.next(), implementations.next()) else {
+            return None;
+        };
+        let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+            return None;
+        };
+        let model::Type::Parameter { owner, index: this } = implementation.self_type() else {
+            return None;
+        };
+        let future = implementation.generics().predicates().any(|predicate| {
+            matches!(predicate, model::Predicate::Bound {
+                ty: model::Type::Parameter { index, .. },
+                bound: model::Bound::Trait { trait_id, polarity: model::Polarity::Positive, .. },
+            } if index == this && self.is_core_trait(trait_id, "Future"))
+        });
+        if id != trait_id
+            || owner != implementation.id()
+            || implementation.polarity() != model::Polarity::Positive
+            || !future
+        {
+            return None;
+        }
+        // The associated type each of the implementation's parameters is,
+        // as `type Ok = T;` gives `T`.
+        let given = implementation
+            .associated()
+            .filter_map(|item| {
+                let definition = self
+                    .graph
+                    .definition_index(item)
+                    .and_then(|index| self.graph.definitions().nth(index))?;
+                let model::Kind::AssociatedType {
+                    default: model::Default::Present(model::Type::Parameter { owner, index }),
+                    ..
+                } = definition.kind()
+                else {
+                    return None;
+                };
+                let name = definition.display_path().last()?;
+                let declared = associated
+                    .iter()
+                    .find(|declared| self.definition_name(declared) == Some(name))?;
+                (owner == implementation.id()).then(|| {
+                    (
+                        *index,
+                        model::Type::Projection {
+                            trait_id: trait_id.clone(),
+                            associated: declared.clone(),
+                            arguments: Box::new([model::Argument::Type(parameter.clone())]),
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let renamed = |index: u32| {
+            if index == *this {
+                return Some(parameter.clone());
+            }
+            given
+                .iter()
+                .find(|(given, _)| *given == index)
+                .map(|(_, ty)| ty.clone())
+        };
+        implementation
+            .generics()
+            .predicates()
+            .map(|predicate| relabel_predicate(predicate, implementation.id(), &renamed))
+            .collect()
+    }
+
     /// The inputs and output of an opaque type's `Fn(A..) -> B` bound, as
     /// `impl Fn(B) -> O` binds them, and as `impl Fn(&Theme, Status) ->
     /// Style` does over the lifetime its `&Theme` elides: an input native
@@ -2138,6 +2274,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // keeps its own reading.
         let mut deep = Vec::new();
         find(signature.output(), true, &mut deep);
+        // So is one the output's future gives, as futures'
+        // `TryJoin<Fut1, Fut2>` gives `(Fut1::Ok, Fut2::Ok)` (#1674).
+        if let Some(output) = self.future_type_output(signature.output()) {
+            find(&output, true, &mut deep);
+        }
         for input in signature.inputs() {
             find(input, true, &mut deep);
         }
@@ -2233,11 +2374,34 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 _ => {}
             }
         }
+        // A projection a future parameter's fixed `Output` names, as
+        // `Result<P::Ok, P::Error>` of a `P: TryFuture` (`future_blankets`):
+        // a synthetic parameter of its own, which the script future's own
+        // type fixes (#1674).
+        let mut outputs = Vec::new();
+        for predicate in generics.predicates() {
+            if let model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection { trait_id, .. },
+                ty,
+            } = predicate
+                && self.is_core_trait(trait_id, "Future")
+            {
+                find(ty, true, &mut outputs);
+            }
+        }
         let mut projected: Vec<Projected> = Vec::new();
         for (position, (index, chain)) in found.into_iter().enumerate() {
             let Some((trait_id, _)) = chain.last().cloned() else {
                 continue;
             };
+            let in_output = outputs.iter().any(|(known, known_chain)| {
+                *known == index
+                    && known_chain.len() == chain.len()
+                    && known_chain
+                        .iter()
+                        .zip(&chain)
+                        .all(|((_, named), (_, associated))| named == associated)
+            });
             // A future's `Output` an input or the output names is its own
             // synthetic parameter (D527), and a callable's is its output. A
             // callable's input is read as any other projection is, as iced's
@@ -2245,6 +2409,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // with `S: sipper::Core`.
             let called = position >= declared;
             if (!called
+                && !in_output
                 && (self.is_core_trait(&trait_id, "Future")
                     || generics.predicates().any(|predicate| {
                         matches!(predicate, model::Predicate::Bound {
@@ -2276,10 +2441,18 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 continue;
             };
+            // A future parameter's first synthetic is its `Output` (D527).
+            let future = generics.predicates().any(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound: model::Bound::Trait { trait_id, .. },
+                } if *bounded == index && self.is_core_trait(trait_id, "Future"))
+            });
             let ordinal = projected
                 .iter()
                 .filter(|known| known.parameter == index)
-                .count();
+                .count()
+                + usize::from(future);
             let Ok(ordinal) = u32::try_from(ordinal) else {
                 continue;
             };
@@ -2377,9 +2550,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// parameter: each implementation of the trait whose self type and
     /// associated type Rawr can name, as `impl StatefulWidget for List<'_>
     /// { type State = ListState; }`.
-    fn projection_relations(
+    fn projection_relations<'p>(
         &self,
-        projected: &[Projected],
+        projected: impl IntoIterator<Item = &'p Projected>,
     ) -> Result<Vec<representability::signature::Relation>, Failure> {
         use representability::signature::{Case, Relation};
         let mut relations = Vec::new();
@@ -9086,6 +9259,10 @@ impl<P: api::Phase> Context<'_, P> {
         let generics = blanket.as_ref().unwrap_or(generics);
         let converted = self.callable_conversion(generics);
         let generics = converted.as_ref().unwrap_or(generics);
+        // A parameter of a crate's trait only futures implement, as
+        // futures' `TryFuture`, takes a future (#1674).
+        let futured = self.future_blankets(generics);
+        let generics = futured.as_ref().unwrap_or(generics);
         // `W::State` of a type parameter `W: StatefulWidget` is a synthetic
         // type parameter the call infers from `W`'s implementation (D558.5),
         // and so is `P::State` where a callable's bound names it, and
@@ -9189,10 +9366,10 @@ impl<P: api::Phase> Context<'_, P> {
                 Ok(representability::convert::Type::Never)
             }
             model::Receiver::None | model::Receiver::Value { .. } => {
-                self.convert_output(&rewritten)
+                self.convert_output(&rewritten, rewrite)
             }
             model::Receiver::Reference { .. } if signature.async_function() => {
-                self.convert_output(&rewritten)
+                self.convert_output(&rewritten, rewrite)
             }
             // A `&[T]` the method lends from its receiver, typed as the
             // slice it is. Through `&self`, as iced's `combo_box::State::
@@ -9374,7 +9551,16 @@ impl<P: api::Phase> Context<'_, P> {
             output = replace_parameter(output, synthetic, &fixed);
         }
         let mut relations = self.relations(generics)?.into_vec();
-        relations.extend(self.projection_relations(&projected)?);
+        // A future parameter's projections are what its output gives, as
+        // `Fut1::Ok` of a `Fut1: TryFuture` is, which the script future's
+        // own type fixes (`future_outputs`): no relation reads them from a
+        // type that fills it, as none does.
+        let related = projected.iter().filter(|projection| {
+            !futures
+                .iter()
+                .any(|(future, _)| *future == projection.parameter)
+        });
+        relations.extend(self.projection_relations(related)?);
         let relations = relations.into_boxed_slice();
         let signature_plan = representability::signature::Signature::new(
             parameters,
@@ -10413,8 +10599,13 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// A function's output. A Rust future, an `impl Future<Output = T>` or
     /// a type that implements `Future`, is iced's `Task<T>`: the bridge
-    /// runs it natively and the facade's `Task` carries it.
-    fn convert_output(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+    /// runs it natively and the facade's `Task` carries it. `rewrite` reads
+    /// the future's output as the signature's types are read.
+    fn convert_output(
+        &self,
+        ty: &model::Type,
+        rewrite: impl Fn(&model::Type) -> model::Type,
+    ) -> Result<representability::convert::Type, Failure> {
         // A thread's `JoinHandle<T>`, as open's `that_in_background` gives:
         // rawr's thread handle, whose `join` makes the thread's `T` rawr's.
         // A `T` that holds a crate's value would need a call's arena, which
@@ -10438,7 +10629,24 @@ impl<P: api::Phase> Context<'_, P> {
                 arguments: Box::new([element]),
             });
         }
-        let output = match ty {
+        let Some(output) = self.future_type_output(ty) else {
+            return self.convert_value(ty);
+        };
+        // What the future gives is a value the bridge gives Rawr, as a
+        // plain output is: changelog's `async fn list() -> Result<(Self,
+        // Vec<Contribution>), Error>` gives a tuple holding a `Vec`. A
+        // projection of the function's parameter it names is that
+        // projection's synthetic parameter, as the signature's own are.
+        Ok(representability::convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::future(),
+            arguments: Box::from([self.convert_value(&rewrite(&output))?]),
+        })
+    }
+
+    /// What `ty` gives as a future: the `Output` of an `impl Future`, or of
+    /// a type's own `impl Future`. `None` for any other type.
+    fn future_type_output(&self, ty: &model::Type) -> Option<model::Type> {
+        match ty {
             model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds).cloned(),
             model::Type::Definition { id, arguments } if arguments.is_empty() => {
                 self.future_impl_output(id).cloned()
@@ -10449,17 +10657,7 @@ impl<P: api::Phase> Context<'_, P> {
                 self.generic_future_impl_output(id, arguments)
             }
             _ => None,
-        };
-        let Some(output) = output else {
-            return self.convert_value(ty);
-        };
-        // What the future gives is a value the bridge gives Rawr, as a
-        // plain output is: changelog's `async fn list() -> Result<(Self,
-        // Vec<Contribution>), Error>` gives a tuple holding a `Vec`.
-        Ok(representability::convert::Type::Nominal {
-            definition: crate::surface::identity::Definition::future(),
-            arguments: Box::from([self.convert_value(&output)?]),
-        })
+        }
     }
 
     /// The `Output` of a generic type's `impl<T> Future for Type<T>`, with
