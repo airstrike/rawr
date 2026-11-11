@@ -283,6 +283,39 @@ fn trait_function(key: &'static str, member: &str) -> Option<Item> {
     found
 }
 
+/// The std trait whose `&self` method `member` lends the trait's one type
+/// parameter, `fn as_ref(&self) -> &T` or `fn borrow(&self) -> &Borrowed`,
+/// where std implements it for the native type `ty` (no reference around
+/// it) and declares no inherent method of that name: `AsRef` of a
+/// `String`'s `as_ref`. Its definition, whose impls for `ty` say which
+/// targets the call may lend.
+pub(super) fn lending_trait(ty: &Ty, member: &str) -> Option<&'static str> {
+    if inherent(ty, member).is_some() {
+        return None;
+    }
+    // A `&str`'s `Self` is the `str` it refers to, and a literal still to
+    // be inferred has every number's impls.
+    let key = match ty {
+        Ty::Str => "str",
+        Ty::Int(Int::Var(_)) => "i32",
+        Ty::Float(Float::Var(_)) => "f64",
+        ty => impl_key(ty)?,
+    };
+    let function = trait_function(key, member)?;
+    let definition = &function.definition[..function.definition.len() - member.len() - 2];
+    let declared = std_table::Declared::parse(function.declaration())?;
+    let [parameter] = std_table::item(definition)?
+        .generics()
+        .filter(|parameter| parameter.kind == std_table::ParameterKind::Type)
+        .collect::<Vec<_>>()[..]
+    else {
+        return None;
+    };
+    let lends = function.receiver() == Some("&self")
+        && declared.output.and_then(|output| output.strip_prefix('&')) == Some(parameter.name);
+    lends.then_some(definition)
+}
+
 /// A function of the native type `ty` as a path names it (`Vec::len`,
 /// `str::trim`, `String::clone`, `String::new`, `i32::default`): one of
 /// the type's own impls, since a path doesn't autoderef (`Vec::iter` is

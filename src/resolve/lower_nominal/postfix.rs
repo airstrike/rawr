@@ -183,6 +183,12 @@ impl<'a> Parser<'a> {
             {
                 return Err(error);
             }
+            // `Widget::_boxed(text.as_ref())`: the crate trait's impl fixes
+            // the lending's target (`settle_spliced_lending`).
+            #[cfg(feature = "rust-import")]
+            if self.spliced_traits.contains_key(&member_span.start()) {
+                self.settle_spliced_lending(&value.ty);
+            }
             // `visitor.by_name::<String>(v)`: a program method's turbofish,
             // which its generic parameters take, as `f::<T>(..)`'s do.
             if matches!(self.peek(), Token::DoubleColon)
@@ -921,6 +927,18 @@ impl<'a> Parser<'a> {
                     };
                     continue;
                 }
+            }
+            // `text.as_ref()`, `v.borrow()`: std's `AsRef` or `Borrow` of a
+            // native value, whose target the use fixes (`lending`).
+            // A crate trait's method of that name, written `Trait::as_ref(x)`,
+            // is the trait's.
+            if !self.spliced_traits.contains_key(&member_span.start())
+                && let Some(definition) = self.lending_call(&builtin, &member)
+            {
+                let method = Span::new(member_span.start(), text_end(member_span.start(), &member));
+                let end = self.next().1;
+                value = self.parse_lending(value, definition, method, end);
+                continue;
             }
             if self.iterator_receiver(&builtin, &member) {
                 value = self.parse_iterator_method(value, member, member_span)?;

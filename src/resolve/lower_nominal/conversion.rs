@@ -169,6 +169,7 @@ impl<'a> Parser<'a> {
             span: expression,
             host: None,
             try_from: Some(error.clone()),
+            lending: None,
         });
         let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
         rendered.push_text(")");
@@ -406,6 +407,7 @@ impl<'a> Parser<'a> {
             span: expression,
             host: None,
             try_from: None,
+            lending: None,
         });
         // `placeholder(value))`: the placeholder becomes `helper(`, or
         // `dispatcher(witness, ` for a generic target.
@@ -544,6 +546,7 @@ impl<'a> Parser<'a> {
                 receiver: value.span,
             }),
             try_from: None,
+            lending: None,
         });
         let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
         rendered.push_text(")");
@@ -1091,7 +1094,9 @@ impl<'a> Parser<'a> {
     pub(super) fn finish_conversion(&mut self, conversion: PendingConversion) -> Result<(), Error> {
         {
             let target = self.inference.resolve(&conversion.target);
-            let helper = if let Some(error) = &conversion.try_from {
+            let helper = if let Some(lending) = conversion.lending {
+                self.lending_helper(lending, &conversion)?
+            } else if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
             } else if matches!(target, Ty::Infer(_)) {
                 let bound = format!("From<{}>", conversion.source.name(&self.models));
@@ -1403,6 +1408,9 @@ pub(super) struct PendingConversion {
     /// `.try_into()`: the error type of the `Result` it gives, the target's
     /// `TryFrom::Error` (#757).
     pub(super) try_from: Option<Ty>,
+    /// `.as_ref()` or `.borrow()` of a native value: the std trait whose
+    /// impl lends the target (`lending`).
+    pub(super) lending: Option<super::lending::Lending>,
 }
 
 /// The `into` forms of a facade value's type, and the value's span.

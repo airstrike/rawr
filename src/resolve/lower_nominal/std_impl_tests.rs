@@ -592,3 +592,79 @@ main();
         "{report}"
     );
 }
+
+/// A native value's `as_ref()` and `borrow()` lend the view the use
+/// expects, from std's `AsRef` and `Borrow` impls for its type: a `let`
+/// annotation, a parameter or a return fixes the target, as rustc infers
+/// the trait's argument (#1632).
+#[test]
+fn language_std_as_ref_and_borrow_of_a_native_value_lend_the_expected_view() {
+    let source = r#"
+use std::borrow::Borrow;
+
+fn count(text: &str) -> usize {
+    text.len()
+}
+
+fn first(bytes: &[u8]) -> u8 {
+    bytes[0]
+}
+
+fn view(s: &String) -> &str {
+    s.as_ref()
+}
+
+fn main() {
+    let s = String::from("hey");
+    let literal = "abc";
+    let v = vec![1, 2, 3];
+    let a = [4, 5];
+    let r: &str = s.as_ref();
+    let bytes: &[u8] = s.as_ref();
+    let borrowed: &str = s.borrow();
+    let whole: &Vec<i32> = v.borrow();
+    let part: &[i32] = v.borrow();
+    let same: &String = s.borrow();
+    let held: &[i32] = a.as_ref();
+    let n = 7;
+    let m: &i32 = n.borrow();
+    println!("{r} {bytes:?} {borrowed}");
+    println!("{} {} {}", count(s.as_ref()), first(literal.as_ref()), view(&s));
+    println!("{whole:?} {part:?} {same} {held:?} {m}");
+    let t: &str = (&s).as_ref();
+    println!("{t}");
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "hey [104, 101, 121] hey\n3 97 hey\n[1, 2, 3] [1, 2, 3] hey [4, 5] 7\nhey\n"
+    );
+    // No impl lends the target: rustc's E0277 at the method.
+    let report = refused(
+        "fn main() { let s = String::from(\"x\"); let r: &i32 = s.as_ref(); println!(\"{r}\"); }\n\
+         main();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `String: AsRef<i32>` is not satisfied"),
+        "{report}"
+    );
+    // No use fixes it: rustc's E0282.
+    let report = refused(
+        "fn main() { let s = String::from(\"x\"); let r = s.as_ref(); println!(\"{}\", r.len()); }\n\
+         main();\n",
+    );
+    assert!(
+        report.starts_with("error[E0282]: type annotations needed"),
+        "{report}"
+    );
+    // The view borrows the value: rustc's E0505.
+    let report = refused(
+        "fn main() { let s = String::from(\"x\"); let r: &str = s.as_ref(); drop(s); println!(\"{r}\"); }\n\
+         main();\n",
+    );
+    assert!(
+        report.starts_with("error[E0505]: cannot move out of `s` because it is borrowed"),
+        "{report}"
+    );
+}
