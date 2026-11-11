@@ -535,12 +535,43 @@ pub fn link(pointer: &Dynamic, link: Link) {
 
 /// Rawr's thread handle of a crate's `JoinHandle<T>`, as a crate's function
 /// gives one: its `join` waits for the crate's thread and `give` makes the
-/// thread's `T` rawr's, where it is joined (#1266).
-#[cfg(feature = "sync")]
+/// thread's `T` rawr's, where it is joined, with the witness of `T` the
+/// handle was attested with (#1266, #1275).
 pub fn joined<T, F>(handle: std::thread::JoinHandle<T>, give: F) -> Dynamic
 where
     T: Send + 'static,
-    F: FnOnce(T) -> RawrResultOf<Dynamic> + Send + 'static,
+    F: FnOnce(T, Option<&crate::host::runtime::Witness>) -> RawrResultOf<Dynamic> + Send + 'static,
 {
     Dynamic::from(crate::eval::threads::Handle::native(handle, give))
+}
+
+/// Attest the value a crate's thread gives with `witness`, the witness of
+/// its `T`, when `value` is rawr's handle of the thread: whether it is
+/// one (#1275).
+pub fn attest_joined(
+    value: &Dynamic,
+    witness: impl FnOnce() -> Option<crate::host::runtime::Witness>,
+) -> bool {
+    let Some(handle) = value.read_lock::<crate::eval::threads::Handle>() else {
+        return false;
+    };
+    if let Some(witness) = witness() {
+        handle.attest(witness);
+    }
+    true
+}
+
+/// The crate's `JoinHandle<T>` of rawr's thread handle `handle`, as a crate
+/// takes one (#1274): the crate's own, as it gave it, or one of a thread
+/// that joins the program's and makes what it gave a `T` with `make`.
+/// `None` for a value that is no handle, or one already joined.
+pub fn join_handle<T, F>(handle: Dynamic, make: F) -> Option<std::thread::JoinHandle<T>>
+where
+    T: Send + 'static,
+    F: FnOnce(Dynamic) -> Result<T, String> + Send + 'static,
+{
+    handle
+        .read_lock::<crate::eval::threads::Handle>()
+        .map(|handle| handle.clone())?
+        .take_native(make)
 }

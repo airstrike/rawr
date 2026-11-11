@@ -4285,6 +4285,10 @@ fn attest_within(
         return arena.attest(handle, witness.clone());
     }
     let inner = |at: usize| witness.argument_witness(at);
+    // A crate's thread: what it gives is attested where it is joined.
+    if __rawr_internal::crossing::attest_joined(value, || inner(0)) {
+        return Ok(());
+    }
     if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
         return match (&*option, inner(0)) {
             (Some(some), Some(witness)) => attest_within(some, &witness, arena),
@@ -8966,6 +8970,7 @@ fn lendable(ty: &convert::Type) -> bool {
         && boxed_element(ty).is_none()
         && counted_element(ty).is_none()
         && keyed_element(ty).is_none()
+        && joined_element(ty).is_none()
         && std_value(ty).is_none()
         && place::available(ty)
         && concrete_type(ty).is_some()
@@ -12584,6 +12589,7 @@ fn render_opening(
             && boxed_element(&ty).is_none()
             && counted_element(&ty).is_none()
             && keyed_element(&ty).is_none()
+            && joined_element(&ty).is_none()
             && !is_facade_value(&ty)
             && !copy_scalar(&ty);
         if !native {
@@ -18346,6 +18352,7 @@ fn render_callable_closure(
             || boxed_element(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
+            || joined_element(ty).is_some()
     };
     let inputs = call
         .inputs()
@@ -18776,7 +18783,8 @@ fn render_take(
                 && !is_duration(item)
                 && boxed_element(item).is_none()
                 && counted_element(item).is_none()
-                && keyed_element(item).is_none();
+                && keyed_element(item).is_none()
+                && joined_element(item).is_none();
             let converted = if native || holds_native(item) {
                 format!(
                     "{{ let _arena = CallArena::enter(); with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}) }}"
@@ -18838,7 +18846,8 @@ fn render_take(
         }
         ty if range_inclusive_element(ty).is_some()
             || boxed_element(ty).is_some()
-            || keyed_element(ty).is_some() =>
+            || keyed_element(ty).is_some()
+            || joined_element(ty).is_some() =>
         {
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
@@ -19183,6 +19192,19 @@ fn render_from_dynamic(
             render_from_dynamic(element, value, depth, &mut converted)?;
             write!(output, "({converted}).map(Box::new)")
         }
+        // Rawr's thread handle, as the crate's own `JoinHandle<T>` it holds
+        // or as one that joins the program's thread and makes its value
+        // the `T` a crate takes, which crosses by value (#1274).
+        ty if let Some(element) = joined_element(ty) => {
+            let rust = concrete_type(element)
+                .ok_or_else(|| request::drift("a joined thread's value type"))?;
+            let mut converted = String::new();
+            render_from_dynamic(element, &format!("joined_{depth}"), depth + 1, &mut converted)?;
+            write!(
+                output,
+                "__rawr_internal::crossing::join_handle::<{rust}, _>({value}, move |joined_{depth}: Dynamic| ({converted}).map_err(|error| format!(\"{{:?}}\", error.reported()))).ok_or(Error::TypeMismatch)"
+            )
+        }
         // Rawr's map or set, as std's of its kind, made from its entries
         // (`keyed_element`).
         ty if let Some((_, members)) = keyed_element(ty) => {
@@ -19460,13 +19482,22 @@ fn render_to_dynamic(
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
         }
         // A crate's thread, as rawr's handle of it: what it gives becomes
-        // rawr's where the program joins it (#1266).
+        // rawr's where the program joins it (#1266), in the arena of the
+        // thread that joins it when it holds a crate's value, as a future's
+        // output is (#1275).
         ty if let Some(element) = joined_element(ty) => {
             let mut converted = String::new();
             render_to_dynamic(element, &format!("joined_{depth}"), depth + 1, &mut converted)?;
+            let give = if element.crosses_by_value() {
+                format!("|joined_{depth}, _| ({converted}).map_err(runtime_error)")
+            } else {
+                format!(
+                    "|joined_{depth}, witness| materialize(witness, move |arguments| {{ let _ = &arguments; {converted} }}).map_err(__rawr_internal::future::error)"
+                )
+            };
             write!(
                 output,
-                "Ok::<Dynamic, Error>(__rawr_internal::crossing::joined({value}, move |joined_{depth}| ({converted}).map_err(runtime_error)))"
+                "Ok::<Dynamic, Error>(__rawr_internal::crossing::joined({value}, move {give}))"
             )
         }
         // std's `RangeInclusive` of a crate's type, as iced's
@@ -19875,22 +19906,10 @@ fn boxed_element(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
-/// `T` of a thread's `JoinHandle<T>` a crate's function gives, which
-/// crosses as rawr's thread handle: its `T` becomes rawr's where the
-/// program joins it, with no call's arena (#1266).
+/// `T` of a thread's `JoinHandle<T>`, which crosses as rawr's thread
+/// handle: its `T` becomes rawr's where the program joins it (#1266).
 fn joined_element(ty: &convert::Type) -> Option<&convert::Type> {
-    match ty {
-        convert::Type::Nominal {
-            definition,
-            arguments,
-        } if *definition == crate::surface::identity::Definition::join_handle() => {
-            match arguments.as_ref() {
-                [element] => Some(element),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
+    ty.joined_element()
 }
 
 /// Rust's `Rc<T>` or `Arc<T>` of a crate's `T` (#775), when `ty` is one:
@@ -23669,6 +23688,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
         ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
+        ty if let Some(element) = joined_element(ty) => {
+            format!("std::thread::JoinHandle<{}>", concrete_type(element)?)
+        }
         ty if let Some((pointer, element)) = counted_element(ty) => {
             format!("{pointer}<{}>", concrete_type(element)?)
         }
