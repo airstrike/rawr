@@ -545,7 +545,9 @@ fn runner_executable(messages: &[u8]) -> Option<PathBuf> {
 /// The runner's sources as Cargo builds them: the generated files with the
 /// mirrored manifest, linked to the shared `runtime` when there is one, else
 /// with the `rawr` crate at the opt-level setting (T302), and with the
-/// runner at `version` when it has one ([`runner_version`]).
+/// runner at `version` when it has one ([`runner_version`]). Each member's
+/// manifest and lock entry take the runner's dependencies and version from
+/// the runner's as rewritten (`bridge::generate::member`).
 fn runner_sources<'a, B>(
     manifest: &'a super::super::Manifest<super::super::Generated, B>,
     mirrored: Option<&'a str>,
@@ -553,8 +555,9 @@ fn runner_sources<'a, B>(
     level: &toml_edit::Item,
     version: Option<&str>,
 ) -> Vec<(&'a str, std::borrow::Cow<'a, [u8]>)> {
+    use crate::bridge::generate;
     use std::borrow::Cow;
-    manifest
+    let mut sources = manifest
         .files
         .iter()
         .map(|file| {
@@ -566,8 +569,12 @@ fn runner_sources<'a, B>(
             let rewired = match (runtime, path, text) {
                 (Some(runtime), "Cargo.toml", Some(text)) => runtime.manifest(text),
                 (Some(runtime), "Cargo.lock", Some(text)) => runtime.lock(text),
-                (Some(runtime), "build.rs", Some(text)) => runtime.build_script(text),
-                (Some(runtime), "src/main.rs", Some(text)) => Some(runtime.main(text)),
+                (Some(runtime), path, Some(text)) if generate::is_build_script(path) => {
+                    runtime.build_script(text)
+                }
+                (Some(runtime), path, Some(text)) if generate::is_crate_root(path) => {
+                    Some(runtime.main(text))
+                }
                 (None, "Cargo.toml", Some(text)) => {
                     crate::runner::runtime::with_opt_level(text, level)
                 }
@@ -577,6 +584,10 @@ fn runner_sources<'a, B>(
                 (Some(version), Some(text)) => with_version(path, text, version).or(rewired),
                 _ => rewired,
             };
+            let rewired = match (path, rewired.as_deref().or(text)) {
+                ("Cargo.lock", Some(text)) => generate::member::lock(text).or(rewired),
+                _ => rewired,
+            };
             let bytes = match (rewired, path, mirrored) {
                 (Some(text), _, _) => Cow::Owned(text.into_bytes()),
                 (None, "Cargo.toml", Some(mirrored)) => Cow::Borrowed(mirrored.as_bytes()),
@@ -584,7 +595,23 @@ fn runner_sources<'a, B>(
             };
             (path, bytes)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let runner = sources
+        .iter()
+        .find(|(path, _)| *path == "Cargo.toml")
+        .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())
+        .map(str::to_owned);
+    for (path, bytes) in &mut sources {
+        if let Some(runner) = &runner
+            && generate::is_member_manifest(path)
+            && let Some(member) = std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|member| generate::member::manifest(runner, member))
+        {
+            *bytes = Cow::Owned(member.into_bytes());
+        }
+    }
+    sources
 }
 
 /// The runner's version for `project`: none for a project's own runner, and

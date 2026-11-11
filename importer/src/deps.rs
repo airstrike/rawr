@@ -142,10 +142,13 @@ pub(crate) fn prune_rawr_from(shared: &Path, sources: &[PathBuf]) {
 /// unit's crate, hash and first source file, from `deps/<crate>-<hash>.d`.
 #[allow(clippy::type_complexity)]
 fn rawr_units(shared: &Path) -> (Vec<PathBuf>, Vec<(String, String, PathBuf)>) {
+    // The runner's crates and its members' (`bridge::generate::member`) are
+    // the project's, wherever rawr's sources are.
     let own = |name: &str| {
         name == "rawr"
             || (name.starts_with("rawr_")
-                && !matches!(name, "rawr_generated_runner" | "rawr_resolution_harness"))
+                && !name.starts_with("rawr_generated_runner")
+                && name != "rawr_resolution_harness")
     };
     // Profile directories: `<shared>/<profile>` and `<shared>/<target>/<profile>`.
     let mut profiles = Vec::new();

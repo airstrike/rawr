@@ -62,10 +62,10 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
         .expect("the builder request seals")
         .generate()
         .expect("the builder runner generates");
-    // The runner is `src/main.rs` plus one module per imported crate (D415).
+    // The runner, its base and a crate of adapters per imported root (#1670).
     let source = manifest
         .files()
-        .filter(|file| file.path().starts_with("src/"))
+        .filter(|file| file.path().ends_with(".rs"))
         .map(|file| std::str::from_utf8(file.bytes()).expect("the source is UTF-8"))
         .collect::<String>();
     let source = source.as_str();

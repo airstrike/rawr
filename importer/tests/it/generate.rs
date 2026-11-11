@@ -6,24 +6,24 @@ use std::path::PathBuf;
 #[test]
 fn exact_operation_forms_emit_rooted_normalized_thunks() {
     let manifest = p3::generated();
-    let main = manifest
+    let runner = manifest
         .files()
-        .find(|file| file.path() == "src/main.rs")
-        .expect("the generated runner has one source root");
-    let main = std::str::from_utf8(main.bytes()).expect("generated Rust is UTF-8");
-    assert!(main.contains("static ADAPTER_MODULES: &[&[Adapter]]"));
+        .find(|file| file.path() == "src/rawr_runner.rs")
+        .expect("the generated runner has its module");
+    let runner = std::str::from_utf8(runner.bytes()).expect("generated Rust is UTF-8");
+    assert!(runner.contains("static ADAPTER_MODULES: &[&[Adapter]]"));
     assert!(
-        !main.contains("fn adapter_"),
-        "adapters live in their modules"
+        !runner.contains("fn adapter_"),
+        "adapters live in their crate's modules"
     );
     let source = manifest
         .files()
-        .filter(|file| file.path().starts_with("src/"))
+        .filter(|file| file.path().ends_with(".rs"))
         .map(|file| std::str::from_utf8(file.bytes()).expect("generated Rust is UTF-8"))
         .collect::<String>();
     let source = source.as_str();
 
-    assert!(source.contains("pub(super) static ADAPTERS: &[Adapter]"));
+    assert!(source.contains("pub static ADAPTERS: &[Adapter]"));
     assert!(source.contains("use super::*;"));
     assert!(source.contains("facade_a::Record::new("));
     assert!(source.contains("let receiver: facade_a::Record = take_native"));
@@ -36,7 +36,7 @@ fn exact_operation_forms_emit_rooted_normalized_thunks() {
     // a count. The runtime counts and queues its handles' releases (D513.7).
     let adapters = manifest
         .files()
-        .filter(|file| file.path().starts_with("src/rawr_adapters_"))
+        .filter(|file| is_adapter_module(file.path()))
         .map(|file| std::str::from_utf8(file.bytes()).expect("generated Rust is UTF-8"))
         .collect::<String>();
     assert!(!adapters.is_empty());
@@ -45,10 +45,15 @@ fn exact_operation_forms_emit_rooted_normalized_thunks() {
     assert!(!source.as_bytes().contains(&b'\r'));
 }
 
-/// The runner source is `src/main.rs` plus one module per imported crate
-/// and identity bucket. Generation is deterministic, and dropping one adapter
-/// changes exactly one module file, so syncing the second generation over the
-/// first rewrites only that file; every other file keeps its mtime.
+/// Whether `path` is an adapter module, in its root's crate (#1670).
+fn is_adapter_module(path: &str) -> bool {
+    path.starts_with("rawr-crates/adapters-") && path.contains("/src/rawr_adapters_")
+}
+
+/// The adapters are one crate per imported root, one module per identity
+/// bucket. Generation is deterministic, and dropping one adapter changes
+/// exactly one module file, so syncing the second generation over the first
+/// rewrites only that file; every other file keeps its mtime.
 #[test]
 fn one_adapter_change_rewrites_only_its_module_file() {
     let project = rawr_import::store::TestProject::new("rawr-p3-modules");
@@ -69,7 +74,7 @@ fn one_adapter_change_rewrites_only_its_module_file() {
     );
     let modules = before
         .iter()
-        .filter(|(path, _)| path.starts_with("src/rawr_adapters_"))
+        .filter(|(path, _)| is_adapter_module(path))
         .count();
     assert!(modules > 1, "adapters split into modules");
 
@@ -84,11 +89,11 @@ fn one_adapter_change_rewrites_only_its_module_file() {
                 .map(|(left, _)| left.0.clone())
                 .collect::<Vec<_>>();
             // A demand change also restamps `src/rawr_surface.rs`;
-            // `src/main.rs` and every other module stay byte-identical.
+            // every other source stays byte-identical.
             match changed.as_slice() {
                 [module, stamps]
                     if after.len() == before.len()
-                        && module.starts_with("src/rawr_adapters_")
+                        && is_adapter_module(module)
                         && stamps == "src/rawr_surface.rs" =>
                 {
                     Some((after, module.clone()))

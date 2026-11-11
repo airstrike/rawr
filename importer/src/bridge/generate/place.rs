@@ -21,7 +21,7 @@ pub(super) fn render(output: &mut Vec<u8>) {
             output.extend_from_slice(source.as_bytes());
         }
     });
-    output.extend_from_slice(b"fn register_native_sequences() {\n");
+    output.extend_from_slice(b"pub fn register_native_sequences() {\n");
     POLICIES.with_borrow(|policies| {
         for ty in policies.keys() {
             let rust = concrete_type(ty).expect("a native descriptor has a concrete type");
@@ -236,8 +236,8 @@ pub(super) fn policy(ty: &convert::Type) -> Result<String, request::Error> {
             "
 impl __rawr_internal::scope::Family for {name} {{ type Of<'a> = {rust}; }}
 impl {name} {{
-    const SHARED: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with_ref::<Self, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);
-    const MUTABLE: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with::<Self, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);
+    pub const SHARED: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with_ref::<Self, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);
+    pub const MUTABLE: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with::<Self, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);
 }}
 "
         )
@@ -252,7 +252,7 @@ impl {name} {{
     let source = format!(
         "
 #[allow(dead_code)]
-struct {name};
+pub struct {name};
 #[allow(clippy::all, unused_variables)]
 impl __rawr_internal::place::Policy for {name} {{
     type Value = {rust};

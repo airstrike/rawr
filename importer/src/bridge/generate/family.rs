@@ -409,7 +409,7 @@ pub(super) fn render(output: &mut String) {
         for (key, index) in names {
             let _ = writeln!(
                 output,
-                "/// `{}` as a proxy's argument.\npub(super) struct RawrOpaqueName{index};\n",
+                "/// `{}` as a proxy's argument.\npub struct RawrOpaqueName{index};\n",
                 key.replace("'x", "'_")
             );
         }
@@ -433,7 +433,7 @@ pub(super) fn render(output: &mut String) {
             let shown = format!("impl {}", bounds.replace("'x", "'_"));
             let _ = writeln!(
                 output,
-                "pub(super) struct RawrGiven{index};
+                "pub struct RawrGiven{index};
 
 impl __rawr_internal::scope::Family for RawrGiven{index} {{
     type Of<'x> = ({types});
@@ -446,7 +446,7 @@ impl __rawr_internal::scope::Inputs for RawrGiven{index} {{
 }}
 
 #[allow(unused_mut)]
-pub(super) fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + use<'x> {{
+pub fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + use<'x> {{
     {call}
 }}
 "
@@ -491,7 +491,7 @@ pub(super) fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + us
             }
             let _ = writeln!(
                 output,
-                "pub(super) trait RawrOpaque{index}<'x> {{{declared}
+                "pub trait RawrOpaque{index}<'x> {{{declared}
 }}
 
 impl<'x{parameters}> RawrOpaque{index}<'x> for {spelled} {{{implemented}

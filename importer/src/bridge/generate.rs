@@ -13,6 +13,7 @@ use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 pub(crate) mod cached;
 mod family;
 mod frame;
+pub(crate) mod member;
 mod object;
 mod place;
 
@@ -20,8 +21,6 @@ const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
 const BUILD_PATH: &str = "build.rs";
 const SOURCE_PATH: &str = "src/main.rs";
-/// The crate name of a runner binary no script type names.
-const RUNNER_BINARY: &str = "rawr_generated_runner";
 /// `core::ops`' operator traits, which a crate type's operator is an impl
 /// of: an adapter calls the impl's method, as `receiver.sub(argument)`,
 /// and `receiver.index(argument)` of `grid[i]` (#709).
@@ -64,53 +63,53 @@ fn main() {\n\
     println!(\"cargo:rerun-if-changed={}\", source.display());\n\
 }\n";
 const RUNTIME_SOURCE: &[u8] = br#"
-use std::any::Any;
-use std::cell::RefCell;
-use __rawr_internal::{Dynamic, ImmutableString};
+pub use std::any::Any;
+pub use std::cell::RefCell;
+pub use __rawr_internal::{Dynamic, ImmutableString};
 
 #[derive(Clone, Copy)]
-struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], item: &'static str, bound: bool, application: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
-type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
-type Project = fn(
+pub struct Adapter { pub identity: [u8; 32], pub signature: [u8; 32], pub selector: [u8; 32], pub instance: [u8; 32], pub item: &'static str, pub bound: bool, pub application: bool, pub root: &'static str, pub witness: u8, pub arguments: u32, pub invoke: Invoke }
+pub type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
+pub type Project = fn(
     Box<dyn Any>,
     &__rawr_internal::host::runtime::Call<'_>,
     &__rawr_internal::host::runtime::Witness,
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>;
-struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dynamic], arena: &'arena mut Arena }
+pub struct Arguments<'slice, 'value, 'arena> { pub values: &'slice mut [&'value mut Dynamic], pub arena: &'arena mut Arena }
 
 /// A script value's handle on one arena slot. Every script copy of it
 /// shares one [`Release`], so the slot's native value is dropped with the
 /// last copy, as Rust drops a value with its last owner: a channel closes
 /// when its last sender goes (D513).
 #[derive(Clone)]
-struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64, release: Option<std::sync::Arc<Release>> }
+pub struct NativeHandle { pub epoch: [u8; 32], pub slot: u32, pub generation: u64, pub release: Option<std::sync::Arc<Release>> }
 
 /// The claim the copies of one handle share on its slot.
-struct Release { epoch: [u8; 32], slot: u32, generation: u64 }
+pub struct Release { pub epoch: [u8; 32], pub slot: u32, pub generation: u64 }
 
 /// Values futures lent and gave back, restored to their slots on the owner
 /// thread the next time it has the arena (D513.6).
 #[allow(clippy::type_complexity)]
-static RESTORES: std::sync::Mutex<Vec<(NativeHandle, Box<dyn Any + Send>)>> =
+pub static RESTORES: std::sync::Mutex<Vec<(NativeHandle, Box<dyn Any + Send>)>> =
     std::sync::Mutex::new(Vec::new());
 
 thread_local! {
     /// The handles the protocol gave out: a handle on the wire keeps its
     /// value alive, as the caller may pass it back (review 5).
-    static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
+    pub static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
     /// Homes a call borrowed (`PointerLent`), back to their slots the next
     /// time the owner thread has the arena.
-    static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
+    pub static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
     /// Values a call borrowed in a map (`MapLent`), back to their slots the
     /// next time the owner thread has the arena.
-    static RELENDS: RefCell<Vec<(NativeHandle, Box<dyn Any>)>> = const { RefCell::new(Vec::new()) };
+    pub static RELENDS: RefCell<Vec<(NativeHandle, Box<dyn Any>)>> = const { RefCell::new(Vec::new()) };
     /// The homes calls borrow now (`PointerLent`), by their slots.
-    static LENT_HOMES: RefCell<Vec<(([u8; 32], u32, u64), std::rc::Rc<LentHome>)>> = const { RefCell::new(Vec::new()) };
+    pub static LENT_HOMES: RefCell<Vec<(([u8; 32], u32, u64), std::rc::Rc<LentHome>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Slots whose last handle was dropped, freed on the owner thread the next
 /// time it has the arena.
-static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
+pub static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
 
 /// How many entries [`RESTORES`] and [`RELEASES`] hold together, changed
 /// only under the lock of the queue that changes ([`enqueue`],
@@ -120,16 +119,16 @@ static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex:
 /// waits for keep it above zero till that arena takes them, so a call
 /// arena on one thread never misses its own releases because an arena on
 /// another thread looked first.
-static PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
     /// Whether this thread's [`REHOMES`], [`RELENDS`] or [`UNLENDS`] may
     /// hold an entry.
-    static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Add `entry` to a queue every thread shares, and count it in [`PENDING`].
-fn enqueue<T>(queue: &std::sync::Mutex<Vec<T>>, entry: T) {
+pub fn enqueue<T>(queue: &std::sync::Mutex<Vec<T>>, entry: T) {
     let mut entries = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     entries.push(entry);
     PENDING.fetch_add(1, std::sync::atomic::Ordering::Release);
@@ -137,7 +136,7 @@ fn enqueue<T>(queue: &std::sync::Mutex<Vec<T>>, entry: T) {
 
 /// Take the entries `take` picks out of a queue every thread shares, and
 /// uncount them in [`PENDING`].
-fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> bool) -> Vec<T> {
+pub fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> bool) -> Vec<T> {
     let mut entries = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (taken, kept) = std::mem::take(&mut *entries)
         .into_iter()
@@ -148,7 +147,7 @@ fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> bool
 }
 
 /// Mark [`QUEUED_HERE`] after an entry joins one of this thread's queues.
-fn queued_here() {
+pub fn queued_here() {
     let _ = QUEUED_HERE.try_with(|queued| queued.set(true));
 }
 
@@ -161,12 +160,12 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable>, send: Option<SendValue>, name: &'static str }
+pub struct NativeSlot { pub generation: u64, pub value: Option<Box<dyn Any>>, pub homed: Option<Box<dyn Homed>>, pub leased: bool, pub debug: Option<DebugText>, pub display: Option<DebugText>, pub clone: Option<CloneValue>, pub relations: Relations, pub witness: Option<__rawr_internal::host::runtime::Witness>, pub project: Option<Project>, pub mapper: Option<[u8; 16]>, pub default_of: Option<[u8; 32]>, pub opaque: Option<OpaqueTable>, pub send: Option<SendValue>, pub name: &'static str }
 
 /// A native value an iced view borrows lives in the application's home
 /// (D568): its slot reaches it there, and holds no value of its own.
 #[allow(dead_code)]
-trait Homed: Any {
+pub trait Homed: Any {
     fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error>;
     fn mutable(&self, call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error>;
     fn as_any(&self) -> &dyn Any;
@@ -189,9 +188,9 @@ trait Homed: Any {
 /// reaches it here, in its own allocation, and takes it back once no pins
 /// hold `lent`.
 #[allow(dead_code)]
-struct InPlace {
-    value: Box<dyn Any>,
-    lent: std::rc::Rc<()>,
+pub struct InPlace {
+    pub value: Box<dyn Any>,
+    pub lent: std::rc::Rc<()>,
 }
 
 impl Homed for InPlace {
@@ -235,7 +234,7 @@ impl Homed for InPlace {
 /// long as the view can borrow it. Its slot reaches it here, and takes it
 /// back once those pins let it go.
 #[allow(dead_code)]
-struct Viewed<T>(std::rc::Rc<T>);
+pub struct Viewed<T>(pub std::rc::Rc<T>);
 
 impl<T: 'static> Homed for Viewed<T> {
     fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
@@ -273,23 +272,23 @@ impl<T: 'static> Homed for Viewed<T> {
 }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
-type DebugText = fn(&dyn Any) -> Option<String>;
+pub type DebugText = fn(&dyn Any) -> Option<String>;
 
-fn debug_text<T: std::fmt::Debug + 'static>(value: &dyn Any) -> Option<String> {
+pub fn debug_text<T: std::fmt::Debug + 'static>(value: &dyn Any) -> Option<String> {
     value.downcast_ref::<T>().map(|value| format!("{value:?}"))
 }
 
 /// Chooses `debug_text::<T>` when `T` implements `Debug` and nothing
 /// otherwise, by method resolution on a concrete `T`.
-struct DebugProbe<T>(std::marker::PhantomData<T>);
+pub struct DebugProbe<T>(pub std::marker::PhantomData<T>);
 
 #[allow(dead_code)]
-fn debug_probe<T>(_: &T) -> DebugProbe<T> {
+pub fn debug_probe<T>(_: &T) -> DebugProbe<T> {
     DebugProbe(std::marker::PhantomData)
 }
 
 #[allow(dead_code)]
-trait ViaDebug {
+pub trait ViaDebug {
     fn native_debug(&self) -> Option<DebugText>;
 }
 
@@ -300,7 +299,7 @@ impl<T: std::fmt::Debug + 'static> ViaDebug for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutDebug {
+pub trait WithoutDebug {
     fn native_debug(&self) -> Option<DebugText>;
 }
 
@@ -317,10 +316,10 @@ impl<T> WithoutDebug for &DebugProbe<T> {
 /// (`Proxy::deferred`); else it runs where it is called, by method
 /// resolution on a concrete `T`.
 #[allow(dead_code)]
-struct DeferProbe<T>(std::cell::Cell<Option<T>>);
+pub struct DeferProbe<T>(pub std::cell::Cell<Option<T>>);
 
 #[allow(dead_code)]
-trait DeferSend<T> {
+pub trait DeferSend<T> {
     fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy>;
 }
 
@@ -335,7 +334,7 @@ impl<T: Send + 'static> DeferSend<T> for DeferProbe<T> {
 }
 
 #[allow(dead_code)]
-trait DeferNot<T> {
+pub trait DeferNot<T> {
     fn defer(&self, call: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy>;
 }
 
@@ -351,7 +350,7 @@ impl<T> DeferNot<T> for &DeferProbe<T> {
 /// lent to the script function that makes it, as `Task::map`'s value is
 /// read by `Task::value`. A mirror's native parts go into the arena (#1249).
 #[allow(dead_code)]
-fn give_held<T: crate::__RawrHeld>(arena: &mut Arena, value: T) -> Dynamic {
+pub fn give_held<T: crate::__RawrHeld>(arena: &mut Arena, value: T) -> Dynamic {
     lend(arena, || crate::__RawrHeld::into_proxy(value).into_dynamic())
 }
 
@@ -360,7 +359,7 @@ fn give_held<T: crate::__RawrHeld>(arena: &mut Arena, value: T) -> Dynamic {
 /// shares it when script code shares it, or its mirror, whose native parts
 /// move out of the arena (#1249).
 #[allow(dead_code)]
-fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+pub fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let place = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     let proxy = __rawr_internal::crossing::Proxy::from_place(&mut **place);
     Ok(lend(arguments.arena, || <T as crate::__RawrHeld>::from_proxy(proxy)))
@@ -369,21 +368,21 @@ fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, index:
 /// A native value out of a call's arena, with what its slot knew of its
 /// type, on its way to the arena where the script value holding it is
 /// first used (`script_proxy`).
-struct Moved {
-    slot: u32,
-    generation: u64,
-    value: Box<dyn Any + Send>,
-    send: SendValue,
-    debug: Option<DebugText>,
-    display: Option<DebugText>,
-    clone: Option<CloneValue>,
-    relations: Relations,
-    witness: Option<__rawr_internal::host::runtime::Witness>,
-    project: Option<Project>,
-    mapper: Option<[u8; 16]>,
-    default_of: Option<[u8; 32]>,
-    opaque: Option<OpaqueTable>,
-    name: &'static str,
+pub struct Moved {
+    pub slot: u32,
+    pub generation: u64,
+    pub value: Box<dyn Any + Send>,
+    pub send: SendValue,
+    pub debug: Option<DebugText>,
+    pub display: Option<DebugText>,
+    pub clone: Option<CloneValue>,
+    pub relations: Relations,
+    pub witness: Option<__rawr_internal::host::runtime::Witness>,
+    pub project: Option<Project>,
+    pub mapper: Option<[u8; 16]>,
+    pub default_of: Option<[u8; 32]>,
+    pub opaque: Option<OpaqueTable>,
+    pub name: &'static str,
 }
 
 /// The proxy of the script value `value` that script code gives native
@@ -394,7 +393,7 @@ struct Moved {
 /// script value is made there. What holds the proxy, as the `Some` of a
 /// `filter_map`, is known now.
 #[allow(dead_code)]
-fn script_proxy(mut value: Dynamic) -> __rawr_internal::crossing::Proxy {
+pub fn script_proxy(mut value: Dynamic) -> __rawr_internal::crossing::Proxy {
     let moved = arena_access(|arena| arena.call.then(|| (arena.epoch, arena.move_out(&mut value))))
         .flatten()
         .filter(|(_, moved)| !moved.is_empty());
@@ -415,12 +414,12 @@ fn script_proxy(mut value: Dynamic) -> __rawr_internal::crossing::Proxy {
     })
 }
 
-fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
+pub fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
     value.downcast_ref::<T>().map(ToString::to_string)
 }
 
 #[allow(dead_code)]
-trait ViaDisplay {
+pub trait ViaDisplay {
     fn native_display(&self) -> Option<DebugText>;
 }
 
@@ -431,7 +430,7 @@ impl<T: std::fmt::Display + 'static> ViaDisplay for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutDisplay {
+pub trait WithoutDisplay {
     fn native_display(&self) -> Option<DebugText>;
 }
 
@@ -445,10 +444,10 @@ impl<T> WithoutDisplay for &DebugProbe<T> {
 /// for a type that implements it, by method resolution on a concrete `T`,
 /// as `debug_probe` chooses, as jiff's `strftime` gives `Display<'f>`.
 #[allow(dead_code)]
-struct ShownProbe<'v, T>(&'v T);
+pub struct ShownProbe<'v, T>(pub &'v T);
 
 #[allow(dead_code)]
-trait ViaShown {
+pub trait ViaShown {
     fn shown_text(&self) -> Option<String>;
 }
 
@@ -459,7 +458,7 @@ impl<T: std::fmt::Display> ViaShown for ShownProbe<'_, T> {
 }
 
 #[allow(dead_code)]
-trait WithoutShown {
+pub trait WithoutShown {
     fn shown_text(&self) -> Option<String>;
 }
 
@@ -470,14 +469,14 @@ impl<T> WithoutShown for &ShownProbe<'_, T> {
 }
 
 /// A copy of a stored value, for a type that implements `Clone`.
-type CloneValue = fn(&dyn Any) -> Option<Box<dyn Any>>;
+pub type CloneValue = fn(&dyn Any) -> Option<Box<dyn Any>>;
 
-fn clone_value<T: Clone + 'static>(value: &dyn Any) -> Option<Box<dyn Any>> {
+pub fn clone_value<T: Clone + 'static>(value: &dyn Any) -> Option<Box<dyn Any>> {
     value.downcast_ref::<T>().map(|value| Box::new(value.clone()) as Box<dyn Any>)
 }
 
 #[allow(dead_code)]
-trait ViaClone {
+pub trait ViaClone {
     fn native_clone(&self) -> Option<CloneValue>;
 }
 
@@ -488,7 +487,7 @@ impl<T: Clone + 'static> ViaClone for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutClone {
+pub trait WithoutClone {
     fn native_clone(&self) -> Option<CloneValue>;
 }
 
@@ -501,14 +500,14 @@ impl<T> WithoutClone for &DebugProbe<T> {
 /// A stored value of a type that implements `Send`, held as one, so it may
 /// move to another thread's arena (`script_proxy`); the value itself back
 /// when it is of another type.
-type SendValue = fn(Box<dyn Any>) -> Result<Box<dyn Any + Send>, Box<dyn Any>>;
+pub type SendValue = fn(Box<dyn Any>) -> Result<Box<dyn Any + Send>, Box<dyn Any>>;
 
-fn send_value<T: Send + 'static>(value: Box<dyn Any>) -> Result<Box<dyn Any + Send>, Box<dyn Any>> {
+pub fn send_value<T: Send + 'static>(value: Box<dyn Any>) -> Result<Box<dyn Any + Send>, Box<dyn Any>> {
     value.downcast::<T>().map(|value| value as Box<dyn Any + Send>)
 }
 
 #[allow(dead_code)]
-trait ViaSend {
+pub trait ViaSend {
     fn native_send(&self) -> Option<SendValue>;
 }
 
@@ -519,7 +518,7 @@ impl<T: Send + 'static> ViaSend for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutSend {
+pub trait WithoutSend {
     fn native_send(&self) -> Option<SendValue>;
 }
 
@@ -530,7 +529,7 @@ impl<T> WithoutSend for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaSequenceClone<T> {
+pub trait ViaSequenceClone<T> {
     fn native_sequence_cloning(&self) -> Option<__rawr_internal::place::sequence::Cloning<T>>;
 }
 
@@ -541,7 +540,7 @@ impl<T: Clone> ViaSequenceClone<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutSequenceClone<T> {
+pub trait WithoutSequenceClone<T> {
     fn native_sequence_cloning(&self) -> Option<__rawr_internal::place::sequence::Cloning<T>>;
 }
 
@@ -552,7 +551,7 @@ impl<T> WithoutSequenceClone<T> for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaSequenceCopy<T> {
+pub trait ViaSequenceCopy<T> {
     fn native_sequence_copying(&self) -> Option<__rawr_internal::place::sequence::Copying<T>>;
 }
 
@@ -563,7 +562,7 @@ impl<T: Copy> ViaSequenceCopy<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutSequenceCopy<T> {
+pub trait WithoutSequenceCopy<T> {
     fn native_sequence_copying(&self) -> Option<__rawr_internal::place::sequence::Copying<T>>;
 }
 
@@ -574,7 +573,7 @@ impl<T> WithoutSequenceCopy<T> for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaSequenceEqual<T> {
+pub trait ViaSequenceEqual<T> {
     fn native_sequence_comparing(&self) -> Option<__rawr_internal::place::sequence::Comparing<T>>;
 }
 
@@ -585,7 +584,7 @@ impl<T: PartialEq> ViaSequenceEqual<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutSequenceEqual<T> {
+pub trait WithoutSequenceEqual<T> {
     fn native_sequence_comparing(&self) -> Option<__rawr_internal::place::sequence::Comparing<T>>;
 }
 
@@ -596,7 +595,7 @@ impl<T> WithoutSequenceEqual<T> for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaPlaceDebug<T> {
+pub trait ViaPlaceDebug<T> {
     fn native_place_debugging(&self) -> Option<__rawr_internal::place::reading::Debugging<T>>;
 }
 
@@ -607,7 +606,7 @@ impl<T: std::fmt::Debug> ViaPlaceDebug<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutPlaceDebug<T> {
+pub trait WithoutPlaceDebug<T> {
     fn native_place_debugging(&self) -> Option<__rawr_internal::place::reading::Debugging<T>>;
 }
 
@@ -618,7 +617,7 @@ impl<T> WithoutPlaceDebug<T> for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaPlaceDisplay<T> {
+pub trait ViaPlaceDisplay<T> {
     fn native_place_displaying(&self) -> Option<__rawr_internal::place::reading::Displaying<T>>;
 }
 
@@ -629,7 +628,7 @@ impl<T: std::fmt::Display> ViaPlaceDisplay<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutPlaceDisplay<T> {
+pub trait WithoutPlaceDisplay<T> {
     fn native_place_displaying(&self) -> Option<__rawr_internal::place::reading::Displaying<T>>;
 }
 
@@ -640,7 +639,7 @@ impl<T> WithoutPlaceDisplay<T> for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaPlacePartial<T> {
+pub trait ViaPlacePartial<T> {
     fn native_place_partial(&self) -> Option<__rawr_internal::place::reading::Partial<T>>;
 }
 
@@ -651,7 +650,7 @@ impl<T: PartialOrd> ViaPlacePartial<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutPlacePartial<T> {
+pub trait WithoutPlacePartial<T> {
     fn native_place_partial(&self) -> Option<__rawr_internal::place::reading::Partial<T>>;
 }
 
@@ -662,7 +661,7 @@ impl<T> WithoutPlacePartial<T> for &DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait ViaPlaceTotal<T> {
+pub trait ViaPlaceTotal<T> {
     fn native_place_total(&self) -> Option<__rawr_internal::place::reading::Total<T>>;
 }
 
@@ -673,7 +672,7 @@ impl<T: Ord> ViaPlaceTotal<T> for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutPlaceTotal<T> {
+pub trait WithoutPlaceTotal<T> {
     fn native_place_total(&self) -> Option<__rawr_internal::place::reading::Total<T>>;
 }
 
@@ -685,14 +684,14 @@ impl<T> WithoutPlaceTotal<T> for &DebugProbe<T> {
 
 /// `==` of two stored values of one type, for a type that implements
 /// `PartialEq`.
-type EqualValues = fn(&dyn Any, &dyn Any) -> Option<bool>;
+pub type EqualValues = fn(&dyn Any, &dyn Any) -> Option<bool>;
 
-fn equal_values<T: PartialEq + 'static>(lhs: &dyn Any, rhs: &dyn Any) -> Option<bool> {
+pub fn equal_values<T: PartialEq + 'static>(lhs: &dyn Any, rhs: &dyn Any) -> Option<bool> {
     Some(lhs.downcast_ref::<T>()? == rhs.downcast_ref::<T>()?)
 }
 
 #[allow(dead_code)]
-trait ViaEqual {
+pub trait ViaEqual {
     fn native_equal(&self) -> Option<EqualValues>;
 }
 
@@ -703,7 +702,7 @@ impl<T: PartialEq + 'static> ViaEqual for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutEqual {
+pub trait WithoutEqual {
     fn native_equal(&self) -> Option<EqualValues>;
 }
 
@@ -714,9 +713,9 @@ impl<T> WithoutEqual for &DebugProbe<T> {
 }
 
 /// The hash of a stored value, for a type that implements `Hash`.
-type HashValue = fn(&dyn Any) -> Option<u64>;
+pub type HashValue = fn(&dyn Any) -> Option<u64>;
 
-fn hash_value<T: std::hash::Hash + 'static>(value: &dyn Any) -> Option<u64> {
+pub fn hash_value<T: std::hash::Hash + 'static>(value: &dyn Any) -> Option<u64> {
     use std::hash::Hasher as _;
     let mut hasher = std::hash::DefaultHasher::new();
     value.downcast_ref::<T>()?.hash(&mut hasher);
@@ -724,7 +723,7 @@ fn hash_value<T: std::hash::Hash + 'static>(value: &dyn Any) -> Option<u64> {
 }
 
 #[allow(dead_code)]
-trait ViaHash {
+pub trait ViaHash {
     fn native_hash(&self) -> Option<HashValue>;
 }
 
@@ -735,7 +734,7 @@ impl<T: std::hash::Hash + 'static> ViaHash for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutHash {
+pub trait WithoutHash {
     fn native_hash(&self) -> Option<HashValue>;
 }
 
@@ -747,14 +746,14 @@ impl<T> WithoutHash for &DebugProbe<T> {
 
 /// The order of two stored values of one type, for a type that
 /// implements `PartialOrd`.
-type OrderValues = fn(&dyn Any, &dyn Any) -> Option<std::cmp::Ordering>;
+pub type OrderValues = fn(&dyn Any, &dyn Any) -> Option<std::cmp::Ordering>;
 
-fn order_values<T: PartialOrd + 'static>(lhs: &dyn Any, rhs: &dyn Any) -> Option<std::cmp::Ordering> {
+pub fn order_values<T: PartialOrd + 'static>(lhs: &dyn Any, rhs: &dyn Any) -> Option<std::cmp::Ordering> {
     lhs.downcast_ref::<T>()?.partial_cmp(rhs.downcast_ref::<T>()?)
 }
 
 #[allow(dead_code)]
-trait ViaOrder {
+pub trait ViaOrder {
     fn native_order(&self) -> Option<OrderValues>;
 }
 
@@ -765,7 +764,7 @@ impl<T: PartialOrd + 'static> ViaOrder for DebugProbe<T> {
 }
 
 #[allow(dead_code)]
-trait WithoutOrder {
+pub trait WithoutOrder {
     fn native_order(&self) -> Option<OrderValues>;
 }
 
@@ -778,11 +777,12 @@ impl<T> WithoutOrder for &DebugProbe<T> {
 /// A stored value's `PartialEq`, `Hash` and `PartialOrd`, when its type
 /// has them.
 #[derive(Clone, Copy, Default)]
-struct Relations { equal: Option<EqualValues>, hash: Option<HashValue>, order: Option<OrderValues> }
+pub struct Relations { pub equal: Option<EqualValues>, pub hash: Option<HashValue>, pub order: Option<OrderValues> }
 
 /// Store `value` in the arena, remembering its `Debug` text and its
 /// `Clone` when its type has them.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! insert_native {
     ($arena:expr, $value:expr) => {{
         #[allow(unused_imports)]
@@ -817,6 +817,7 @@ macro_rules! insert_native {
 /// its `PartialEq`, chosen as `insert_native` chooses a stored value's. The
 /// type carries no lifetime, so the value is reached as `dyn Any`.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! lent_reads {
     ($family:ty, $target:ty) => {{
         fn reach(
@@ -850,6 +851,7 @@ macro_rules! lent_reads {
 /// A copy of a borrowed std value Rawr's std holds (`crossing::Std`): its
 /// owned form, as `&Path` gives a `PathBuf`.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! std_copy {
     ($target:expr) => {{
         Ok::<_, Error>(::std::borrow::ToOwned::to_owned($target))
@@ -858,6 +860,7 @@ macro_rules! std_copy {
 
 /// A copy of a field by its type's `Clone`, `None` when it has none.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! field_copy {
     ($field:expr) => {{
         #[allow(unused_imports)]
@@ -874,6 +877,7 @@ macro_rules! field_copy {
 /// none, so a target without `Clone` fails where it is read and not where
 /// the runner compiles.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! guard_copy {
     ($target:expr) => {{
         #[allow(unused_imports)]
@@ -888,6 +892,7 @@ macro_rules! guard_copy {
 /// a call reads, as `.spacing(self.spacing)` copies a lent `Pixels`.
 /// `None` when the argument is no lent value.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! lent_copy {
     ($arguments:expr, $index:expr, $ty:ty) => {
         $crate::__rawr_runner::lent_value(&*$arguments, $index).map(|lent| -> Result<$ty, Error> {
@@ -904,7 +909,7 @@ macro_rules! lent_copy {
 
 /// `target` copied by `clone`, the `Clone` of its type when it has one.
 #[allow(dead_code)]
-fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error> {
+pub fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error> {
     let clone = clone.ok_or(Error::NotClone(std::any::type_name::<T>()))?;
     clone(target as &dyn Any)
         .and_then(|value| value.downcast::<T>().ok())
@@ -916,12 +921,12 @@ fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error>
 /// moved out of its slot into the map for the call, and back after, so
 /// none is copied. Its keys are rawr's strings or numbers, made for it.
 #[allow(dead_code)]
-struct MapLent<M: LentMap> { map: M, keys: Vec<(M::Key, NativeHandle)> }
+pub struct MapLent<M: LentMap> { pub map: M, pub keys: Vec<(M::Key, NativeHandle)> }
 
 /// std's `HashMap` and `BTreeMap`, as a [`MapLent`] gives their values
 /// back.
 #[allow(dead_code)]
-trait LentMap: 'static {
+pub trait LentMap: 'static {
     type Key: 'static;
     type Value: 'static;
     fn pull(&mut self, key: &Self::Key) -> Option<Self::Value>;
@@ -967,7 +972,7 @@ impl<M: LentMap> Drop for MapLent<M> {
 /// last of the slices that share the values gives them back to their slots
 /// when it drops (`Unlend`).
 #[allow(dead_code)]
-struct SliceLent<T: 'static> { items: std::rc::Rc<Vec<T>>, handles: std::rc::Rc<[NativeHandle]> }
+pub struct SliceLent<T: 'static> { pub items: std::rc::Rc<Vec<T>>, pub handles: std::rc::Rc<[NativeHandle]> }
 
 impl<T: 'static> std::ops::Deref for SliceLent<T> {
     type Target = [T];
@@ -994,7 +999,7 @@ impl<T: 'static> Drop for SliceLent<T> {
 /// The home of a slot whose value a lent slice holds (`SliceLent`): the
 /// value is read there, and refuses to be changed while it is lent.
 #[allow(dead_code)]
-struct SliceHome<T> { items: std::rc::Rc<Vec<T>>, index: usize }
+pub struct SliceHome<T> { pub items: std::rc::Rc<Vec<T>>, pub index: usize }
 
 impl<T: 'static> Homed for SliceHome<T> {
     fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
@@ -1027,11 +1032,11 @@ impl<T: 'static> Homed for SliceHome<T> {
 
 /// Values a lent slice gave back, moved into their slots the next time the
 /// owner thread has the arena.
-trait Unlend {
+pub trait Unlend {
     fn unlend(self: Box<Self>, arena: &mut Arena);
 }
 
-struct SliceUnlend<T: 'static> { items: std::rc::Rc<Vec<T>>, handles: std::rc::Rc<[NativeHandle]> }
+pub struct SliceUnlend<T: 'static> { pub items: std::rc::Rc<Vec<T>>, pub handles: std::rc::Rc<[NativeHandle]> }
 
 impl<T: 'static> Unlend for SliceUnlend<T> {
     fn unlend(self: Box<Self>, arena: &mut Arena) {
@@ -1053,14 +1058,14 @@ impl<T: 'static> Unlend for SliceUnlend<T> {
 thread_local! {
     /// Slices whose last borrow ended (`SliceLent`), their values back to
     /// their slots the next time the owner thread has the arena.
-    static UNLENDS: RefCell<Vec<Box<dyn Unlend>>> = const { RefCell::new(Vec::new()) };
+    pub static UNLENDS: RefCell<Vec<Box<dyn Unlend>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The values of `handles`, moved out of their slots into one slice, or
 /// the slice they are in already, as a second `view(&items)` shares the
 /// first's.
 #[allow(dead_code)]
-fn lend_slice<T: 'static>(arena: &mut Arena, handles: Vec<NativeHandle>) -> Result<SliceLent<T>, Error> {
+pub fn lend_slice<T: 'static>(arena: &mut Arena, handles: Vec<NativeHandle>) -> Result<SliceLent<T>, Error> {
     if let Some(first) = handles.first()
         && let Some(home) = arena.homed(first)
     {
@@ -1113,11 +1118,11 @@ fn lend_slice<T: 'static>(arena: &mut Arena, handles: Vec<NativeHandle>) -> Resu
 /// value is read through it, as `Deref` reads it, and never copied out.
 #[allow(dead_code)]
 #[derive(Clone)]
-struct Pointed<P>(P);
+pub struct Pointed<P>(pub P);
 
 /// Rust's `Rc` and `Arc`, as a [`Pointed`] holds them.
 #[allow(dead_code)]
-trait Pointer: Clone + std::ops::Deref<Target = <Self as Pointer>::Value> + 'static {
+pub trait Pointer: Clone + std::ops::Deref<Target = <Self as Pointer>::Value> + 'static {
     type Value: 'static;
     fn new(value: Self::Value) -> Self;
     fn strong(&self) -> usize;
@@ -1181,7 +1186,7 @@ impl<P: Pointer> Homed for Pointed<P> {
 /// `value`, a rawr pointer's handle, is in: what a rawr `Rc` or `Arc` that
 /// stands for it reads (`crossing::Link`).
 #[allow(dead_code)]
-fn pointer_count<P: Pointer>(value: &Dynamic) -> Option<(usize, usize)> {
+pub fn pointer_count<P: Pointer>(value: &Dynamic) -> Option<(usize, usize)> {
     let handle = value.read_lock::<NativeHandle>()?.clone();
     arena_access(|arena| {
         let pointed = arena.homed(&handle)?.as_any().downcast_ref::<Pointed<P>>()?;
@@ -1197,7 +1202,7 @@ fn pointer_count<P: Pointer>(value: &Dynamic) -> Option<(usize, usize)> {
 /// of rawr's pointers share that one, so a copy for each of the others is
 /// held while the call runs (`Balance`), where it counts them.
 #[allow(dead_code)]
-fn take_pointer<P: Pointer>(arena: &mut Arena, value: Dynamic) -> Result<(P, Balance<P>), Error> {
+pub fn take_pointer<P: Pointer>(arena: &mut Arena, value: Dynamic) -> Result<(P, Balance<P>), Error> {
     let (pointee, strong, only) = __rawr_internal::crossing::pointee(&value).ok_or(Error::TypeMismatch)?;
     let handle = pointee.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
     let pointer = arena.point::<P>(handle.clone())?;
@@ -1215,11 +1220,11 @@ fn take_pointer<P: Pointer>(arena: &mut Arena, value: Dynamic) -> Result<(P, Bal
 /// Copies of a crate's own pointer, one for each rawr pointer but one that
 /// shares it, held while a call runs so that native code counts them.
 #[allow(dead_code)]
-struct Balance<P>(Vec<P>);
+pub struct Balance<P>(pub Vec<P>);
 
 #[allow(dead_code)]
 impl<P: Pointer> Balance<P> {
-    fn of(pointer: &P, count: usize) -> Self {
+    pub fn of(pointer: &P, count: usize) -> Self {
         Self(std::iter::repeat_with(|| pointer.clone()).take(count).collect())
     }
 }
@@ -1229,16 +1234,16 @@ impl<P: Pointer> Balance<P> {
 /// borrow of it in one call shares it, as `same(&a, &b)` of two of rawr's
 /// pointers to one allocation borrows two.
 #[allow(dead_code)]
-struct LentHome { homed: Box<dyn Homed>, balance: Box<dyn Any> }
+pub struct LentHome { pub homed: Box<dyn Homed>, pub balance: Box<dyn Any> }
 
 /// A borrow of a crate's own pointer for one call (#775): its home, out of
 /// its slot until the last borrow of it ends, so the borrow adds no count.
 #[allow(dead_code)]
-struct PointerLent<P: Pointer> { lent: Option<std::rc::Rc<LentHome>>, handle: NativeHandle, pointer: std::marker::PhantomData<P> }
+pub struct PointerLent<P: Pointer> { pub lent: Option<std::rc::Rc<LentHome>>, pub handle: NativeHandle, pub pointer: std::marker::PhantomData<P> }
 
 #[allow(dead_code)]
 impl<P: Pointer> PointerLent<P> {
-    fn get(&self) -> Option<&P> {
+    pub fn get(&self) -> Option<&P> {
         self.lent.as_ref()?.homed.as_any().downcast_ref::<Pointed<P>>().map(|pointed| &pointed.0)
     }
 }
@@ -1268,7 +1273,7 @@ impl<P: Pointer> Drop for PointerLent<P> {
 /// that takes `&Rc<T>` or `&Arc<T>`, made now if this is its first
 /// crossing.
 #[allow(dead_code)]
-fn lend_pointer<P: Pointer>(arena: &mut Arena, value: &Dynamic) -> Result<PointerLent<P>, Error> {
+pub fn lend_pointer<P: Pointer>(arena: &mut Arena, value: &Dynamic) -> Result<PointerLent<P>, Error> {
     let (pointee, strong, _) = __rawr_internal::crossing::pointee(value).ok_or(Error::TypeMismatch)?;
     let handle = pointee.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
     let key = (handle.epoch, handle.slot, handle.generation);
@@ -1291,7 +1296,7 @@ fn lend_pointer<P: Pointer>(arena: &mut Arena, value: &Dynamic) -> Result<Pointe
 /// A rawr `Rc` or `Arc` standing for the crate's own `pointer`, whose value
 /// it reads in place: a slot `pointer` is the home of.
 #[allow(dead_code)]
-fn give_pointed<P: Pointer>(
+pub fn give_pointed<P: Pointer>(
     arena: &mut Arena,
     pointer: P,
     debug: Option<DebugText>,
@@ -1313,6 +1318,7 @@ fn give_pointed<P: Pointer>(
 /// `Hash` and `PartialOrd` of the value the pointer holds, when its type
 /// has them.
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! give_pointer {
     ($arena:expr, $pointer:expr) => {{
         #[allow(unused_imports)]
@@ -1360,26 +1366,26 @@ impl std::fmt::Debug for NativeHandle {
 /// local's other fields when it moves one out (#834): its fields by
 /// position, each `None` once moved, which drop in order with its slot.
 #[allow(dead_code)]
-struct Parts { of: std::any::TypeId, fields: Vec<Option<Box<dyn Any>>> }
+pub struct Parts { pub of: std::any::TypeId, pub fields: Vec<Option<Box<dyn Any>>> }
 
 /// A thread's native values, by slot. `call` marks a call's own
 /// (`CallArena`).
-struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32>, call: bool }
+pub struct Arena { pub epoch: [u8; 32], pub slots: Vec<NativeSlot>, pub free: Vec<u32>, pub call: bool }
 
 thread_local! {
-    static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
+    pub static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
 }
 
 /// Run the native call `call` with `arena` lent to the script closures it
 /// calls back on this thread, as Freya's event loop calls an app's `fn
 /// app()` from inside `launch` (D551.6).
 #[allow(dead_code)]
-fn lend<R>(arena: &mut Arena, call: impl FnOnce() -> R) -> R {
+pub fn lend<R>(arena: &mut Arena, call: impl FnOnce() -> R) -> R {
     __rawr_internal::island::lend::lend(arena, call)
 }
 
 /// The epochs of the arenas [`CallArena`] made, while each lives.
-static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec::new());
+pub static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec::new());
 
 /// An arena for one call on a thread that has none, as iced's executor
 /// calls `Task::map`'s function: the native values the call takes and gives
@@ -1389,11 +1395,11 @@ static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec:
 /// that value (`script_proxy`). Another value the call keeps past its end
 /// can't reach the owner's arena, so the call fails there and says so.
 #[allow(dead_code)]
-struct CallArena(Option<[u8; 32]>);
+pub struct CallArena(pub Option<[u8; 32]>);
 
 #[allow(dead_code)]
 impl CallArena {
-    fn enter() -> Self {
+    pub fn enter() -> Self {
         if arena_access(|_| ()).is_some() {
             return Self(None);
         }
@@ -1459,7 +1465,7 @@ impl Drop for CallArena {
 /// `call` with this thread's arena: the one in its cell, or else the one a
 /// native call running on this thread lends. `None` when neither is free.
 /// A thread that ends has no arena: a handle its last values drop finds none.
-fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
+pub fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
     NATIVE_ARENA
         .try_with(|cell| match cell.try_borrow_mut() {
             Ok(mut arena) => Some(call(arena.as_mut()?)),
@@ -1473,7 +1479,7 @@ fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
 /// value's `{:?}` that prints a native value it holds, as a program's
 /// `Curve { from: Point, .. }` inside a crate's `Action<Curve>` does, reads
 /// the arena again while the outer read holds it.
-fn arena_read<R>(call: impl FnOnce(&Arena) -> R) -> Option<R> {
+pub fn arena_read<R>(call: impl FnOnce(&Arena) -> R) -> Option<R> {
     NATIVE_ARENA
         .try_with(|cell| match cell.try_borrow() {
             Ok(arena) => Some(call(arena.as_ref()?)),
@@ -1483,7 +1489,7 @@ fn arena_read<R>(call: impl FnOnce(&Arena) -> R) -> Option<R> {
         .flatten()
 }
 
-enum Error {
+pub enum Error {
     MissingArgument,
     TypeMismatch,
     StaleHandle,
@@ -1548,7 +1554,7 @@ impl Error {
     /// and moves are checked before any adapter runs (D664.1). So is the
     /// type of a lent value or a region's value an adapter reaches, which
     /// the generator chose (#1528).
-    fn bug(&self) -> Option<&'static str> {
+    pub fn bug(&self) -> Option<&'static str> {
         Some(match self {
             Self::MissingArgument => "an adapter ran without one of its arguments",
             Self::TypeMismatch => "a value reached an adapter as a type its signature doesn't take",
@@ -1565,14 +1571,14 @@ impl Error {
 
     /// The error as the program sees it. One that only a rawr bug causes
     /// panics, naming the bug.
-    fn reported(self) -> Self {
+    pub fn reported(self) -> Self {
         if let Some(bug) = self.bug() {
             panic!("rawr bug: {bug}");
         }
         self
     }
 
-    fn code(&self) -> u8 {
+    pub fn code(&self) -> u8 {
         match self {
             Self::MissingArgument => 1,
             Self::TypeMismatch => 2,
@@ -1597,11 +1603,12 @@ impl Error {
 /// A Rust integer as Rawr keeps it in an `i64`. Rawr keeps a `u64` or a
 /// `usize` as the `i64` with the same bits, so every value of theirs
 /// crosses. The narrower types are checked as `try_from` checks.
-trait Int: Sized + Copy + std::fmt::Display {
+pub trait Int: Sized + Copy + std::fmt::Display {
     fn from_int(value: i64) -> Option<Self>;
     fn into_int(self) -> Option<i64>;
 }
 
+#[macro_export]
 macro_rules! checked_int {
     ($($ty:ty),*) => {$(
         impl Int for $ty {
@@ -1616,6 +1623,7 @@ macro_rules! checked_int {
 }
 checked_int!(i8, i16, i32, i64, isize, u8, u16, u32);
 
+#[macro_export]
 macro_rules! wide_int {
     ($($ty:ty),*) => {$(
         impl Int for $ty {
@@ -1632,7 +1640,7 @@ wide_int!(u64, usize);
 
 /// Rawr's `i64` as the Rust integer `T`.
 #[allow(dead_code)]
-fn int_from<T: Int>(value: i64) -> Result<T, Error> {
+pub fn int_from<T: Int>(value: i64) -> Result<T, Error> {
     T::from_int(value).ok_or_else(|| Error::OutOfRange {
         value: value.to_string(),
         ty: std::any::type_name::<T>(),
@@ -1641,7 +1649,7 @@ fn int_from<T: Int>(value: i64) -> Result<T, Error> {
 
 /// The Rust integer `value` as Rawr's `i64`.
 #[allow(dead_code)]
-fn int_into<T: Int>(value: T) -> Result<i64, Error> {
+pub fn int_into<T: Int>(value: T) -> Result<i64, Error> {
     value.into_int().ok_or_else(|| Error::OutOfRange {
         value: value.to_string(),
         ty: "i64",
@@ -1650,22 +1658,22 @@ fn int_into<T: Int>(value: T) -> Result<i64, Error> {
 
 /// Rawr's inclusive integer range with each end checked into `T`.
 #[allow(dead_code)]
-fn range_from<T: Int>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::RangeInclusive<T>, Error> {
+pub fn range_from<T: Int>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::RangeInclusive<T>, Error> {
     let (start, end) = range.into_inner();
     Ok(int_from(start)?..=int_from(end)?)
 }
 
 impl Arena {
-    fn new(epoch: [u8; 32]) -> Self {
+    pub fn new(epoch: [u8; 32]) -> Self {
         Self { epoch, slots: Vec::new(), free: Vec::new(), call: false }
     }
 
-    fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
+    pub fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
         self.occupy(Some(Box::new(value)), None, std::any::type_name::<T>())
     }
 
     /// A slot holding `value`, or reaching it in `homed`, named `name`.
-    fn occupy(&mut self, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, name: &'static str) -> Result<NativeHandle, Error> {
+    pub fn occupy(&mut self, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, name: &'static str) -> Result<NativeHandle, Error> {
         let slot = match self.free.pop() {
             Some(slot) => slot,
             None => {
@@ -1700,7 +1708,7 @@ impl Arena {
     /// Give the value at `handle`, whose type holds an opaque `impl Trait`
     /// type, the calls that take it, compiled where it was made.
     #[allow(dead_code)]
-    fn set_opaque(&mut self, handle: &NativeHandle, table: OpaqueTable) {
+    pub fn set_opaque(&mut self, handle: &NativeHandle, table: OpaqueTable) {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.opaque = Some(table);
         }
@@ -1709,7 +1717,7 @@ impl Arena {
     /// The calls that take the value at `handle`, compiled where it was
     /// made.
     #[allow(dead_code)]
-    fn opaque(&self, handle: &NativeHandle) -> Result<OpaqueTable, Error> {
+    pub fn opaque(&self, handle: &NativeHandle) -> Result<OpaqueTable, Error> {
         let entry = self.slots.get(handle.slot as usize).ok_or(Error::StaleHandle)?;
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return Err(Error::StaleHandle);
@@ -1721,7 +1729,7 @@ impl Arena {
     /// type `identity`, outside any call: it takes that type's witness where
     /// it is first checked as it.
     #[allow(dead_code)]
-    fn made_by_default(&mut self, handle: &NativeHandle, identity: [u8; 32]) {
+    pub fn made_by_default(&mut self, handle: &NativeHandle, identity: [u8; 32]) {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.default_of = Some(identity);
         }
@@ -1729,14 +1737,14 @@ impl Arena {
 
     /// The imported type whose `Default` made the value at `handle`, while
     /// it has no witness.
-    fn default_of(&self, handle: &NativeHandle) -> Option<[u8; 32]> {
+    pub fn default_of(&self, handle: &NativeHandle) -> Option<[u8; 32]> {
         let entry = self.slots.get(handle.slot as usize)?;
         (handle.epoch == self.epoch && handle.generation == entry.generation && entry.witness.is_none())
             .then_some(entry.default_of)
             .flatten()
     }
 
-    fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>, clone: Option<CloneValue>) -> Result<NativeHandle, Error> {
+    pub fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>, clone: Option<CloneValue>) -> Result<NativeHandle, Error> {
         let handle = self.insert(value)?;
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.debug = debug;
@@ -1746,13 +1754,13 @@ impl Arena {
     }
 
     /// The type of the value at `handle` when it has no `Debug`.
-    fn undebuggable(&self, handle: &NativeHandle) -> Option<&'static str> {
+    pub fn undebuggable(&self, handle: &NativeHandle) -> Option<&'static str> {
         let entry = self.slots.get(handle.slot as usize)?;
         (handle.epoch == self.epoch && handle.generation == entry.generation && entry.debug.is_none())
             .then_some(entry.name)
     }
 
-    fn debug(&self, handle: NativeHandle) -> Option<String> {
+    pub fn debug(&self, handle: NativeHandle) -> Option<String> {
         let entry = self.slots.get(handle.slot as usize)?;
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return None;
@@ -1767,21 +1775,21 @@ impl Arena {
     }
 
     #[allow(dead_code)]
-    fn set_display(&mut self, handle: NativeHandle, display: Option<DebugText>) {
+    pub fn set_display(&mut self, handle: NativeHandle, display: Option<DebugText>) {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.display = display;
         }
     }
 
     #[allow(dead_code)]
-    fn set_relations(&mut self, handle: NativeHandle, relations: Relations) {
+    pub fn set_relations(&mut self, handle: NativeHandle, relations: Relations) {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.relations = relations;
         }
     }
 
     #[allow(dead_code)]
-    fn set_send(&mut self, handle: NativeHandle, send: Option<SendValue>) {
+    pub fn set_send(&mut self, handle: NativeHandle, send: Option<SendValue>) {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.send = send;
         }
@@ -1790,7 +1798,7 @@ impl Arena {
     /// The values `value`'s handles hold in this call's arena, out of their
     /// slots to move with it (`script_proxy`): each of a `Send` type, held
     /// by value. Another stays, as its thread can't give it away.
-    fn move_out(&mut self, value: &mut Dynamic) -> Vec<Moved> {
+    pub fn move_out(&mut self, value: &mut Dynamic) -> Vec<Moved> {
         let mut moved = Vec::<Moved>::new();
         value.deep_scan(|held| {
             let Some((slot, generation)) = held
@@ -1838,7 +1846,7 @@ impl Arena {
     /// `moved`, which `value` held in the call arena `epoch`, in slots of
     /// this arena, and `value`'s handles on them. The handles it held
     /// before are given back, to drop once the arena is free.
-    fn move_in(&mut self, value: &mut Dynamic, epoch: [u8; 32], moved: Vec<Moved>) -> Vec<NativeHandle> {
+    pub fn move_in(&mut self, value: &mut Dynamic, epoch: [u8; 32], moved: Vec<Moved>) -> Vec<NativeHandle> {
         let mut given = Vec::with_capacity(moved.len());
         for moved in moved {
             let Ok(handle) = self.occupy(Some(moved.value), None, moved.name) else {
@@ -1875,7 +1883,7 @@ impl Arena {
     }
 
     /// The live value of `handle`, with its slot.
-    fn live(&self, handle: NativeHandle) -> Option<(&NativeSlot, &dyn Any)> {
+    pub fn live(&self, handle: NativeHandle) -> Option<(&NativeSlot, &dyn Any)> {
         let entry = self.slots.get(handle.slot as usize)?;
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return None;
@@ -1889,7 +1897,7 @@ impl Arena {
 
     /// `==` of two values of one type by its `PartialEq`.
     /// `call` of the value `handle` names.
-    fn with_value<R>(&self, handle: NativeHandle, call: impl FnOnce(&dyn Any) -> R) -> Option<R> {
+    pub fn with_value<R>(&self, handle: NativeHandle, call: impl FnOnce(&dyn Any) -> R) -> Option<R> {
         if let Some(homed) = self.homed(&handle) {
             let mut call = Some(call);
             let mut output = None;
@@ -1901,7 +1909,7 @@ impl Arena {
     }
 
     /// The home a homed slot's value lives in ([`Homed`]).
-    fn homed(&self, handle: &NativeHandle) -> Option<&dyn Homed> {
+    pub fn homed(&self, handle: &NativeHandle) -> Option<&dyn Homed> {
         if handle.epoch != self.epoch { return None; }
         let entry = self.slots.get(handle.slot as usize)?;
         if entry.generation != handle.generation { return None; }
@@ -1912,7 +1920,7 @@ impl Arena {
     /// iced view borrows it (D568), once: `home` keeps it there, and the
     /// slot reaches it through what `home` gives back.
     #[allow(dead_code)]
-    fn home<T: 'static, H: Homed + Clone>(
+    pub fn home<T: 'static, H: Homed + Clone>(
         &mut self,
         handle: NativeHandle,
         home: impl FnOnce(T) -> Result<H, Error>,
@@ -1932,7 +1940,7 @@ impl Arena {
     /// it through ([`Viewed`]). The value moves out of its slot once, and
     /// isn't copied.
     #[allow(dead_code)]
-    fn share<T: 'static>(&mut self, handle: NativeHandle) -> Result<std::rc::Rc<T>, Error> {
+    pub fn share<T: 'static>(&mut self, handle: NativeHandle) -> Result<std::rc::Rc<T>, Error> {
         self.settle(&handle);
         if let Some(homed) = self.homed(&handle) {
             return homed
@@ -1954,7 +1962,7 @@ impl Arena {
     /// allocation ([`InPlace`]) the first time, and isn't copied. A value a
     /// view already shares stays in its `Rc`.
     #[allow(dead_code)]
-    fn lend_in_place(&mut self, handle: &NativeHandle, pins: &__rawr_internal::scope::Pins) -> Result<*const dyn Any, Error> {
+    pub fn lend_in_place(&mut self, handle: &NativeHandle, pins: &__rawr_internal::scope::Pins) -> Result<*const dyn Any, Error> {
         self.settle(handle);
         if let Some(homed) = self.homed(handle) {
             let (keeper, pointer) = homed.lend().ok_or(Error::Leased)?;
@@ -1974,7 +1982,7 @@ impl Arena {
     /// home, where the value moves the first time it crosses as one, and
     /// isn't copied.
     #[allow(dead_code)]
-    fn point<P: Pointer>(&mut self, handle: NativeHandle) -> Result<P, Error> {
+    pub fn point<P: Pointer>(&mut self, handle: NativeHandle) -> Result<P, Error> {
         self.home::<P::Value, Pointed<P>>(handle, |value| Ok(Pointed(P::new(value))))
             .map(|pointed| pointed.0)
     }
@@ -1982,7 +1990,7 @@ impl Arena {
     /// The value of `handle`, out of its slot while a call borrows it in a
     /// map (`MapLent`); the slot refuses every use meanwhile.
     #[allow(dead_code)]
-    fn lend_out<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
+    pub fn lend_out<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
         self.settle(&handle);
         if self.homed(&handle).is_some() {
             return Err(Error::Leased);
@@ -1996,7 +2004,7 @@ impl Arena {
     /// The home of `handle`'s slot, out of it while a call borrows it
     /// (`PointerLent`); the slot refuses every use meanwhile.
     #[allow(dead_code)]
-    fn unhome(&mut self, handle: &NativeHandle) -> Result<Box<dyn Homed>, Error> {
+    pub fn unhome(&mut self, handle: &NativeHandle) -> Result<Box<dyn Homed>, Error> {
         if handle.epoch != self.epoch { return Err(Error::StaleHandle); }
         let entry = self.slots.get_mut(handle.slot as usize).ok_or(Error::StaleHandle)?;
         if entry.generation != handle.generation { return Err(Error::StaleHandle); }
@@ -2007,7 +2015,7 @@ impl Arena {
 
     /// A home back in the slot it was lent from, unless its last handle
     /// went meanwhile.
-    fn rehome(&mut self, handle: NativeHandle, homed: Box<dyn Homed>) {
+    pub fn rehome(&mut self, handle: NativeHandle, homed: Box<dyn Homed>) {
         if handle.epoch != self.epoch { return; }
         if let Some(entry) = self.slots.get_mut(handle.slot as usize)
             && entry.generation == handle.generation
@@ -2021,7 +2029,7 @@ impl Arena {
 
     /// The slot of `handle` out of the home a lent slice gave it, waiting
     /// for its value (`SliceUnlend`), unless its last handle went meanwhile.
-    fn unhome_slice<T: 'static>(&mut self, handle: &NativeHandle) {
+    pub fn unhome_slice<T: 'static>(&mut self, handle: &NativeHandle) {
         if handle.epoch != self.epoch { return; }
         if let Some(entry) = self.slots.get_mut(handle.slot as usize)
             && entry.generation == handle.generation
@@ -2034,7 +2042,7 @@ impl Arena {
 
     /// Give the slot of `handle` its value back from its home once nothing
     /// borrows it there.
-    fn settle(&mut self, handle: &NativeHandle) {
+    pub fn settle(&mut self, handle: &NativeHandle) {
         if handle.epoch != self.epoch {
             return;
         }
@@ -2053,7 +2061,7 @@ impl Arena {
         }
     }
 
-    fn equal(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<bool> {
+    pub fn equal(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<bool> {
         let (entry, lhs) = self.live(lhs)?;
         let (_, rhs) = self.live(rhs)?;
         if lhs.type_id() != rhs.type_id() {
@@ -2064,7 +2072,7 @@ impl Arena {
 
     /// The order a hashed collection keeps two values of one type in: by
     /// hash, then by `Debug` text when two unequal values share one.
-    fn compare(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<std::cmp::Ordering> {
+    pub fn compare(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<std::cmp::Ordering> {
         let (left, lhs) = self.live(lhs)?;
         let (right, rhs) = self.live(rhs)?;
         if lhs.type_id() != rhs.type_id() {
@@ -2085,7 +2093,7 @@ impl Arena {
         }
     }
 
-    fn display(&self, handle: NativeHandle) -> Option<String> {
+    pub fn display(&self, handle: NativeHandle) -> Option<String> {
         let entry = self.slots.get(handle.slot as usize)?;
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return None;
@@ -2099,7 +2107,7 @@ impl Arena {
         display(entry.value.as_deref()?)
     }
 
-    fn insert_projectable<T: 'static>(&mut self, value: T, project: Project, mapper: [u8; 16]) -> Result<NativeHandle, Error> {
+    pub fn insert_projectable<T: 'static>(&mut self, value: T, project: Project, mapper: [u8; 16]) -> Result<NativeHandle, Error> {
         let handle = self.insert(value)?;
         let entry = self.slots.get_mut(handle.slot as usize).ok_or(Error::StaleHandle)?;
         entry.project = Some(project);
@@ -2107,11 +2115,11 @@ impl Arena {
         Ok(handle)
     }
 
-    fn index<T: 'static>(&self, handle: &NativeHandle) -> Result<usize, Error> {
+    pub fn index<T: 'static>(&self, handle: &NativeHandle) -> Result<usize, Error> {
         self.index_where(handle, |value| value.is::<T>())
     }
 
-    fn index_where(&self, handle: &NativeHandle, is: impl Fn(&dyn Any) -> bool) -> Result<usize, Error> {
+    pub fn index_where(&self, handle: &NativeHandle, is: impl Fn(&dyn Any) -> bool) -> Result<usize, Error> {
         if handle.epoch != self.epoch { return Err(Error::StaleHandle); }
         let index = handle.slot as usize;
         let entry = self.slots.get(index).ok_or(Error::StaleHandle)?;
@@ -2132,7 +2140,7 @@ impl Arena {
     /// names it, or a home holds it, as `self.state` does while native code
     /// borrows it. `None` when this is its last copy, which moves it.
     #[allow(dead_code)]
-    fn read_kept<T: 'static, R>(&mut self, handle: &NativeHandle, read: impl FnOnce(&T) -> R) -> Result<Option<R>, Error> {
+    pub fn read_kept<T: 'static, R>(&mut self, handle: &NativeHandle, read: impl FnOnce(&T) -> R) -> Result<Option<R>, Error> {
         self.settle(handle);
         let kept = self.homed(handle).is_some()
             || handle
@@ -2145,7 +2153,7 @@ impl Arena {
         self.shared::<T, _>(handle.clone(), read).map(Some)
     }
 
-    fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
+    pub fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
         self.take_where(&handle, |value| value.is::<T>())?
             .downcast::<T>()
             .map(|value| *value)
@@ -2154,14 +2162,14 @@ impl Arena {
 
     /// The value `handle` names, of whatever type it is: a marked
     /// function's result native code takes (#1118).
-    fn take_any(&mut self, handle: &NativeHandle) -> Result<Box<dyn Any>, Error> {
+    pub fn take_any(&mut self, handle: &NativeHandle) -> Result<Box<dyn Any>, Error> {
         self.take_where(handle, |_| true)
     }
 
     /// Whether the value `handle` names is a `T` the program moved fields
     /// out of (`split`), whose slot holds its fields apart.
     #[allow(dead_code)]
-    fn parted<T: 'static>(&self, handle: &NativeHandle) -> bool {
+    pub fn parted<T: 'static>(&self, handle: &NativeHandle) -> bool {
         handle.epoch == self.epoch
             && self.slots.get(handle.slot as usize).is_some_and(|entry| {
                 entry.generation == handle.generation
@@ -2178,7 +2186,7 @@ impl Arena {
     /// moves one out by value (#834). `false`, and the value stays whole,
     /// where it is not plainly in its slot, as a value a home holds is not.
     #[allow(dead_code)]
-    fn split<T: 'static>(&mut self, handle: &NativeHandle, split: fn(T) -> Vec<Option<Box<dyn Any>>>) -> Result<bool, Error> {
+    pub fn split<T: 'static>(&mut self, handle: &NativeHandle, split: fn(T) -> Vec<Option<Box<dyn Any>>>) -> Result<bool, Error> {
         self.settle(handle);
         if self.homed(handle).is_some() {
             return Ok(false);
@@ -2193,7 +2201,7 @@ impl Arena {
 
     /// Field `index` of a value `split` parted, moved out of it.
     #[allow(dead_code)]
-    fn take_part<F: 'static>(&mut self, handle: &NativeHandle, index: usize) -> Result<F, Error> {
+    pub fn take_part<F: 'static>(&mut self, handle: &NativeHandle, index: usize) -> Result<F, Error> {
         let slot = self.index_where(handle, |value| value.is::<Parts>())?;
         let parts = self.slots[slot]
             .value
@@ -2206,7 +2214,7 @@ impl Arena {
 
     /// `read` of field `index` of a value `split` parted, where it is.
     #[allow(dead_code)]
-    fn read_part<F: 'static, R>(&self, handle: &NativeHandle, index: usize, read: impl FnOnce(&F) -> R) -> Result<R, Error> {
+    pub fn read_part<F: 'static, R>(&self, handle: &NativeHandle, index: usize, read: impl FnOnce(&F) -> R) -> Result<R, Error> {
         let slot = self.index_where(handle, |value| value.is::<Parts>())?;
         let field = self.slots[slot]
             .value
@@ -2221,7 +2229,7 @@ impl Arena {
 
     /// The value `handle` names when `is` holds for it: moved out by the
     /// last copy of the handle, and else copied out by its `Clone`.
-    fn take_where(&mut self, handle: &NativeHandle, is: impl Fn(&dyn Any) -> bool) -> Result<Box<dyn Any>, Error> {
+    pub fn take_where(&mut self, handle: &NativeHandle, is: impl Fn(&dyn Any) -> bool) -> Result<Box<dyn Any>, Error> {
         self.settle(handle);
         // A homed value is copied out by its `Clone`, as a slot's is; one
         // without it stays where the view borrows it.
@@ -2263,7 +2271,7 @@ impl Arena {
         Ok(value)
     }
 
-    fn project(
+    pub fn project(
         &mut self,
         handle: NativeHandle,
         call: &__rawr_internal::host::runtime::Call<'_>,
@@ -2297,7 +2305,7 @@ impl Arena {
         project(value, call, &witness)
     }
 
-    fn witness(&self, handle: NativeHandle) -> Option<&__rawr_internal::host::runtime::Witness> {
+    pub fn witness(&self, handle: NativeHandle) -> Option<&__rawr_internal::host::runtime::Witness> {
         let index = handle.slot as usize;
         let entry = self.slots.get(index)?;
         // A value lent to a future keeps its witness.
@@ -2308,7 +2316,7 @@ impl Arena {
             .flatten()
     }
 
-    fn attest(
+    pub fn attest(
         &mut self,
         handle: NativeHandle,
         witness: __rawr_internal::host::runtime::Witness,
@@ -2328,7 +2336,7 @@ impl Arena {
     /// Lend the value to a future (D513.6): it leaves its slot, which
     /// refuses every use until the future gives it back.
     #[allow(dead_code)]
-    fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {
+    pub fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {
         self.settle(&handle);
         if self.homed(&handle).is_some() {
             return Err(Error::Leased);
@@ -2342,7 +2350,7 @@ impl Arena {
 
     /// Lend a native place synchronously on its owner thread, without
     /// imposing the transfer bound required by an asynchronous Held value.
-    fn lease_place<T: 'static>(&mut self, handle: NativeHandle) -> Result<PlaceHeld<T>, Error> {
+    pub fn lease_place<T: 'static>(&mut self, handle: NativeHandle) -> Result<PlaceHeld<T>, Error> {
         self.settle(&handle);
         if self.homed(&handle).is_some() { return Err(Error::Leased); }
         let index = self.index::<T>(&handle)?;
@@ -2354,7 +2362,7 @@ impl Arena {
 
     /// Free each slot whose last handle was dropped. Dropping a native value
     /// may drop handles it holds, which are freed in the next round.
-    fn release_dropped(&mut self) {
+    pub fn release_dropped(&mut self) {
         // Nothing queued since the last look: nothing to release.
         let here = QUEUED_HERE.try_with(|queued| queued.replace(false)).unwrap_or(false);
         if PENDING.load(std::sync::atomic::Ordering::Acquire) == 0 && !here {
@@ -2424,7 +2432,7 @@ impl Arena {
     }
 
     /// The value a future borrowed, back in its slot.
-    fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any>) {
+    pub fn restore(&mut self, handle: NativeHandle, value: Box<dyn Any>) {
         if handle.epoch != self.epoch { return; }
         if let Some(entry) = self.slots.get_mut(handle.slot as usize)
             && entry.generation == handle.generation
@@ -2435,7 +2443,7 @@ impl Arena {
         }
     }
 
-    fn shared<T: 'static, R>(
+    pub fn shared<T: 'static, R>(
         &self,
         handle: NativeHandle,
         call: impl FnOnce(&T) -> R,
@@ -2469,7 +2477,7 @@ impl Arena {
         Ok(call(value))
     }
 
-    fn mutable<T: 'static, R>(
+    pub fn mutable<T: 'static, R>(
         &mut self,
         handle: NativeHandle,
         call: impl FnOnce(&mut T) -> R,
@@ -2500,7 +2508,7 @@ impl Arena {
     /// slot refuses every use meanwhile, and the value goes back after,
     /// unless its last handle went.
     #[allow(dead_code)]
-    fn held<T: 'static, R>(
+    pub fn held<T: 'static, R>(
         &mut self,
         handle: NativeHandle,
         call: impl FnOnce(&mut Self, &mut T) -> R,
@@ -2552,7 +2560,7 @@ impl Arena {
     /// is read in its home, as Rust lets a shared borrow live beside
     /// another, where `held` would refuse it as a `&mut` (E0502).
     #[allow(dead_code)]
-    fn held_shared<T: 'static, R>(
+    pub fn held_shared<T: 'static, R>(
         &mut self,
         handle: NativeHandle,
         call: impl FnOnce(&mut Self, &T) -> R,
@@ -2580,7 +2588,7 @@ impl Arena {
     /// guard, as an `Option<&mut T>` method's `None` (#1334), leaves the
     /// value in its slot, and the end it gives holds nothing.
     #[allow(dead_code)]
-    fn yoke<T: 'static, U: ?Sized + 'static>(
+    pub fn yoke<T: 'static, U: ?Sized + 'static>(
         &mut self,
         handle: &NativeHandle,
         reach: impl for<'a> FnOnce(&'a mut T) -> Option<Box<dyn std::ops::DerefMut<Target = U> + 'a>>,
@@ -2604,7 +2612,7 @@ impl Arena {
 /// The native value `value` holds, moved out of this thread's arena for
 /// native code that called a marked function (#1118). One a call already
 /// moved on, as `grid.map(..)` moves a given `Element` (#1224), is gone.
-fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
+pub fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
     let handle = value.read_lock::<NativeHandle>()?;
     Some(
         arena_access(|arena| {
@@ -2620,7 +2628,7 @@ fn moved(value: &Dynamic) -> Option<Result<Box<dyn Any>, String>> {
 /// The slot of the native value `value` holds, by its arena, index and
 /// generation, which every script value holding that native value shares
 /// (#1600).
-fn identity(value: &Dynamic) -> Option<[u64; 3]> {
+pub fn identity(value: &Dynamic) -> Option<[u64; 3]> {
     let handle = value.read_lock::<NativeHandle>()?;
     let mut epoch = [0; 8];
     epoch.copy_from_slice(&handle.epoch[..8]);
@@ -2630,7 +2638,7 @@ fn identity(value: &Dynamic) -> Option<[u64; 3]> {
 /// The native value `value` holds and its type's witness, moved out of
 /// this thread's arena for a static declared in a body, which keeps it for
 /// the program's life (D862).
-fn settled(value: &Dynamic) -> Option<Result<__rawr_internal::island::Settled, String>> {
+pub fn settled(value: &Dynamic) -> Option<Result<__rawr_internal::island::Settled, String>> {
     let handle = value.read_lock::<NativeHandle>()?;
     Some(
         arena_access(|arena| {
@@ -2647,7 +2655,7 @@ fn settled(value: &Dynamic) -> Option<Result<__rawr_internal::island::Settled, S
 /// The `&'static T` marked code passes for a `&'static T` parameter or
 /// receiver: a static's, which lives as long as the program (D862).
 #[allow(dead_code)]
-fn lasting_argument<T: 'static>(arguments: &Arguments<'_, '_, '_>, index: usize) -> Result<&'static T, Error> {
+pub fn lasting_argument<T: 'static>(arguments: &Arguments<'_, '_, '_>, index: usize) -> Result<&'static T, Error> {
     let value = arguments.values.get(index).ok_or(Error::MissingArgument)?;
     __rawr_internal::place::statics::lasting::<T>(value)
         .ok_or_else(|| Error::Value("borrowed value does not live long enough (E0597)".to_owned()))
@@ -2657,7 +2665,7 @@ fn lasting_argument<T: 'static>(arguments: &Arguments<'_, '_, '_>, index: usize)
 /// called a marked function for as long as `pins` hold it (#1442). Without
 /// pins the call asked for a `&'static`, which a value of the arena can't
 /// give.
-fn lent_in_place(
+pub fn lent_in_place(
     value: &Dynamic,
     pins: Option<&__rawr_internal::scope::Pins>,
 ) -> Option<Result<*const dyn Any, String>> {
@@ -2678,7 +2686,7 @@ fn lent_in_place(
 /// The script value that holds a native value native code gave a marked
 /// function by value (#1139), kept in this thread's arena with what its
 /// trampoline found of its type, as a value the runner made is.
-fn lodge(
+pub fn lodge(
     given: __rawr_internal::island::Given,
     witness: Option<&__rawr_internal::host::runtime::Witness>,
 ) -> Result<Dynamic, String> {
@@ -2703,7 +2711,7 @@ fn lodge(
     }
 }
 
-fn install_arena(epoch: [u8; 32]) {
+pub fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::moves(moved);
     __rawr_internal::island::settles(settled);
     __rawr_internal::island::identifies(identity);
@@ -2723,7 +2731,7 @@ fn install_arena(epoch: [u8; 32]) {
     EXPORTED.with_borrow_mut(Vec::clear);
 }
 
-fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
+pub fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
     arena_access(|arena| {
         arena.release_dropped();
         let result = call(arena);
@@ -2736,16 +2744,16 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
 /// Native place ownership uses the existing arena's owner thread and release
 /// authority, including non-Send values. Its synchronous lease is always
 /// restored before the source operation returns or unwinds.
-struct PlaceOwner<T>(std::marker::PhantomData<fn() -> T>);
+pub struct PlaceOwner<T>(pub std::marker::PhantomData<fn() -> T>);
 
 /// A value lent from its slot for a synchronous use on the owner thread,
 /// as a native place's access or a call's `&mut T` input is: it never
 /// leaves the thread, so it needs no `Send`, as rand's `ThreadRng` isn't.
-struct PlaceHeld<T: 'static> { value: Option<T>, handle: NativeHandle }
+pub struct PlaceHeld<T: 'static> { pub value: Option<T>, pub handle: NativeHandle }
 
 #[allow(dead_code)]
 impl<T: 'static> PlaceHeld<T> {
-    fn get_mut(&mut self) -> &mut T {
+    pub fn get_mut(&mut self) -> &mut T {
         self.value.as_mut().expect("a lent value is held till it drops")
     }
 }
@@ -2768,14 +2776,14 @@ thread_local! {
     /// Native vectors script code owns, on the thread that made them, by
     /// slot. Each access moves its value out for the access alone, so no
     /// borrow of the table outlives a statement.
-    static PLACE_VALUES: RefCell<(u64, std::collections::BTreeMap<u64, Box<dyn Any>>)> =
+    pub static PLACE_VALUES: RefCell<(u64, std::collections::BTreeMap<u64, Box<dyn Any>>)> =
         RefCell::new((0, std::collections::BTreeMap::new()));
 }
 
 /// Ownership of a native value in this thread's place table (D651). The
 /// carrier is a slot number: another thread finds nothing under it.
-struct PlaceLocal;
-struct PlaceSlot(u64);
+pub struct PlaceLocal;
+pub struct PlaceSlot(pub u64);
 
 impl Drop for PlaceSlot {
     fn drop(&mut self) {
@@ -2788,7 +2796,7 @@ impl Drop for PlaceSlot {
 }
 
 /// A value out of its slot for one access, put back however the access ends.
-struct PlaceLease(u64, Option<Box<dyn Any>>);
+pub struct PlaceLease(pub u64, pub Option<Box<dyn Any>>);
 
 impl Drop for PlaceLease {
     fn drop(&mut self) {
@@ -2798,7 +2806,7 @@ impl Drop for PlaceLease {
     }
 }
 
-fn place_slot_missing() -> Box<__rawr_internal::EvalAltResult> {
+pub fn place_slot_missing() -> Box<__rawr_internal::EvalAltResult> {
     __rawr_internal::EvalAltResult::ErrorRuntime("the owned native place is borrowed, moved or on another thread".into(), __rawr_internal::Position::NONE).into()
 }
 
@@ -2833,7 +2841,7 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
     }
 }
 
-fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
+pub fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
     runtime_error(error)
 }
 
@@ -2866,21 +2874,21 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
 /// of a `Clone` value for `&self`, or the value itself, lent from its slot,
 /// which it goes back to when the future ends or is dropped.
 #[allow(dead_code)]
-enum Held<T: Send + 'static> {
+pub enum Held<T: Send + 'static> {
     Cloned(T),
     Leased { value: Option<T>, handle: NativeHandle },
 }
 
 #[allow(dead_code)]
 impl<T: Send + 'static> Held<T> {
-    fn get_mut(&mut self) -> &mut T {
+    pub fn get_mut(&mut self) -> &mut T {
         match self {
             Self::Cloned(value) => value,
             Self::Leased { value, .. } => value.as_mut().expect("a lent value is held until dropped"),
         }
     }
 
-    fn get(&self) -> &T {
+    pub fn get(&self) -> &T {
         match self {
             Self::Cloned(value) => value,
             Self::Leased { value, .. } => value.as_ref().expect("a lent value is held until dropped"),
@@ -2892,7 +2900,7 @@ impl<T: Send + 'static> Held<T> {
 /// borrows its receiver (#680): the receiver, leased from its slot while
 /// the guard lives, and the method that reaches the `U` in it.
 #[allow(dead_code)]
-struct Projected<T: Send + 'static, U: 'static>(Held<T>, fn(&T) -> &U);
+pub struct Projected<T: Send + 'static, U: 'static>(pub Held<T>, pub fn(&T) -> &U);
 
 impl<T: Send + 'static, U: 'static> std::ops::Deref for Projected<T, U> {
     type Target = U;
@@ -2921,17 +2929,17 @@ impl<T: Send + 'static> Drop for Held<T> {
 /// Chooses a copy of a `Clone` receiver for a `&self` async method, and a
 /// lease otherwise, by method resolution on a concrete `T`.
 #[allow(dead_code)]
-struct HoldProbe<T>(std::marker::PhantomData<T>);
+pub struct HoldProbe<T>(pub std::marker::PhantomData<T>);
 
 #[allow(dead_code)]
 impl<T> HoldProbe<T> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
 #[allow(dead_code)]
-trait HoldClone<T: Send + 'static> {
+pub trait HoldClone<T: Send + 'static> {
     fn hold(&self, arena: &mut Arena, handle: NativeHandle) -> Result<Held<T>, Error>;
 }
 
@@ -2942,7 +2950,7 @@ impl<T: Clone + Send + 'static> HoldClone<T> for HoldProbe<T> {
 }
 
 #[allow(dead_code)]
-trait HoldLease<T: Send + 'static> {
+pub trait HoldLease<T: Send + 'static> {
     fn hold(&self, arena: &mut Arena, handle: NativeHandle) -> Result<Held<T>, Error>;
 }
 
@@ -2958,17 +2966,17 @@ impl<T: Send + 'static> HoldLease<T> for &HoldProbe<T> {
 /// `Terminal<CrosstermBackend<Stdout>>`, has its target's `Default` only
 /// where the impl's bounds hold for its arguments.
 #[allow(dead_code)]
-struct DefaultProbe<T>(std::marker::PhantomData<T>);
+pub struct DefaultProbe<T>(pub std::marker::PhantomData<T>);
 
 #[allow(dead_code)]
 impl<T> DefaultProbe<T> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
 #[allow(dead_code)]
-trait DefaultGiven<T> {
+pub trait DefaultGiven<T> {
     fn made(&self) -> Option<fn() -> T>;
 }
 
@@ -2979,7 +2987,7 @@ impl<T: Default> DefaultGiven<T> for DefaultProbe<T> {
 }
 
 #[allow(dead_code)]
-trait DefaultAbsent<T> {
+pub trait DefaultAbsent<T> {
     fn made(&self) -> Option<fn() -> T>;
 }
 
@@ -2995,7 +3003,7 @@ impl<T> DefaultAbsent<T> for &DefaultProbe<T> {
 /// the output is, as `reqwest::get`'s `Result<Response, Error>`, takes its
 /// own type argument's.
 #[allow(dead_code)]
-fn materialize(
+pub fn materialize(
     witness: Option<&__rawr_internal::host::runtime::Witness>,
     convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, String> {
@@ -3014,7 +3022,7 @@ fn materialize(
 /// [`materialize`] of an output that holds script values an erased generic
 /// gave back: each is checked against the script type it stands for.
 #[allow(dead_code)]
-fn materialize_checked(
+pub fn materialize_checked(
     witness: Option<&__rawr_internal::host::runtime::Witness>,
     convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, String> {
@@ -3023,44 +3031,44 @@ fn materialize_checked(
     Ok(output)
 }
 
-fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+pub fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     (**value).take().try_cast_result::<T>().map_err(|_| Error::TypeMismatch)
 }
 
 #[allow(dead_code)]
-fn take_std<T: __rawr_internal::crossing::Std>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+pub fn take_std<T: __rawr_internal::crossing::Std>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     T::take((**value).take()).ok_or(Error::TypeMismatch)
 }
 
 #[allow(dead_code)]
-fn take_int<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+pub fn take_int<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     int_from(take_primitive::<i64>(arguments, index)?)
 }
 
 #[allow(dead_code)]
-fn take_f32(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<f32, Error> {
+pub fn take_f32(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<f32, Error> {
     take_primitive::<f64>(arguments, index).map(|value| value as f32)
 }
 
 /// An inclusive range whose integer type Rust infers from the call.
 #[allow(dead_code)]
-fn take_range<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<std::ops::RangeInclusive<T>, Error> {
+pub fn take_range<T: Int>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<std::ops::RangeInclusive<T>, Error> {
     range_from(take_primitive::<std::ops::RangeInclusive<i64>>(arguments, index)?)
 }
 
 /// A `Cow<'_, str>`'s text: a program's `Cow<str>`, or the string a
 /// struct's `Cow<str>` field is given.
 #[allow(dead_code)]
-fn take_text(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
+pub fn take_text(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     **value = __rawr_internal::cow::text((**value).take());
     take_string(arguments, index)
 }
 
 #[allow(dead_code)]
-fn take_string(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
+pub fn take_string(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<String, Error> {
     let value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take();
     if let Some(place) = __rawr_internal::place::get(&value) {
         __rawr_internal::place::take::<__rawr_internal::place::text::Text>(&place, place.witness())
@@ -3070,7 +3078,7 @@ fn take_string(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<St
     }
 }
 
-fn native_handle(
+pub fn native_handle(
     arguments: &mut Arguments<'_, '_, '_>,
     index: usize,
     consume: bool,
@@ -3087,7 +3095,7 @@ fn native_handle(
 
 /// A script value an erased generic takes, as it is (D513.2).
 #[allow(dead_code)]
-fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::Value, Error> {
+pub fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::Value, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     Ok(__rawr_internal::Value::from((**value).take()))
 }
@@ -3095,7 +3103,7 @@ fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__r
 /// A script future a generic item's `F: Future` takes, as the std future
 /// that runs it (D527).
 #[allow(dead_code)]
-fn take_script(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Script, Error> {
+pub fn take_script(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Script, Error> {
     take_future(arguments, index).map(__rawr_internal::future::Future::into_script)
 }
 
@@ -3103,7 +3111,7 @@ fn take_script(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__
 /// value whose opaque type is a future, as a program's own `impl Straw<..>`
 /// is, which its table makes one of where it was made.
 #[allow(dead_code)]
-fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Future, Error> {
+pub fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Future, Error> {
     let mut value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take();
     let handle = value.read_lock::<NativeHandle>().map(|handle| handle.clone());
     if let Some(handle) = handle {
@@ -3119,7 +3127,7 @@ fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__
 /// Check script values that came back from an erased generic against the
 /// script type they stand for, on the thread that owns the program.
 #[allow(dead_code)]
-fn check_values(
+pub fn check_values(
     witness: Option<&__rawr_internal::host::runtime::Witness>,
     value: &Dynamic,
 ) -> Result<(), Error> {
@@ -3132,7 +3140,7 @@ fn check_values(
 /// The value native code lent the call at argument `index` (D558.3), if
 /// that argument is one.
 #[allow(dead_code)]
-fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Lent> {
+pub fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Lent> {
     arguments
         .values
         .get(index)
@@ -3143,7 +3151,7 @@ fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_
 /// slot, or lent by native code to a marked function, which keeps it as
 /// long as the anchored call's result (#1413).
 #[allow(dead_code)]
-enum ViewedArgument<T: 'static> {
+pub enum ViewedArgument<T: 'static> {
     Shared(std::rc::Rc<T>),
     Lent(__rawr_internal::scope::Lent),
 }
@@ -3152,7 +3160,7 @@ enum ViewedArgument<T: 'static> {
 impl<T: 'static> ViewedArgument<T> {
     /// The value `value` names: one native code lent, or one its slot
     /// shares.
-    fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
+    pub fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
         if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
             return Ok(Self::Lent(lent));
         }
@@ -3168,7 +3176,7 @@ impl<T: 'static> ViewedArgument<T> {
     /// The value borrowed as long as `pins`, which hold a shared one. A
     /// lent one is reached in `lender`, the anchored region of the call
     /// native code lent it to, and only one native code keeps so long.
-    fn reach<'p>(
+    pub fn reach<'p>(
         self,
         pins: &'p __rawr_internal::scope::Pins,
         lender: Option<&__rawr_internal::scope::Region<'p>>,
@@ -3188,7 +3196,7 @@ impl<T: 'static> ViewedArgument<T> {
 /// lent a marked function, which keeps it as long as the anchored call's
 /// result (#1292, #1413).
 #[allow(dead_code)]
-enum ViewedSlice<T: 'static> {
+pub enum ViewedSlice<T: 'static> {
     Shared(SliceLent<T>),
     Lent(__rawr_internal::scope::Lent),
 }
@@ -3197,7 +3205,7 @@ enum ViewedSlice<T: 'static> {
 impl<T: 'static> ViewedSlice<T> {
     /// The slice `value` names: one native code lent, or an array of
     /// values in their slots.
-    fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
+    pub fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
         if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
             return Ok(Self::Lent(lent));
         }
@@ -3212,7 +3220,7 @@ impl<T: 'static> ViewedSlice<T> {
 
     /// The slice borrowed as long as `pins`, as [`ViewedArgument::reach`]
     /// reaches a value.
-    fn reach<'p>(
+    pub fn reach<'p>(
         self,
         pins: &'p __rawr_internal::scope::Pins,
         lender: Option<&__rawr_internal::scope::Region<'p>>,
@@ -3230,7 +3238,7 @@ impl<T: 'static> ViewedSlice<T> {
 /// The value in a scope frame's region at argument `index` (D558 tier 1),
 /// if that argument is one.
 #[allow(dead_code)]
-fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
+pub fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
     arguments
         .values
         .get(index)
@@ -3243,7 +3251,7 @@ fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__raw
 /// region ends first: a call that takes values of several frames runs in
 /// it, as `with_children([a, b])` of two `let`s does (#1329).
 #[allow(dead_code)]
-fn scoped_innermost(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> Option<__rawr_internal::scope::Scoped> {
+pub fn scoped_innermost(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> Option<__rawr_internal::scope::Scoped> {
     let scoped = |item: &Dynamic| item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
     let mut handles = Vec::new();
     for value in indices.iter().filter_map(|index| arguments.values.get(*index)) {
@@ -3261,28 +3269,28 @@ fn scoped_innermost(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> Opt
 /// A value native code lent the call (D558.3) that an argument reaches,
 /// erased: its type is `'static`, as ratatui's `ListState` is.
 #[allow(dead_code)]
-enum Reached<'a> {
+pub enum Reached<'a> {
     Shared(&'a (dyn Any + 'static)),
     Mutable(&'a mut (dyn Any + 'static)),
 }
 
 #[allow(dead_code)]
 impl<'a> Reached<'a> {
-    fn reborrow(&mut self) -> Reached<'_> {
+    pub fn reborrow(&mut self) -> Reached<'_> {
         match self {
             Self::Shared(value) => Reached::Shared(*value),
             Self::Mutable(value) => Reached::Mutable(&mut **value),
         }
     }
 
-    fn shared<T: 'static>(self) -> Option<&'a T> {
+    pub fn shared<T: 'static>(self) -> Option<&'a T> {
         match self {
             Self::Shared(value) => value.downcast_ref(),
             Self::Mutable(value) => value.downcast_ref(),
         }
     }
 
-    fn mutable<T: 'static>(self) -> Option<&'a mut T> {
+    pub fn mutable<T: 'static>(self) -> Option<&'a mut T> {
         match self {
             Self::Shared(_) => None,
             Self::Mutable(value) => value.downcast_mut(),
@@ -3291,14 +3299,14 @@ impl<'a> Reached<'a> {
 }
 
 /// The lent arguments a call reached, by argument index.
-type LentArguments<'r> = [(usize, Option<Reached<'r>>)];
+pub type LentArguments<'r> = [(usize, Option<Reached<'r>>)];
 
 /// Reaches the value `lent` names through the accessor its trampoline made
 /// for a `T`, mutably or not, and hands it to `visit`.
-type Reach = fn(Dynamic, bool, &mut dyn FnMut(Reached<'_>)) -> Result<(), Error>;
+pub type Reach = fn(Dynamic, bool, &mut dyn FnMut(Reached<'_>)) -> Result<(), Error>;
 
 #[allow(dead_code)]
-fn reach_lent<T: 'static>(
+pub fn reach_lent<T: 'static>(
     value: Dynamic,
     mutable: bool,
     visit: &mut dyn FnMut(Reached<'_>),
@@ -3342,7 +3350,7 @@ fn reach_lent<T: 'static>(
 
 /// Reach a native sequence/text place through its exact descriptor.
 #[allow(dead_code)]
-fn reach_place<P: __rawr_internal::place::Policy>(
+pub fn reach_place<P: __rawr_internal::place::Policy>(
     value: Dynamic,
     mutable: bool,
     visit: &mut dyn FnMut(Reached<'_>),
@@ -3361,7 +3369,7 @@ fn reach_place<P: __rawr_internal::place::Policy>(
 /// an arena slot, or one native code lent (D558.3).
 #[allow(dead_code)]
 #[derive(Clone)]
-enum Lender {
+pub enum Lender {
     Handle(NativeHandle),
     Lent(__rawr_internal::scope::Lent),
     /// A field a pattern borrowed from another value (#783).
@@ -3375,7 +3383,7 @@ enum Lender {
 impl Lender {
     /// The lender `value` names: a value in an arena slot, one native code
     /// lent, or a field borrowed from another value.
-    fn of(value: &Dynamic) -> Result<Self, Error> {
+    pub fn of(value: &Dynamic) -> Result<Self, Error> {
         if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>() {
             return Ok(Self::Lent(*lent));
         }
@@ -3395,7 +3403,7 @@ impl Lender {
 /// What a reach of a lender failed with, as the adapter that reached it
 /// reports it.
 #[allow(dead_code)]
-fn unreached(error: Box<__rawr_internal::EvalAltResult>) -> Error {
+pub fn unreached(error: Box<__rawr_internal::EvalAltResult>) -> Error {
     match *error {
         __rawr_internal::EvalAltResult::ErrorRuntime(message, _) => Error::Unreached(message.to_string()),
         error => Error::Unreached(error.to_string()),
@@ -3403,7 +3411,7 @@ fn unreached(error: Box<__rawr_internal::EvalAltResult>) -> Error {
 }
 
 #[allow(dead_code)]
-struct LenderF<T>(std::marker::PhantomData<fn() -> T>);
+pub struct LenderF<T>(pub std::marker::PhantomData<fn() -> T>);
 
 impl<T: 'static> __rawr_internal::scope::Family for LenderF<T> {
     type Of<'a> = T;
@@ -3413,12 +3421,12 @@ thread_local! {
     /// The arena slots a lent slice's operation has claimed on this
     /// thread, by arena, slot and generation: a nested operation on a slice the
     /// same value lends shares the claim, as Rust's shared borrows do.
-    static LENDERS: RefCell<std::collections::BTreeMap<([u8; 32], u32, u64), __rawr_internal::scope::Nonce>> =
+    pub static LENDERS: RefCell<std::collections::BTreeMap<([u8; 32], u32, u64), __rawr_internal::scope::Nonce>> =
         const { RefCell::new(std::collections::BTreeMap::new()) };
 }
 
 #[allow(dead_code)]
-struct Lending(([u8; 32], u32, u64));
+pub struct Lending(pub ([u8; 32], u32, u64));
 
 impl Drop for Lending {
     fn drop(&mut self) {
@@ -3432,9 +3440,9 @@ impl Drop for Lending {
 /// value ends the guard first, as rustc ends the borrow at its last use,
 /// and the value goes back to its slot the next time the slot settles.
 #[allow(dead_code)]
-struct Yoked<U: ?Sized + 'static> {
-    id: u64,
-    yoke: RefCell<__rawr_internal::island::place::Yoke<U>>,
+pub struct Yoked<U: ?Sized + 'static> {
+    pub id: u64,
+    pub yoke: RefCell<__rawr_internal::island::place::Yoke<U>>,
 }
 
 impl<U: ?Sized + 'static> Homed for Yoked<U> {
@@ -3463,16 +3471,16 @@ impl<U: ?Sized + 'static> Homed for Yoked<U> {
 /// ([`Arena::yoke`]): the guard ends when the last copy of the place
 /// drops, as Rust drops it at the end of its statement or block.
 #[allow(dead_code)]
-struct YokeEnd<U: ?Sized + 'static> {
-    handle: NativeHandle,
-    id: u64,
-    target: std::marker::PhantomData<fn() -> Box<U>>,
+pub struct YokeEnd<U: ?Sized + 'static> {
+    pub handle: NativeHandle,
+    pub id: u64,
+    pub target: std::marker::PhantomData<fn() -> Box<U>>,
 }
 
 #[allow(dead_code)]
 impl<U: ?Sized + 'static> YokeEnd<U> {
     /// Whether the guard lasts: the method gave one, and nothing ended it.
-    fn held(&self, arena: &Arena) -> bool {
+    pub fn held(&self, arena: &Arena) -> bool {
         arena
             .homed(&self.handle)
             .and_then(|homed| homed.as_any().downcast_ref::<Yoked<U>>())
@@ -3480,7 +3488,7 @@ impl<U: ?Sized + 'static> YokeEnd<U> {
     }
 
     /// `body` of the guard's target, while the guard lasts.
-    fn with<R>(&self, arena: &Arena, body: impl FnOnce(&mut U) -> R) -> Result<R, Error> {
+    pub fn with<R>(&self, arena: &Arena, body: impl FnOnce(&mut U) -> R) -> Result<R, Error> {
         let ended = || Error::Lent(std::any::type_name::<U>(), __rawr_internal::scope::Error::Expired);
         let yoked = arena
             .homed(&self.handle)
@@ -3504,10 +3512,10 @@ impl<U: ?Sized + 'static> Drop for YokeEnd<U> {
 /// A guard whose place is gone, ended the next time the owner thread has
 /// the arena, unless a later guard took its place.
 #[allow(dead_code)]
-struct Unyoke<U: ?Sized + 'static> {
-    handle: NativeHandle,
-    id: u64,
-    target: std::marker::PhantomData<fn() -> Box<U>>,
+pub struct Unyoke<U: ?Sized + 'static> {
+    pub handle: NativeHandle,
+    pub id: u64,
+    pub target: std::marker::PhantomData<fn() -> Box<U>>,
 }
 
 impl<U: ?Sized + 'static> Unlend for Unyoke<U> {
@@ -3525,7 +3533,7 @@ impl<U: ?Sized + 'static> Unlend for Unyoke<U> {
 /// The lend that holds the value of the crate value handle `value`, while
 /// its slot has leased it to lend shared.
 #[allow(dead_code)]
-fn lender_nonce(value: &Dynamic) -> Option<__rawr_internal::scope::Nonce> {
+pub fn lender_nonce(value: &Dynamic) -> Option<__rawr_internal::scope::Nonce> {
     let handle = value.read_lock::<NativeHandle>()?;
     LENDERS.with_borrow(|lenders| lenders.get(&(handle.epoch, handle.slot, handle.generation)).copied())
 }
@@ -3535,7 +3543,7 @@ fn lender_nonce(value: &Dynamic) -> Option<__rawr_internal::scope::Nonce> {
 /// arena is free while native code reads the slice, and the value goes
 /// back when it ends. A value an iced view's home holds is read there.
 #[allow(dead_code)]
-fn reach_lender<T: 'static>(
+pub fn reach_lender<T: 'static>(
     lender: &Lender,
     visit: &mut dyn FnMut(&T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
@@ -3593,7 +3601,7 @@ fn reach_lender<T: 'static>(
 /// goes back when the scope ends. A value an iced view's home holds is
 /// changed there.
 #[allow(dead_code)]
-fn reach_lender_mut<T: 'static>(
+pub fn reach_lender_mut<T: 'static>(
     lender: &Lender,
     visit: &mut dyn FnMut(&mut T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
@@ -3635,7 +3643,7 @@ fn reach_lender_mut<T: 'static>(
 /// `render_stateful_widget(.., state)` takes a `&mut ListState` lent to a
 /// marked function. Each is claimed for the call alone, as a borrow is.
 #[allow(dead_code)]
-fn with_lent_arguments(
+pub fn with_lent_arguments(
     arguments: &mut Arguments<'_, '_, '_>,
     lendable: &[(usize, bool, Reach)],
     body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
@@ -3659,7 +3667,7 @@ fn with_lent_arguments(
 /// (#1291): the call borrows the elements in place, and none moves or is
 /// copied. `None` for another value, which `body` takes from the arena.
 #[allow(dead_code)]
-fn with_slice_argument<E: __rawr_internal::place::Policy>(
+pub fn with_slice_argument<E: __rawr_internal::place::Policy>(
     arguments: &mut Arguments<'_, '_, '_>,
     index: usize,
     body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, Option<&[E::Value]>) -> Result<Dynamic, Error>,
@@ -3693,7 +3701,7 @@ fn with_slice_argument<E: __rawr_internal::place::Policy>(
 /// given, pinned for the runner's life ([`pin_slice`]), as rustc promotes
 /// `&[Block::Md("..")]` to a `'static`.
 #[allow(dead_code)]
-fn with_lasting_slice_argument<E: __rawr_internal::place::Policy>(
+pub fn with_lasting_slice_argument<E: __rawr_internal::place::Policy>(
     arguments: &mut Arguments<'_, '_, '_>,
     index: usize,
     body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &'static [E::Value]) -> Result<Dynamic, Error>,
@@ -3719,7 +3727,7 @@ fn with_lasting_slice_argument<E: __rawr_internal::place::Policy>(
 /// [T]` parameter takes them (#1437): no value is copied, each slot reads
 /// its value in the slice from then on (`SliceHome`), and none goes back.
 #[allow(dead_code)]
-fn pin_slice<T: 'static>(lent: SliceLent<T>) -> &'static [T] {
+pub fn pin_slice<T: 'static>(lent: SliceLent<T>) -> &'static [T] {
     let items: &'static std::rc::Rc<Vec<T>> = Box::leak(Box::new(lent.items.clone()));
     items
 }
@@ -3729,7 +3737,7 @@ fn pin_slice<T: 'static>(lent: SliceLent<T>) -> &'static [T] {
 /// a crate value its slot shares, or the text of the program's
 /// `format_args!`, whose `fmt::Arguments` the frame makes (#1561).
 #[allow(dead_code)]
-enum HeldObject<T: ?Sized + 'static> {
+pub enum HeldObject<T: ?Sized + 'static> {
     Lasting(&'static T),
     Made(Box<T>),
     Shared(std::rc::Rc<T>),
@@ -3739,7 +3747,7 @@ enum HeldObject<T: ?Sized + 'static> {
 #[allow(dead_code)]
 impl<T: ?Sized + 'static> HeldObject<T> {
     /// The object, `None` for a text, whose object the frame makes.
-    fn get(&self) -> Option<&T> {
+    pub fn get(&self) -> Option<&T> {
         match self {
             Self::Lasting(object) => Some(object),
             Self::Made(object) => Some(object),
@@ -3748,7 +3756,7 @@ impl<T: ?Sized + 'static> HeldObject<T> {
         }
     }
 
-    fn text(&self) -> Option<&str> {
+    pub fn text(&self) -> Option<&str> {
         match self {
             Self::Text(text) => Some(text.as_str()),
             _ => None,
@@ -3761,7 +3769,7 @@ impl<T: ?Sized + 'static> HeldObject<T> {
 /// `Arguments` lives only in the statement that makes it, so each is made
 /// in a call of its own and `body` runs innermost (#1561).
 #[allow(dead_code)]
-fn with_arguments<R>(
+pub fn with_arguments<R>(
     texts: &[&str],
     made: Vec<&::core::fmt::Arguments<'_>>,
     body: impl FnOnce(&[&::core::fmt::Arguments<'_>]) -> R,
@@ -3776,7 +3784,7 @@ fn with_arguments<R>(
 }
 
 #[allow(dead_code)]
-fn nest_lent(
+pub fn nest_lent(
     arguments: &mut Arguments<'_, '_, '_>,
     found: &[(usize, bool, Dynamic, Reach)],
     reached: &mut Vec<(usize, Option<Reached<'_>>)>,
@@ -3799,11 +3807,11 @@ fn nest_lent(
 
 /// The lent value at argument `index`, once: the call's borrow of it.
 #[allow(dead_code)]
-fn lent_argument<'r>(lent: &mut LentArguments<'r>, index: usize) -> Option<Reached<'r>> {
+pub fn lent_argument<'r>(lent: &mut LentArguments<'r>, index: usize) -> Option<Reached<'r>> {
     lent.iter_mut().find(|(at, _)| *at == index).and_then(|(_, value)| value.take())
 }
 
-fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+pub fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let handle = native_handle(arguments, index, true)?;
     arguments.arena.take(handle)
 }
@@ -3813,13 +3821,13 @@ fn take_native<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) 
 /// value is made, where rustc knows its type, and a call that takes it runs
 /// the one at its index.
 #[derive(Clone, Copy)]
-struct OpaqueTable(&'static [OpaqueEntry]);
+pub struct OpaqueTable(pub &'static [OpaqueEntry]);
 
-type OpaqueEntry = Box<dyn Fn(&mut Arguments<'_, '_, '_>, OpaqueTable) -> Result<Dynamic, Error> + Send + Sync>;
+pub type OpaqueEntry = Box<dyn Fn(&mut Arguments<'_, '_, '_>, OpaqueTable) -> Result<Dynamic, Error> + Send + Sync>;
 
 impl OpaqueTable {
     #[allow(dead_code)]
-    fn call(self, index: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
+    pub fn call(self, index: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
         let entry = self.0.get(index).ok_or(Error::TypeMismatch)?;
         entry(arguments, self)
     }
@@ -3828,7 +3836,7 @@ impl OpaqueTable {
     /// table ends with: one that makes it when the type is a future, and
     /// refuses it otherwise.
     #[allow(dead_code)]
-    fn future(self, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
+    pub fn future(self, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
         let entry = self.0.last().ok_or(Error::TypeMismatch)?;
         entry(arguments, self)
     }
@@ -3836,7 +3844,7 @@ impl OpaqueTable {
 
 /// The table of `entries`, each a call that takes a value of `T`'s type.
 #[allow(dead_code)]
-fn opaque_table<T: 'static, const N: usize>(
+pub fn opaque_table<T: 'static, const N: usize>(
     _: std::marker::PhantomData<T>,
     entries: [fn(&mut Arguments<'_, '_, '_>, OpaqueTable, std::marker::PhantomData<T>) -> Result<Dynamic, Error>; N],
 ) -> Box<[OpaqueEntry]> {
@@ -3856,12 +3864,12 @@ fn opaque_table<T: 'static, const N: usize>(
 /// runner's generic impl function, where rustc knows their types, and
 /// reached through it. A call that takes one runs the entry the frame
 /// compiled for it, at the frame's types.
-trait Frame {
+pub trait Frame {
     fn call(&mut self, nonce: u64, slot: u32, entry: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
 }
 
 /// A frame as its call lends it to the script function it runs.
-struct FrameF;
+pub struct FrameF;
 
 impl __rawr_internal::scope::Family for FrameF {
     type Of<'x> = &'x mut (dyn Frame + 'x);
@@ -3870,12 +3878,12 @@ impl __rawr_internal::scope::Family for FrameF {
 /// A value a frame keeps, as script code holds it in the arena: the lend
 /// of its frame, the slot of its type and its index there.
 #[derive(Clone, Copy, Debug)]
-struct FrameRef { nonce: u64, slot: u32, index: usize }
+pub struct FrameRef { pub nonce: u64, pub slot: u32, pub index: usize }
 
 /// The script value of the value at `index` in `slot` of the frame lent as
 /// `nonce`, which calls that take it reach through `table`.
 #[allow(dead_code)]
-fn frame_handle(arena: &mut Arena, nonce: u64, slot: u32, index: usize, table: OpaqueTable) -> Result<Dynamic, Error> {
+pub fn frame_handle(arena: &mut Arena, nonce: u64, slot: u32, index: usize, table: OpaqueTable) -> Result<Dynamic, Error> {
     let handle = arena.insert(FrameRef { nonce, slot, index })?;
     arena.set_opaque(&handle, table);
     Ok(Dynamic::from(handle))
@@ -3884,7 +3892,7 @@ fn frame_handle(arena: &mut Arena, nonce: u64, slot: u32, index: usize, table: O
 /// The index in `slot` of the value `handle` names in the frame lent as
 /// `nonce`.
 #[allow(dead_code)]
-fn frame_index(arena: &Arena, handle: NativeHandle, nonce: u64, slot: u32) -> Result<usize, Error> {
+pub fn frame_index(arena: &Arena, handle: NativeHandle, nonce: u64, slot: u32) -> Result<usize, Error> {
     let reference = arena.shared::<FrameRef, _>(handle, |reference| *reference)?;
     if reference.nonce != nonce || reference.slot != slot {
         return Err(Error::Lent("a value native code gave a generic function", __rawr_internal::scope::Error::Mismatch));
@@ -3895,15 +3903,15 @@ fn frame_index(arena: &Arena, handle: NativeHandle, nonce: u64, slot: u32) -> Re
 std::thread_local! {
     /// The frames lent on this thread, innermost last: each one's nonce and
     /// the slot of each opaque type it keeps, by identity.
-    static FRAMES: RefCell<Vec<(u64, &'static [([u8; 32], u32)])>> = const { RefCell::new(Vec::new()) };
+    pub static FRAMES: RefCell<Vec<(u64, &'static [([u8; 32], u32)])>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A frame's place among [`FRAMES`] while it is lent.
-struct FrameCurrent;
+pub struct FrameCurrent;
 
 impl FrameCurrent {
     #[allow(dead_code)]
-    fn enter(nonce: u64, keys: &'static [([u8; 32], u32)]) -> Self {
+    pub fn enter(nonce: u64, keys: &'static [([u8; 32], u32)]) -> Self {
         FRAMES.with_borrow_mut(|frames| frames.push((nonce, keys)));
         Self
     }
@@ -3921,7 +3929,7 @@ impl Drop for FrameCurrent {
 /// values of the opaque type `key`, for a call that takes none of them, as
 /// `<S::Error as Error>::custom(..)` makes one (#593).
 #[allow(dead_code)]
-fn frame_static(key: &[u8; 32], entry: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
+pub fn frame_static(key: &[u8; 32], entry: usize, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
     let found = FRAMES.with_borrow(|frames| {
         frames.iter().rev().find_map(|(nonce, keys)| {
             keys.iter().find(|(known, _)| known == key).map(|(_, slot)| (*nonce, *slot))
@@ -3937,7 +3945,7 @@ fn frame_static(key: &[u8; 32], entry: usize, arguments: &mut Arguments<'_, '_, 
 /// Each value `fresh` names, made before its frame was lent, as of the
 /// frame lent as `nonce`.
 #[allow(dead_code)]
-fn frame_lent(fresh: &[NativeHandle], nonce: u64) {
+pub fn frame_lent(fresh: &[NativeHandle], nonce: u64) {
     let _ = with_arena(|arena| {
         for handle in fresh {
             arena.mutable::<FrameRef, _>(handle.clone(), |reference| reference.nonce = nonce)?;
@@ -3949,7 +3957,7 @@ fn frame_lent(fresh: &[NativeHandle], nonce: u64) {
 /// The call `entry` of the frame that keeps the value at argument
 /// `position`, at its slot's type.
 #[allow(dead_code)]
-fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, slot: u32, entry: usize) -> Result<Dynamic, Error> {
+pub fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, slot: u32, entry: usize) -> Result<Dynamic, Error> {
     let handle = native_handle(arguments, position, false)?;
     let reference = arguments.arena.shared::<FrameRef, _>(handle, |reference| *reference)?;
     __rawr_internal::scope::with::<FrameF, _>(__rawr_internal::scope::nonce(reference.nonce), |frame| {
@@ -3961,7 +3969,7 @@ fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, slot: 
 /// Strings a call takes as `&'static str`, as iced's `Font::new` does,
 /// pinned for as long as the runner lives.
 #[allow(dead_code)]
-fn static_pins() -> &'static __rawr_internal::scope::Pins {
+pub fn static_pins() -> &'static __rawr_internal::scope::Pins {
     static PINS: std::sync::OnceLock<__rawr_internal::scope::Pins> = std::sync::OnceLock::new();
     PINS.get_or_init(__rawr_internal::scope::Pins::lasting)
 }
@@ -3969,7 +3977,7 @@ fn static_pins() -> &'static __rawr_internal::scope::Pins {
 /// Whether each argument at `positions` is text the program lends at
 /// `'static`, as a string literal is (`scope::lent_static`).
 #[allow(dead_code)]
-fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bool {
+pub fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bool {
     positions.iter().all(|position| {
         arguments
             .values
@@ -3981,7 +3989,7 @@ fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bool {
 /// Bytes a call takes as `&'static [u8]`, as a font's are, kept for as long
 /// as the runner lives: once for each content, however often it is given.
 #[allow(dead_code)]
-fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
+pub fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
     static KEPT: std::sync::Mutex<Vec<&'static [u8]>> = std::sync::Mutex::new(Vec::new());
     let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(found) = kept.iter().find(|kept| ***kept == *bytes) {
@@ -3995,7 +4003,7 @@ fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
 /// Scalars a struct's field borrows for its lifetime, as iced's
 /// `LineDash::segments: &'a [f32]`, kept as [`static_bytes`] keeps bytes.
 #[allow(dead_code)]
-fn static_slice<T: PartialEq + Send + Sync + 'static>(values: Vec<T>) -> &'static [T] {
+pub fn static_slice<T: PartialEq + Send + Sync + 'static>(values: Vec<T>) -> &'static [T] {
     static KEPT: std::sync::Mutex<Vec<&'static (dyn std::any::Any + Send + Sync)>> =
         std::sync::Mutex::new(Vec::new());
     let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -4013,7 +4021,7 @@ fn static_slice<T: PartialEq + Send + Sync + 'static>(values: Vec<T>) -> &'stati
 
 /// [`take_native`] at the type `witness` names, which Rust code can't write.
 #[allow(dead_code)]
-fn take_like<T: 'static>(
+pub fn take_like<T: 'static>(
     arguments: &mut Arguments<'_, '_, '_>,
     index: usize,
     _witness: std::marker::PhantomData<T>,
@@ -4024,7 +4032,7 @@ fn take_like<T: 'static>(
 /// The value at `handle`, at the type `witness` names, as an `Option` of
 /// an opaque type holds it.
 #[allow(dead_code)]
-fn take_handle_like<T: 'static>(
+pub fn take_handle_like<T: 'static>(
     arena: &mut Arena,
     handle: NativeHandle,
     _witness: std::marker::PhantomData<T>,
@@ -4035,7 +4043,7 @@ fn take_handle_like<T: 'static>(
 /// [`Arena::shared`] at the type `witness` names, which Rust code can't
 /// write.
 #[allow(dead_code)]
-fn shared_like<T: 'static, R>(
+pub fn shared_like<T: 'static, R>(
     arena: &Arena,
     handle: NativeHandle,
     _witness: std::marker::PhantomData<T>,
@@ -4047,7 +4055,7 @@ fn shared_like<T: 'static, R>(
 /// [`Arena::mutable`] at the type `witness` names, which Rust code can't
 /// write.
 #[allow(dead_code)]
-fn mutable_like<T: 'static, R>(
+pub fn mutable_like<T: 'static, R>(
     arena: &mut Arena,
     handle: NativeHandle,
     _witness: std::marker::PhantomData<T>,
@@ -4058,18 +4066,18 @@ fn mutable_like<T: 'static, R>(
 
 /// The type of `value`, which Rust code can't write when it is opaque.
 #[allow(dead_code)]
-fn witness_of<T>(_: &T) -> std::marker::PhantomData<T> {
+pub fn witness_of<T>(_: &T) -> std::marker::PhantomData<T> {
     std::marker::PhantomData
 }
 
-fn take_bytes<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8], Error> {
+pub fn take_bytes<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8], Error> {
     if length > input.len() { return Err(Error::Malformed); }
     let (value, remaining) = input.split_at(length);
     *input = remaining;
     Ok(value)
 }
 
-fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
+pub fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
     let tag = take_bytes(input, 1)?[0];
     Ok(match tag {
         0 => Dynamic::from(()),
@@ -4113,7 +4121,7 @@ fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
     })
 }
 
-fn push_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), Error> {
+pub fn push_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), Error> {
     let actual = output.len().checked_add(value.len()).and_then(|bytes| bytes.checked_add(5)).ok_or(Error::Allocation)?;
     if actual > 8 * 1024 * 1024 { return Err(Error::Allocation); }
     output.try_reserve_exact(value.len()).map_err(|_| Error::Allocation)?;
@@ -4121,7 +4129,7 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
+pub fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
     if value.is::<()>() {
         let _: () = value.try_cast_result().map_err(|_| Error::TypeMismatch)?;
         output.push(0);
@@ -4177,32 +4185,7 @@ fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
     Ok(())
 }
 
-fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> {
-    if payload.len() < 100 || &payload[..32] != key { return Err(Error::Stale); }
-    payload = &payload[32..];
-    let identity: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
-    let signature: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
-    let count = u32::from_le_bytes(take_bytes(&mut payload, 4)?.try_into().map_err(|_| Error::Malformed)?);
-    let adapter = adapters().find(|adapter| adapter.identity == identity && adapter.signature == signature).ok_or(Error::MissingAdapter)?;
-    if count != adapter.arguments { return Err(Error::Cardinality); }
-    let count = usize::try_from(count).map_err(|_| Error::Cardinality)?;
-    let mut values = Vec::new();
-    values.try_reserve_exact(count).map_err(|_| Error::Allocation)?;
-    for _ in 0..count { values.push(decode_value(&mut payload)?); }
-    if !payload.is_empty() { return Err(Error::Malformed); }
-    let mut references: Vec<&mut Dynamic> = values.iter_mut().collect();
-    let value = with_arena(|arena| {
-        let mut arguments = Arguments { values: &mut references, arena };
-        (adapter.invoke)(&mut arguments)
-    })?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(77).map_err(|_| Error::Allocation)?;
-    output.extend_from_slice(key);
-    encode_value(value, &mut output)?;
-    Ok(output)
-}
-
-fn runtime_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
+pub fn runtime_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
     __rawr_internal::EvalAltResult::ErrorRuntime(
         format!("{:?}", error.reported()).into(),
         __rawr_internal::Position::NONE,
@@ -4212,29 +4195,29 @@ fn runtime_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
 
 /// The witness-mode bit of an adapter whose output holds script values an
 /// erased generic gave back, which are checked against the call's witness.
-const CHECK_VALUES: u8 = 0x80;
+pub const CHECK_VALUES: u8 = 0x80;
 
 thread_local! {
     /// The witness of each operand of the call an adapter runs: a closure's
     /// parameters take theirs (review 2).
-    static OPERANDS: RefCell<Vec<Option<__rawr_internal::host::runtime::Witness>>> =
+    pub static OPERANDS: RefCell<Vec<Option<__rawr_internal::host::runtime::Witness>>> =
         const { RefCell::new(Vec::new()) };
     /// The witness of the output of the call an adapter runs: a borrow
     /// guard's place gives its reads it, as the call would its output.
-    static OUTPUT: RefCell<Option<__rawr_internal::host::runtime::Witness>> =
+    pub static OUTPUT: RefCell<Option<__rawr_internal::host::runtime::Witness>> =
         const { RefCell::new(None) };
 }
 
 /// The witness of the output of the call the adapter runs.
 #[allow(dead_code)]
-fn output_witness() -> Option<__rawr_internal::host::runtime::Witness> {
+pub fn output_witness() -> Option<__rawr_internal::host::runtime::Witness> {
     OUTPUT.with_borrow(Clone::clone)
 }
 
 /// `value`, a read of a guard's target, attested as the guard's call's
 /// output is.
 #[allow(dead_code)]
-fn attest_read(
+pub fn attest_read(
     arena: &mut Arena,
     value: Dynamic,
     witness: &Option<__rawr_internal::host::runtime::Witness>,
@@ -4248,7 +4231,7 @@ fn attest_read(
 /// A native value a closure's input crosses as, with the closure
 /// parameter's witness when the call that made the closure had one.
 #[allow(dead_code)]
-fn attest_input(
+pub fn attest_input(
     arena: &mut Arena,
     value: Dynamic,
     witness: Option<&Option<__rawr_internal::host::runtime::Witness>>,
@@ -4262,7 +4245,7 @@ fn attest_input(
 /// `value` with each native value in it attested, as [`attest_within`]
 /// attests them.
 #[allow(dead_code)]
-fn attest_nested(
+pub fn attest_nested(
     arena: &mut Arena,
     value: Dynamic,
     witness: &__rawr_internal::host::runtime::Witness,
@@ -4276,7 +4259,7 @@ fn attest_nested(
 /// `Rc` or an `Arc`, a tuple or an array, at any depth, as the
 /// `Option<SmolStr>` among a key press's fields or the `Vec<Family>` of
 /// iced's `Result<Vec<Family>, Error>` is.
-fn attest_within(
+pub fn attest_within(
     value: &Dynamic,
     witness: &__rawr_internal::host::runtime::Witness,
     arena: &mut Arena,
@@ -4322,7 +4305,7 @@ fn attest_within(
 /// the program's value a `&mut String` or `&mut Vec<T>` lends, which the
 /// value keeps as a native place once the call has it (#716).
 #[allow(dead_code)]
-fn operand_witness(index: usize) -> __rawr_internal::host::runtime::Witness {
+pub fn operand_witness(index: usize) -> __rawr_internal::host::runtime::Witness {
     OPERANDS
         .with_borrow(|operands| operands.get(index).cloned().flatten())
         .expect("rawr: an imported call's operand has no type witness")
@@ -4333,7 +4316,7 @@ fn operand_witness(index: usize) -> __rawr_internal::host::runtime::Witness {
 /// call lends it where it is, as rustc's borrow does, and the program
 /// reads and changes it there (#716).
 #[allow(dead_code)]
-fn native_place<P: __rawr_internal::place::Policy>(
+pub fn native_place<P: __rawr_internal::place::Policy>(
     value: P::Value,
     witness: &__rawr_internal::host::runtime::Witness,
 ) -> Result<Dynamic, Error> {
@@ -4344,7 +4327,7 @@ fn native_place<P: __rawr_internal::place::Policy>(
 /// given back to that place, which every handle of it reaches (#716), or,
 /// for a program's value, a native place of its own.
 #[allow(dead_code)]
-fn restored_place<P: __rawr_internal::place::Policy>(
+pub fn restored_place<P: __rawr_internal::place::Policy>(
     owner: Option<__rawr_internal::place::Place>,
     value: P::Value,
     witness: &__rawr_internal::host::runtime::Witness,
@@ -4360,7 +4343,7 @@ fn restored_place<P: __rawr_internal::place::Policy>(
 /// The witnesses of the `count` parameters of the closure that is operand
 /// `index` of the running call.
 #[allow(dead_code)]
-fn closure_inputs(index: usize, count: usize) -> Vec<Option<__rawr_internal::host::runtime::Witness>> {
+pub fn closure_inputs(index: usize, count: usize) -> Vec<Option<__rawr_internal::host::runtime::Witness>> {
     OPERANDS.with_borrow(|operands| {
         let closure = operands.get(index).cloned().flatten();
         (0..count)
@@ -4369,7 +4352,7 @@ fn closure_inputs(index: usize, count: usize) -> Vec<Option<__rawr_internal::hos
     })
 }
 
-fn runtime_invoke(
+pub fn runtime_invoke(
     adapter: Adapter,
     call: &__rawr_internal::host::runtime::Call<'_>,
     values: &mut [&mut Dynamic],
@@ -4392,7 +4375,7 @@ fn runtime_invoke(
     Ok(output)
 }
 
-fn invoke_in_arena(
+pub fn invoke_in_arena(
     adapter: Adapter,
     call: &__rawr_internal::host::runtime::Call<'_>,
     values: &mut [&mut Dynamic],
@@ -4452,7 +4435,7 @@ fn invoke_in_arena(
     .map_err(runtime_error)
 }
 
-fn runtime_project(
+pub fn runtime_project(
     call: &__rawr_internal::host::runtime::Call<'_>,
     values: &mut [&mut Dynamic],
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
@@ -4470,7 +4453,7 @@ fn runtime_project(
         .unwrap_or_else(|| Err(runtime_error(Error::Stale)))
 }
 
-fn native_attestation(
+pub fn native_attestation(
     value: &Dynamic,
     expected: &__rawr_internal::host::runtime::Instantiation<'_>,
 ) -> Option<__rawr_internal::host::runtime::Attested> {
@@ -4489,7 +4472,7 @@ fn native_attestation(
 }
 
 /// `==` of two imported values by their Rust type's `PartialEq`.
-fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
+pub fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
     // A value in a scope frame's region (D558 tier 1), with one of its
     // region or one the arena holds.
     let scoped = |value: &Dynamic| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
@@ -4524,10 +4507,39 @@ fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
 }
 
 /// The order of two imported values that key a hashed collection.
-fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+pub fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
     let lhs = lhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     let rhs = rhs.read_lock::<NativeHandle>().map(|value| value.clone())?;
     arena_access(|arena| arena.compare(lhs, rhs)).flatten()
+}
+"#;
+
+/// The runner's own driver, in the final crate beside what only it holds:
+/// the adapter table, the bindings it installs and the programs it compiles.
+const DRIVER_SOURCE: &[u8] = br#"
+fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> {
+    if payload.len() < 100 || &payload[..32] != key { return Err(Error::Stale); }
+    payload = &payload[32..];
+    let identity: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
+    let signature: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
+    let count = u32::from_le_bytes(take_bytes(&mut payload, 4)?.try_into().map_err(|_| Error::Malformed)?);
+    let adapter = adapters().find(|adapter| adapter.identity == identity && adapter.signature == signature).ok_or(Error::MissingAdapter)?;
+    if count != adapter.arguments { return Err(Error::Cardinality); }
+    let count = usize::try_from(count).map_err(|_| Error::Cardinality)?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(count).map_err(|_| Error::Allocation)?;
+    for _ in 0..count { values.push(decode_value(&mut payload)?); }
+    if !payload.is_empty() { return Err(Error::Malformed); }
+    let mut references: Vec<&mut Dynamic> = values.iter_mut().collect();
+    let value = with_arena(|arena| {
+        let mut arguments = Arguments { values: &mut references, arena };
+        (adapter.invoke)(&mut arguments)
+    })?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(77).map_err(|_| Error::Allocation)?;
+    output.extend_from_slice(key);
+    encode_value(value, &mut output)?;
+    Ok(output)
 }
 
 fn imported_runtime(
@@ -4917,11 +4929,11 @@ mod native_arena_tests {
     }
 }
 "#;
-const NEUTRAL_PROFILE_SOURCE: &[u8] = br#"
+const NEUTRAL_PROFILE_HOST_SOURCE: &[u8] = br#"
 /// What a host profile gives the adapters of a program without one: a Rust
 /// future crosses as the core's future (D513.3), made on the thread that
 /// first polls it and made a Rawr value on the thread that owns the program.
-mod __rawr_profile_host {
+pub mod __rawr_profile_host {
     pub mod task {
         use __rawr_internal::{host, Dynamic};
 
@@ -5033,7 +5045,10 @@ mod __rawr_profile_host {
         }
     }
 }
+"#;
 
+/// What the driver of a program without a host profile compiles it with.
+const NEUTRAL_PROFILE_SOURCE: &[u8] = br#"
 mod __rawr_profile {
     #[derive(Clone)]
     pub struct ApplicationContract;
@@ -7134,9 +7149,7 @@ fn render<B: crate::surface::Runner>(
     spans
         .try_reserve_exact(request.plans.len())
         .map_err(|_| request::Error::Allocation)?;
-    // A runner whose proxies stand for a script's types is built as a
-    // binary named as the script's crate, so their `type_name` is theirs.
-    let named = render_source(
+    let members = render_source(
         &request.plans,
         request.fingerprint,
         profile,
@@ -7146,14 +7159,16 @@ fn render<B: crate::surface::Runner>(
         &mut sources,
         &mut spans,
     )?;
-    let lock = runner_lock(harness.lock(), &hidden)?;
-    let (manifest, aliases) = runner_manifest_aliased(
-        harness.manifest(),
-        named.as_deref(),
-        &hidden,
-        harness.lock(),
-    )?;
+    let lock = member::runner_lock(&runner_lock(harness.lock(), &hidden)?, &members)?;
+    let (manifest, aliases) = runner_manifest_aliased(harness.manifest(), &hidden, harness.lock())?;
+    let manifest = member::runner_manifest(&manifest, &members)?;
+    for member in &members {
+        let path = format!("{}/{MANIFEST_PATH}", member.directory());
+        sources.push((path.into(), member.manifest(&manifest)?));
+    }
     alias_crates(&aliases, &mut sources)?;
+    // In path order, as the sources are framed.
+    sources.sort_by(|(left, _), (right, _)| left.cmp(right));
     let source = encode_sources(&sources)?;
     let mut source_map = Vec::new();
     super::source_map::write(request, &spans, &mut source_map)?;
@@ -7377,12 +7392,8 @@ fn path_reached(lock: &[u8], name: &str) -> bool {
 }
 
 #[cfg(test)]
-fn runner_manifest(
-    bytes: &[u8],
-    binary: Option<&str>,
-    hidden: &[HiddenCrate],
-) -> Result<Vec<u8>, request::Error> {
-    runner_manifest_aliased(bytes, binary, hidden, &[]).map(|(manifest, _)| manifest)
+fn runner_manifest(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
+    runner_manifest_aliased(bytes, hidden, &[]).map(|(manifest, _)| manifest)
 }
 
 /// The crate names a dependency key gives Rust code.
@@ -7430,15 +7441,6 @@ fn alias_crates(
     if aliases.is_empty() {
         return Ok(());
     }
-    let main = sources
-        .iter_mut()
-        .find(|(path, _)| path.as_ref() == SOURCE_PATH)
-        .ok_or_else(|| request::drift("generated runner root"))?;
-    let first = main
-        .1
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .map_or(0, |at| at + 1);
     let mut lines = Vec::new();
     for (existing, required) in aliases {
         writeln!(
@@ -7447,7 +7449,19 @@ fn alias_crates(
         )
         .map_err(request::unwritable)?;
     }
-    main.1.splice(first..first, lines);
+    // Each crate's root: the runner's and every member's.
+    let mut roots = 0_usize;
+    for (_, root) in sources.iter_mut().filter(|(path, _)| is_crate_root(path)) {
+        let first = root
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(0, |at| at + 1);
+        root.splice(first..first, lines.iter().copied());
+        roots += 1;
+    }
+    if roots == 0 {
+        return Err(request::drift("generated runner root"));
+    }
     Ok(())
 }
 
@@ -7460,7 +7474,6 @@ type Aliases = Vec<(String, String)>;
 /// under two names, so the project's dependency serves both.
 fn runner_manifest_aliased(
     bytes: &[u8],
-    binary: Option<&str>,
     hidden: &[HiddenCrate],
     lock: &[u8],
 ) -> Result<(Vec<u8>, Aliases), request::Error> {
@@ -7565,16 +7578,6 @@ fn runner_manifest_aliased(
                 }
             }
         }
-    }
-    // The binary is the script crate's name; its bundle keeps the executable
-    // as `rawr-generated-runner`.
-    if let Some(binary) = binary.filter(|binary| *binary != RUNNER_BINARY) {
-        let mut target = toml_edit::Table::new();
-        target.insert("name", value(binary));
-        target.insert("path", value(SOURCE_PATH));
-        let mut targets = toml_edit::ArrayOfTables::new();
-        targets.push(target);
-        document.insert("bin", Item::ArrayOfTables(targets));
     }
     // The project's own profile, `[patch]` and `[replace]` come with the
     // harness manifest unchanged, so the runner's units are the ones the
@@ -7754,6 +7757,14 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Render the runner's sources into `sources` and return its member crates
+/// (`member`), the base first. The base holds the runtime, the families,
+/// places and proxies every adapter names, the traits the program names and
+/// the script's impls. Each imported root's adapters are a crate of their
+/// own on the base, so Cargo compiles them on several cores, and an edit
+/// that changes one root's adapters recompiles that crate and the runner
+/// alone. The runner holds the rest: the adapter table, the bindings it
+/// installs, the per-generation stamps and the protocol.
 #[allow(clippy::too_many_arguments)]
 fn render_source(
     plans: &[Plan],
@@ -7764,7 +7775,7 @@ fn render_source(
     (lock, paths, hidden): (&[u8], &[(String, String)], &mut Vec<HiddenCrate>),
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
-) -> Result<Option<String>, request::Error> {
+) -> Result<Vec<member::Member>, request::Error> {
     let mut main = Vec::new();
     let output = &mut main;
     if !profile.projections().is_empty() && facade_plan.is_none() {
@@ -7777,12 +7788,19 @@ fn render_source(
         })
         .transpose()?;
     output
+        .write_all(RUNTIME_IMPORTS)
+        .map_err(request::unwritable)?;
+    output
+        .write_all(TRAIT_IMPORTS)
+        .map_err(request::unwritable)?;
+    output
         .write_all(
             b"static GENERATED_MANIFEST: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rawr-generated-manifest.bin\"));\n",
         )
         .map_err(request::unwritable)?;
     // The per-generation stamps change with every demand change; their own
-    // module keeps `src/main.rs` byte-identical across such edits.
+    // module keeps the runner's other sources byte-identical across such
+    // edits.
     let mut stamps = Vec::new();
     stamps
         .write_all(b"pub(super) static COMPILED_SURFACE: [u8; 32] = ")
@@ -7799,11 +7817,14 @@ fn render_source(
         crate::universe::enabled()
     )
     .map_err(request::unwritable)?;
+    // The traits every adapter has in scope, in the base, which each crate
+    // of adapters imports with the runtime.
+    let mut traits = Vec::new();
     // An operator needs no import in Rust: its trait is in scope for every
     // adapter, which calls the impl's method (`receiver.sub(argument)`).
     writeln!(
-        stamps,
-        "#[allow(unused_imports)]\npub(super) use ::core::ops::{{{}}};",
+        traits,
+        "#[allow(unused_imports)]\npub use ::core::ops::{{{}}};",
         OPERATOR_TRAITS
             .iter()
             .map(|name| format!("{name} as _"))
@@ -7816,10 +7837,10 @@ fn render_source(
     // and the `deref` a method probe takes through a crate type's `Deref`
     // (#762).
     writeln!(
-        stamps,
-        "#[allow(unused_imports)]\npub(super) use ::core::str::FromStr as _;\n\
-         #[allow(unused_imports)]\npub(super) use ::core::hash::Hash as _;\n\
-         #[allow(unused_imports)]\npub(super) use ::core::ops::{{Deref as _, DerefMut as _}};"
+        traits,
+        "#[allow(unused_imports)]\npub use ::core::str::FromStr as _;\n\
+         #[allow(unused_imports)]\npub use ::core::hash::Hash as _;\n\
+         #[allow(unused_imports)]\npub use ::core::ops::{{Deref as _, DerefMut as _}};"
     )
     .map_err(request::unwritable)?;
     // Each trait the program names is in scope for every adapter, so a
@@ -7877,15 +7898,15 @@ fn render_source(
                         hidden.push(found);
                     }
                     writeln!(
-                        stamps,
-                        "#[allow(unused_imports, deprecated)]\npub(super) use ::{segment}::{rest} as _;"
+                        traits,
+                        "#[allow(unused_imports, deprecated)]\npub use ::{segment}::{rest} as _;"
                     )
                     .map_err(request::unwritable)?;
                     continue;
                 }
                 writeln!(
-                    stamps,
-                    "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",
+                    traits,
+                    "#[allow(unused_imports, deprecated)]\npub use {}::{path} as _;",
                     facade.root()
                 )
                 .map_err(request::unwritable)?;
@@ -7894,7 +7915,7 @@ fn render_source(
     }
     output
         .write_all(
-            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\n",
+            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\n",
         )
         .map_err(request::unwritable)?;
     // The facade plan is megabytes of data: rustc reads it with
@@ -7910,7 +7931,7 @@ fn render_source(
     };
     sources.push((BINDINGS_PATH.into(), embedded));
     output
-        .write_all(RUNTIME_SOURCE)
+        .write_all(DRIVER_SOURCE)
         .map_err(request::unwritable)?;
     output
         .write_all(TOP_LEVEL_SOURCE)
@@ -7924,15 +7945,33 @@ fn render_source(
         .write_all(profile_source)
         .map_err(request::unwritable)?;
     render_profile_projection_bindings(profile, facade.as_ref(), output)?;
-    let mut modules = std::collections::BTreeMap::<String, Vec<usize>>::new();
+    // Each root's crate and its modules, each module's plans in order.
+    let mut units =
+        std::collections::BTreeMap::<String, std::collections::BTreeMap<String, Vec<usize>>>::new();
     for (index, plan) in plans.iter().enumerate() {
-        modules.entry(adapter_module(plan)).or_default().push(index);
+        units
+            .entry(adapter_unit(plan, plans)?)
+            .or_default()
+            .entry(adapter_module(plan))
+            .or_default()
+            .push(index);
+    }
+    let mut members = Vec::new();
+    for unit in units.keys() {
+        members.push(member::Member::Adapters { root: unit.clone() });
     }
     output
         .write_all(b"\nstatic ADAPTER_MODULES: &[&[Adapter]] = &[\n")
         .map_err(request::unwritable)?;
-    for module in modules.keys() {
-        writeln!(output, "    {module}::ADAPTERS,").map_err(request::unwritable)?;
+    for (member, modules) in members.iter().zip(units.values()) {
+        for module in modules.keys() {
+            writeln!(
+                output,
+                "    ::{}::__rawr_adapters::{module}::ADAPTERS,",
+                member.key()
+            )
+            .map_err(request::unwritable)?;
+        }
     }
     output
         .write_all(
@@ -8050,7 +8089,7 @@ fn render_source(
         }
     }
     output.write_all(b"];\n\n").map_err(request::unwritable)?;
-    render_execution_tests(modules.keys(), output)?;
+    render_execution_tests(plans, output)?;
     let runner = if profile.owns_product_lifecycle() {
         LIFECYCLE_PROFILE_RUNNER_MAIN
     } else if profile.has_generated_projections() {
@@ -8066,129 +8105,57 @@ fn render_source(
     output
         .write_all(SHELL_SOURCE)
         .map_err(request::unwritable)?;
-    output.write_all(b"\n").map_err(request::unwritable)?;
-    for module in modules.keys() {
-        writeln!(output, "mod {module};").map_err(request::unwritable)?;
-    }
     output
-        .write_all(b"mod rawr_applications;\n")
-        .map_err(request::unwritable)?;
-    output
-        .write_all(b"include!(\"rawr_impls.rs\");\n")
+        .write_all(b"\nmod rawr_applications;\n")
         .map_err(request::unwritable)?;
     sources.push((SOURCE_PATH.into(), ROOT_SOURCE.to_vec()));
-    let primitive = plans.iter().position(|plan| {
-        matches!(
-            plan.operation(),
-            Operation::Function { signature, .. }
-                if signature.inputs().is_empty()
-                    && matches!(signature.output(), convert::Type::Builtin(convert::Builtin::I64))
-        )
-    });
-    let builder = plans
-        .iter()
-        .position(|plan| builder_execution_inputs(plan.operation()).is_some());
-    for (module, indices) in &modules {
-        let mut file = Vec::new();
-        file.write_all(b"use super::*;\n\npub(super) static ADAPTERS: &[Adapter] = &[\n")
-            .map_err(request::unwritable)?;
-        for index in indices {
-            let plan = &plans[*index];
-            write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
-            byte_array(&mut file, plan.identity().as_bytes())?;
-            write!(file, ", signature: ").map_err(request::unwritable)?;
-            byte_array(&mut file, &signature(plan)?)?;
-            write!(file, ", selector: ").map_err(request::unwritable)?;
-            byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-            write!(file, ", instance: ").map_err(request::unwritable)?;
-            byte_array(&mut file, &instance_key(plan))?;
-            write!(
-                file,
-                ", item: {:?}, bound: {}, application: {}, root: {:?}, witness: {}",
-                facade_item_path(plan),
-                plan.selector().is_some(),
-                plan.application_invocation().is_some(),
-                plan.export().root_alias(),
-                witness_mode(plan) | if returns_values(plan) { 0x80 } else { 0 }
-            )
-            .map_err(request::unwritable)?;
-            writeln!(
-                file,
-                ", arguments: {}, invoke: {} }},",
-                arguments(plan)?,
-                adapter_name(plan)
-            )
-            .map_err(request::unwritable)?;
-            for matcher in matchers(plan) {
-                write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &matcher.identity(plan))?;
-                write!(file, ", signature: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &signature(plan)?)?;
-                write!(file, ", selector: ").map_err(request::unwritable)?;
-                byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-                write!(file, ", instance: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &[0; 32])?;
-                // A matcher gives new values, which take its output's
-                // witness: a field's reader gives the field's value alone.
-                writeln!(
-                    file,
-                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
-                    plan.export().root_alias(),
-                    matcher.name(plan)
-                )
+    for (member, modules) in members.iter().zip(units.values()) {
+        let directory = member.directory();
+        let mut table = RUNTIME_IMPORTS.to_vec();
+        for (module, indices) in modules {
+            writeln!(table, "pub mod {module};").map_err(request::unwritable)?;
+            let mut file = Vec::new();
+            file.write_all(b"use super::*;\n")
                 .map_err(request::unwritable)?;
-            }
-            if has_store(plan) {
-                write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &store_identity(plan))?;
-                write!(file, ", signature: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &signature(plan)?)?;
-                write!(file, ", selector: ").map_err(request::unwritable)?;
-                byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-                write!(file, ", instance: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &[0; 32])?;
-                writeln!(
-                    file,
-                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
-                    plan.export().root_alias(),
-                    store_name(plan)
-                )
+            file.write_all(TRAIT_IMPORTS).map_err(request::unwritable)?;
+            file.write_all(b"\npub static ADAPTERS: &[Adapter] = &[\n")
                 .map_err(request::unwritable)?;
+            for index in indices {
+                render_rows(&plans[*index], &mut file)?;
             }
-            if has_lender(plan) {
-                write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &lender_identity(plan))?;
-                write!(file, ", signature: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &signature(plan)?)?;
-                write!(file, ", selector: ").map_err(request::unwritable)?;
-                byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-                write!(file, ", instance: ").map_err(request::unwritable)?;
-                byte_array(&mut file, &[0; 32])?;
-                writeln!(
-                    file,
-                    ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
-                    plan.export().root_alias(),
-                    lender_name(plan)
-                )
-                .map_err(request::unwritable)?;
+            file.write_all(b"];\n\n").map_err(request::unwritable)?;
+            let path: Box<str> = format!("{directory}/src/{module}.rs").into();
+            for index in indices {
+                let plan = &plans[*index];
+                let start = span_offset(&file)?;
+                render_adapter(plan, plans, profile, facade.as_ref(), &mut file)?;
+                for matcher in matchers(plan) {
+                    render_matcher(plan, matcher, &mut file)?;
+                }
+                render_store(plan, &mut file)?;
+                render_field_lender(plan, &mut file)?;
+                let end = span_offset(&file)?;
+                spans.push((plan.identity(), path.clone(), start..end));
             }
+            sources.push((path, file));
         }
-        file.write_all(b"];\n\n").map_err(request::unwritable)?;
-        let path: Box<str> = format!("src/{module}.rs").into();
-        for index in indices {
-            let plan = &plans[*index];
-            let start = span_offset(&file)?;
-            render_adapter(plan, plans, profile, facade.as_ref(), &mut file)?;
-            for matcher in matchers(plan) {
-                render_matcher(plan, matcher, &mut file)?;
-            }
-            render_store(plan, &mut file)?;
-            render_field_lender(plan, &mut file)?;
-            let end = span_offset(&file)?;
-            spans.push((plan.identity(), path.clone(), start..end));
-        }
-        render_module_execution_tests(plans, indices, primitive, builder, &mut file)?;
-        sources.push((path, file));
+        table
+            .write_all(b"mod rawr_applications;\n")
+            .map_err(request::unwritable)?;
+        let mut applications = Vec::new();
+        render_application_helpers(
+            modules.values().flatten().map(|index| &plans[*index]),
+            &mut applications,
+        )?;
+        sources.push((
+            format!("{directory}/src/{APPLICATIONS_FILE}").into(),
+            applications,
+        ));
+        sources.push((format!("{directory}/src/{ADAPTERS_FILE}").into(), table));
+        sources.push((
+            format!("{directory}/{LIBRARY_PATH}").into(),
+            ADAPTERS_ROOT.to_vec(),
+        ));
     }
     let mut applications = Vec::new();
     render_applications(plans, &mut applications)?;
@@ -8200,12 +8167,42 @@ fn render_source(
     place::render(&mut impls);
     let mut families = Vec::new();
     render_families(&mut families)?;
-    sources.push((FAMILIES_PATH.into(), families));
     let mut proxies = Vec::new();
     render_proxies(&mut proxies)?;
-    // In path order, as the sources are framed.
-    sources.push((IMPLS_PATH.into(), impls));
-    sources.push((PROXIES_PATH.into(), proxies));
+    let base = member::Member::Base {
+        library: PROXY_CRATE
+            .with_borrow(Clone::clone)
+            .unwrap_or_else(|| member::BASE_KEY.to_owned()),
+    };
+    let directory = base.directory();
+    let mut runtime = b"#[allow(unused_imports)]\nuse rawr_traits::*;\npub mod rawr_traits;\n\
+        #[allow(unused_imports)]\npub use rawr_families::*;\npub mod rawr_families;\n"
+        .to_vec();
+    runtime
+        .write_all(RUNTIME_SOURCE)
+        .map_err(request::unwritable)?;
+    render_macro_exports(&mut runtime)?;
+    if !profile.has_generated_projections() {
+        runtime
+            .write_all(NEUTRAL_PROFILE_HOST_SOURCE)
+            .map_err(request::unwritable)?;
+    }
+    runtime
+        .write_all(b"include!(\"rawr_impls.rs\");\n")
+        .map_err(request::unwritable)?;
+    sources.push((
+        format!("{directory}/{BUILD_PATH}").into(),
+        BASE_BUILD_SCRIPT.to_vec(),
+    ));
+    sources.push((
+        format!("{directory}/{LIBRARY_PATH}").into(),
+        BASE_ROOT.to_vec(),
+    ));
+    sources.push((format!("{directory}/src/rawr_families.rs").into(), families));
+    sources.push((format!("{directory}/src/rawr_impls.rs").into(), impls));
+    sources.push((format!("{directory}/src/rawr_proxies.rs").into(), proxies));
+    sources.push((format!("{directory}/src/{RUNNER_FILE}").into(), runtime));
+    sources.push((format!("{directory}/src/rawr_traits.rs").into(), traits));
     sources.push((RUNNER_PATH.into(), main));
     sources.push((SURFACE_PATH.into(), stamps));
     // Each crate a type is named through (`hidden_spelling`), which the
@@ -8222,7 +8219,113 @@ fn render_source(
             }
         }
     }
-    Ok(PROXY_CRATE.with_borrow(Clone::clone))
+    members.insert(0, base);
+    Ok(members)
+}
+
+/// The adapter table's rows for `plan`: its own, each variant's matchers,
+/// each field's store and its lender.
+fn render_rows(plan: &Plan, file: &mut Vec<u8>) -> Result<(), request::Error> {
+    write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
+    byte_array(file, plan.identity().as_bytes())?;
+    write!(file, ", signature: ").map_err(request::unwritable)?;
+    byte_array(file, &signature(plan)?)?;
+    write!(file, ", selector: ").map_err(request::unwritable)?;
+    byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
+    write!(file, ", instance: ").map_err(request::unwritable)?;
+    byte_array(file, &instance_key(plan))?;
+    write!(
+        file,
+        ", item: {:?}, bound: {}, application: {}, root: {:?}, witness: {}",
+        facade_item_path(plan),
+        plan.selector().is_some(),
+        plan.application_invocation().is_some(),
+        plan.export().root_alias(),
+        witness_mode(plan) | if returns_values(plan) { 0x80 } else { 0 }
+    )
+    .map_err(request::unwritable)?;
+    writeln!(
+        file,
+        ", arguments: {}, invoke: {} }},",
+        arguments(plan)?,
+        adapter_name(plan)
+    )
+    .map_err(request::unwritable)?;
+    for matcher in matchers(plan) {
+        write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
+        byte_array(file, &matcher.identity(plan))?;
+        write!(file, ", signature: ").map_err(request::unwritable)?;
+        byte_array(file, &signature(plan)?)?;
+        write!(file, ", selector: ").map_err(request::unwritable)?;
+        byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
+        write!(file, ", instance: ").map_err(request::unwritable)?;
+        byte_array(file, &[0; 32])?;
+        // A matcher gives new values, which take its output's
+        // witness: a field's reader gives the field's value alone.
+        writeln!(
+            file,
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
+            plan.export().root_alias(),
+            matcher.name(plan)
+        )
+        .map_err(request::unwritable)?;
+    }
+    if has_store(plan) {
+        write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
+        byte_array(file, &store_identity(plan))?;
+        write!(file, ", signature: ").map_err(request::unwritable)?;
+        byte_array(file, &signature(plan)?)?;
+        write!(file, ", selector: ").map_err(request::unwritable)?;
+        byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
+        write!(file, ", instance: ").map_err(request::unwritable)?;
+        byte_array(file, &[0; 32])?;
+        writeln!(
+            file,
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
+            plan.export().root_alias(),
+            store_name(plan)
+        )
+        .map_err(request::unwritable)?;
+    }
+    if has_lender(plan) {
+        write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
+        byte_array(file, &lender_identity(plan))?;
+        write!(file, ", signature: ").map_err(request::unwritable)?;
+        byte_array(file, &signature(plan)?)?;
+        write!(file, ", selector: ").map_err(request::unwritable)?;
+        byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
+        write!(file, ", instance: ").map_err(request::unwritable)?;
+        byte_array(file, &[0; 32])?;
+        writeln!(
+            file,
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+            plan.export().root_alias(),
+            lender_name(plan)
+        )
+        .map_err(request::unwritable)?;
+    }
+    Ok(())
+}
+
+/// Every macro the runtime defines, from the runtime's module too, where
+/// each crate of adapters imports the runtime: an exported macro is at its
+/// crate's root.
+fn render_macro_exports(output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let text = std::str::from_utf8(RUNTIME_SOURCE).map_err(request::unwritable)?;
+    let names = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("macro_rules! "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return Ok(());
+    }
+    writeln!(
+        output,
+        "\n#[allow(unused_imports)]\npub use crate::{{{}}};",
+        names.join(", ")
+    )
+    .map_err(request::unwritable)
 }
 
 /// `path`, a root's path through a crate it reaches only as a macro's
@@ -8304,18 +8407,48 @@ fn instance_key(plan: &Plan) -> [u8; 32] {
 /// changes exactly one module file and rustc can reuse the others.
 fn adapter_module(plan: &Plan) -> String {
     let mut module = String::from("rawr_adapters_");
-    for character in plan.export().root_alias().chars() {
-        module.push(if character.is_ascii_alphanumeric() {
-            character.to_ascii_lowercase()
-        } else {
-            '_'
-        });
-    }
+    module.push_str(&root_segment(plan.export().root_alias()));
     module.push('_');
     module.push(char::from(
         b"0123456789abcdef"[usize::from(plan.identity().as_bytes()[0] >> 4)],
     ));
     module
+}
+
+/// A root's name as a module segment: its ASCII letters and digits in
+/// lowercase, anything else `_`.
+fn root_segment(root: &str) -> String {
+    root.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The crate of adapters an adapter is in (`member::Member::Adapters`): its
+/// root's, or for a call that runs what the producer of an opaque type
+/// compiled for it (`render_adapter`), that producer's, whose table it
+/// reaches in its module.
+fn adapter_unit(plan: &Plan, cohort: &[Plan]) -> Result<String, request::Error> {
+    let mut current = plan;
+    // Each step goes to another plan, so the walk ends within the cohort.
+    for _ in 0..cohort.len() {
+        let Some((_, key, operand)) = opaque_operand(current)? else {
+            break;
+        };
+        if by_handle(&operand, &key) {
+            break;
+        }
+        match opaque_producer(cohort, &key)? {
+            Some(producer) if !std::ptr::eq(producer, current) => current = producer,
+            _ => break,
+        }
+    }
+    Ok(root_segment(current.export().root_alias()))
 }
 
 fn adapter_name(plan: &Plan) -> String {
@@ -8341,51 +8474,95 @@ fn span_offset(output: &[u8]) -> Result<u32, request::Error> {
     })
 }
 
-/// The scope families the adapters name (D558 tier 1), after every adapter
-/// module in path order.
-const FAMILIES_PATH: &str = "src/rawr_families.rs";
-
-/// The runner's proxies of script types (D594), included at the crate root
-/// so each is named as the script names it.
-const PROXIES_PATH: &str = "src/rawr_proxies.rs";
 /// The runner itself, the crate root's module `__rawr_runner`, which holds
 /// every item of the runner's own and the modules it declares: a program
 /// names its types and modules as it likes, and none meets a runner item
-/// at the crate root, where the proxies are (#1163).
+/// at the crate root, where the base's proxies are (#1163).
 const RUNNER_PATH: &str = "src/rawr_runner.rs";
-/// The runner's crate root: the proxies and the runner's module, whose
-/// name no program spells. The runner's own support is written whole, and
-/// each runner uses the part its program needs, so what it leaves unused
-/// is no finding.
+/// The base's module `__rawr_runner`, the runtime every adapter calls.
+const RUNNER_FILE: &str = "rawr_runner.rs";
+/// A member's crate root, under its directory.
+const LIBRARY_PATH: &str = "src/lib.rs";
+/// A crate of adapters' module `__rawr_adapters`, which declares its
+/// adapter modules.
+const ADAPTERS_FILE: &str = "rawr_adapters.rs";
+/// A crate of adapters' isolated call helpers of its proof-backed
+/// applications.
+const APPLICATIONS_FILE: &str = "rawr_applications.rs";
+/// The runner's crate root: the runner's module, whose name no program
+/// spells, beside the base's proxies, as the script names them. The
+/// runner's own support is written whole, and each runner uses the part its
+/// program needs, so what it leaves unused is no finding.
 const ROOT_SOURCE: &[u8] = b"#![forbid(unsafe_code)]\n\
-include!(\"rawr_proxies.rs\");\n\
+#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::*;\n\
 #[allow(dead_code)]\n\
 #[path = \"rawr_runner.rs\"]\n\
 mod __rawr_runner;\n\
 \n\
 fn main() {\n    __rawr_runner::main()\n}\n";
-/// The script's impls for the proxies (D594), included after the runtime
-/// they call, whose macros come first.
-const IMPLS_PATH: &str = "src/rawr_impls.rs";
+/// What the runner's module and each crate of adapters' module import from
+/// the base: the runtime.
+const RUNTIME_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::__rawr_runner::*;\n";
+/// The traits every adapter has in scope, which each module that calls
+/// their methods imports from the module that imports them: a `_` import
+/// another crate gives reaches only a glob of its own module.
+const TRAIT_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::__rawr_runner::rawr_traits::*;\n";
+/// The base's crate root: the proxies of script types (D594), at its root so
+/// each is named as the script names it, and the runtime.
+const BASE_ROOT: &[u8] = b"#![forbid(unsafe_code)]\n\
+include!(\"rawr_proxies.rs\");\n\
+#[allow(dead_code)]\n\
+#[path = \"rawr_runner.rs\"]\n\
+pub mod __rawr_runner;\n";
+/// The base's build script, which the shared runtime's link search joins
+/// (`runner::runtime`): Cargo gives it to every crate that depends on the
+/// base.
+const BASE_BUILD_SCRIPT: &[u8] = b"fn main() {\n}\n";
+/// A crate of adapters' root: the base's proxies, as the base names them,
+/// and the module of its adapters.
+const ADAPTERS_ROOT: &[u8] = b"#![forbid(unsafe_code)]\n\
+#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::*;\n\
+#[allow(dead_code)]\n\
+#[path = \"rawr_adapters.rs\"]\n\
+pub mod __rawr_adapters;\n";
 
-/// The proof-backed applications' isolated call helpers and their encoded
-/// applications, after every adapter module in path order.
+/// Whether `path`, a generated source, is a crate's root: the runner's or a
+/// member's.
+pub(crate) fn is_crate_root(path: &str) -> bool {
+    path == SOURCE_PATH || member::file(path) == Some(LIBRARY_PATH)
+}
+
+/// Whether `path`, a generated file, is a crate's build script: the
+/// runner's or a member's.
+pub(crate) fn is_build_script(path: &str) -> bool {
+    path == BUILD_PATH || member::file(path) == Some(BUILD_PATH)
+}
+
+/// Whether `path`, a generated file, is a member's manifest.
+pub(crate) fn is_member_manifest(path: &str) -> bool {
+    member::file(path) == Some(MANIFEST_PATH)
+}
+
+/// The proof-backed applications' encoded applications.
 const APPLICATIONS_PATH: &str = "src/rawr_applications.rs";
 
 /// Render each application's helper module. A helper sees no inherited
 /// glob: `#[no_implicit_prelude]` removes the implicit prelude, then the
 /// module imports exactly the recorded prelude and traits of the source
 /// call's lexical scope, so method lookup sees what the source saw.
-fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
+fn render_application_helpers<'p>(
+    plans: impl Iterator<Item = &'p Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
     let encoding = request::unwritable;
-    let mut applications = Vec::new();
     for plan in plans {
         let Some(invocation) = plan.application_invocation() else {
             continue;
         };
-        applications.push(crate::surface::application::Application {
-            invocation: invocation.clone(),
-        });
         let name = identity_name("application", plan);
         writeln!(output, "#[no_implicit_prelude]\n#[allow(unused_imports, dead_code, non_snake_case)]\npub(crate) mod {name} {{").map_err(encoding)?;
         if let Some(prelude) = &invocation.prelude {
@@ -8432,13 +8609,26 @@ fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), reque
         }
         output.write_all(b"    }\n}\n\n").map_err(encoding)?;
     }
+    Ok(())
+}
+
+/// Render the encoded applications of every plan, which the runner's
+/// driver installs.
+fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let applications = plans
+        .iter()
+        .filter_map(Plan::application_invocation)
+        .map(|invocation| crate::surface::application::Application {
+            invocation: invocation.clone(),
+        })
+        .collect::<Vec<_>>();
     let encoded = crate::surface::application::Application::encode_all(&applications)
         .map_err(request::unwritable)?;
     output
         .write_all(b"pub(crate) static APPLICATIONS: &[u8] = &")
-        .map_err(encoding)?;
+        .map_err(request::unwritable)?;
     byte_array(output, &encoded)?;
-    output.write_all(b";\n").map_err(encoding)
+    output.write_all(b";\n").map_err(request::unwritable)
 }
 
 fn render_native(
@@ -8480,15 +8670,15 @@ fn render_native(
     }
 }
 
-/// The per-generation stamps module, after every adapter module in path order.
+/// The per-generation stamps module of the runner.
 const SURFACE_PATH: &str = "src/rawr_surface.rs";
 
-/// The facade plan `src/main.rs` includes as bytes.
+/// The facade plan the runner's module includes as bytes.
 const BINDINGS_PATH: &str = "src/imported_bindings.bin";
 
-/// The generated runner's source files in path order: the facade plan,
-/// `src/main.rs` and one file per adapter module, framed into one canonical
-/// byte string.
+/// The generated runner's source files in path order: the facade plan, the
+/// runner's modules and its members' manifests, build scripts and sources
+/// (`member`), framed into one canonical byte string.
 const SOURCES_MAGIC: &[u8; 8] = b"RAWRSRC1";
 
 pub(crate) fn encode_sources(sources: &[(Box<str>, Vec<u8>)]) -> Result<Vec<u8>, request::Error> {
@@ -8516,7 +8706,9 @@ pub(crate) fn encode_sources(sources: &[(Box<str>, Vec<u8>)]) -> Result<Vec<u8>,
 
 /// Make `root` hold exactly `files`, writing a file only when its bytes
 /// changed (an unchanged file keeps its mtime and Cargo sees it unchanged) and
-/// removing generated sources no longer produced. Returns the paths written.
+/// removing generated sources no longer produced: a source of the runner's
+/// or of a member's, and a member no longer produced, whole. Returns the
+/// paths written.
 pub fn sync_sources<'a>(
     root: &std::path::Path,
     files: impl IntoIterator<Item = (&'a str, &'a [u8])>,
@@ -8537,10 +8729,26 @@ pub fn sync_sources<'a>(
         }
         kept.insert(target);
     }
-    for entry in std::fs::read_dir(root.join("src"))?.flatten() {
-        let path = entry.path();
-        if !kept.contains(&path) && path.extension().is_some_and(|extension| extension == "rs") {
-            std::fs::remove_file(&path)?;
+    let mut sources = vec![root.join("src")];
+    for entry in std::fs::read_dir(root.join(member::DIRECTORY))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let directory = entry.path();
+        if kept.iter().any(|path| path.starts_with(&directory)) {
+            sources.push(directory.join("src"));
+        } else {
+            std::fs::remove_dir_all(&directory)?;
+        }
+    }
+    for directory in sources {
+        for entry in std::fs::read_dir(directory)?.flatten() {
+            let path = entry.path();
+            if !kept.contains(&path) && path.extension().is_some_and(|extension| extension == "rs")
+            {
+                std::fs::remove_file(&path)?;
+            }
         }
     }
     Ok(written)
@@ -8556,6 +8764,33 @@ fn length(bytes: &mut &[u8]) -> Option<usize> {
     let (head, tail) = bytes.split_first_chunk::<8>()?;
     *bytes = tail;
     usize::try_from(u64::from_le_bytes(*head)).ok()
+}
+
+/// Whether `name` is one path segment: no separator and no dot.
+fn plain_segment(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['/', '\\', '.'])
+}
+
+/// Whether `path` is where a generated source may be: the facade plan, a
+/// `.rs` file in the runner's `src`, or a member's manifest, build script
+/// or `.rs` file in its `src` (`member`).
+fn generated_source_path(path: &str) -> bool {
+    let source = |path: &str| {
+        path.strip_prefix("src/")
+            .and_then(|name| name.strip_suffix(".rs"))
+            .is_some_and(plain_segment)
+    };
+    if path == BINDINGS_PATH || source(path) {
+        return true;
+    }
+    path.strip_prefix(member::DIRECTORY)
+        .and_then(|path| path.strip_prefix('/'))
+        .and_then(|path| path.split_once('/'))
+        .is_some_and(|(directory, file)| {
+            !directory.contains(['/', '\\', '.'])
+                && !directory.is_empty()
+                && (file == MANIFEST_PATH || file == BUILD_PATH || source(file))
+        })
 }
 
 pub(crate) fn decode_sources(mut bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, request::Error> {
@@ -8575,10 +8810,7 @@ pub(crate) fn decode_sources(mut bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, req
         if sources
             .last()
             .is_some_and(|(previous, _): &(&str, &[u8])| *previous >= path)
-            || !(path == BINDINGS_PATH
-                || path.starts_with("src/")
-                    && path.ends_with(".rs")
-                    && !path[4..path.len() - 3].contains(['/', '\\', '.']))
+            || !generated_source_path(path)
         {
             return Err(request::drift("generated source paths"));
         }
@@ -22221,11 +22453,11 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
             writeln!(
                 output,
                 "/// The script type `{path}` where native generic code takes a Rust type (D594).
-pub struct {name}{generics}(pub(crate) __rawr_internal::crossing::Proxy{marker});
+pub struct {name}{generics}(pub __rawr_internal::crossing::Proxy{marker});
 
 #[allow(dead_code)]
 impl{bounds} {name}{generics} {{
-    pub(crate) fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
+    pub fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
         {made}
     }}
 }}
@@ -22291,7 +22523,7 @@ const HELD_SOURCE: &str =
 /// takes a Rust type: its proxy (D594), or its mirror in rawr's copy of a native
 /// root's crate (#1249).
 #[allow(dead_code)]
-pub(crate) trait __RawrHeld: Sized {
+pub trait __RawrHeld: Sized {
     fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self;
     fn into_proxy(self) -> __rawr_internal::crossing::Proxy;
     /// `body` of the value lent shared to a program function, as a crate
@@ -23082,7 +23314,7 @@ fn lent_mutably(ty: &convert::Type) -> bool {
 fn render_families(output: &mut Vec<u8>) -> Result<(), request::Error> {
     output
         .write_all(
-            b"#![allow(dead_code)]
+            b"#![allow(dead_code, unused_imports)]
 use super::*;
 
 ",
@@ -23133,7 +23365,7 @@ use super::*;
             .replace("'x", "'_");
         writeln!(
             output,
-            "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{shorten}{equal}\n}}\n"
+            "pub struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{display}{clone}{shorten}{equal}\n}}\n"
         )
         .map_err(request::unwritable)?;
     }
@@ -24168,40 +24400,91 @@ fn producer_inputs(operation: &Operation) -> Option<ProducerInputs<'_>> {
     primitive.then_some(inputs)
 }
 
-/// The runner's own execution tests: every module's producers against every
-/// module's receivers. Each module lists its own rows, so `src/main.rs` names
-/// only the modules.
-fn render_execution_tests<'a>(
-    modules: impl Iterator<Item = &'a String> + Clone,
-    output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
+/// The runner's own execution tests: every producer against every receiver,
+/// and the single primitive and builder tests. They run in the runner's
+/// crate, which `cargo test` builds for its tests, and call each adapter
+/// through the adapter table.
+fn render_execution_tests(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
     output
         .write_all(
             b"#[cfg(test)]\nmod generated_execution_tests {\n    use super::*;\n\n\
               fn invoke_one(identity: [u8; 32], handle: NativeHandle, arena: &mut Arena) -> Result<Dynamic, Error> {\n\
-                  let adapter = adapters().find(|adapter| adapter.identity == identity).expect(\"generated adapter\");\n\
                   let mut receiver = Dynamic::from(handle);\n\
                   let mut values = [&mut receiver];\n\
                   let mut arguments = Arguments { values: &mut values, arena };\n\
-                  (adapter.invoke)(&mut arguments)\n\
+                  adapter(identity)(&mut arguments)\n\
               }\n\n\
-              const PRODUCERS: &[&[fn(&mut Arena) -> Result<NativeHandle, Error>]] = &[\n",
+              fn adapter(identity: [u8; 32]) -> Invoke {\n\
+                  adapters().find(|adapter| adapter.identity == identity).expect(\"generated adapter\").invoke\n\
+              }\n\n",
         )
         .map_err(request::unwritable)?;
-    for module in modules.clone() {
-        writeln!(output, "        {module}::PRODUCERS,").map_err(request::unwritable)?;
+    for plan in plans {
+        let Some(inputs) = producer_inputs(plan.operation()) else {
+            continue;
+        };
+        writeln!(
+            output,
+            "fn {}(arena: &mut Arena) -> Result<NativeHandle, Error> {{",
+            identity_name("producer", plan)
+        )
+        .map_err(request::unwritable)?;
+        render_execution_values(&inputs.iter().collect::<Vec<_>>(), output)?;
+        output
+            .write_all(b"    let mut arguments = Arguments { values: &mut values, arena };\n    let output = adapter(")
+            .map_err(request::unwritable)?;
+        byte_array(output, plan.identity().as_bytes())?;
+        output
+            .write_all(b")(&mut arguments)?;\n    if output.is::<NativeHandle>() { Ok(output.clone_cast::<NativeHandle>()) } else { Err(Error::TypeMismatch) }\n}\n\n")
+            .map_err(request::unwritable)?;
     }
     output
-        .write_all(b"    ];\n\n    const ACCEPTS: &[&[([u8; 32], bool)]] = &[\n")
+        .write_all(b"    const PRODUCERS: &[fn(&mut Arena) -> Result<NativeHandle, Error>] = &[\n")
         .map_err(request::unwritable)?;
-    for module in modules {
-        writeln!(output, "        {module}::ACCEPTS,").map_err(request::unwritable)?;
+    for plan in plans {
+        if producer_inputs(plan.operation()).is_some() {
+            writeln!(output, "        {},", identity_name("producer", plan))
+                .map_err(request::unwritable)?;
+        }
+    }
+    // A struct the tests can build from primitives alone. One whose
+    // constructor takes another crate value, as `FieldSurface { leaf }`
+    // does, has no producer, so its fields have no value to read.
+    let producible = plans
+        .iter()
+        .filter(|plan| {
+            matches!(plan.operation(), Operation::StructConstructor { .. })
+                && producer_inputs(plan.operation()).is_some()
+        })
+        .map(structural_type)
+        .collect::<std::collections::BTreeSet<_>>();
+    output
+        .write_all(b"    ];\n\n    const ACCEPTS: &[([u8; 32], bool)] = &[\n")
+        .map_err(request::unwritable)?;
+    for plan in plans {
+        let consumes = match plan.operation() {
+            Operation::StructField { field, .. } if producible.contains(&structural_type(plan)) => {
+                !shared_field(field.ty())
+            }
+            Operation::StructField { .. } => continue,
+            Operation::Method {
+                receiver,
+                signature,
+                ..
+            } if signature.inputs().is_empty() => matches!(receiver, Receiver::Owned),
+            _ => continue,
+        };
+        output
+            .write_all(b"        (")
+            .map_err(request::unwritable)?;
+        byte_array(output, plan.identity().as_bytes())?;
+        writeln!(output, ", {consumes}),").map_err(request::unwritable)?;
     }
     output
         .write_all(
             b"    ];\n\n\
               fn assert_accepts(identity: [u8; 32], consumes: bool) {\n\
-                  for producer in PRODUCERS.iter().flat_map(|producers| producers.iter()) {\n\
+                  for producer in PRODUCERS {\n\
                       let mut arena = Arena::new([11; 32]);\n\
                       let handle = producer(&mut arena).expect(\"nominal producer\");\n\
                       let slot = handle.slot as usize;\n\
@@ -24222,114 +24505,51 @@ fn render_execution_tests<'a>(
               }\n\n\
               #[test]\n\
               fn nominal_producers_and_receivers_execute_without_cloning_values() {\n\
-                  assert!(PRODUCERS.iter().any(|producers| !producers.is_empty()));\n\
-                  for (identity, consumes) in ACCEPTS.iter().flat_map(|accepts| accepts.iter()) {\n\
+                  assert!(!PRODUCERS.is_empty());\n\
+                  for (identity, consumes) in ACCEPTS {\n\
                       assert_accepts(*identity, *consumes);\n\
                   }\n\
-              }\n\
-              }\n\n",
-        )
-        .map_err(request::unwritable)
-}
-
-/// One adapter module's execution-test rows: its producers, the receivers it
-/// asserts, and the single primitive and builder tests when it owns their plan.
-fn render_module_execution_tests(
-    plans: &[Plan],
-    indices: &[usize],
-    primitive: Option<usize>,
-    builder: Option<usize>,
-    output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
-    for index in indices {
-        let plan = &plans[*index];
-        let Some(inputs) = producer_inputs(plan.operation()) else {
-            continue;
-        };
-        writeln!(
-            output,
-            "#[cfg(test)]\nfn {}(arena: &mut Arena) -> Result<NativeHandle, Error> {{",
-            identity_name("producer", plan)
+              }\n",
         )
         .map_err(request::unwritable)?;
-        render_execution_values(&inputs.iter().collect::<Vec<_>>(), output)?;
-        writeln!(
-            output,
-            "    let mut arguments = Arguments {{ values: &mut values, arena }};\n    let output = {}(&mut arguments)?;\n    if output.is::<NativeHandle>() {{ Ok(output.clone_cast::<NativeHandle>()) }} else {{ Err(Error::TypeMismatch) }}\n}}\n",
-            adapter_name(plan)
+    let primitive = plans.iter().find(|plan| {
+        matches!(
+            plan.operation(),
+            Operation::Function { signature, .. }
+                if signature.inputs().is_empty()
+                    && matches!(signature.output(), convert::Type::Builtin(convert::Builtin::I64))
         )
-        .map_err(request::unwritable)?;
-    }
-    output
-        .write_all(
-            b"#[cfg(test)]\npub(super) const PRODUCERS: &[fn(&mut Arena) -> Result<NativeHandle, Error>] = &[\n",
-        )
-        .map_err(request::unwritable)?;
-    for index in indices {
-        let plan = &plans[*index];
-        if producer_inputs(plan.operation()).is_some() {
-            writeln!(output, "    {},", identity_name("producer", plan))
-                .map_err(request::unwritable)?;
-        }
-    }
-    // A struct the tests can build from primitives alone. One whose
-    // constructor takes another crate value, as `FieldSurface { leaf }`
-    // does, has no producer, so its fields have no value to read.
-    let producible = plans
-        .iter()
-        .filter(|plan| {
-            matches!(plan.operation(), Operation::StructConstructor { .. })
-                && producer_inputs(plan.operation()).is_some()
-        })
-        .map(structural_type)
-        .collect::<std::collections::BTreeSet<_>>();
-    output
-        .write_all(b"];\n\n#[cfg(test)]\npub(super) const ACCEPTS: &[([u8; 32], bool)] = &[\n")
-        .map_err(request::unwritable)?;
-    for index in indices {
-        let plan = &plans[*index];
-        let consumes = match plan.operation() {
-            Operation::StructField { field, .. } if producible.contains(&structural_type(plan)) => {
-                !shared_field(field.ty())
-            }
-            Operation::StructField { .. } => continue,
-            Operation::Method {
-                receiver,
-                signature,
-                ..
-            } if signature.inputs().is_empty() => matches!(receiver, Receiver::Owned),
-            _ => continue,
-        };
-        output.write_all(b"    (").map_err(request::unwritable)?;
-        byte_array(output, plan.identity().as_bytes())?;
-        writeln!(output, ", {consumes}),").map_err(request::unwritable)?;
-    }
-    output.write_all(b"];\n").map_err(request::unwritable)?;
-    if let Some(index) = primitive.filter(|index| indices.contains(index)) {
-        writeln!(
-            output,
-            "\n#[cfg(test)]\n#[test]\nfn primitive_output_executes_without_an_arena_slot() {{\n    let mut arena = Arena::new([12; 32]);\n    let mut values: [&mut Dynamic; 0] = [];\n    let mut arguments = Arguments {{ values: &mut values, arena: &mut arena }};\n    let output = {}(&mut arguments).expect(\"primitive adapter\");\n    assert!(output.is::<i64>());\n    assert!(arena.slots.is_empty());\n}}",
-            adapter_name(&plans[index])
-        )
-        .map_err(request::unwritable)?;
-    }
-    if let Some(index) = builder.filter(|index| indices.contains(index)) {
-        let inputs = builder_execution_inputs(plans[index].operation())
-            .ok_or_else(|| request::drift("generated builder execution inputs"))?;
+    });
+    if let Some(plan) = primitive {
         output
             .write_all(
-                b"\n#[cfg(test)]\n#[test]\nfn consuming_builder_replays_in_one_native_invocation() {\n    let mut arena = Arena::new([13; 32]);\n",
+                b"\n#[test]\nfn primitive_output_executes_without_an_arena_slot() {\n    let mut arena = Arena::new([12; 32]);\n    let mut values: [&mut Dynamic; 0] = [];\n    let mut arguments = Arguments { values: &mut values, arena: &mut arena };\n    let output = adapter(",
+            )
+            .map_err(request::unwritable)?;
+        byte_array(output, plan.identity().as_bytes())?;
+        output
+            .write_all(b")(&mut arguments).expect(\"primitive adapter\");\n    assert!(output.is::<i64>());\n    assert!(arena.slots.is_empty());\n}\n")
+            .map_err(request::unwritable)?;
+    }
+    let builder = plans
+        .iter()
+        .find_map(|plan| Some((plan, builder_execution_inputs(plan.operation())?)));
+    if let Some((plan, inputs)) = builder {
+        output
+            .write_all(
+                b"\n#[test]\nfn consuming_builder_replays_in_one_native_invocation() {\n    let mut arena = Arena::new([13; 32]);\n",
             )
             .map_err(request::unwritable)?;
         render_execution_values(&inputs, output)?;
-        writeln!(
-            output,
-            "    let mut arguments = Arguments {{ values: &mut values, arena: &mut arena }};\n    let output = {}(&mut arguments).expect(\"builder replay\");\n    assert!(output.is::<i64>());\n    assert!(arena.slots.is_empty());\n}}",
-            adapter_name(&plans[index])
-        )
-        .map_err(request::unwritable)?;
+        output
+            .write_all(b"    let mut arguments = Arguments { values: &mut values, arena: &mut arena };\n    let output = adapter(")
+            .map_err(request::unwritable)?;
+        byte_array(output, plan.identity().as_bytes())?;
+        output
+            .write_all(b")(&mut arguments).expect(\"builder replay\");\n    assert!(output.is::<i64>());\n    assert!(arena.slots.is_empty());\n}\n")
+            .map_err(request::unwritable)?;
     }
-    Ok(())
+    output.write_all(b"}\n\n").map_err(request::unwritable)
 }
 
 fn render_execution_values(
@@ -24532,9 +24752,9 @@ impl Write for Hashing {
 #[cfg(test)]
 mod tests {
     use super::{
-        projected_event_message, render_container_path, render_item_turbofish,
-        LIFECYCLE_PROFILE_RUNNER_MAIN, NEUTRAL_PROFILE_SOURCE, PROFILE_RUNNER_MAIN, RUNNER_MAIN,
-        RUNTIME_SOURCE,
+        projected_event_message, render_container_path, render_item_turbofish, DRIVER_SOURCE,
+        LIFECYCLE_PROFILE_RUNNER_MAIN, NEUTRAL_PROFILE_HOST_SOURCE, NEUTRAL_PROFILE_SOURCE,
+        PROFILE_RUNNER_MAIN, RUNNER_MAIN, RUNTIME_SOURCE,
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
@@ -24707,12 +24927,13 @@ mod tests {
     /// native value drops with its last handle (D513.3, D513.6).
     #[test]
     fn the_plain_runner_lends_receivers_and_releases_native_values() {
-        let neutral = std::str::from_utf8(NEUTRAL_PROFILE_SOURCE).unwrap();
-        assert!(neutral.contains("mod __rawr_profile_host {"), "{neutral}");
+        let host = std::str::from_utf8(NEUTRAL_PROFILE_HOST_SOURCE).unwrap();
+        assert!(host.contains("pub mod __rawr_profile_host {"), "{host}");
         assert!(
-            neutral.contains("__rawr_internal::future::Future::native(move || {"),
-            "{neutral}"
+            host.contains("__rawr_internal::future::Future::native(move || {"),
+            "{host}"
         );
+        let neutral = std::str::from_utf8(NEUTRAL_PROFILE_SOURCE).unwrap();
         assert!(
             neutral.contains("__rawr_internal::future::facade::definition()"),
             "{neutral}"
@@ -24859,7 +25080,7 @@ mod tests {
     #[test]
     fn runner_manifest_keeps_the_projects_profile() {
         let harness = b"[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[profile.dev.package.\"*\"]\nopt-level = 3\n\n[dependencies]\niced = \"0.14\"\n";
-        let manifest = super::runner_manifest(harness, None, &[]).unwrap();
+        let manifest = super::runner_manifest(harness, &[]).unwrap();
         let document = std::str::from_utf8(&manifest)
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
@@ -24878,7 +25099,7 @@ mod tests {
         // The harness's build dependency on Rawr's own crate, which it never
         // builds, is a dependency of the runner, and its build script has none.
         let harness = b"[workspace]\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies]\nzeta = \"1\"\n\n[build-dependencies]\n__rawr_internal = { package = \"rawr\", path = \"/rawr\" }\n";
-        let manifest = super::runner_manifest(harness, None, &[]).unwrap();
+        let manifest = super::runner_manifest(harness, &[]).unwrap();
         let document = std::str::from_utf8(&manifest)
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
@@ -24946,7 +25167,7 @@ mod tests {
         let lock = std::fs::read(root.join("Cargo.lock")).unwrap();
         assert!(super::unused_patches(&lock).contains("ghost"));
         let harness = std::fs::read(root.join("Cargo.toml")).unwrap();
-        let (manifest, _) = super::runner_manifest_aliased(&harness, None, &[], &lock).unwrap();
+        let (manifest, _) = super::runner_manifest_aliased(&harness, &[], &lock).unwrap();
         let runner = super::runner_lock(&lock, &[]).unwrap();
         assert!(!String::from_utf8_lossy(&manifest).contains("ghost"));
         assert!(!String::from_utf8_lossy(&runner).contains("ghost"));
@@ -24974,7 +25195,6 @@ mod tests {
         };
         let (manifest, _) = super::runner_manifest_aliased(
             harness,
-            None,
             &[hidden("ui_shell"), hidden("local_macros")],
             lock,
         )
@@ -24998,7 +25218,7 @@ mod tests {
 
     #[test]
     fn generated_compiler_retains_one_native_account_before_initial_compilation() {
-        let runtime = std::str::from_utf8(RUNTIME_SOURCE).expect("runtime source is UTF-8");
+        let runtime = std::str::from_utf8(DRIVER_SOURCE).expect("driver source is UTF-8");
         let (prepare, compile) = runtime
             .split_once("fn prepare_engine(")
             .expect("engine preparation")
@@ -25466,7 +25686,7 @@ mod tests {
 
     #[test]
     fn generated_runtime_binds_every_imported_type_in_one_pass() {
-        let source = std::str::from_utf8(RUNTIME_SOURCE).expect("runtime source is UTF-8");
+        let source = std::str::from_utf8(DRIVER_SOURCE).expect("driver source is UTF-8");
         assert!(source.contains("builder.bind_imported_type_attestations(native_attestation)?"));
         assert!(!source.contains("for selector in imported_identities"));
         assert!(source.contains("builder.bind_type_attestation(path, native_attestation)?"));

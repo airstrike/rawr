@@ -531,14 +531,24 @@ fn names_rawr(name: &str, root: Option<&str>) -> bool {
         })
 }
 
-/// A package in the runner's lockfile, other than the runner, that depends
-/// on `rawr`, such as rawr-iced.
+/// Whether a lock entry is the runner's own package or one of its members'
+/// (`bridge::generate::member`).
+fn is_runner(package: &Table) -> bool {
+    package
+        .get("name")
+        .and_then(Item::as_str)
+        .is_some_and(crate::bridge::generate::member::is_runner_package)
+        && !package.contains_key("source")
+}
+
+/// A package in the runner's lockfile, other than the runner and its
+/// members, that depends on `rawr`, such as rawr-iced.
 fn rawr_dependent(lock: &str) -> Option<String> {
     let document = lock.parse::<DocumentMut>().ok()?;
     let packages = document.get("package")?.as_array_of_tables()?;
     packages
         .iter()
-        .filter(|package| package.get("name").and_then(Item::as_str) != Some(RUNNER))
+        .filter(|package| !is_runner(package))
         .find(|package| {
             package
                 .get("dependencies")
@@ -556,8 +566,8 @@ fn rawr_dependent(lock: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// `lock` without the runner's `rawr` dependency and every package that only
-/// `rawr` reached.
+/// `lock` without the `rawr` dependency of the runner and its members, and
+/// every package that only `rawr` reached.
 fn prune_lock(lock: &str) -> Option<String> {
     let mut document = lock.parse::<DocumentMut>().ok()?;
     let packages = document.get_mut("package")?.as_array_of_tables_mut()?;
@@ -583,17 +593,15 @@ fn prune_lock(lock: &str) -> Option<String> {
         package.get("name").and_then(Item::as_str) == Some(RUNNER)
             && !package.contains_key("source")
     })?;
-    if let Some(dependencies) = packages
-        .get_mut(root)?
-        .get_mut("dependencies")
-        .and_then(Item::as_array_mut)
-    {
-        dependencies.retain(|dependency| {
-            dependency
-                .as_str()
-                .and_then(|text| text.split_whitespace().next())
-                != Some("rawr")
-        });
+    for package in packages.iter_mut().filter(|package| is_runner(package)) {
+        if let Some(dependencies) = package.get_mut("dependencies").and_then(Item::as_array_mut) {
+            dependencies.retain(|dependency| {
+                dependency
+                    .as_str()
+                    .and_then(|text| text.split_whitespace().next())
+                    != Some("rawr")
+            });
+        }
     }
     let identities = packages.iter().map(identity).collect::<Vec<_>>();
     let edges = packages
