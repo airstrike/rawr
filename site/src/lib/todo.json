@@ -4571,7 +4571,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "inboard (about 1,070 crates) with theme.rs, home.rs and sidebar.rs marked, measured 2026-11-11 with the machine quiet. A body edit swaps in place in 0.76 s, re-lowering 1 file (#1688). A warm start reaches the app's first output in about 18 s (#1638). A check after a doc-only rawr install takes 57 s in one round with nothing read or classified (#1690, #1695); it was about 7 min. A cold check takes 205 s. Cleanup by state took target/rawr from 22 GB to 15 GB (#1677). Left: each install binds a new harness and copies 3,043 files (#1696); canonicalization is serial when cold (#1687).",
+          "note": "inboard (about 1,070 crates) with theme.rs, home.rs and sidebar.rs marked, measured 2026-11-11 with the machine quiet. A body edit swaps in place in 0.76 s, re-lowering 1 file (#1688). A warm start reaches the app's first output in about 18 s (#1638). A check right after a rawr install takes 16 s with every count at 0: no harness, resolution, nightly build or copy (#1690, #1695, #1696); it was about 7 min. A cold check takes 205 s. Cleanup by state took target/rawr from 22 GB to 15 GB (#1677). Left: canonicalization is serial when cold (#1687); the runner rebuilds after an install (#1493).",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
