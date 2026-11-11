@@ -15,7 +15,8 @@
         {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]},
         {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]},
         {"text":"Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner.","issues":[1670]},
-        {"text":"A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed.","issues":[1722]}
+        {"text":"A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed.","issues":[1722]},
+        {"text":"`rawr run` lowers again only the marked files that name what a save changed: a new function, a derive or a `cfg` on something native code doesn't see re-lowers its own file and the files that name it.","issues":[1718],"refs":[1646]}
       ]
     },
     "releases": [
@@ -3773,13 +3774,16 @@
     {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"},
     {"issue":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open","category":"Divergences from rustc"},
     {"issue":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open","category":"Divergences from rustc"},
     {"issue":1721,"title":"The importer's rustc-driver it suite is stale: the p3 runner fails E0599 and tests read src/main.rs for moved code","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1724,"title":"31 rawr lib tests fail on main: account Carrier errors, layout sizes, a missing native binding, rustc-wording drift","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1724,"title":"31 rawr lib tests fail on main: account Carrier errors, layout sizes, a missing native binding, rustc-wording drift","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1725,"title":"A runner a native rebuild starts lowers every marked file again, though most files' keys are unchanged","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1726,"title":"Adding or removing a struct or enum re-lowers every file that reaches a type numbered after it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4985,9 +4989,12 @@
             {"number":1688,"title":"A save naming a re-exported crate type prepared again: its build and its compile named the type differently","state":"closed"},
             {"number":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"closed"},
             {"number":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed"},
-            {"number":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open"},
+            {"number":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"closed"},
             {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
-            {"number":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open"}
+            {"number":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open"},
+            {"number":1725,"title":"A runner a native rebuild starts lowers every marked file again, though most files' keys are unchanged","state":"open"},
+            {"number":1726,"title":"Adding or removing a struct or enum re-lowers every file that reaches a type numbered after it","state":"open"},
+            {"number":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open"}
           ]
         }
       ]

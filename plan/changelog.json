@@ -8,7 +8,8 @@
       {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]},
       {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]},
       {"text":"Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner.","issues":[1670]},
-      {"text":"A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed.","issues":[1722]}
+      {"text":"A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed.","issues":[1722]},
+      {"text":"`rawr run` lowers again only the marked files that name what a save changed: a new function, a derive or a `cfg` on something native code doesn't see re-lowers its own file and the files that name it.","issues":[1718],"refs":[1646]}
     ]
   },
   "releases": [

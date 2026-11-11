@@ -9,6 +9,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`. (#1713)
 - Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner. (#1670)
 - A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed. (#1722)
+- `rawr run` lowers again only the marked files that name what a save changed: a new function, a derive or a `cfg` on something native code doesn't see re-lowers its own file and the files that name it. (#1718; part of #1646)
 
 ## 0.3.184 (2026-11-11)
 
