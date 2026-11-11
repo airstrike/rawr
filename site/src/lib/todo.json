@@ -27,7 +27,10 @@
         {"text":"A native generic call that takes a program value works in the head of a `for`, `if`, `match` or `while`, so iced's download_progress runs its downloads as cargo does.","issues":[314]},
         {"text":"serde's `Deserialize` on a unit-variant enum runs. `from_utf8_lossy(&[u8])` gets a scope frame that owns a copy of the bytes, and a match pattern infers the type a call leaves open, as `V` of `EnumAccess::variant::<V>()`. iced's todos now passes `rawr check`.","issues":[1709],"refs":[1017]},
         {"text":"A leading `::` path names its crate, as rustc's does: `use ::image as img;` and `use ::image::ColorType;` run beside an `image` the program imports from another crate. iced's screenshot now passes `rawr check`.","issues":[1706]},
-        {"text":"`Option<PathBuf>::as_deref` gives an `Option<&Path>`, as std's `Deref for PathBuf` does, and `Path::extension` works as a function value after it, as in iced's editor.","issues":[1705]}
+        {"text":"`Option<PathBuf>::as_deref` gives an `Option<&Path>`, as std's `Deref for PathBuf` does, and `Path::extension` works as a function value after it, as in iced's editor.","issues":[1705]},
+        {"text":"A crate's thread `JoinHandle` crosses inside an `Option`, a `Result` or a tuple, and a crate can take one, whether the crate's thread or the program's own `std::thread::spawn` made it.","issues":[1274]},
+        {"text":"A crate's `JoinHandle<T>` whose `T` holds the crate's values, alone or in an `Option`, gives them to the program when it joins the thread.","issues":[1275]},
+        {"text":"A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`.","issues":[1276]}
       ]
     },
     "releases": [
@@ -3314,9 +3317,9 @@
     {"issue":1271,"title":"An opaque type's Add, as impl Number gets it through a supertrait, gives the + operator","state":"open","category":"Divergences from rustc"},
     {"issue":1272,"title":"A marked pub fn whose argument is a native alias of a wire type (`type Width = usize`) gets a native handle at the call","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1273,"title":"A native module's unit struct used as a value (`page::Home`) can't be used yet","state":"open","category":"Divergences from rustc"},
-    {"issue":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"open","category":"Divergences from rustc"},
-    {"issue":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"open","category":"Divergences from rustc"},
-    {"issue":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open","category":"Divergences from rustc"},
+    {"issue":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"closed","category":"Divergences from rustc"},
+    {"issue":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"closed","category":"Divergences from rustc"},
+    {"issue":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"closed","category":"Divergences from rustc"},
     {"issue":1277,"title":"rawr-import: a dependency's feature named on the command line (`--features dep/feat`) reaches the dependency","state":"open","category":"Divergences from rustc"},
     {"issue":1278,"title":"rawr-import panics in package::import::type_usage: a type parameter's index names a declared parameter","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1279,"title":"A function's nested opaque output, as `-> impl Iterator<Item = impl Display>`, can't be used","state":"open","category":"Divergences from rustc"},
@@ -3753,7 +3756,8 @@
     {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"open","category":"Divergences from rustc"},
     {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"open","category":"Divergences from rustc"},
     {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open","category":"Divergences from rustc"}
+    {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4310,9 +4314,9 @@
             {"number":1218,"title":"A generic program function's type parameter isn't inferred through an impl Trait argument's bound, nor taken from a t...","state":"closed"},
             {"number":1266,"title":"iced tour: `open::that_in_background(..)` gives E0433 cannot find module or crate `open`; cargo check passes","state":"closed"},
             {"number":1267,"title":"A dependency whose every item is left out reads as an unknown crate (E0433) instead of naming the unsupported item","state":"closed"},
-            {"number":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"open"},
-            {"number":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"open"},
-            {"number":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"open"},
+            {"number":1274,"title":"A crate's JoinHandle nested in an output (Option, Result, a tuple) or taken as an input crosses","state":"closed"},
+            {"number":1275,"title":"A crate's JoinHandle<T> of a T that holds crate values crosses","state":"closed"},
+            {"number":1276,"title":"A program's thread JoinHandle as a crate generic's type argument","state":"closed"},
             {"number":1317,"title":"A crate's unit struct used as a value (`badge::Secondary`), through a re-export, with its From conversion at a call","state":"closed"},
             {"number":1319,"title":"`use m::{self, f}` binds both a module and its same-named function","state":"closed"},
             {"number":1320,"title":"A struct's constructor is no separate rejected export","state":"closed"},
@@ -4358,7 +4362,8 @@
             {"number":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"open"},
             {"number":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"open"},
             {"number":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"open"},
-            {"number":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open"}
+            {"number":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open"},
+            {"number":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open"}
           ],
           "milestone": "0.4"
         },

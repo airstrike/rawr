@@ -21,6 +21,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - serde's `Deserialize` on a unit-variant enum runs. `from_utf8_lossy(&[u8])` gets a scope frame that owns a copy of the bytes, and a match pattern infers the type a call leaves open, as `V` of `EnumAccess::variant::<V>()`. iced's todos now passes `rawr check`. (#1709; part of #1017)
 - A leading `::` path names its crate, as rustc's does: `use ::image as img;` and `use ::image::ColorType;` run beside an `image` the program imports from another crate. iced's screenshot now passes `rawr check`. (#1706)
 - `Option<PathBuf>::as_deref` gives an `Option<&Path>`, as std's `Deref for PathBuf` does, and `Path::extension` works as a function value after it, as in iced's editor. (#1705)
+- A crate's thread `JoinHandle` crosses inside an `Option`, a `Result` or a tuple, and a crate can take one, whether the crate's thread or the program's own `std::thread::spawn` made it. (#1274)
+- A crate's `JoinHandle<T>` whose `T` holds the crate's values, alone or in an `Option`, gives them to the program when it joins the thread. (#1275)
+- A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`. (#1276)
 
 ## 0.3.183 (2026-11-11)
 
