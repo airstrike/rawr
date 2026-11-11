@@ -127,7 +127,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // `impl AddAssign<Turn> for f32` (#987). `driver.rs`,
 // `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
 // move with it.
-const PROTOCOL_SCHEMA: u32 = 74;
+const PROTOCOL_SCHEMA: u32 = 75;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
