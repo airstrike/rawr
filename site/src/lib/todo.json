@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate function whose output future's `Output` is its future parameter's `S::Output`, as futures' adapters keep their input's output, is imported. Before, the parameter's output was declared twice and Bind stopped with E0403 \"the name `SOutput` is already used for a generic parameter\", which stopped inboard's check. This had regressed with #1674.","issues":[1685]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.182",
@@ -3682,7 +3687,8 @@
     {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open","category":"Divergences from rustc"},
     {"issue":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
     {"issue":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"open","category":"Divergences from rustc"}
+    {"issue":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"open","category":"Divergences from rustc"},
+    {"issue":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4763,7 +4769,8 @@
             {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"},
             {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open"},
             {"number":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open"},
-            {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed"}
+            {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed"},
+            {"number":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"open"}
           ]
         }
       ]
