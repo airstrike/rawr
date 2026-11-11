@@ -3794,7 +3794,8 @@
     {"issue":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"open","category":"Divergences from rustc"},
-    {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5096,7 +5097,8 @@
             {"number":1377,"title":"Trim generations that never build a new runner, and keep siblings reused across generations","state":"open"},
             {"number":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"closed"},
             {"number":1407,"title":"inboard after one run: store.parts 7.4G beside store/executions 6.8G; parts should replace whole…","state":"open"},
-            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"}
+            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"},
+            {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"open"}
           ]
         },
         {
