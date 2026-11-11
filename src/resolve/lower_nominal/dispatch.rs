@@ -141,22 +141,22 @@ pub(super) fn write_trait_dispatchers(
                     .filter(|definition| definition.trait_name() == Some(trait_name))
                 {
                     if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) {
-                        blanket = Some(definition.id());
+                        blanket = Some(definition);
                         continue;
                     }
                     let _ = writeln!(
                         text,
                         "if __rawr_type == {} {{ return self.{}({parameters}); }}",
                         owner_key(*owner),
-                        method_name(definition.id())
+                        method_name(definition)
                     );
                 }
             }
             // A std trait's dispatcher falls back to what Rawr does for a
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
-                _ if let Some(id) = blanket => {
-                    format!("return self.{}({parameters});", method_name(id))
+                _ if let Some(blanket) = blanket => {
+                    format!("return self.{}({parameters});", method_name(blanket))
                 }
                 (true, "Clone") => "return self;".to_string(),
                 // An `Rc` or `Arc` writes what it points to, as std's
@@ -290,18 +290,18 @@ pub(super) fn write_instance_dispatchers(
             }
             // A blanket impl runs for a value no other impl is for.
             if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) {
-                blanket = Some(definition.id());
+                blanket = Some(definition);
                 continue;
             }
             let _ = writeln!(
                 text,
                 "if __rawr_type == {} {{ return self.{}({parameters}); }}",
                 owner_key(*owner),
-                method_name(definition.id())
+                method_name(definition)
             );
         }
-        if let Some(id) = blanket {
-            let _ = writeln!(text, "return self.{}({parameters});", method_name(id));
+        if let Some(blanket) = blanket {
+            let _ = writeln!(text, "return self.{}({parameters});", method_name(blanket));
         }
         // Rust's own operator impls on builtins: the runtime's operator.
         if let Some((symbol, ..)) = models
@@ -428,7 +428,7 @@ pub(super) fn write_into_dispatchers(
                     text,
                     "if __rawr_type == {} {{ return {}(self); }}",
                     owner_key(id),
-                    method_name(conversion.id())
+                    method_name(conversion)
                 );
             }
         }
@@ -577,7 +577,7 @@ pub(super) fn write_static_dispatcher(
                             text,
                             "if __rawr_witness == {}{conditions} {{ return {}({parameters}); }}",
                             owner_key(*owner),
-                            method_name(definition.id())
+                            method_name(definition)
                         );
                     }
                 }
@@ -619,7 +619,7 @@ pub(super) fn write_static_dispatcher(
                     text,
                     "if __rawr_witness == {} {{ return {}({parameters}); }}",
                     owner_key(*owner),
-                    method_name(definition.id())
+                    method_name(definition)
                 );
             }
         }
@@ -686,7 +686,7 @@ pub(super) fn write_default_dispatcher(
             continue;
         }
         let call = if let Some(definition) = models.std_impl(*id, "Default", "default") {
-            format!("{}()", method_name(definition.id()))
+            format!("{}()", method_name(definition))
         } else if !models.default_folds(&model.ty(), &mut Vec::new()) {
             continue;
         } else if let Some(value) = default_value(model, models, &mut Vec::new()) {
@@ -734,7 +734,7 @@ pub(super) fn write_method(
     output.declaration(
         source,
         declaration,
-        &format!("{}(", method_name(definition.id())),
+        &format!("{}(", method_name(definition)),
     );
     for (index, parameter) in definition.parameters().iter().enumerate() {
         if index > 0 {

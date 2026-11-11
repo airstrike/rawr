@@ -1631,7 +1631,7 @@ impl<'a> Parser<'a> {
                             self.method_substitution(&definition, Some(&ty), span)?;
                         self.bind_method_instance(definition, &substitution, span)?
                     };
-                    return Ok(origin::Fragment::call(method_name(definition.id()), []));
+                    return Ok(origin::Fragment::call(method_name(&definition), []));
                 }
                 // A derived `Default` with a field whose `Default` runs code
                 // is the struct of each field's `Default`, built each time.

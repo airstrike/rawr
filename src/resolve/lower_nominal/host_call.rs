@@ -180,7 +180,7 @@ impl<'a> Parser<'a> {
             .join(", ");
         let source = origin::Fragment::plain(format!(
             "(|{parameters}| {}({parameters}))",
-            method_name(definition.id())
+            method_name(definition)
         ));
         Ok(self.operator_expr(
             source,

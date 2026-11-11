@@ -25,12 +25,34 @@ pub(super) const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
 pub(super) const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
 pub(super) const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 
-pub(super) fn method_name(id: method::Id) -> String {
-    format!("{METHOD_SENTINEL}{}", id.index())
+/// A method's generated name, by its symbol: a lowering that calls it
+/// names it the same in every generation of the program, however the
+/// program's methods are numbered (#1718).
+pub(super) fn method_name(definition: &method::Definition) -> String {
+    stable(METHOD_SENTINEL, &definition.symbol())
 }
 
-pub(super) fn function_name(id: crate::item::Id) -> String {
-    format!("{FUNCTION_SENTINEL}{}", id.index())
+/// A function's generated name, by its key, as `method_name`.
+pub(super) fn function_name(key: &crate::item::Key) -> String {
+    stable(FUNCTION_SENTINEL, &private_function_name(key))
+}
+
+/// `sentinel`, then the first `DIGITS` digits of `symbol`'s digest in
+/// base 62: an identifier no other symbol's reaches but by a 71-bit
+/// collision. It fits a conversion's placeholder (`conversion_placeholder`).
+fn stable(sentinel: &str, symbol: &str) -> String {
+    use sha2::Digest as _;
+    const DIGITS: usize = 12;
+    const ALPHABET: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let digest = sha2::Sha256::digest(symbol.as_bytes());
+    let mut name = String::with_capacity(sentinel.len() + DIGITS);
+    name.push_str(sentinel);
+    name.extend(
+        digest[..DIGITS]
+            .iter()
+            .map(|byte| char::from(ALPHABET[usize::from(*byte) % ALPHABET.len()])),
+    );
+    name
 }
 
 /// A private function's generated name: its path, and a block item's

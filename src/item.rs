@@ -339,7 +339,7 @@ impl Value {
 /// ```compile_fail
 /// let _ = rawr::item::Id(0);
 /// ```
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Id(usize);
 
@@ -348,9 +348,54 @@ impl Id {
         Self(index)
     }
 
+    #[cfg(feature = "rust-import")]
     pub(crate) const fn index(self) -> usize {
         self.0
     }
+}
+
+impl fmt::Debug for Id {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        numbered(formatter, "Id", self.0)
+    }
+}
+
+std::thread_local! {
+    /// Whether this thread writes item and method ids without their
+    /// numbers (`unnumbered`).
+    static UNNUMBERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// What `write` gives, each item and method id this thread writes by
+/// `Debug` meanwhile written without its number: a digest of what a
+/// declaration is then reads the same however the program numbers its
+/// items and methods, as a lowering's generated names do (#1718).
+#[cfg(feature = "rust-import")]
+pub(crate) fn unnumbered<T>(write: impl FnOnce() -> T) -> T {
+    /// Puts back how ids were written before, as `write` ends or unwinds.
+    struct Restore(bool);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNNUMBERED.set(self.0);
+        }
+    }
+
+    let _restore = Restore(UNNUMBERED.replace(true));
+    write()
+}
+
+/// Write the id `name(index)`, or `name` alone while this thread writes
+/// ids `unnumbered`.
+pub(crate) fn numbered(
+    formatter: &mut fmt::Formatter<'_>,
+    name: &str,
+    index: usize,
+) -> fmt::Result {
+    if UNNUMBERED.get() {
+        return formatter.write_str(name);
+    }
+    formatter.debug_tuple(name).field(&index).finish()
 }
 
 /// A source name and its exact span.

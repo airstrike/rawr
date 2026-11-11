@@ -238,7 +238,7 @@ impl<'a> Parser<'a> {
                 self.select_conversion(id, Some(&target), &source, value.span)?
         {
             value.source =
-                origin::Fragment::call(method_name(conversion.id()), [value.rendered_source()]);
+                origin::Fragment::call(method_name(&conversion), [value.rendered_source()]);
             value.prelude = origin::Fragment::default();
             value.ty = target.clone();
             value.lvalue = None;

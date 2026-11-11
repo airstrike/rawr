@@ -571,7 +571,7 @@ impl<'a> Parser<'a> {
                     self.coerce_expr(&from, argument)?;
                     return Ok(self.operator_expr(
                         origin::Fragment::call(
-                            method_name(conversion.id()),
+                            method_name(&conversion),
                             [argument.rendered_source()],
                         ),
                         owner,
@@ -1199,7 +1199,7 @@ impl<'a> Parser<'a> {
             };
             self.coerce_expr(&from, argument)?;
             return Ok(self.operator_expr(
-                origin::Fragment::call(method_name(definition.id()), [argument.rendered_source()]),
+                origin::Fragment::call(method_name(&definition), [argument.rendered_source()]),
                 owner,
                 call,
             ));
@@ -1601,7 +1601,7 @@ impl<'a> Parser<'a> {
         let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
         self.move_copied_in(&mut arguments, &copied);
         let source = origin::Fragment::call(
-            method_name(definition.id()),
+            method_name(&definition),
             arguments
                 .iter()
                 .map(ParsedExpr::rendered_source)
@@ -2098,10 +2098,7 @@ impl<'a> Parser<'a> {
             } {
                 self.coerce_expr(&from, argument)?;
                 return Ok(self.operator_expr(
-                    origin::Fragment::call(
-                        method_name(definition.id()),
-                        [argument.rendered_source()],
-                    ),
+                    origin::Fragment::call(method_name(&definition), [argument.rendered_source()]),
                     builtin,
                     expression,
                 ));

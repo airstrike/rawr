@@ -242,7 +242,7 @@ impl<'a> Parser<'a> {
             if !matches!(declared, Ty::Projection(..)) {
                 self.unify_type(error, &declared);
             }
-            return Ok(method_name(definition.id()));
+            return Ok(method_name(&definition));
         }
         let (source, target) = (source.name(&self.models), target.name(&self.models));
         Err(Error::MissingCapability {
@@ -1300,7 +1300,7 @@ impl<'a> Parser<'a> {
                 }
                 None => None,
             } {
-                method_name(definition.id())
+                method_name(&definition)
             } else if matches!(target, Ty::Host { .. })
                 && let Some(helper) = self.host_from_helper(&target, &conversion)?
             {

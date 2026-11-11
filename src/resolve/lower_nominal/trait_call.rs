@@ -87,7 +87,7 @@ impl<'a> Parser<'a> {
             .and_then(|owner| self.self_typed_function(owner, &function.name.text, &resolved))
         {
             let source = origin::Fragment::call(
-                method_name(definition.id()),
+                method_name(&definition),
                 arguments.iter().map(ParsedExpr::rendered_source),
             );
             return Ok(self.operator_expr(source, output, call));

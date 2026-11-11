@@ -1772,7 +1772,7 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                     ", ",
                 );
-                let method = method_name(definition.id());
+                let method = method_name(&definition);
                 let places =
                     self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
                 let mut source =
@@ -1833,7 +1833,7 @@ impl<'a> Parser<'a> {
                     .chain(witnesses),
                 ", ",
             );
-            let method = method_name(definition.id());
+            let method = method_name(&definition);
             let source = match writeback {
                 Some(Writeback::Owned) => {
                     let receiver = self.temporary("receiver");
@@ -3652,7 +3652,7 @@ impl<'a> Parser<'a> {
             source.push(unwrapped);
             source.push_text(format!(" }} else {{ {drops}return "));
             let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
-            let converted = origin::Fragment::call(method_name(conversion.id()), [error]);
+            let converted = origin::Fragment::call(method_name(&conversion), [error]);
             let returned = self.prelude_op(PreludeOp::Err, [converted]);
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
             source.push_text("; } }");

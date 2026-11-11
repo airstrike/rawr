@@ -102,7 +102,7 @@ impl<'a> Parser<'a> {
             && let Some((definition, from_str_error)) = self.program_from_str(*id)
         {
             self.require_type(&from_str_error, error, span)?;
-            return Ok(Some(method_name(definition.id())));
+            return Ok(Some(method_name(&definition)));
         }
         // A crate type's `impl FromStr`: its `from_str`, which the importer
         // brings as it brings any member of the type (#709).

@@ -296,7 +296,7 @@ pub(super) fn write_glue(
                 text,
                 "if __rawr_type == {} {{ __rawr_value.{}(); }}",
                 owner_key(*owner),
-                method_name(definition.id())
+                method_name(definition)
             );
         }
     }
