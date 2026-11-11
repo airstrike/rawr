@@ -679,13 +679,14 @@ impl<'a> Parser<'a> {
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
-            // The `JoinHandle` of a crate's thread, as a crate gives one
-            // (#1266): rawr's thread handle, whose value becomes rawr's
-            // where it is joined.
+            // A thread's `JoinHandle`, the program's or a crate's (#1266,
+            // #1274): rawr's thread handle, whose value becomes rawr's where
+            // it is joined, attested as its `T` (#1275).
             #[cfg(feature = "sync")]
-            Ty::Thread(thread::Kind::JoinHandle, _) => {
-                intrinsic::Type::builtin("JoinHandle", TypeId::of::<crate::eval::threads::Handle>())
-            }
+            Ty::Thread(thread::Kind::JoinHandle, inner) => intrinsic::Type::joined(
+                TypeId::of::<crate::eval::threads::Handle>(),
+                self.proven_type(&inner, operation, span)?,
+            ),
             Ty::Thread(..) => return Err(unpassable(ty.name(&self.models), operation, span)),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 return Err(Error::InvalidHostOperation {

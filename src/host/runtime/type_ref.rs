@@ -47,6 +47,13 @@ pub(crate) enum Type {
         name: ImmutableString,
         element: Box<[Type]>,
     },
+    /// Rust's `std::thread::JoinHandle<T>`, of the one type in `element`:
+    /// rawr's thread handle, whose `T` the value its thread gives is
+    /// attested as where it is joined (#1275).
+    Joined {
+        runtime: Representation,
+        element: Box<[Type]>,
+    },
     Script {
         identity: type_def::Identity,
         schema: program::schema::Fingerprint,
@@ -183,6 +190,10 @@ impl Type {
                 name: name.clone(),
                 element: each(element),
             },
+            Self::Joined { runtime, element } => Self::Joined {
+                runtime: *runtime,
+                element: each(element),
+            },
             Self::Result(ok, err) => Self::Result(
                 Box::new(ok.instantiate(arguments)),
                 Box::new(err.instantiate(arguments)),
@@ -239,6 +250,15 @@ impl Type {
     pub(crate) fn counted(name: impl Into<ImmutableString>, element: Self) -> Self {
         Self::Counted {
             name: name.into(),
+            element: Box::new([element]),
+        }
+    }
+
+    /// Rust's `JoinHandle` of `element`, held as `runtime`.
+    #[cfg(feature = "sync")]
+    pub(crate) fn joined(runtime: TypeId, element: Self) -> Self {
+        Self::Joined {
+            runtime: Representation::exact(runtime),
             element: Box::new([element]),
         }
     }
@@ -334,7 +354,9 @@ impl Type {
             Self::Counted { .. } => TypeId::of::<crate::resolve::lower_nominal::counted::Counted>(),
             Self::Result(..) => TypeId::of::<crate::result::Value>(),
             Self::Callable { .. } => TypeId::of::<crate::item::Value>(),
-            Self::Builtin { runtime, .. } | Self::Script { runtime, .. } => runtime.runtime(),
+            Self::Builtin { runtime, .. }
+            | Self::Script { runtime, .. }
+            | Self::Joined { runtime, .. } => runtime.runtime(),
             Self::Host {
                 identity: runtime, ..
             } => *runtime,
@@ -384,6 +406,13 @@ impl Type {
                     element: other_element,
                 },
             ) => name == other_name && all(element, other_element),
+            (
+                Self::Joined { runtime, element },
+                Self::Joined {
+                    runtime: other_runtime,
+                    element: other_element,
+                },
+            ) => runtime == other_runtime && all(element, other_element),
             (
                 Self::Script {
                     identity,
@@ -452,7 +481,7 @@ impl Type {
             #[cfg(feature = "rust-import")]
             Self::Imported { arguments, .. } => arguments,
             Self::Script { arguments, .. } => arguments,
-            Self::Counted { element, .. } => element,
+            Self::Counted { element, .. } | Self::Joined { element, .. } => element,
             Self::Unit
             | Self::Array { .. }
             | Self::Option(_)
@@ -490,6 +519,7 @@ impl Type {
             | Self::Builtin { .. }
             | Self::Object(_)
             | Self::Counted { .. }
+            | Self::Joined { .. }
             | Self::Script { .. } => None,
         }
     }
@@ -673,7 +703,9 @@ impl Type {
                     .iter()
                     .try_for_each(|element| element.validate(&pointee, model, registry))
             }
-            Self::Unit | Self::Builtin { .. } => {
+            // The handle: what its thread gives is attested where it is
+            // joined.
+            Self::Unit | Self::Builtin { .. } | Self::Joined { .. } => {
                 if value.type_id() == self.runtime() {
                     Ok(())
                 } else {
@@ -717,7 +749,7 @@ impl Type {
             Self::Array { element, .. } | Self::Option(element) => {
                 element.collect_dependencies(dependencies);
             }
-            Self::Counted { element, .. } => {
+            Self::Counted { element, .. } | Self::Joined { element, .. } => {
                 for element in element {
                     element.collect_dependencies(dependencies);
                 }
@@ -955,6 +987,13 @@ impl crate::digest::Write for Type {
                 writer.text(name);
                 write_slice(writer, element)?;
             }
+            Self::Joined {
+                runtime: _,
+                element,
+            } => {
+                writer.tag(0x2108);
+                write_slice(writer, element)?;
+            }
             Self::Result(ok, err) => {
                 writer.tag(0x210c);
                 ok.write(writer)?;
@@ -1074,6 +1113,10 @@ impl fmt::Display for Type {
             Self::Counted { name, element } => {
                 let element = element.iter().map(ToString::to_string).collect::<String>();
                 write!(formatter, "{name}<{element}>")
+            }
+            Self::Joined { element, .. } => {
+                let element = element.iter().map(ToString::to_string).collect::<String>();
+                write!(formatter, "JoinHandle<{element}>")
             }
             Self::Script {
                 identity: type_def::Identity::Script(key),

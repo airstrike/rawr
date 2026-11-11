@@ -19,6 +19,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use crate::func::NativeCallContext;
+use crate::host::runtime::Witness;
 use crate::{Dynamic, Engine, EvalAltResult, FnPtr, Position, Shared};
 
 /// What a thread's closure gave: its value, or the panic that ended it.
@@ -33,36 +34,59 @@ enum Thread {
     Program(std::thread::JoinHandle<Outcome>),
     /// One a crate spawned and gave the `JoinHandle` of (#1266).
     Crate(Box<dyn Joined>),
+    /// One the program spawned whose handle a crate took (#1274): the
+    /// thread that joins it for the crate drops the sender of `ended` once
+    /// it has.
+    Lent(std::sync::mpsc::Receiver<()>),
 }
 
 /// A crate's thread, which gives its value as rawr's once it is joined.
 trait Joined: Send {
     fn join(self: Box<Self>) -> Outcome;
     fn is_finished(&self) -> bool;
+    /// Take the witness of the thread's `T`, which the value it gives is
+    /// attested with as it becomes rawr's (#1275).
+    fn attest(&mut self, witness: Witness);
+    /// The crate's own `JoinHandle<T>`, as a crate takes it back.
+    fn into_handle(self: Box<Self>) -> Box<dyn std::any::Any + Send>;
 }
 
-/// A crate's `JoinHandle<T>` and what makes its `T` rawr's.
+/// A crate's `JoinHandle<T>`, what makes its `T` rawr's, and the witness
+/// of `T` the call that gave it had.
 struct Native<T, F> {
     handle: std::thread::JoinHandle<T>,
     give: F,
+    witness: Option<Witness>,
 }
 
 impl<T, F> Joined for Native<T, F>
 where
-    T: Send,
-    F: FnOnce(T) -> Outcome + Send,
+    T: Send + 'static,
+    F: FnOnce(T, Option<&Witness>) -> Outcome + Send,
 {
     fn join(self: Box<Self>) -> Outcome {
-        let Self { handle, give } = *self;
+        let Self {
+            handle,
+            give,
+            witness,
+        } = *self;
         // The thread printed its panic as it ended, through Rust's hook.
         handle
             .join()
             .map_err(|_| panic("a crate's thread panicked"))
-            .and_then(give)
+            .and_then(|value| give(value, witness.as_ref()))
     }
 
     fn is_finished(&self) -> bool {
         self.handle.is_finished()
+    }
+
+    fn attest(&mut self, witness: Witness) {
+        self.witness = Some(witness);
+    }
+
+    fn into_handle(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        Box::new(self.handle)
     }
 }
 
@@ -179,8 +203,16 @@ impl Drop for Threads {
                 }
             };
             for slot in slots {
-                if let Some(Thread::Program(thread)) = take(&slot) {
-                    let _ = thread.join();
+                match take(&slot) {
+                    Some(Thread::Program(thread)) => {
+                        let _ = thread.join();
+                    }
+                    // A crate took it: the thread that joins it for the
+                    // crate says when it has.
+                    Some(Thread::Lent(ended)) => {
+                        let _ = ended.recv();
+                    }
+                    Some(Thread::Crate(_)) | None => {}
                 }
             }
         }
@@ -194,11 +226,28 @@ impl Handle {
     pub(crate) fn native<T, F>(handle: std::thread::JoinHandle<T>, give: F) -> Self
     where
         T: Send + 'static,
-        F: FnOnce(T) -> Outcome + Send + 'static,
+        F: FnOnce(T, Option<&Witness>) -> Outcome + Send + 'static,
     {
         Self(Shared::new(Mutex::new(Some(Thread::Crate(Box::new(
-            Native { handle, give },
+            Native {
+                handle,
+                give,
+                witness: None,
+            },
         ))))))
+    }
+
+    /// Give a crate's thread the witness of its `T`, as the call that gave
+    /// its handle declares it (#1275).
+    pub(crate) fn attest(&self, witness: Witness) {
+        if let Some(Thread::Crate(thread)) = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+        {
+            thread.attest(witness);
+        }
     }
 
     /// Wait for the thread to end, as `JoinHandle::join`: its closure's
@@ -210,7 +259,55 @@ impl Handle {
                 .join()
                 .unwrap_or_else(|_| Err(panic("rawr: a spawned thread aborted"))),
             Thread::Crate(thread) => thread.join(),
+            // A crate holds it, as Rust's moved handle is.
+            Thread::Lent(ended) => {
+                restore(&self.0, Thread::Lent(ended));
+                return None;
+            }
         })
+    }
+
+    /// The `JoinHandle<T>` a crate takes of this handle (#1274): the
+    /// crate's own, as it gave it, or one of a thread that joins the
+    /// program's and makes what its closure gave a `T` with `make`. A
+    /// panic of the program's thread, or a value `make` refuses, is the
+    /// panic the crate's `join` gives. `None` once it is joined, or for
+    /// a crate's of another `T`.
+    pub(crate) fn take_native<T, F>(&self, make: F) -> Option<std::thread::JoinHandle<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce(Dynamic) -> Result<T, String> + Send + 'static,
+    {
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        match slot.take()? {
+            Thread::Crate(thread) => thread
+                .into_handle()
+                .downcast::<std::thread::JoinHandle<T>>()
+                .ok()
+                .map(|handle| *handle),
+            // The group's root still waits for the program's thread, which
+            // borrows the engine, through `ended`.
+            Thread::Program(thread) => {
+                let (done, ended) = std::sync::mpsc::channel::<()>();
+                *slot = Some(Thread::Lent(ended));
+                std::thread::Builder::new()
+                    .spawn(move || {
+                        let value = match thread.join() {
+                            Ok(Ok(value)) => make(value),
+                            // The thread printed its panic as it ended.
+                            Ok(Err(_)) | Err(_) => Err("a program's thread panicked".to_owned()),
+                        };
+                        drop(done);
+                        // A payload, as the program's panic already printed.
+                        value.unwrap_or_else(|message| std::panic::resume_unwind(Box::new(message)))
+                    })
+                    .ok()
+            }
+            lent @ Thread::Lent(_) => {
+                *slot = Some(lent);
+                None
+            }
+        }
     }
 
     /// Whether the thread's closure has returned, as
@@ -223,12 +320,20 @@ impl Handle {
             .is_none_or(|thread| match thread {
                 Thread::Program(thread) => thread.is_finished(),
                 Thread::Crate(thread) => thread.is_finished(),
+                Thread::Lent(ended) => matches!(
+                    ended.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected)
+                ),
             })
     }
 }
 
 fn take(slot: &Slot) -> Option<Thread> {
     slot.lock().unwrap_or_else(PoisonError::into_inner).take()
+}
+
+fn restore(slot: &Slot, thread: Thread) {
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(thread);
 }
 
 fn panic(message: &str) -> Box<EvalAltResult> {

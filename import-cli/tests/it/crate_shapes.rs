@@ -383,14 +383,44 @@ fn a_crates_join_handle_is_joined_or_ignored() {
     runs_as_cargo_does("opened", "true\ntrue\n");
 }
 
-/// A path into a crate none of whose items the program can use yet, as
-/// `opener::that_if_given` gives an `Option<JoinHandle<..>>`: the crate is
-/// a module, and rawr says why the item can't be used, as it does in a
-/// crate with other items. It used to say rustc's E0433 for the crate, as
-/// for one the program doesn't depend on (#1267).
+/// A crate's `JoinHandle` in a crate's `Option` or tuple output, and taken
+/// as an input, from the crate's thread and from the program's own: each
+/// crosses as rawr's thread handle, joined where the program or the crate
+/// joins it (#1274).
+#[test]
+fn a_crates_join_handle_crosses_nested_and_as_an_input() {
+    runs_as_cargo_does(
+        "opened_nested",
+        "true\ntrue\ntrue true\ntrue\nfalse\ntrue\n",
+    );
+}
+
+/// A crate's thread that gives a crate's value, alone and in an `Option`:
+/// the value becomes rawr's where the program joins the thread (#1275).
+#[test]
+fn a_crates_join_handle_of_a_crate_value_is_joined() {
+    runs_as_cargo_does(
+        "paged",
+        "3 page 3\nfound page 5\ntrue\nPage { number: 6, text: \"page 6\" }\n",
+    );
+}
+
+/// A program's thread handle, and a crate's, as the type argument of a
+/// crate's generic `Held<T>`, which gives it back to be joined (#1276).
+#[test]
+fn a_programs_join_handle_fills_a_crates_type_parameter() {
+    runs_as_cargo_does("held", "42\ntrue\n");
+}
+
+/// A path into a crate none of whose items the program uses, as
+/// `opener::number_of` takes a `JoinHandle<Page>`, which a program's
+/// thread can't give as a crate's value: the crate is a module, and rawr
+/// says why the item can't be used, as it does in a crate with other
+/// items. It used to say rustc's E0433 for the crate, as for one the
+/// program doesn't depend on (#1267).
 #[test]
 fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
-    let program = "// rawr\n\nfn main() {\n    let _ = opener::that_if_given(Some(\"https://iced.rs\"));\n}\n";
+    let program = "// rawr\n\nfn main() {\n    let _ = opener::number_of(opener::read_in_background(1));\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
     let directory = crate::support::scratch();
     let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -407,7 +437,7 @@ fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
     assert!(!stderr.contains("E0433"), "{stderr}");
     assert!(
         stderr.contains(
-            "`that_if_given` can't be used yet: rawr doesn't run `std::thread::JoinHandle` here in a crate's signature yet"
+            "`number_of` can't be used yet: rawr doesn't run `std::thread::JoinHandle` here in a crate's signature yet"
         ),
         "{stderr}"
     );

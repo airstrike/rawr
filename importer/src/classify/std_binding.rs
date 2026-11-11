@@ -43,9 +43,9 @@ pub(crate) enum Std {
     Duration,
     /// std's `Instant`: rawr's own.
     Instant,
-    /// std's `thread::JoinHandle<T>`: rawr's thread handle, where a
-    /// crate's function gives one of a `T` that crosses by value (#1266).
-    /// Elsewhere it is [`Unrun::JoinHandle`].
+    /// std's `thread::JoinHandle<T>`: rawr's thread handle, of any `T` a
+    /// crate gives and of a `T` that crosses by value a crate takes (#1266,
+    /// #1274, #1275). Elsewhere it is [`Unrun::JoinHandle`].
     JoinHandle,
     /// A std type rawr's std holds as its Rust value (`crossing::Std`), by
     /// its path under `std`, and whether it is `Clone`.
@@ -80,10 +80,9 @@ pub enum Unrun {
     BTreeMap,
     /// `std::collections::BTreeSet`, as `HashMap` is.
     BTreeSet,
-    /// `std::thread::JoinHandle` other than a function's output of a `T`
-    /// that crosses by value: the crate's thread gives a crate value, which
-    /// only a call's arena holds, or the crate takes the handle, which
-    /// rawr's thread handle doesn't hold as a Rust one.
+    /// `std::thread::JoinHandle` the crate lends or a field holds, or one
+    /// the crate takes of a `T` that holds a crate value, which a program's
+    /// thread gives on no call's arena.
     JoinHandle,
     /// Any other std type: one rawr has no representation for yet.
     Other,

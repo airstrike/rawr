@@ -311,6 +311,22 @@ pub(super) fn imported_surface_type(
                 inference, models, item, operation, imported,
             )?]),
         },
+        // A thread's `JoinHandle<T>`, the program's or a crate's, as a crate
+        // value holds it (#1276): Rust's, which the crate's thread is or
+        // which joins the program's, of a `T` that crosses by value, as a
+        // program's thread gives it on no call's arena.
+        #[cfg(feature = "sync")]
+        Ty::Thread(super::thread::Kind::JoinHandle, element) => {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            let element = imported_surface_type(inference, models, element, operation, imported)?;
+            if !element.crosses_by_value() {
+                return Err(unsupported_type_argument(ty.name(models), operation));
+            }
+            Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::join_handle(),
+                arguments: Box::new([element]),
+            }
+        }
         // A crate's trait object (D872): `dyn Trait` itself where a `&T`
         // takes it, as the `&dyn Trait` input a call reads as `&impl
         // Trait` is, and `Box<dyn Trait>`.
@@ -973,6 +989,12 @@ pub(super) fn instance_surface_type(
         Ty::Iter(item, _) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::iterator(),
             arguments: Box::new([instance_surface_type(inference, models, item)?]),
+        },
+        // A thread's `JoinHandle`, as `imported_surface_type` has it.
+        #[cfg(feature = "sync")]
+        Ty::Thread(super::thread::Kind::JoinHandle, element) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::join_handle(),
+            arguments: Box::new([instance_surface_type(inference, models, element)?]),
         },
         Ty::Counted(counter, inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::counted(

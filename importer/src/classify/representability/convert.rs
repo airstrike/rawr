@@ -222,6 +222,104 @@ pub enum Type {
     Object(Box<super::object::Object>),
 }
 
+impl Type {
+    /// Whether a value of this type becomes rawr's, or rawr's becomes one,
+    /// with no call's arena: it holds no crate value, only rawr's builtins
+    /// and std's types rawr holds as its own, as a thread's `io::Result<()>`
+    /// does.
+    #[must_use]
+    pub fn crosses_by_value(&self) -> bool {
+        use crate::surface::identity::Definition;
+        match self {
+            Self::Unit | Self::Builtin(_) => true,
+            Self::Option(element)
+            | Self::Sequence {
+                element,
+                owned: true,
+                ..
+            } => element.crosses_by_value(),
+            Self::Result(ok, err) => ok.crosses_by_value() && err.crosses_by_value(),
+            Self::Tuple(members) => members.iter().all(Self::crosses_by_value),
+            Self::Nominal {
+                definition,
+                arguments,
+            } => {
+                arguments.is_empty()
+                    && (Definition::std_path(definition.as_bytes()).is_some()
+                        || *definition == Definition::duration()
+                        || *definition == Definition::instant())
+            }
+            _ => false,
+        }
+    }
+
+    /// `T` of a thread's `JoinHandle<T>`, which crosses as rawr's thread
+    /// handle (#1266).
+    #[must_use]
+    pub fn joined_element(&self) -> Option<&Self> {
+        match self {
+            Self::Nominal {
+                definition,
+                arguments,
+            } if *definition == crate::surface::identity::Definition::join_handle() => {
+                match arguments.as_ref() {
+                    [element] => Some(element),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether each thread's `JoinHandle` this type holds crosses where it
+    /// is: one the crate gives the program (`taken` false) of any `T`, which
+    /// becomes rawr's where the program joins it, and one the crate takes of
+    /// a `T` that crosses by value, as a program's thread gives it on no
+    /// call's arena (#1274, #1275). None is borrowed, and a callable's
+    /// inputs cross the other way from its output.
+    #[must_use]
+    pub fn handles_cross(&self, taken: bool) -> bool {
+        match self {
+            ty if let Some(element) = ty.joined_element() => {
+                (!taken || element.crosses_by_value()) && element.handles_cross(taken)
+            }
+            Self::Nominal {
+                definition,
+                arguments,
+            } if *definition == crate::surface::identity::Definition::callable() => {
+                arguments.split_last().is_none_or(|(output, inputs)| {
+                    output.handles_cross(taken)
+                        && inputs.iter().all(|input| input.handles_cross(!taken))
+                })
+            }
+            Self::Nominal { arguments, .. } | Self::Tuple(arguments) => arguments
+                .iter()
+                .all(|argument| argument.handles_cross(taken)),
+            Self::Option(element)
+            | Self::Sequence { element, .. }
+            | Self::ConstArray { element, .. } => element.handles_cross(taken),
+            Self::Result(ok, err) => ok.handles_cross(taken) && err.handles_cross(taken),
+            Self::Borrowed { ty, .. } => !ty.holds_handle(),
+            _ => true,
+        }
+    }
+
+    /// Whether a value of this type holds a thread's `JoinHandle`, alone or
+    /// inside an `Option`, a `Result`, a tuple or an array.
+    #[must_use]
+    pub fn holds_handle(&self) -> bool {
+        match self {
+            ty if ty.joined_element().is_some() => true,
+            Self::Tuple(members) => members.iter().any(Self::holds_handle),
+            Self::Option(element)
+            | Self::Sequence { element, .. }
+            | Self::ConstArray { element, .. } => element.holds_handle(),
+            Self::Result(ok, err) => ok.holds_handle() || err.holds_handle(),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Constant {
     ty: Box<str>,
