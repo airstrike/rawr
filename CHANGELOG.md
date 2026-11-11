@@ -12,6 +12,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo. (#990)
 - A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build. (#1665)
 - A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9. (#1682; part of #1618)
+- `futures::future::try_join` takes an async block's and an async fn's futures and gives what each yields inside its `Ok`, as iced's pokedex joins them. (#1674)
+- A `String`'s or `str`'s `as_ref()` lends a `&Path` or `&OsStr`, as std's impls do, and a type std has no such impl for is rustc's E0277 naming `Path`. (#1675)
+- A generic `T: AsRef<[u8]>` given a `String` lends its bytes, as rustc does. (#1676)
 
 ## 0.3.181 (2026-11-10)
 

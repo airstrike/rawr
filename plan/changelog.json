@@ -11,7 +11,10 @@
       {"text":"A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type.","issues":[1660]},
       {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]},
       {"text":"A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build.","issues":[1665]},
-      {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]}
+      {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]},
+      {"text":"`futures::future::try_join` takes an async block's and an async fn's futures and gives what each yields inside its `Ok`, as iced's pokedex joins them.","issues":[1674]},
+      {"text":"A `String`'s or `str`'s `as_ref()` lends a `&Path` or `&OsStr`, as std's impls do, and a type std has no such impl for is rustc's E0277 naming `Path`.","issues":[1675]},
+      {"text":"A generic `T: AsRef<[u8]>` given a `String` lends its bytes, as rustc does.","issues":[1676]}
     ]
   },
   "releases": [

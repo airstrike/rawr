@@ -18,7 +18,10 @@
         {"text":"A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type.","issues":[1660]},
         {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]},
         {"text":"A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build.","issues":[1665]},
-        {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]}
+        {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]},
+        {"text":"`futures::future::try_join` takes an async block's and an async fn's futures and gives what each yields inside its `Ok`, as iced's pokedex joins them.","issues":[1674]},
+        {"text":"A `String`'s or `str`'s `as_ref()` lends a `&Path` or `&OsStr`, as std's impls do, and a type std has no such impl for is rustc's E0277 naming `Path`.","issues":[1675]},
+        {"text":"A generic `T: AsRef<[u8]>` given a `String` lends its bytes, as rustc does.","issues":[1676]}
       ]
     },
     "releases": [
@@ -3667,16 +3670,17 @@
     {"issue":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"open","category":"Divergences from rustc"},
     {"issue":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open","category":"Divergences from rustc"},
-    {"issue":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"open","category":"Divergences from rustc"},
-    {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"open","category":"Divergences from rustc"},
-    {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"open","category":"Divergences from rustc"},
+    {"issue":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"closed","category":"Divergences from rustc"},
+    {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"closed","category":"Divergences from rustc"},
+    {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed","category":"Divergences from rustc"},
     {"issue":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open","category":"Divergences from rustc"},
     {"issue":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open","category":"Divergences from rustc"},
     {"issue":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open","category":"Divergences from rustc"},
     {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open","category":"Divergences from rustc"},
     {"issue":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4256,15 +4260,16 @@
             {"number":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"closed"},
             {"number":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"closed"},
             {"number":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"closed"},
-            {"number":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"open"},
-            {"number":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"open"},
-            {"number":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"open"},
+            {"number":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"closed"},
+            {"number":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"closed"},
+            {"number":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed"},
             {"number":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"open"},
             {"number":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open"},
             {"number":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open"},
             {"number":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open"},
             {"number":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open"},
-            {"number":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open"}
+            {"number":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open"},
+            {"number":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"open"}
           ],
           "milestone": "0.4"
         },
