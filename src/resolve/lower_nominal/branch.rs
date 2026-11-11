@@ -161,7 +161,10 @@ impl<'a> Parser<'a> {
                     // A struct is matched by `_`, a binding or its unit value.
                     return Ok(subject.rendered_source());
                 };
-                let helper = self.push_op(Op::MatchSubject { definition, item });
+                let helper = self.push_op(Op::MatchSubject {
+                    definition,
+                    item: Box::new(item),
+                });
                 origin::Fragment::call(&helper, [subject.rendered_source()])
             }
             _ => {

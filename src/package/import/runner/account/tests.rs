@@ -13,26 +13,7 @@ fn carrier_entries(entries: &[([u8; 32], [u8; 32], u32)]) -> Carrier {
 }
 
 pub(crate) fn carrier_bytes(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RAWRGM01");
-    bytes.extend_from_slice(&[3; 32]);
-    bytes.extend_from_slice(&0_u64.to_le_bytes());
-    bytes.extend_from_slice(&(entries.len() as u64).to_le_bytes());
-    for (identity, signature, arguments) in entries {
-        bytes.extend_from_slice(identity);
-        bytes.extend_from_slice(signature);
-        bytes.extend_from_slice(&arguments.to_le_bytes());
-    }
-    bytes.extend_from_slice(&20_u64.to_le_bytes());
-    bytes.extend_from_slice(&2_u32.to_le_bytes());
-    bytes.extend_from_slice(&0_u64.to_le_bytes());
-    bytes.extend_from_slice(&0_u64.to_le_bytes());
-    bytes.extend_from_slice(&0_u64.to_le_bytes());
-    // Exact current manifest, wire, generator, runtime and profile versions.
-    for version in rawr_import::runner::manifest::carrier_versions() {
-        bytes.extend_from_slice(&version.to_le_bytes());
-    }
-    bytes
+    rawr_import::runner::manifest::carrier_fixture(entries)
 }
 
 #[test]

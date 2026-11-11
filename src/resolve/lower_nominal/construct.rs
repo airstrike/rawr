@@ -18,7 +18,10 @@ impl<'a> Parser<'a> {
         match item.form {
             crate::item::StructForm::Unit if item.generics.is_empty() => {
                 let ty = Ty::Script(definition.id(), Box::default());
-                let helper = self.push_op(Op::Struct { definition, item });
+                let helper = self.push_op(Op::Struct {
+                    definition,
+                    item: Box::new(item),
+                });
                 let source = origin::Fragment::call(&helper, []);
                 return Ok(Some(self.operator_expr(source, ty, expression)));
             }
@@ -38,7 +41,7 @@ impl<'a> Parser<'a> {
         let arity = inputs.len();
         let helper = self.push_op(Op::Struct {
             definition: definition.clone(),
-            item,
+            item: Box::new(item),
         });
         if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
             let parameters = (0..arity)
@@ -800,7 +803,7 @@ impl<'a> Parser<'a> {
                 .all(|(field, declared)| *field == declared.name.text);
         let helper = self.push_op(Op::Struct {
             definition: definition.clone(),
-            item,
+            item: Box::new(item),
         });
         let source = if declared_order {
             let values = order.iter().map(|field| {

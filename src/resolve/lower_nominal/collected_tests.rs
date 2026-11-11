@@ -120,6 +120,11 @@ fn used<'a>(uses: &'a [ImportedUse], path: &str) -> &'a ImportedUse {
     uses.iter().find(|used| used.path == path).unwrap()
 }
 
+/// The instance key the generated runner binds `used`'s adapter under.
+fn instance(used: &ImportedUse) -> [u8; 32] {
+    rawr_import::surface::instance::key_with_constants(&used.types, &used.constants, &used.slots)
+}
+
 #[test]
 fn executable_use_collection_retains_concrete_types_and_static_operands() {
     let mut engine = Engine::new();
@@ -153,14 +158,19 @@ fn executable_use_collection_retains_concrete_types_and_static_operands() {
         .unwrap()
         .clone();
     let mut runtime = host::runtime::Builder::new(call_facade());
+    // A generic item's call reaches only its own instance's adapter.
+    let identity = used(&collected.uses, "native::identity");
     runtime
-        .bind_imported(selector(2).fingerprint(), |_, args| {
-            assert_eq!(args.len(), 1);
-            Ok(args[0].take())
-        })
+        .bind_imported_instance(
+            identity.selector.fingerprint(),
+            instance(identity),
+            &identity.path,
+            |_, args| {
+                assert_eq!(args.len(), 1);
+                Ok(args[0].take())
+            },
+        )
         .unwrap();
-    // The generated runner binds an item reached by two paths only once.
-    assert!(!runtime.accepts_imported(&selector(2).fingerprint()));
     assert!(runtime.accepts_imported(&selector(3).fingerprint()));
     runtime
         .bind_imported(selector(3).fingerprint(), |_, args| {
@@ -185,7 +195,7 @@ fn imported_function_called_by_name_and_full_path_runs() {
     let mut engine = Engine::new();
     engine.register_host_facade(call_facade()).unwrap();
     let engine = Shared::new(engine);
-    let (executable, _) = parity(
+    let (executable, collected) = parity(
         &engine,
         "use native::{apply, identity, increment};\npub fn run() -> i64 { apply(native::identity(identity(41)), increment) }\n",
     );
@@ -196,20 +206,31 @@ fn imported_function_called_by_name_and_full_path_runs() {
         .unwrap()
         .clone();
     let mut runtime = host::runtime::Builder::new(call_facade());
-    for id in [2, 3] {
-        assert!(runtime.accepts_imported(&selector(id).fingerprint()));
-        runtime
-            .bind_imported(selector(id).fingerprint(), move |_, args| {
-                let value = args[0].take();
-                Ok(if id == 3 {
-                    Dynamic::from(value.as_int().unwrap() + 1)
-                } else {
-                    value
-                })
-            })
-            .unwrap();
-        assert!(!runtime.accepts_imported(&selector(id).fingerprint()));
-    }
+    // Both paths reach one instance of `identity`, so one adapter serves
+    // both calls.
+    let identities = collected
+        .uses
+        .iter()
+        .filter(|used| used.path == "native::identity")
+        .map(instance)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(identities.len(), 1);
+    let identity = used(&collected.uses, "native::identity");
+    runtime
+        .bind_imported_instance(
+            identity.selector.fingerprint(),
+            instance(identity),
+            &identity.path,
+            |_, args| Ok(args[0].take()),
+        )
+        .unwrap();
+    assert!(runtime.accepts_imported(&selector(3).fingerprint()));
+    runtime
+        .bind_imported(selector(3).fingerprint(), |_, args| {
+            Ok(Dynamic::from(args[0].take().as_int().unwrap() + 1))
+        })
+        .unwrap();
+    assert!(!runtime.accepts_imported(&selector(3).fingerprint()));
     let mut registry = host::runtime::Registry::new();
     registry.install(runtime.finish()).unwrap();
     let result = authority
@@ -394,6 +415,7 @@ fn executable_use_collection_requires_and_retains_exact_structural_adapters() {
                 )]),
                 constructible: true,
                 unsupported: None,
+                layout: None,
             }),
             &mut host::TestImportAllocation::default(),
         )

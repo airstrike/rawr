@@ -1206,7 +1206,7 @@ impl<'a> Parser<'a> {
             .collect();
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),
-            item: item.clone(),
+            item: Box::new(item.clone()),
             variant,
         });
         let parameters = (0..inputs.len())

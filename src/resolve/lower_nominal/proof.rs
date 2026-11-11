@@ -230,14 +230,17 @@ impl<'a> Parser<'a> {
                     )),
                 }
             }
-            Op::Struct { definition, item } => ExecutableOp::Struct { definition, item },
+            Op::Struct { definition, item } => ExecutableOp::Struct {
+                definition,
+                item: *item,
+            },
             Op::Enum {
                 definition,
                 item,
                 variant,
             } => ExecutableOp::Enum {
                 definition,
-                item,
+                item: *item,
                 variant,
             },
             Op::Clone { definition } => ExecutableOp::Clone { definition },
@@ -327,9 +330,10 @@ impl<'a> Parser<'a> {
                 }
             }
             Op::Validate { definition } => ExecutableOp::Validate { definition },
-            Op::MatchSubject { definition, item } => {
-                ExecutableOp::MatchSubject { definition, item }
-            }
+            Op::MatchSubject { definition, item } => ExecutableOp::MatchSubject {
+                definition,
+                item: *item,
+            },
         })
     }
 

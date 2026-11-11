@@ -235,7 +235,8 @@ fn main() {
 "#,
     );
     assert!(report.contains("expected `u16`, found `&str`"), "{report}");
-    // `Option<T>` has one impl, which takes its own type.
+    // `Option<T>` has one impl, which takes its own type: rustc checks
+    // `Some`'s argument against it.
     let report = refused(
         r#"
 fn main() {
@@ -245,7 +246,8 @@ fn main() {
 "#,
     );
     assert!(
-        report.contains("expected `Option<String>`, found `Option<&str>`"),
+        report.contains("error[E0308]: mismatched types")
+            && report.contains("expected `String`, found `&str`"),
         "{report}"
     );
     // std has no `impl PartialOrd for HashMap<K, V>`.

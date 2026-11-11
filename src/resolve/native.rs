@@ -72,13 +72,32 @@ impl Capture {
     /// Only the error that actually escapes this same pass can classify a miss.
     /// Successful/speculative lookups and different diagnostics cannot inherit it.
     pub(crate) fn matches(&self, source: program::source::Id, error: &Error) -> bool {
-        self.terminal.lock().ok().is_some_and(|terminal| {
-            terminal.as_ref().is_some_and(|miss| {
-                miss.source == source
-                    && miss.span == error.primary_span()
-                    && miss.kind == discriminant(error)
-            })
-        })
+        self.terminal
+            .lock()
+            .ok()
+            .is_some_and(|terminal| terminal.as_ref().is_some_and(|miss| miss.is(source, error)))
+    }
+
+    /// The miss recorded for `error` is the miss of `restated`, the error
+    /// the pass reports for it instead: rustc names a path's unknown type
+    /// at the path's last segment.
+    pub(crate) fn restate(&self, source: program::source::Id, error: &Error, restated: &Error) {
+        if let Ok(mut terminal) = self.terminal.lock()
+            && let Some(miss) = terminal.as_mut()
+            && miss.is(source, error)
+        {
+            miss.span = restated.primary_span();
+            miss.kind = discriminant(restated);
+        }
+    }
+}
+
+impl Miss {
+    /// Whether this is the miss of `error` in `source`.
+    fn is(&self, source: program::source::Id, error: &Error) -> bool {
+        self.source == source
+            && self.span == error.primary_span()
+            && self.kind == discriminant(error)
     }
 }
 

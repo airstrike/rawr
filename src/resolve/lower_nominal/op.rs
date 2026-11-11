@@ -50,13 +50,16 @@ pub(super) enum Op {
     Projection {
         operation: Box<ProjectionOperation>,
     },
+    // A program type's item is boxed, here and in `MatchSubject`: it is
+    // larger than any other op's operands, and every op is as large as the
+    // largest.
     Struct {
         definition: type_def::Definition,
-        item: item::Struct,
+        item: Box<item::Struct>,
     },
     Enum {
         definition: type_def::Definition,
-        item: item::Enum,
+        item: Box<item::Enum>,
         variant: usize,
     },
     Clone {
@@ -77,7 +80,7 @@ pub(super) enum Op {
     },
     MatchSubject {
         definition: type_def::Definition,
-        item: item::Enum,
+        item: Box<item::Enum>,
     },
     /// Write what a pattern bound by `&mut` back into the place it matched.
     Prelude(PreludeOp),

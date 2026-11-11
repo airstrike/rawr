@@ -1646,7 +1646,7 @@ impl<'a> Parser<'a> {
                         .collect::<Result<Vec<_>, _>>()?;
                     let helper = self.push_op(Op::Struct {
                         definition: definition.clone(),
-                        item: item.clone(),
+                        item: Box::new(item.clone()),
                     });
                     return Ok(origin::Fragment::call(&helper, fields));
                 }

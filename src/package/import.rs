@@ -2368,7 +2368,6 @@ fn build(
             Box::default(),
             associated,
             shape,
-            None,
             0,
             allocation,
         ) {
@@ -2492,6 +2491,7 @@ fn build(
                                 ty: unsupported.ty().into(),
                             })
                         }),
+                        layout: plan.layout().map(runner::layout),
                     },
                     Representability::Enum(plan) => {
                         let mut variants = Vec::new();
@@ -2553,11 +2553,9 @@ fn build(
             std::mem::size_of::<host::type_def::Definition>().checked_add(selector)
         });
         allocation.retain_checked(Some(1), definition_bytes)?;
-        let (layout, dropped) = match entry.outcome.representability() {
-            Representability::Struct(plan) => {
-                (plan.layout().map(runner::layout), plan.dropped() as usize)
-            }
-            _ => (None, 0),
+        let dropped = match entry.outcome.representability() {
+            Representability::Struct(plan) => plan.dropped() as usize,
+            _ => 0,
         };
         builder.imported_opaque_type(
             entry.relative.as_ref(),
@@ -2567,7 +2565,6 @@ fn build(
             defaults,
             Box::default(),
             shape,
-            layout,
             dropped,
             allocation,
         )?;

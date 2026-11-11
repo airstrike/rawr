@@ -46,9 +46,6 @@ pub struct Definition {
     /// binds. Few types have either, so they share one box, and the field
     /// is `None` when a type has neither.
     generics: Option<Box<Generics>>,
-    /// rustc's layout of the type, when the import driver gave one: what a
-    /// cycle of statics of it needs (D865).
-    layout: Option<Shared<layout::Layout>>,
 }
 
 /// The rarely present parts of a [`Definition`]'s parameters.
@@ -108,6 +105,9 @@ pub enum Shape {
         constructible: bool,
         /// The first public field rawr can't hold, which a literal names.
         unsupported: Option<Box<Unsupported>>,
+        /// rustc's layout of the struct, when the import driver gave one:
+        /// what a cycle of statics of it needs (D865).
+        layout: Option<Box<layout::Layout>>,
     },
     /// Exact source-visible enum variants.
     Enum {
@@ -333,7 +333,6 @@ impl Definition {
             projections: projections.into_boxed_slice(),
             exact_arity: self.exact_arity,
             generics: self.generics.clone(),
-            layout: self.layout.clone(),
         })
     }
 
@@ -376,7 +375,6 @@ impl Definition {
             projections: Box::default(),
             exact_arity: true,
             generics: None,
-            layout: None,
         })
     }
 
@@ -394,7 +392,6 @@ impl Definition {
             projections: Box::default(),
             exact_arity: false,
             generics: None,
-            layout: None,
         }
     }
 
@@ -447,7 +444,6 @@ impl Definition {
                     dropped: 0,
                 })
             }),
-            layout: None,
         })
     }
 
@@ -574,16 +570,13 @@ impl Definition {
             .map(|(_, _, position)| *position)
     }
 
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn with_layout(mut self, layout: Option<layout::Layout>) -> Self {
-        self.layout = layout.map(Shared::new);
-        self
-    }
-
     /// rustc's layout of the type, when the import driver gave one.
     #[must_use]
     pub fn layout(&self) -> Option<&layout::Layout> {
-        self.layout.as_deref()
+        match self.shape() {
+            Shape::Struct { layout, .. } => layout.as_deref(),
+            Shape::Opaque | Shape::Enum { .. } | Shape::Trait(_) => None,
+        }
     }
 
     pub(crate) fn with_shape(mut self, shape: Shape) -> Self {

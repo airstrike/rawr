@@ -1391,7 +1391,7 @@ impl<'a> Parser<'a> {
                 .collect::<Vec<_>>();
             let helper = self.push_op(Op::Enum {
                 definition: definition.clone(),
-                item,
+                item: Box::new(item),
                 variant,
             });
             let (source, end) = self.parse_named_values(&definition, &fields, &helper)?;
@@ -1493,7 +1493,7 @@ impl<'a> Parser<'a> {
         self.compose(span(owner_span.start(), end), &enum_ty, &parts);
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),
-            item,
+            item: Box::new(item),
             variant,
         });
         Ok(ParsedExpr {

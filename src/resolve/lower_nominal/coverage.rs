@@ -27,6 +27,9 @@ pub(super) enum Key {
     Literal(ast::NominalLiteral),
     /// A range: never a complete set of values on its own.
     Range,
+    /// A crate value's part tested at run time, which, as a range, is
+    /// never a complete set of values on its own (`host_coverage`).
+    Tested,
     /// A tuple's only constructor.
     Tuple,
     /// A slice pattern: its payload is its `before` leading elements, then
@@ -489,6 +492,23 @@ impl Pattern {
         matches!(self, Self::Wildcard)
     }
 
+    /// This pattern with each crate part tested at run time matching
+    /// anything, as a pattern's facade checks name what those parts miss.
+    fn untested(&self) -> Self {
+        match self {
+            Self::Wildcard
+            | Self::Constructor {
+                key: Key::Tested, ..
+            } => Self::Wildcard,
+            Self::Constructor { key, name, payload } => Self::Constructor {
+                key: key.clone(),
+                name: name.clone(),
+                payload: payload.iter().map(Self::untested).collect(),
+            },
+            Self::Or(alternatives) => Self::Or(alternatives.iter().map(Self::untested).collect()),
+        }
+    }
+
     pub(super) fn render(&self) -> String {
         match self {
             Self::Wildcard => "_".to_string(),
@@ -649,11 +669,13 @@ impl<'a> Parser<'a> {
         site: BindingSite,
     ) -> Result<(), Error> {
         // A facade value's own checks name what it misses, below its
-        // variant too, as `Event::Pressed(1_i64..=i64::MAX)`.
+        // variant too, as `Event::Pressed(1_i64..=i64::MAX)`, and what a
+        // facade part of it misses, in its place: rustc's
+        // `(Style { height: i64::MIN..=-1_i64, .. }, _)`, never `(_, _)`.
         let mut witnesses = if matches!(self.referenced(ty), Ty::Host { .. }) {
             Vec::new()
         } else {
-            self.uncovered(syntax, coverage, ty)
+            self.uncovered(syntax, &coverage.untested(), ty)
         };
         let checks = self.host_checks.borrow().clone();
         for (_, check, check_ty, _) in checks {
@@ -1071,7 +1093,7 @@ impl<'a> Parser<'a> {
         ty: &Ty,
     ) -> Result<Pattern, Error> {
         let partial = || Pattern::Constructor {
-            key: Key::Range,
+            key: Key::Tested,
             name: "_".into(),
             payload: Box::default(),
         };

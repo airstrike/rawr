@@ -49,7 +49,7 @@ fn compiler_ir_layout_keeps_parser_types_compact() {
         std::mem::size_of::<super::Op>()
     );
     #[cfg(feature = "rust-import")]
-    assert_eq!(std::mem::size_of::<super::Op>(), 320);
+    assert_eq!(std::mem::size_of::<super::Op>(), 200);
     #[cfg(not(feature = "rust-import"))]
     assert!(
         std::mem::size_of::<super::ExecutableOp>() < 1_112,
@@ -57,7 +57,7 @@ fn compiler_ir_layout_keeps_parser_types_compact() {
         std::mem::size_of::<super::ExecutableOp>()
     );
     #[cfg(feature = "rust-import")]
-    assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 624);
+    assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 592);
 }
 
 #[cfg(feature = "rust-import")]
@@ -1235,6 +1235,7 @@ fn imported_facade() -> facade::Definition {
         ]),
         constructible: true,
         unsupported: None,
+        layout: None,
     }
     .into();
     builder
@@ -1272,6 +1273,7 @@ fn imported_facade() -> facade::Definition {
                 ]),
                 constructible: false,
                 unsupported: None,
+                layout: None,
             }
             .into(),
             &mut allocation,
@@ -1306,6 +1308,7 @@ fn imported_facade() -> facade::Definition {
                 )]),
                 constructible: true,
                 unsupported: None,
+                layout: None,
             }
             .into(),
             &mut allocation,
@@ -1332,6 +1335,7 @@ fn imported_facade() -> facade::Definition {
                 )]),
                 constructible: true,
                 unsupported: None,
+                layout: None,
             }
             .into(),
             &mut allocation,
@@ -1456,6 +1460,7 @@ fn imported_alias_facade(alias_first: bool) -> facade::Definition {
         )]),
         constructible: true,
         unsupported: None,
+        layout: None,
     }
     .into();
     let aliases = if alias_first {

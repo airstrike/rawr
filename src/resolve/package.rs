@@ -907,10 +907,21 @@ impl<'a> Resolver<'a> {
                             .with_names(&_occupied)
                     }),
                 )
-                .map_err(|error| Failure {
-                    primary: context.source,
-                    secondary: None,
-                    error: self.unresolved_type(&context, &modules, error),
+                .map_err(|error| {
+                    let restated = self.unresolved_type(&context, &modules, error.clone());
+                    #[cfg(feature = "rust-import")]
+                    if let Some(capture) = self.native.as_deref() {
+                        capture.restate(
+                            program::source::Id::from_index(context.source.index()),
+                            &error,
+                            &restated,
+                        );
+                    }
+                    Failure {
+                        primary: context.source,
+                        secondary: None,
+                        error: restated,
+                    }
                 })?;
                 shells.push(shell);
             }
