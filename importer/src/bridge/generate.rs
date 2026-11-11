@@ -14419,9 +14419,12 @@ fn render_borrowed_receiver(
     }
     // An output that borrows what a lent receiver carries can't leave the
     // accessor's visitor: such a receiver is reached only in the arena, at
-    // `'static`, or in a scope frame's region (D558 tier 1).
+    // `'static`, or in a scope frame's region (D558 tier 1). A `&str` the
+    // call copies (`lent_copy`) leaves nothing borrowed, so a lent
+    // receiver gives it, as iced_test's `candidate.label()` does (#1694).
     if container_family(path, &container).is_some()
         && may_borrow(&substituted(signature.output(), signature, substitutions)?)
+        && lent_copy(signature) != ".to_owned()"
     {
         return writeln!(
             output,
@@ -16259,6 +16262,15 @@ fn render_slot(
         None
     };
     let lifetime = if family.is_some() { "'x " } else { "" };
+    // A script value made on a thread with no arena is made where it is
+    // first used (`DeferProbe`): its function may make native values, as
+    // `Message::Tick(Local::now())` does, which only the owner's arena
+    // holds.
+    let deferred = family.is_none()
+        && is_proxied(&returned)
+        && !inputs
+            .iter()
+            .any(|input| matches!(input, convert::Type::Borrowed { .. }));
     let mut parameters = Vec::new();
     let mut values = Vec::new();
     let mut mutable = Vec::new();
@@ -16376,8 +16388,17 @@ fn render_slot(
                     "a slot's input borrows a value that isn't a script value",
                 ));
             }
+            // A deferred slot keeps its inputs past the call, so a `&str`
+            // in one, as the `(u32, &str)` a crate future gives, is at
+            // `'static`: a value Rawr gives native code holds a string
+            // pinned for the runner's life, as a literal is (#1700).
             input => {
-                let rust = concrete_type(input).ok_or_else(|| drift("a slot's input"))?;
+                let spelled = if deferred {
+                    std::borrow::Cow::Owned(at_static_str(input))
+                } else {
+                    std::borrow::Cow::Borrowed(input)
+                };
+                let rust = concrete_type(&spelled).ok_or_else(|| drift("a slot's input"))?;
                 parameters.push(format!("{name}: {rust}"));
                 let mut converted = String::new();
                 {
@@ -16482,15 +16503,7 @@ fn render_slot(
             let mut converted = String::new();
             render_from_dynamic(&returned, "value", 0, &mut converted)?;
             let native_output = holds_native(&returned);
-            // A script value made on a thread with no arena is made where
-            // it is first used (`DeferProbe`): its function may make native
-            // values, as `Message::Tick(Local::now())` does, which only the
-            // owner's arena holds.
-            let deferred = if is_proxied(&returned)
-                && !inputs
-                    .iter()
-                    .any(|input| matches!(input, convert::Type::Borrowed { .. }))
-            {
+            let deferred = if deferred {
                 let names = (0..inputs.len())
                     .map(|position| format!("input_{position},"))
                     .collect::<String>();
@@ -18187,6 +18200,8 @@ fn render_callable_closure(
     let mut lends = Vec::new();
     let mut held = Vec::new();
     let mut restores = String::new();
+    // Each input taken by value that the call lends by reference.
+    let mut borrowed = String::new();
     // Whether an input takes its parameter's witness, which a lent one
     // doesn't.
     let mut attested = false;
@@ -18228,6 +18243,26 @@ fn render_callable_closure(
             parameters.push(format!("input_{position}: &mut {rust}"));
             lent.push(position.to_string());
             let lend = LentInput::new(position, true, rust);
+            values.push(lend.value());
+            lends.push(lend);
+            continue;
+        }
+        // A native value at the bound's own lifetime, as iced_test's
+        // selector takes `Candidate<'a>` of `for<'a> FnMut(Candidate<'a>)`:
+        // lent for the call alone, at every lifetime its family takes, as a
+        // borrow of one with lifetimes is, since no arena value outlives
+        // what it borrows (#1694).
+        if matches!(input, convert::Type::Nominal { .. })
+            && !by_value(input)
+            && carries_lifetime(input)
+            && let Some(family) = scoped_type(input)
+        {
+            let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
+            parameters.push(format!("input_{position}: {rust}"));
+            borrowed.push_str(&format!(
+                "let input_{position} = &input_{position};\n            "
+            ));
+            let lend = LentInput::scoped(position, false, rust, family);
             values.push(lend.value());
             lends.push(lend);
             continue;
@@ -18375,7 +18410,7 @@ fn render_callable_closure(
     };
     let body = place::around(&places, "witnesses.clone()", held_around(&held, body));
     let (items, body) = lent_around(&lends, body);
-    let body = format!("{items}{body}");
+    let body = format!("{items}{borrowed}{body}");
     // A regional output is at the lifetime of the pins, which rustc infers
     // from them, as no Rust code here can name it.
     let (pinned, returns) = match regional {
@@ -23243,12 +23278,47 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
     }
 }
 
-/// Whether `definition` is an opaque `impl Trait` type a function gives.
+/// `ty` with each `&str` in it at `'static`, as a value Rawr gives native
+/// code pins its strings for the runner's life.
+fn at_static_str(ty: &convert::Type) -> convert::Type {
+    let all = |types: &[convert::Type]| types.iter().map(at_static_str).collect();
+    let one = |ty: &convert::Type| Box::new(at_static_str(ty));
+    match ty {
+        convert::Type::Borrowed { mutable: false, ty }
+            if **ty == convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            convert::Type::Builtin(convert::Builtin::StaticStr)
+        }
+        convert::Type::Tuple(members) => convert::Type::Tuple(all(members)),
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => convert::Type::Nominal {
+            definition: *definition,
+            arguments: all(arguments),
+        },
+        convert::Type::Option(element) => convert::Type::Option(one(element)),
+        convert::Type::Result(ok, err) => convert::Type::Result(one(ok), one(err)),
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
+            element: one(element),
+            owned: *owned,
+            length: *length,
+        },
+        ty => ty.clone(),
+    }
+}
+
 /// The substitutions with each `&str` an opaque output captures pinned as
 /// a `&'static str`, as a string literal is in Rust: `download(url: impl
 /// AsRef<str>) -> impl Steps` captures `&'static str` from a literal, and
-/// no region can hold a type Rust code can't name. `None` when there is
-/// none.
+/// no region can hold a type Rust code can't name. A crate's `impl Future`
+/// is such a type too, so `passed_beside(.., "beside")` gives a future of
+/// `(u32, &'static str)`, which a `'static` task takes (#1700). `None` when
+/// there is none.
 fn opaque_pinned_strings(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
@@ -23259,7 +23329,7 @@ fn opaque_pinned_strings(
                 definition,
                 arguments,
             } => {
-                (is_opaque(definition)
+                ((is_opaque(definition) || is_future(ty))
                     && arguments
                         .iter()
                         .any(|argument| output_names(argument, index)))
@@ -23297,6 +23367,7 @@ fn opaque_pinned_strings(
     pinned
 }
 
+/// Whether `definition` is an opaque `impl Trait` type a function gives.
 fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
     OPAQUE_TYPES.with_borrow(|opaque| opaque.contains_key(definition.as_bytes()))
         && !OPAQUE_CALLABLES.with_borrow(|callables| callables.contains_key(definition.as_bytes()))
@@ -23781,6 +23852,9 @@ fn render_generic_arguments(
                         // `str` itself, as `F` of jiff's `strftime(&self,
                         // format: &'f F)` is where a `&str` fills `&F`.
                         convert::Type::Builtin(convert::Builtin::Str) => b"str",
+                        // A `&str` an opaque output captures, pinned for the
+                        // runner's life (`opaque_pinned_strings`).
+                        convert::Type::Builtin(convert::Builtin::StaticStr) => b"&'static str",
                         convert::Type::Builtin(builtin) => {
                             builtin.rust_name().unwrap_or_default().as_bytes()
                         }

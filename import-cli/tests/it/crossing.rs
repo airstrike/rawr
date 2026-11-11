@@ -1626,6 +1626,22 @@ fn a_selector_a_closure_also_fills_takes_a_string() {
     );
 }
 
+/// iced_test's `ui.click(|candidate| ..)` (#1694): `click`'s `Selector` is
+/// implemented for `FnMut(Candidate<'_>) -> Option<T>`, and a closure over
+/// the lifetime-carrying candidate fills it, one capturing what it looks
+/// for. The output is `cargo run`'s.
+#[test]
+fn a_closure_over_a_lifetime_carrying_candidate_fills_a_selector() {
+    let (rawr, cargo) = both_printed("clicked_closure.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.starts_with("click Ok(\"Increment\")\nclick Ok(\"Decrement\")\n")
+            && rawr.contains("click Err(NotFound(\"a closure\"))\nmessage Increment")
+            && rawr.ends_with("message Decrement\nvalue 0"),
+        "{rawr}"
+    );
+}
+
 /// iced_test's `ui.simulate(click())` (#1679): the opaque `impl
 /// Iterator<Item = Event>` `click()` gives fills `simulate`'s `impl
 /// IntoIterator<Item = Event>`, from a call and from a local. The output
@@ -1999,6 +2015,17 @@ fn a_crates_generic_named_as_a_synthetic_parameter_is_its_own() {
     let (rawr, cargo) = both_printed("passed_named.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "Some(Waited(15, 7))\n7");
+}
+
+/// A crate future's output that holds a `&'static str` (#1700):
+/// `passed_beside(.., "beside")` gives `(u32, &str)`, and a script closure
+/// takes it apart and keeps the string, as rustc allows. The output is
+/// `cargo run`'s.
+#[test]
+fn a_futures_output_holding_a_static_str_reaches_a_closure() {
+    let (rawr, cargo) = both_printed("passed_label.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Waited(15, \"beside\"))");
 }
 
 /// iced's game_of_life (#1659): `Task::perform(task, Message::Grid.with(version))`
