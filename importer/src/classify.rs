@@ -4231,6 +4231,7 @@ impl<P: api::Phase> api::Graph<P> {
         workers: usize,
     ) -> Result<(ClassifiedParts, usize), Error> {
         let semantic_api = *self.semantic_fingerprint().as_bytes();
+        #[cfg(not(target_arch = "wasm32"))]
         crate::progress::classified(self.definitions().len());
         let context = Context::new(self, authority)?;
         let result = (|| {

@@ -1195,6 +1195,7 @@ impl Plan {
         graph: &crate::api::Graph<impl crate::api::Phase>,
         outcomes: impl ExactSizeIterator<Item = crate::classify::Outcome<'a>>,
     ) -> Result<Box<[u8]>, super::Error> {
+        #[cfg(not(target_arch = "wasm32"))]
         crate::progress::generated(outcomes.len());
         let mut facades = Vec::<Facade>::new();
         // Each re-exported variant: its root, its path, its enum and its
