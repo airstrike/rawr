@@ -922,6 +922,17 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
         said.contains("nightly builds 0, probes 0"),
         "a new driver extracts nothing again\n{said}"
     );
+    // One round, which copies no build output and seals no bundle. It
+    // still binds one harness and asks Cargo once: the harness names
+    // rawr's crate by its host directory, which keys the resolution.
+    assert!(
+        said.contains("rawr-import: check rounds 1,"),
+        "a new driver checks in one round\n{said}"
+    );
+    assert!(
+        said.contains(", compiled 0, copied 0, sealed 0,"),
+        "a new driver copies and seals nothing\n{said}"
+    );
     assert!(
         said.contains("canonicalized 0, classified 0, generated 0"),
         "a new driver canonicalizes, classifies and generates nothing again\n{said}"

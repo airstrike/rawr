@@ -493,6 +493,10 @@ fn prepare(
         .imported_transport(expected, &limits)
         .map_err(Error::other)?;
     let project = graph.entry_package().root().to_path_buf();
+    // After an install, the instances the last build's check recorded are
+    // this check's first guess, which its build confirms or corrects, so
+    // the install costs no second build (D869).
+    rawr::package::instances::adopt(&project).map_err(Error::other)?;
     // A program that used proved applications last time keys its check by
     // the identity of every input its API was read from: its dependencies'
     // facts change only with them, so no facts are read for a warm run.
