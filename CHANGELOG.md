@@ -6,6 +6,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - Removing an unused type, or changing its fields, swaps into the running program instead of restarting it. The program restarts only when a live value of the type exists, or a closure native code holds can still make the old one, and it says which. (#1746)
+- A declaration added above a `macro_rules!` lowers again only its own file, and an edit to a path crate of the project lowers again only the marked files that name what changed. (#1730, #1735, #1734)
 
 ## 0.3.187 (2026-11-11)
 

@@ -12,7 +12,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"Removing an unused type, or changing its fields, swaps into the running program instead of restarting it. The program restarts only when a live value of the type exists, or a closure native code holds can still make the old one, and it says which.","issues":[1746]}
+        {"text":"Removing an unused type, or changing its fields, swaps into the running program instead of restarting it. The program restarts only when a live value of the type exists, or a closure native code holds can still make the old one, and it says which.","issues":[1746]},
+        {"text":"A declaration added above a `macro_rules!` lowers again only its own file, and an edit to a path crate of the project lowers again only the marked files that name what changed.","issues":[1730,1735,1734]}
       ]
     },
     "releases": [
@@ -3814,12 +3815,12 @@
     {"issue":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.186"},
     {"issue":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"open","category":"Divergences from rustc"},
-    {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1734,"title":"A reused kept lowering doesn't check the adapters held inside witnessed ops","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1735,"title":"An edit to a workspace path crate lowers every marked file again, because its facade counts whole in each key","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1734,"title":"A reused kept lowering doesn't check the adapters held inside witnessed ops","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1735,"title":"An edit to a workspace path crate lowers every marked file again, because its facade counts whole in each key","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1737,"title":"A derive change on a native-visible marked type prepares a native build and says \"changed its fields\"","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.186"},
     {"issue":1738,"title":"A std derive added to a marked type native code holds as a trait object rebuilds for its stand-in's impl","state":"open","category":"Shared dependency cache (D607)"},
@@ -3832,7 +3833,10 @@
     {"issue":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1749,"title":"Adapters name their crate by its whole facade, so a path-crate edit lowers every file calling its adapters","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1750,"title":"A second run at a project whose path crate was edited before fails its first start (stale read-set, E0432)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5046,9 +5050,9 @@
             {"number":1726,"title":"Adding or removing a struct or enum re-lowers every file that reaches a type numbered after it","state":"closed"},
             {"number":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open"},
             {"number":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"closed"},
-            {"number":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open"},
-            {"number":1734,"title":"A reused kept lowering doesn't check the adapters held inside witnessed ops","state":"open"},
-            {"number":1735,"title":"An edit to a workspace path crate lowers every marked file again, because its facade counts whole in each key","state":"open"},
+            {"number":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"closed"},
+            {"number":1734,"title":"A reused kept lowering doesn't check the adapters held inside witnessed ops","state":"closed"},
+            {"number":1735,"title":"An edit to a workspace path crate lowers every marked file again, because its facade counts whole in each key","state":"closed"},
             {"number":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"closed"},
             {"number":1737,"title":"A derive change on a native-visible marked type prepares a native build and says \"changed its fields\"","state":"closed"},
             {"number":1738,"title":"A std derive added to a marked type native code holds as a trait object rebuilds for its stand-in's impl","state":"open"},
@@ -5060,7 +5064,9 @@
             {"number":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed"},
             {"number":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"closed"},
             {"number":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open"},
-            {"number":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open"}
+            {"number":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open"},
+            {"number":1749,"title":"Adapters name their crate by its whole facade, so a path-crate edit lowers every file calling its adapters","state":"open"},
+            {"number":1750,"title":"A second run at a project whose path crate was edited before fails its first start (stale read-set, E0432)","state":"open"}
           ]
         }
       ]
@@ -5151,7 +5157,8 @@
             {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"},
             {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed"},
             {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
-            {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"}
+            {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"},
+            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"open"}
           ]
         },
         {
