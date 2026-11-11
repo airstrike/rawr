@@ -279,7 +279,11 @@ impl<'a> Parser<'a> {
                         .find(|(_, ty, _)| {
                             contains(&self.inference.resolve(ty), &|inner| *inner == unknown)
                         })
-                        .map_or_else(|| ty.name(&self.models), |(name, ..)| name.clone());
+                        .map_or_else(
+                            || ty.name(&self.models),
+                            // As rustc spells it, as `impl Into<Size>`.
+                            |(name, ..)| operation.item.signature().shown(name).into(),
+                        );
                     Error::TypeAnnotationsNeeded {
                         parameter,
                         reference: at,

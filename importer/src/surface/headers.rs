@@ -349,7 +349,9 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                 parameter_indices(argument, &mut named);
             }
             // An `impl Trait` input's parameter has no name a path can
-            // spell, and one of an enclosing impl isn't among `generics`.
+            // spell, and one of an enclosing impl isn't among `generics`:
+            // each is named as a signature names an argument's `impl
+            // Trait`, which no crate's own parameter is.
             let parameters = named
                 .iter()
                 .map(|index| {
@@ -362,7 +364,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                                 && name.chars().all(|c| c.is_alphanumeric() || c == '_')
                                 && !name.starts_with(|c: char| c.is_ascii_digit())
                         })
-                        .map_or_else(|| format!("Impl{index}").into(), Into::into);
+                        .map_or_else(|| signature::argument_impl_name(*index), Into::into);
                     signature::Parameter::new(*index, name, signature::Kind::Type)
                 })
                 .collect::<Box<[_]>>();

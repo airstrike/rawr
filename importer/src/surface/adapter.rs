@@ -1227,7 +1227,8 @@ fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::P
             clone_str(parameter.name())?,
             parameter.kind(),
         )
-        .with_static_str(parameter.static_str());
+        .with_static_str(parameter.static_str())
+        .with_shown(parameter.renamed().map(clone_str).transpose()?);
         // An argument's `impl Trait` keeps its mark, so no turbofish names
         // it (E0632).
         parameters.push(if parameter.is_argument_impl() {
@@ -1379,7 +1380,9 @@ fn parameter_slice_bytes(parameters: &[signature::Parameter]) -> Option<usize> {
         .len()
         .checked_mul(mem::size_of::<signature::Parameter>())?
         .checked_add(parameters.iter().try_fold(0_usize, |bytes, parameter| {
-            bytes.checked_add(parameter.name().len())
+            bytes
+                .checked_add(parameter.name().len())?
+                .checked_add(parameter.renamed().map_or(0, str::len))
         })?)
 }
 
