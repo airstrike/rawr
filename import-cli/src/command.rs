@@ -38,6 +38,10 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     // A universe runner, as `?play`'s image builds it (#434).
     if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
         rawr_import::universe::set();
+        // The directory its caller takes the runner from (#1752).
+        if let Some(directory) = std::env::var_os(rawr_import::universe::DIRECTORY) {
+            rawr_import::universe::deliver_into(std::path::Path::new(&directory));
+        }
     }
     let arguments = match rawr_cli::target_arguments(arguments) {
         Ok(arguments) => arguments,

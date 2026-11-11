@@ -8,20 +8,20 @@
 //!
 //! ```sh
 //! sh play/universe/examples.sh
-//! RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe
+//! RAWR_UNIVERSE_RUNNER=1 RAWR_UNIVERSE_OUT=play/universe/target/universe rawr-import run play/universe
 //! cargo test -p rawr-play --test universe -- --ignored
 //! ```
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-const NEEDS_RUNNER: &str = "needs the runner: sh play/universe/examples.sh, then RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe";
+const NEEDS_RUNNER: &str = "needs the runner: sh play/universe/examples.sh, then RAWR_UNIVERSE_RUNNER=1 RAWR_UNIVERSE_OUT=play/universe/target/universe rawr-import run play/universe";
 
 /// Run `source` through the CLI on the universe runner.
 fn run(source: &str) -> std::process::Output {
     use std::io::Write as _;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("universe");
-    let runner = root.join("target/rawr/runner/target/debug/play");
+    let runner = root.join("target/universe/runner");
     assert!(runner.is_file(), "{NEEDS_RUNNER}");
     let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-play"))
         .args(["-", "--time-ms", "30000", "-o", "-"])
@@ -234,7 +234,7 @@ async fn main() {
 /// A server on the universe runner, prepared once.
 fn server() -> rawr_play::universe::Server {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("universe");
-    let runner = root.join("target/rawr/runner/target/debug/play");
+    let runner = root.join("target/universe/runner");
     assert!(runner.is_file(), "{NEEDS_RUNNER}");
     rawr_play::universe::Universe::new(root, runner)
         .serve()

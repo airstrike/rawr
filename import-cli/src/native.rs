@@ -160,7 +160,11 @@ impl<B> Lane<B> {
         &mut self,
         generated: rawr_import::runner::Manifest<rawr_import::runner::Generated, B>,
     ) -> Result<rawr_import::runner::Manifest<rawr_import::runner::Built, B>, Error> {
-        generated.build_on_demand(&self.cache).map_err(Error::Build)
+        let built = generated
+            .build_on_demand(&self.cache)
+            .map_err(Error::Build)?;
+        rawr_import::universe::deliver(&built).map_err(Error::Deliver)?;
+        Ok(built)
     }
 
     fn admit_built(
@@ -474,6 +478,7 @@ pub enum Error {
     Import(rawr_import::Error),
     Cache(rawr_import::cache::entry::Error),
     Build(rawr_import::runner::BuildError),
+    Deliver(rawr_import::universe::Error),
     Process(rawr_import::process::RunnerError),
     Bootstrap(rawr_import::supervisor::bootstrap::Error),
     Supervisor(rawr_import::supervisor::Error),
@@ -557,6 +562,7 @@ impl std::fmt::Display for Error {
             Self::Import(error) => error.fmt(formatter),
             Self::Cache(error) => error.fmt(formatter),
             Self::Build(error) => error.fmt(formatter),
+            Self::Deliver(error) => error.fmt(formatter),
             Self::Process(error) => error.fmt(formatter),
             Self::Bootstrap(error) => error.fmt(formatter),
             Self::Supervisor(error) => error.fmt(formatter),
@@ -581,6 +587,7 @@ impl std::error::Error for Error {
             Self::Import(error) => Some(error),
             Self::Cache(error) => Some(error),
             Self::Build(error) => Some(error),
+            Self::Deliver(error) => Some(error),
             Self::Process(error) => Some(error),
             Self::Bootstrap(error) => Some(error),
             Self::Supervisor(error) => Some(error),

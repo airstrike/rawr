@@ -91,6 +91,8 @@ COPY . .
 # ($CARGO_HOME/rawr: its runtime and shared bindings) and the universe's
 # target directory are cache mounts too, so the runner recompiles only what a
 # new rawr changes; rawr's own digests decide that, as on any machine.
+# rawr-import writes the runner to /out/universe/runner, the directory
+# RAWR_UNIVERSE_OUT names (#1752).
 RUN --mount=type=cache,id=rawr-play-universe-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=rawr-play-universe-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=rawr-play-import-target,target=/src/target \
@@ -102,8 +104,7 @@ RUN --mount=type=cache,id=rawr-play-universe-registry,target=/usr/local/cargo/re
       cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
     && cp -r play/universe/. /universe/ \
     && sh /universe/examples.sh \
-    && RAWR_UNIVERSE_RUNNER=1 /src/target/release/rawr-import run /universe \
-    && install -D -m 0755 /universe/target/rawr/runner/target/debug/play /out/universe/runner \
+    && RAWR_UNIVERSE_RUNNER=1 RAWR_UNIVERSE_OUT=/out/universe /src/target/release/rawr-import run /universe \
     && install -D -m 0644 /universe/Cargo.toml /out/universe/Cargo.toml
 
 FROM gcr.io/distroless/cc-debian12:nonroot

@@ -6,9 +6,10 @@
 # headless shell's `[patch]`: in a browser iced runs on its own web shell,
 # iced_winit, which draws into a canvas on the page. Cargo builds the copy
 # for wasm32 (CARGO_BUILD_TARGET), and rawr-import reads, extracts and
-# generates for that target as Cargo builds it (#1394). The runner it
-# builds is the copy's target/rawr/runner/target/wasm32-unknown-unknown/
-# debug/play.wasm, optimized for size, as rawr-web is.
+# generates for that target as Cargo builds it (#1394). rawr-import writes
+# the runner it builds, optimized for size as rawr-web is, to
+# target/wasm/universe/target/universe/runner, the directory
+# RAWR_UNIVERSE_OUT names (#1752).
 set -eu
 cd "$(dirname "$0")/../.."
 import="${1:-rawr-import}"
@@ -31,16 +32,24 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly-2026-07-11}" \
   CARGO_PROFILE_DEV_OPT_LEVEL=s \
   CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
   CARGO_PROFILE_DEV_OVERFLOW_CHECKS=false \
-  RAWR_UNIVERSE_RUNNER=1
-# `run` builds the runner and then starts it, which a wasm32 module can't
-# be here: once the runner is built, that start is the one failure left.
-runner="$copy/target/rawr/runner/target/wasm32-unknown-unknown/debug/play.wasm"
+  RAWR_UNIVERSE_RUNNER=1 \
+  RAWR_UNIVERSE_OUT="$copy/target/universe"
+# A runner left from an earlier build is gone first, so only this build's
+# can be found there.
+runner="$RAWR_UNIVERSE_OUT/runner"
+rm -f "$runner"
 log="$copy/target/web.log"
 mkdir -p "$copy/target"
 status=0
+# `run` builds the runner and then starts it, which a wasm32 module can't
+# be here: once the runner is built, that start is the one failure left.
 "$import" run "$copy" 2> "$log" || status=$?
 cat "$log" >&2
 if [ "$status" -ne 0 ] && ! grep -q "runner exited before connecting its protocol socket" "$log"; then
   exit "$status"
+fi
+if [ ! -f "$runner" ]; then
+  echo "web.sh: $import wrote no runner to $RAWR_UNIVERSE_OUT" >&2
+  exit 1
 fi
 echo "web.sh: built $runner"
