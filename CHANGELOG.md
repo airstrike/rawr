@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.188 (2026-11-11)
+
 - Removing an unused type, or changing its fields, swaps into the running program instead of restarting it. The program restarts only when a live value of the type exists, or a closure native code holds can still make the old one, and it says which. (#1746)
 - A declaration added above a `macro_rules!` lowers again only its own file, and an edit to a path crate of the project lowers again only the marked files that name what changed. (#1730, #1735, #1734)
 - Editing a path crate, such as a workspace member, and starting again from a copy or restore of older files no longer breaks the first start: rawr's shared extraction build checks a path crate's files by their contents, not their times. (#1750)
