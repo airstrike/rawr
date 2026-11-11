@@ -521,8 +521,7 @@ fn compile<B>(
 }
 
 /// The executable of the runner's binary target, from Cargo's
-/// `compiler-artifact` message for the `rawr-generated-runner` package. The
-/// binary may take the script crate's name (D594).
+/// `compiler-artifact` message for the `rawr-generated-runner` package.
 fn runner_executable(messages: &[u8]) -> Option<PathBuf> {
     messages
         .split(|byte| *byte == b'\n')
