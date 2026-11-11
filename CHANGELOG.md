@@ -5,6 +5,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `RAWR_VERBOSE` says what each start of the program ran: Cargo resolutions, nightly builds, probes, runner builds and the check's rounds. (#1742; part of #1739)
+- A new pub item no native code names (a struct, fn, trait, impl or re-export) swaps into the running program instead of rebuilding native code. A new `Drop` impl, or a new impl of the crate's own trait that native code could hold as a `dyn` value, still rebuilds. An item taken away rebuilds, and the restart line names each one. (#1741)
+
+## 0.3.186 (2026-11-11)
+
 - A refutable `let` of a tuple holding a crate value names rustc's missing pattern again, and a signature naming a crate type rawr hasn't prepared asks to prepare it instead of failing. (#1724)
 - A save that adds or removes a struct or enum lowers again only its own file and the files that name it. (#1726)
 - After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed. (#1725)

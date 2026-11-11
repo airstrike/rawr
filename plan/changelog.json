@@ -5,14 +5,22 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A refutable `let` of a tuple holding a crate value names rustc's missing pattern again, and a signature naming a crate type rawr hasn't prepared asks to prepare it instead of failing.","issues":[1724]},
-      {"text":"A save that adds or removes a struct or enum lowers again only its own file and the files that name it.","issues":[1726]},
-      {"text":"After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed.","issues":[1725]},
-      {"text":"Adding or removing a derive on a private type in a marked file swaps into the running program instead of restarting it. A save the running program can't take, such as a new field or a removed type, restarts it at once with its reason, without first preparing a native build.","issues":[1728]},
-      {"text":"A pub marked type's new `#[derive(..)]` swaps into the running program instead of preparing a native build. A derive that goes away still builds again, and the restart line names it instead of saying the fields changed.","issues":[1737]}
+      {"text":"`RAWR_VERBOSE` says what each start of the program ran: Cargo resolutions, nightly builds, probes, runner builds and the check's rounds.","issues":[1742],"refs":[1739]},
+      {"text":"A new pub item no native code names (a struct, fn, trait, impl or re-export) swaps into the running program instead of rebuilding native code. A new `Drop` impl, or a new impl of the crate's own trait that native code could hold as a `dyn` value, still rebuilds. An item taken away rebuilds, and the restart line names each one.","issues":[1741]}
     ]
   },
   "releases": [
+    {
+      "version": "0.3.186",
+      "date": "2026-11-11",
+      "entries": [
+        {"text":"A refutable `let` of a tuple holding a crate value names rustc's missing pattern again, and a signature naming a crate type rawr hasn't prepared asks to prepare it instead of failing.","issues":[1724]},
+        {"text":"A save that adds or removes a struct or enum lowers again only its own file and the files that name it.","issues":[1726]},
+        {"text":"After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed.","issues":[1725]},
+        {"text":"Adding or removing a derive on a private type in a marked file swaps into the running program instead of restarting it. A save the running program can't take, such as a new field or a removed type, restarts it at once with its reason, without first preparing a native build.","issues":[1728]},
+        {"text":"A pub marked type's new `#[derive(..)]` swaps into the running program instead of preparing a native build. A derive that goes away still builds again, and the restart line names it instead of saying the fields changed.","issues":[1737]}
+      ]
+    },
     {
       "version": "0.3.185",
       "date": "2026-11-11",

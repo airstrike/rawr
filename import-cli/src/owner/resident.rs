@@ -12,8 +12,11 @@ mod tests;
 /// The exact `Cargo.toml` the admitted native owner consumed, and what
 /// native code sees of the marked modules when the crate root is native
 /// (D501). Comparing them conservatively routes any declaration edit, and
-/// any edit that changes a trampoline, to preparation. The last field is a
-/// marked root's async `main` entry (D513.4).
+/// any edit that changes a trampoline, to preparation; a new derive or a
+/// new item native code can see goes to the running program's compile
+/// first, which prepares only for a native use it finds uncovered
+/// (#1737, #1741). The last field is a marked root's async `main` entry
+/// (D513.4).
 #[derive(Clone, Eq, PartialEq)]
 pub struct Manifests(
     Box<[(PathBuf, Box<str>)]>,
@@ -104,9 +107,10 @@ impl Manifests {
             shape
                 .change(next_shape)
                 .or_else(native)
-                // A new derive needs a new native build only for a native
-                // use of its impl, as a marked call at a native bound.
+                // A new derive or item needs a new native build only for a
+                // native use of it, as a marked call at a native bound.
                 .or_else(|| shape.derived(next_shape))
+                .or_else(|| shape.added(next_shape))
                 // No runner runs to compare with, or an earlier native
                 // build is still owed.
                 .unwrap_or_else(|| "the program needs a new native build".to_owned()),
@@ -237,6 +241,49 @@ impl Native {
             });
         }
         Ok(self.joined.as_ref().expect("joined above"))
+    }
+}
+
+/// What this process had done when a program's start began: Cargo's
+/// resolutions, the nightly's builds, the probes, the runner builds and
+/// the check's rounds. A restart that needs no native build runs none of
+/// the first four (#1739).
+pub(super) struct Start {
+    api: rawr_import::progress::Work,
+    runner_builds: usize,
+    rounds: usize,
+}
+
+impl Start {
+    /// What this process has done so far.
+    pub(super) fn now() -> Self {
+        Self {
+            api: rawr_import::progress::work(),
+            runner_builds: rawr_import::progress::runner_builds(),
+            rounds: rawr_import::progress::rounds().len(),
+        }
+    }
+
+    /// With `RAWR_VERBOSE`, say what the start since `self` did, and each
+    /// of its check's rounds.
+    pub(super) fn tell(self) {
+        if !rawr_cli::cells::verbose() {
+            return;
+        }
+        let api = rawr_import::progress::work();
+        let rounds = rawr_import::progress::rounds();
+        let rounds = rounds.get(self.rounds..).unwrap_or_default();
+        eprintln!(
+            "rawr-import: a start ran Cargo resolutions {}, nightly builds {}, probes {}, runner builds {}, rounds {}",
+            api.resolved() - self.api.resolved(),
+            api.built() - self.api.built(),
+            api.probed() - self.api.probed(),
+            rawr_import::progress::runner_builds() - self.runner_builds,
+            rounds.len(),
+        );
+        for round in rounds {
+            eprintln!("rawr-import: a start's round: {round}");
+        }
     }
 }
 

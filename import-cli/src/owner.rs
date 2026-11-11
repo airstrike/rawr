@@ -467,8 +467,10 @@ fn session(
         rawr_import::progress::listen(rawr_cli::events::building);
     }
     rawr_import::progress::begin(&root);
+    let start = resident::Start::now();
     let initial = initial_watched_program(target, graph, &target_path, lifecycle, profile, program);
     rawr_import::progress::finish(initial.is_ok());
+    start.tell();
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
     rawr_cli::events::running();
 
