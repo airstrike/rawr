@@ -1213,14 +1213,30 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     let said = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{said}");
     assert_eq!(String::from_utf8_lossy(&second.stdout), printed, "{said}");
+    // The run line, and the round's counts of work done again; the round
+    // line names each stage, so its counts are read by name.
     assert!(
         said.contains(
             "rawr-import: run rounds 1, Cargo resolutions 0, nightly builds 0, probes 0, \
-             runner builds 0, runner units compiled 0\n\
-             rawr-import: round 1: compiled 0, probes 0, read 0, classified 0, generated 0\n"
+             runner builds 0, runner units compiled 0\n"
         ),
         "{said}"
     );
+    let round = said
+        .lines()
+        .find(|line| line.starts_with("rawr-import: round 1: "))
+        .unwrap_or_else(|| panic!("{said}"));
+    for count in [
+        "harnesses 0,",
+        "compiled 0,",
+        "probes 0,",
+        "read 0,",
+        "canonicalized 0,",
+        "classified 0,",
+        "generated 0,",
+    ] {
+        assert!(round.contains(count), "{count} in {round}");
+    }
     let rebuilt = modified(&root.join("target"));
     let written = rebuilt
         .iter()
