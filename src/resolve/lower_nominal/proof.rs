@@ -353,10 +353,19 @@ impl<'a> Parser<'a> {
                 _ => false,
             },
             // `[T; N]` is `Copy` when `T` is; `Vec<T>` is only `Clone`.
-            Ty::Array { element, kind } => {
-                (capability != capability::Kind::Copy || kind.length().is_some())
-                    && self.type_provides(&element, capability)
-            }
+            // `Vec<T>`, `VecDeque<T>` and `[T; 0]` are `Default` for any
+            // `T`, and the unsized `[T]` never is.
+            Ty::Array { element, kind } => match (capability, kind) {
+                (
+                    capability::Kind::Default,
+                    sequence::Kind::Vec | sequence::Kind::Deque | sequence::Kind::Array(0),
+                ) => true,
+                (capability::Kind::Default, sequence::Kind::Slice) => false,
+                _ => {
+                    (capability != capability::Kind::Copy || kind.length().is_some())
+                        && self.type_provides(&element, capability)
+                }
+            },
             Ty::Tuple(members) => members
                 .iter()
                 .all(|member| self.type_provides(member, capability)),
