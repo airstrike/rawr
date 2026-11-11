@@ -13,7 +13,9 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A crate function whose output future's `Output` is its future parameter's `S::Output`, as futures' adapters keep their input's output, is imported. Before, the parameter's output was declared twice and Bind stopped with E0403 \"the name `SOutput` is already used for a generic parameter\", which stopped inboard's check. This had regressed with #1674.","issues":[1685]},
-        {"text":"A new rawr build no longer classifies and generates an unchanged project's API again, also when the project's crates came from a cold extraction or a later run reads them from shared tables. The API names the resolution universe without the digest of the rawr build that compiled it, and a shared-table run names its resolution as a complete one does. After an install, inboard's \"building API\" had taken 237 s on one core.","issues":[1686]}
+        {"text":"A new rawr build no longer classifies and generates an unchanged project's API again, also when the project's crates came from a cold extraction or a later run reads them from shared tables. The API names the resolution universe without the digest of the rawr build that compiled it, and a shared-table run names its resolution as a complete one does. After an install, inboard's \"building API\" had taken 237 s on one core.","issues":[1686]},
+        {"text":"A save to a marked file that names a crate type through one of several re-export routes, as inboard's theme.rs names `iced::theme::Mode`, now swaps into the running program in about a second instead of rebuilding it (18-97 s in inboard). Every use that names a type, its variant, field or constructor names it by the type's one path, in rawr-import's compile and in the runner's own.","issues":[1688]},
+        {"text":"Under `RAWR_VERBOSE=1`, when a save can't swap in place, the runner names the file, line and column of the use its build doesn't cover, and the item.","issues":[1689]}
       ]
     },
     "releases": [
@@ -3691,7 +3693,9 @@
     {"issue":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"open","category":"Divergences from rustc"},
     {"issue":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"open","category":"Divergences from rustc"},
     {"issue":1686,"title":"A new rawr build reclassified an extracted project's API: the API named rawr's source digest","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1688,"title":"A save naming a re-exported crate type prepared again: its build and its compile named the type differently","state":"open","category":"No glue (D593)"},
+    {"issue":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4775,7 +4779,9 @@
             {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed"},
             {"number":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"open"},
             {"number":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"open"},
-            {"number":1686,"title":"A new rawr build reclassified an extracted project's API: the API named rawr's source digest","state":"open"}
+            {"number":1686,"title":"A new rawr build reclassified an extracted project's API: the API named rawr's source digest","state":"open"},
+            {"number":1688,"title":"A save naming a re-exported crate type prepared again: its build and its compile named the type differently","state":"open"},
+            {"number":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"open"}
           ]
         }
       ]
