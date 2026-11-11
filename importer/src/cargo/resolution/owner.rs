@@ -1395,6 +1395,7 @@ impl SharedReady {
             Arc::clone(&evaluation.cached.attestation),
             proof,
             &evaluation.request.policy,
+            limits,
             move |stored| {
                 // This may run inside the store's batch, under the
                 // project's ownership lease, so it reads only files: a

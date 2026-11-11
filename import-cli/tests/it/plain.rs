@@ -849,9 +849,17 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
 /// read back from the shared tables is the one the last build classified:
 /// it names the Rawr it links by package name and version, the universe it
 /// resolves in as it resolves, and the resolution by its lockfile, not by
-/// the host directory's path or the build's own sources. So no definition
-/// is classified and no facade generated again, after the build that
-/// extracted the crates as after one that read their tables.
+/// the host directory's path, in its manifest or among the files it reads,
+/// or by the build's own sources. So no definition is classified and no
+/// facade generated again, after the build that extracted the crates as
+/// after one that read their tables, and none is canonicalized again after
+/// the first that read them.
+///
+/// An install also puts a new `rawr-import-driver` beside `rawr-import`,
+/// and the toolchain's attestation names the driver it found, by path and
+/// bytes. The API read from the tables is a function of the tables, not of
+/// that driver, so such an install canonicalizes no sidecar again either: a
+/// generator version bump is only a regeneration.
 #[test]
 fn another_rawr_build_extracts_and_classifies_nothing_again() {
     let home = crate::support::scratch().join("moved-host-home");
@@ -859,8 +867,9 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
     let _ = fs::remove_dir_all(&home);
     let _ = fs::remove_dir_all(&root);
     copy(Path::new(FIXTURE), &root);
-    let check = |host: &str| {
-        let checked = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let installed = Path::new(env!("CARGO_BIN_EXE_rawr-import"));
+    let check_with = |importer: &Path, host: &str| {
+        let checked = Command::new(importer)
             .arg("check")
             .arg(&root)
             .env("RAWR_HOME", &home)
@@ -877,8 +886,11 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
         assert!(checked.status.success(), "{said}");
         said
     };
+    let check = |host: &str| check_with(installed, host);
     // The first build extracts into an empty home; each later one reads
-    // the tables under its own host.
+    // the tables under its own host. The first to read them canonicalizes
+    // them once, as its API is keyed apart from the extracted one (#1687);
+    // after it, a host directory of its own canonicalizes nothing.
     check("first");
     for host in ["second", "third"] {
         let said = check(host);
@@ -890,7 +902,30 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
             said.contains("classified 0, generated 0"),
             "another Rawr build classifies and generates nothing again\n{said}"
         );
+        assert!(
+            host == "second" || said.contains("canonicalized 0,"),
+            "another Rawr build canonicalizes nothing again\n{said}"
+        );
     }
+    // Another install: `rawr-import` and its driver in another directory,
+    // so the attestation names another driver.
+    let bin = crate::support::scratch().join("moved-host-install");
+    let _ = fs::remove_dir_all(&bin);
+    fs::create_dir_all(&bin).unwrap();
+    for name in ["rawr-import", "rawr-import-driver"] {
+        let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+        fs::copy(installed.with_file_name(&name), bin.join(&name)).unwrap();
+    }
+    let importer = bin.join(format!("rawr-import{}", std::env::consts::EXE_SUFFIX));
+    let said = check_with(&importer, "fourth");
+    assert!(
+        said.contains("nightly builds 0, probes 0"),
+        "a new driver extracts nothing again\n{said}"
+    );
+    assert!(
+        said.contains("canonicalized 0, classified 0, generated 0"),
+        "a new driver canonicalizes, classifies and generates nothing again\n{said}"
+    );
 }
 
 /// A program with a module of its own selects its own crate, whose table

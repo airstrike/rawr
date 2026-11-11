@@ -270,7 +270,10 @@ pub(crate) fn shared_context(
 }
 
 /// Retain the API of a run that replayed shared bindings, under the
-/// toolchain attestation; a current API hit defers `materialize`.
+/// toolchain attestation; a current API hit defers `materialize`. An API
+/// that is not current under this attestation, as after an install that
+/// replaced the driver, is staged from its memo when the tables gave it
+/// before.
 #[cfg(feature = "rustc-driver")]
 pub(crate) fn retain_shared(
     context: &crate::context::Context,
@@ -278,6 +281,7 @@ pub(crate) fn retain_shared(
     parent: std::sync::Arc<crate::node::Validated<cargo::toolchain::Attestation>>,
     proof: crate::input::proof::Proof,
     policy: &Policy,
+    limits: &cargo::Limits,
     materialize: impl FnOnce(Option<&api::cached::Product>) -> Result<api::Graph<api::Captured>>
         + Send
         + 'static,
@@ -297,7 +301,14 @@ pub(crate) fn retain_shared(
         &policy_identity,
         crate::node::Parent::validated(parent.as_ref()),
         &retention,
-        || None,
+        || {
+            Some(api::memo::shared_key(
+                request,
+                &policy_identity,
+                &context.identity(),
+                limits,
+            ))
+        },
         materialize,
         |product, retained, graph| {
             api::retained::Continuation::capture_shared(
@@ -2707,6 +2718,7 @@ fn canonicalize_fragments(
     allocation: &mut Allocation,
     seal: SealMode<'_>,
 ) -> Result<api::Graph<api::Captured>> {
+    crate::progress::canonicalized(fragments.len());
     let result = (|| {
         allocation.category(EvidenceCategory::Candidate);
         validate_resolution_context(&fragments, context, allocation)?;
