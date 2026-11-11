@@ -1104,11 +1104,14 @@ mod seed {
         (segments, index)
     }
 
-    /// Every path the text names, `use` bindings expanded.
+    /// Every path the text names, `use` bindings expanded. A path with a
+    /// leading `::` names a crate, as rustc's does, never a name a `use`
+    /// binds: `::image::ColorType` beside `use iced::widget::image;`.
     pub(super) fn paths(text: &str) -> Vec<Vec<String>> {
         let tokens = tokens(text);
-        let mut bindings: Vec<(&str, Vec<&str>)> = Vec::new();
-        let mut qualified: Vec<Vec<&str>> = Vec::new();
+        // Each binding's name, its path, and whether that path is global.
+        let mut bindings: Vec<(&str, Vec<&str>, bool)> = Vec::new();
+        let mut qualified: Vec<(Vec<&str>, bool)> = Vec::new();
         // `mod download;`: a path `download::Progress` names the module,
         // even beside `use download::download;`, a function of the same
         // name in the value namespace.
@@ -1137,11 +1140,12 @@ mod seed {
                         index += 2;
                     }
                     if local != *name {
-                        bindings.push((local, vec![*name]));
+                        bindings.push((local, vec![*name], true));
                     }
                 }
                 Token::Ident("use") => {
-                    let (prefix, next) = path(&tokens, index + 1);
+                    let global = tokens.get(index + 1) == Some(&Token::Path);
+                    let (prefix, next) = path(&tokens, index + 1 + usize::from(global));
                     index = next;
                     if prefix.is_empty() {
                         continue;
@@ -1152,7 +1156,7 @@ mod seed {
                         // A glob demands every public name of the module.
                         let mut glob = prefix;
                         glob.push("*");
-                        qualified.push(glob);
+                        qualified.push((glob, global));
                         index += 2;
                     } else if tokens.get(index) == Some(&Token::Path)
                         && tokens.get(index + 1) == Some(&Token::Open)
@@ -1173,7 +1177,7 @@ mod seed {
                                 local = alias;
                                 index += 2;
                             }
-                            bindings.push((local, full));
+                            bindings.push((local, full, global));
                             if tokens.get(index) == Some(&Token::Comma) {
                                 index += 1;
                             }
@@ -1186,14 +1190,22 @@ mod seed {
                             local = alias;
                             index += 2;
                         }
-                        bindings.push((local, prefix));
+                        bindings.push((local, prefix, global));
                     }
                 }
                 Token::Ident(_) => {
                     let (segments, next) = path(&tokens, index);
                     index = next;
                     if segments.len() >= 2 {
-                        qualified.push(segments);
+                        qualified.push((segments, false));
+                    }
+                }
+                // `::parts::Point`, which no `use` binding starts.
+                Token::Path if matches!(tokens.get(index + 1), Some(Token::Ident(_))) => {
+                    let (segments, next) = path(&tokens, index + 1);
+                    index = next;
+                    if segments.len() >= 2 {
+                        qualified.push((segments, true));
                     }
                 }
                 _ => index += 1,
@@ -1204,7 +1216,14 @@ mod seed {
         // or in a block, names `iced::keyboard::key`.
         let bindings = bindings
             .iter()
-            .map(|(local, full)| (*local, through_bindings(full, &bindings, &modules)))
+            .map(|(local, full, global)| {
+                let full = if *global {
+                    full.clone()
+                } else {
+                    through_bindings(full, &bindings, &modules)
+                };
+                (*local, full)
+            })
             .collect::<Vec<_>>();
         let mut paths = bindings
             .iter()
@@ -1214,10 +1233,10 @@ mod seed {
         // `use m::badge::{self, badge};`: a path through it goes through
         // the module, which a syntactic pass can't tell from the function,
         // so it demands the path through each.
-        for segments in qualified {
+        for (segments, global) in qualified {
             let mut starts = bindings
                 .iter()
-                .filter(|(local, _)| *local == segments[0] && !modules.contains(local))
+                .filter(|(local, _)| !global && *local == segments[0] && !modules.contains(local))
                 .map(|(_, full)| full.clone())
                 .collect::<Vec<_>>();
             if starts.is_empty() {
@@ -1234,10 +1253,11 @@ mod seed {
     /// `full` with its first segment, while another `use` binds it, written
     /// as that binding's path: `iced::keyboard::key` for `keyboard::key`
     /// after `use iced::keyboard;`. A `mod` of that name is the module, and a
-    /// binding's own name (`use serde::serde;`) is the crate's.
+    /// binding's own name (`use serde::serde;`) is the crate's. A global
+    /// binding's path starts at its crate, so the expansion ends there.
     fn through_bindings<'a>(
         full: &[&'a str],
-        bindings: &[(&'a str, Vec<&'a str>)],
+        bindings: &[(&'a str, Vec<&'a str>, bool)],
         modules: &[&'a str],
     ) -> Vec<&'a str> {
         let mut full = full.to_vec();
@@ -1247,16 +1267,19 @@ mod seed {
         while full.len() >= 2
             && !modules.contains(&full[0])
             && let Some(index) = (0..bindings.len()).rev().find(|&index| {
-                let (local, path) = &bindings[index];
+                let (local, path, _) = &bindings[index];
                 !taken[index] && *local == full[0] && path.as_slice() != full.as_slice()
             })
         {
             taken[index] = true;
-            let path = &bindings[index].1;
+            let (_, path, global) = &bindings[index];
             if path[0] == full[0] {
                 break;
             }
             full.splice(..1, path.iter().copied());
+            if *global {
+                break;
+            }
         }
         full
     }
@@ -1342,6 +1365,32 @@ mod seed {
                     "iced::widget::Column::new",
                     "iced::widget::button",
                     "iced::widget::text::Style::default",
+                ]
+            );
+        }
+
+        /// iced's screenshot: a leading `::` names the crate `image`, beside
+        /// the `image` that `use iced::widget::image;` binds, and a path
+        /// through `use ::image as img;` starts at the crate (#1706).
+        #[test]
+        fn seed_starts_a_global_path_at_its_crate() {
+            let text = "use iced::widget::image;\n\
+                use ::image as img;\n\
+                use ::image::ColorType;\n\
+                use img::Rgba;\n\
+                fn save() { img::save_buffer(); image::Handle::from_bytes(); \
+                ::image::open(); ColorType::Rgba8; }\n";
+            assert_eq!(
+                joined(text),
+                [
+                    "iced::widget::image",
+                    "iced::widget::image::Handle::from_bytes",
+                    "image",
+                    "image::ColorType",
+                    "image::ColorType::Rgba8",
+                    "image::Rgba",
+                    "image::open",
+                    "image::save_buffer",
                 ]
             );
         }

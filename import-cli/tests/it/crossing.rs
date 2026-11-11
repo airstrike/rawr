@@ -750,6 +750,26 @@ fn methods_of_a_generic_target_are_callable_through_its_opaque_alias() {
     assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3), quad 4r1 rgb(4, 5, 6) at 3");
 }
 
+/// `use ::parts as soft;` and `use ::parts::Point;` name the dependency
+/// crate beside the program's own `parts`, as rustc resolves a leading
+/// `::` to an extern crate, as iced's screenshot writes `use ::image as
+/// img;` beside `iced::widget::image` (#1706). The output is `cargo run`'s.
+#[test]
+fn a_dependency_crate_renamed_through_a_leading_path_separator_runs() {
+    let manifest = CROSSING.read("Cargo.toml").replace(
+        "[dependencies]",
+        "[dependencies]\nparts = { path = \"parts\" }",
+    );
+    let main = CROSSING.read("variants/renamed_crate.rs");
+    let root = CROSSING.lease(&[("Cargo.toml", &manifest), ("src/main.rs", &main)]);
+    let (rawr, cargo) = both_printed_in(&root, "", &[]);
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Handle { name: \"shot\" } Point { x: 1.0, y: 2.0 } true 5"
+    );
+}
+
 /// A provided method reaches the script's `labels`, and what it pushes
 /// onto the `&mut Vec<String>` native code lends it is in native code's
 /// vector after the callback returns (#365). The output is `cargo run`'s.
