@@ -21,6 +21,8 @@ pub(crate) struct Inherited {
     pub(crate) dependencies: BTreeMap<String, Dependency>,
     /// Build dependencies by their `[build-dependencies]` key.
     pub(crate) build_dependencies: BTreeMap<String, Dependency>,
+    /// Dev-dependencies by their `[dev-dependencies]` key.
+    pub(crate) dev_dependencies: BTreeMap<String, Dependency>,
 }
 
 /// The fields `manifest` inherits from its workspace, from Cargo's
@@ -37,14 +39,16 @@ pub(crate) fn inherited(manifest: &Path) -> Result<Inherited, String> {
         edition: string(&package["edition"]),
         dependencies: BTreeMap::new(),
         build_dependencies: BTreeMap::new(),
+        dev_dependencies: BTreeMap::new(),
     };
     for dependency in package["dependencies"].as_array().into_iter().flatten() {
-        // Normal and build dependencies, optional ones included, as Rawr
-        // reads them. A key declared for every target and under a
+        // Each kind's dependencies, optional ones included, as Rawr reads
+        // them. A key declared for every target and under a
         // `[target.'cfg(..)']` table is the former's.
         let entries = match dependency["kind"].as_str() {
             None => &mut inherited.dependencies,
             Some("build") => &mut inherited.build_dependencies,
+            Some("dev") => &mut inherited.dev_dependencies,
             Some(_) => continue,
         };
         let targeted = !dependency["target"].is_null();

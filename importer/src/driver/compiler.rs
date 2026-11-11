@@ -122,10 +122,12 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // that sets a projected associated type to one of its parameters, with that
 // item (#1674). Schema 72 reads whether a crate enum is `#[non_exhaustive]`
 // (#1681). Schema 73 keeps a crate trait's impls for `&str` with the
-// associated type a parameter's projection names (#1678). `driver.rs`,
+// associated type a parameter's projection names (#1678). Schema 74 gives a
+// crate type the compound assignments' impls for a number that take it, as
+// `impl AddAssign<Turn> for f32` (#987). `driver.rs`,
 // `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
 // move with it.
-const PROTOCOL_SCHEMA: u32 = 73;
+const PROTOCOL_SCHEMA: u32 = 74;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

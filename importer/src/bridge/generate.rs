@@ -11782,6 +11782,20 @@ fn render_adapter_body(
                 }
                 call.write_all(b")").map_err(request::unwritable)?;
                 let call = String::from_utf8(call).map_err(request::unwritable)?;
+                // A compound assignment's impl for a number, as `impl
+                // AddAssign<Turn> for f32`, changes its first input through
+                // the `&mut` it is lent, and gives it back.
+                let call = match call.split_once("(argument_0") {
+                    Some((path, rest)) if signature.assigns() => format!(
+                        "{{ let mut assigned = argument_0; {path}(&mut assigned{rest}; assigned }}"
+                    ),
+                    None if signature.assigns() => {
+                        return Err(request::drift(
+                            "a compound assignment's number is not its first argument",
+                        ));
+                    }
+                    _ => call,
+                };
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 if !lazy && !lifetime_inputs(signature, substitutions)? {
                     render_anchored_output(returned, &call, output)?;

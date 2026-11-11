@@ -860,9 +860,10 @@ impl<'a> Parser<'a> {
         // `2.0 * angle` through a crate's `impl Mul<Radians> for f32`: the
         // operand type's function of the number (`Radians::mul(f32,
         // Radians)`), among which the number's kind selects one as rustc
-        // selects the impl.
-        if !symbol.ends_with('=')
-            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Bool | Ty::Char)
+        // selects the impl. `y += angle` through its `impl
+        // AddAssign<Radians> for f32` is the function that gives the
+        // number back changed (`Radians::add_assign(f32, Radians) -> f32`).
+        if matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Bool | Ty::Char)
             && let Some(rhs) = rhs.as_deref()
             && let Ty::Host { proof, .. } = self.inference.resolve(&rhs.ty)
         {

@@ -246,6 +246,15 @@ fn a_number_on_the_left_selects_the_crates_impl_for_it() {
     );
 }
 
+/// A compound assignment with a number on the left and a crate's type on
+/// the right, `y += turn` with the crate's `impl AddAssign<Turn> for f32`,
+/// calls the impl with the number as its `&mut` place, on a local and on
+/// a field, as rustc does, and so does a program's own impl (#987).
+#[test]
+fn a_number_on_the_left_of_a_compound_assignment_takes_the_crates_impl() {
+    runs_as_cargo_does("compound", "1.5\n2.5\n6.5\n");
+}
+
 /// A float literal whose only constraint is a bound one float type meets,
 /// as iced's progress_bar writes `Animation::new(0.)` with lilt's `Float`
 /// implemented for `bool` and `f32`, is that type, as rustc selects the

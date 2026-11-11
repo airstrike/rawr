@@ -1976,6 +1976,45 @@ fn rawr_test_of_a_program_with_a_dependency_reports_what_cargo_test_reports() {
     );
 }
 
+/// `rawr test` links the package's `[dev-dependencies]` into its tests
+/// alone, as `cargo test` links them into the test harness (#1703): a
+/// test that uses one runs, and `rawr run` of the same program builds
+/// without it.
+#[test]
+fn rawr_test_links_dev_dependencies_into_the_tests() {
+    let root = crate::support::scratch().join("plain-dev-dependencies");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(FIXTURE), &root);
+    let manifest = root.join("Cargo.toml");
+    let text_of_manifest = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("[dependencies]", "[dev-dependencies]");
+    fs::write(&manifest, text_of_manifest).unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nfn main() {\n    println!(\"no dependency\");\n}\n\n#[cfg(test)]\nmod tests {\n    \
+         use semver::Version;\n\n    #[test]\n    fn parses() {\n        \
+         assert_eq!(Version::parse(\"1.2.3\").unwrap().minor, 2);\n    }\n}\n",
+    )
+    .unwrap();
+
+    let tested = rawr_import(&root, &["test"]);
+    assert!(
+        tested.status.success() && text(&tested.stdout).contains("test tests::parses ... ok"),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&tested.stdout),
+        text(&tested.stderr)
+    );
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "no dependency\n");
+}
+
 /// A crate's derive on a program type is expanded by rustc and its items
 /// are program code (D740, #593). A local proc-macro crate's derive,
 /// re-exported beside its trait as serde's is, runs on a top-level struct

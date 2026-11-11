@@ -645,7 +645,7 @@ pub mod looks {
 /// `impl Mul<Radians> for f32` is the crate's impl of a std trait for a
 /// std type, beside the type's own `Mul<f32>`, `Mul` and `Rem`.
 pub mod angle {
-    use std::ops::{Add, Div, Mul, Rem, Sub};
+    use std::ops::{Add, AddAssign, Div, Mul, Rem, Sub};
 
     #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
     pub struct Turn(pub f32);
@@ -708,6 +708,13 @@ pub mod angle {
 
         fn div(self, rhs: Turn) -> Turn {
             Turn(self as f32 / rhs.0)
+        }
+    }
+
+    /// A number a turn changes in place, as `y += angle`.
+    impl AddAssign<Turn> for f32 {
+        fn add_assign(&mut self, rhs: Turn) {
+            *self += rhs.0 * 2.0;
         }
     }
 }

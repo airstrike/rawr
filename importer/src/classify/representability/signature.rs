@@ -163,6 +163,12 @@ pub struct Signature {
     /// A method's receiver is `&'static self`: only a static fills it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lasting_receiver: bool,
+    /// A function that changes its first input in place, as a crate's
+    /// `impl AddAssign<Turn> for f32` changes its `&mut self`: the call
+    /// takes the number by value, lends the impl's function a `&mut` of
+    /// it, and gives it back changed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    assigns: bool,
 }
 
 /// The associated types an opaque `impl Trait` type binds, each at the
@@ -672,6 +678,7 @@ impl Signature {
             statics: Box::new([]),
             regional: Box::new([]),
             lasting_receiver: false,
+            assigns: false,
         }
     }
 
@@ -789,6 +796,18 @@ impl Signature {
     #[must_use]
     pub const fn lasting_receiver(&self) -> bool {
         self.lasting_receiver
+    }
+
+    pub(crate) fn with_assigns(mut self, assigns: bool) -> Self {
+        self.assigns = assigns;
+        self
+    }
+
+    /// Whether the function changes its first input in place, which the
+    /// call gives back as its output.
+    #[must_use]
+    pub const fn assigns(&self) -> bool {
+        self.assigns
     }
 
     pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {

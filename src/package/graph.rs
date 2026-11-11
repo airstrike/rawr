@@ -828,10 +828,22 @@ impl<'a> Builder<'a> {
             },
             |target| target.kind() == project::cargo::Kind::Library,
         );
+        // The entry crate of a test build is the test harness `cargo test`
+        // builds; its dependencies build as they always do.
+        let mode = if self.packages.is_empty()
+            && (self.engine.test()
+                || self
+                    .snapshot
+                    .is_some_and(|snapshot| snapshot.features().test()))
+        {
+            project::cargo::Mode::Test
+        } else {
+            project::cargo::Mode::Build
+        };
         let (cargo, unit) = match cargo {
             Some((cargo, evidence)) => {
                 let (cargo, unit) =
-                    self.on_host(cargo, &evidence, described.as_ref(), target.as_ref())?;
+                    self.on_host(cargo, &evidence, described.as_ref(), target.as_ref(), mode)?;
                 (Some((cargo, evidence)), unit)
             }
             None => (None, None),
@@ -1891,16 +1903,17 @@ impl<'a> Builder<'a> {
     /// `cargo` as Cargo builds `target` of `package` on the host: its
     /// `[target.'<platform>']` dependencies Cargo links there joined, and
     /// Cargo's unit for it (its profile's panic strategy and its features),
-    /// from Cargo's unit graph. A runner's snapshot does not ask Cargo
-    /// ([`manifest::cargo::Host::Unasked`]), and a file that is no target
-    /// of its package builds as the binary `cargo run` runs, else the
-    /// library.
+    /// from Cargo's unit graph, built in `mode`. A runner's snapshot does
+    /// not ask Cargo ([`manifest::cargo::Host::Unasked`]), and a file that
+    /// is no target of its package builds as the binary `cargo run` runs,
+    /// else the library.
     fn on_host(
         &mut self,
         cargo: manifest::cargo::Cargo,
         evidence: &diagnostic::Source,
         package: Option<&project::cargo::Package>,
         target: Option<&project::cargo::Target>,
+        mode: project::cargo::Mode,
     ) -> Result<(manifest::cargo::Cargo, Option<project::cargo::Unit>), Error> {
         let built = package
             .filter(|_| self.snapshot.is_none())
@@ -1908,7 +1921,7 @@ impl<'a> Builder<'a> {
                 target
                     .or_else(|| package.run_binary())
                     .or_else(|| package.library())
-                    .map(|target| project::cargo::Unit::of(package, target))
+                    .map(|target| project::cargo::Unit::of(package, target, mode))
             });
         match built {
             Some(Ok(unit)) => Ok((
@@ -1924,7 +1937,7 @@ impl<'a> Builder<'a> {
                     Span::new(Position::START, Position::START),
                 ))
             }
-            None => Ok((cargo.on_host(manifest::cargo::Host::Unasked), None)),
+            None => Ok((cargo.on_host(manifest::cargo::Host::Unasked(mode)), None)),
         }
     }
 
