@@ -14,7 +14,8 @@
       "entries": [
         {"text":"A refutable `let` of a tuple holding a crate value names rustc's missing pattern again, and a signature naming a crate type rawr hasn't prepared asks to prepare it instead of failing.","issues":[1724]},
         {"text":"A save that adds or removes a struct or enum lowers again only its own file and the files that name it.","issues":[1726]},
-        {"text":"After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed.","issues":[1725]}
+        {"text":"After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed.","issues":[1725]},
+        {"text":"Adding or removing a derive on a private type in a marked file swaps into the running program instead of restarting it. A save the running program can't take, such as a new field or a removed type, restarts it at once with its reason, without first preparing a native build.","issues":[1728]}
       ]
     },
     "releases": [
@@ -3793,7 +3794,7 @@
     {"issue":1725,"title":"A runner a native rebuild starts lowers every marked file again, though most files' keys are unchanged","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1726,"title":"Adding or removing a struct or enum re-lowers every file that reaches a type numbered after it","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"open","category":"Divergences from rustc"},
     {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed","category":"Shared dependency cache (D607)"},
@@ -3801,7 +3802,8 @@
     {"issue":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1734,"title":"A reused kept lowering doesn't check the adapters held inside witnessed ops","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1735,"title":"An edit to a workspace path crate lowers every marked file again, because its facade counts whole in each key","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1737,"title":"A derive change on a native-visible marked type prepares a native build and says \"changed its fields\"","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5014,11 +5016,12 @@
             {"number":1725,"title":"A runner a native rebuild starts lowers every marked file again, though most files' keys are unchanged","state":"closed"},
             {"number":1726,"title":"Adding or removing a struct or enum re-lowers every file that reaches a type numbered after it","state":"closed"},
             {"number":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open"},
-            {"number":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"open"},
+            {"number":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"closed"},
             {"number":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open"},
             {"number":1734,"title":"A reused kept lowering doesn't check the adapters held inside witnessed ops","state":"open"},
             {"number":1735,"title":"An edit to a workspace path crate lowers every marked file again, because its facade counts whole in each key","state":"open"},
-            {"number":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"open"}
+            {"number":1736,"title":"islands::another_rawr_build_checks_with_the_instances_the_last_build_recorded expects one Cargo resolution and sees none","state":"open"},
+            {"number":1737,"title":"A derive change on a native-visible marked type prepares a native build and says \"changed its fields\"","state":"open"}
           ]
         }
       ]

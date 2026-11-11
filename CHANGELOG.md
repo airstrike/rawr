@@ -8,6 +8,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A refutable `let` of a tuple holding a crate value names rustc's missing pattern again, and a signature naming a crate type rawr hasn't prepared asks to prepare it instead of failing. (#1724)
 - A save that adds or removes a struct or enum lowers again only its own file and the files that name it. (#1726)
 - After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed. (#1725)
+- Adding or removing a derive on a private type in a marked file swaps into the running program instead of restarting it. A save the running program can't take, such as a new field or a removed type, restarts it at once with its reason, without first preparing a native build. (#1728)
 
 ## 0.3.185 (2026-11-11)
 
