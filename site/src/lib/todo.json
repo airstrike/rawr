@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-10",
-  "version": "0.3.181",
+  "version": "0.3.182",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,22 +9,24 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Bind classifies a project's definitions and exports across the machine's cores, with byte-identical contracts. An opaque type's left-out captures are now set by the function that gives it, whatever is classified first.","issues":[1669]},
-        {"text":"`s.as_ref()` and `s.borrow()` on a String, str, Vec, array or number lend the view the use expects: a `let` annotation, a parameter, a return, or a later crate trait bound such as iced's `column![self.description.as_ref(), ..]`. The view comes from std's `AsRef` and `Borrow` impls, with rustc's E0282, E0277 and E0505 where rustc gives them.","issues":[1672],"refs":[1632,1018]},
-        {"text":"A `match` or `if` whose arms give `&str` and `&String` is a `&str`, as in rustc: one arm deref-coerces to the other's type, in either order.","issues":[1673],"refs":[1018]},
-        {"text":"A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type.","issues":[1660]},
-        {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]},
-        {"text":"A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build.","issues":[1665]},
-        {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]},
-        {"text":"`futures::future::try_join` takes an async block's and an async fn's futures and gives what each yields inside its `Ok`, as iced's pokedex joins them.","issues":[1674]},
-        {"text":"A `String`'s or `str`'s `as_ref()` lends a `&Path` or `&OsStr`, as std's impls do, and a type std has no such impl for is rustc's E0277 naming `Path`.","issues":[1675]},
-        {"text":"A generic `T: AsRef<[u8]>` given a `String` lends its bytes, as rustc does.","issues":[1676]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.182",
+        "date": "2026-11-10",
+        "entries": [
+          {"text":"Bind classifies a project's definitions and exports across the machine's cores, with byte-identical contracts. An opaque type's left-out captures are now set by the function that gives it, whatever is classified first.","issues":[1669]},
+          {"text":"`s.as_ref()` and `s.borrow()` on a String, str, Vec, array or number lend the view the use expects: a `let` annotation, a parameter, a return, or a later crate trait bound such as iced's `column![self.description.as_ref(), ..]`. The view comes from std's `AsRef` and `Borrow` impls, with rustc's E0282, E0277 and E0505 where rustc gives them.","issues":[1672],"refs":[1632,1018]},
+          {"text":"A `match` or `if` whose arms give `&str` and `&String` is a `&str`, as in rustc: one arm deref-coerces to the other's type, in either order.","issues":[1673],"refs":[1018]},
+          {"text":"A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type.","issues":[1660]},
+          {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]},
+          {"text":"A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build.","issues":[1665]},
+          {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]},
+          {"text":"`futures::future::try_join` takes an async block's and an async fn's futures and gives what each yields inside its `Ok`, as iced's pokedex joins them.","issues":[1674]},
+          {"text":"A `String`'s or `str`'s `as_ref()` lends a `&Path` or `&OsStr`, as std's impls do, and a type std has no such impl for is rustc's E0277 naming `Path`.","issues":[1675]},
+          {"text":"A generic `T: AsRef<[u8]>` given a `String` lends its bytes, as rustc does.","issues":[1676]}
+        ]
+      },
       {
         "version": "0.3.181",
         "date": "2026-11-10",
@@ -2986,7 +2988,7 @@
     {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health","release":"0.3.168"},
-    {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"closed","category":"Divergences from rustc"},
+    {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
@@ -3656,29 +3658,29 @@
     {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"closed","category":"Divergences from rustc"},
-    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"closed","category":"Divergences from rustc"},
+    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open","category":"No glue (D593)"},
     {"issue":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open","category":"No glue (D593)"},
     {"issue":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
     {"issue":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
-    {"issue":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
     {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"open","category":"Divergences from rustc"},
-    {"issue":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open","category":"Divergences from rustc"},
-    {"issue":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"closed","category":"Divergences from rustc"},
-    {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed","category":"Divergences from rustc"},
+    {"issue":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
+    {"issue":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
+    {"issue":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
+    {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
+    {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open","category":"Divergences from rustc"},
     {"issue":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open","category":"Divergences from rustc"},
     {"issue":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open","category":"Divergences from rustc"},
     {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open","category":"Divergences from rustc"},
-    {"issue":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
     {"issue":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"open","category":"Divergences from rustc"}
   ],
@@ -4263,8 +4265,8 @@
             {"number":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"closed"},
             {"number":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"closed"},
             {"number":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed"},
-            {"number":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"open"},
-            {"number":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open"},
+            {"number":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"closed"},
+            {"number":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"closed"},
             {"number":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open"},
             {"number":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open"},
             {"number":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open"},
@@ -4761,7 +4763,7 @@
             {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"},
             {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open"},
             {"number":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open"},
-            {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"open"}
+            {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed"}
           ]
         }
       ]
