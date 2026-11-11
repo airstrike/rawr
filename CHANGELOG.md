@@ -7,6 +7,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees. (#1716; part of #1646)
 - A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`. (#1713)
+- Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner. (#1670)
 
 ## 0.3.184 (2026-11-11)
 

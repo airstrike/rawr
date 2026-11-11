@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]},
-        {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]}
+        {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]},
+        {"text":"Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner.","issues":[1670]}
       ]
     },
     "releases": [
@@ -3723,7 +3724,7 @@
     {"issue":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
-    {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
@@ -3773,7 +3774,10 @@
     {"issue":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open","category":"Divergences from rustc"},
-    {"issue":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open","category":"Divergences from rustc"}
+    {"issue":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open","category":"Divergences from rustc"},
+    {"issue":1721,"title":"The importer's rustc-driver it suite is stale: the p3 runner fails E0599 and tests read src/main.rs for moved code","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4927,14 +4931,17 @@
           "name": "Build: the runner on every core",
           "start": 80,
           "size": 3,
-          "state": "now",
-          "note": "The runner's adapters sit in per-crate modules of one crate, so rustc's front end compiles them on one core. Splitting the runner into crates is under way (#1670). Left: a project that can't share rawr's runtime rebuilds rawr in the project after every install (#1493).",
+          "state": "next",
+          "note": "The runner is a workspace of a base crate and one adapter crate per imported root, so a rebuild uses several cores and a new call into one crate recompiles only that crate's adapters and the runner (#1670). A root with a very large API, such as iced, is still one crate. Left: a project that can't share rawr's runtime rebuilds rawr in the project after every install (#1493).",
           "issues": [
             {"number":1480,"title":"A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"closed"},
             {"number":1493,"title":"A project that can't share rawr's runtime rebuilds rawr in-project after every install: its marker names the sources","state":"open"},
             {"number":1494,"title":"A runner that builds rawr in the project recompiled the rawr crate on a second run with nothing changed","state":"open"},
             {"number":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open"},
-            {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open"}
+            {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"closed"},
+            {"number":1721,"title":"The importer's rustc-driver it suite is stale: the p3 runner fails E0599 and tests read src/main.rs for moved code","state":"open"},
+            {"number":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"open"},
+            {"number":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"open"}
           ]
         },
         {
