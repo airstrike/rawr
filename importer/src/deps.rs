@@ -457,7 +457,9 @@ pub(crate) fn prune_superseded(
         .then(|| current_runner(&profiles, &hashes))
         .flatten()
         .map(|(hash, binary)| (hash, debug_map_objects(&binary)));
-    prune_incremental(&profiles, &members, record, &before);
+    if !members.current.is_empty() {
+        prune_incremental(&profiles, &members, record, &before);
+    }
     for profile in &profiles {
         for directory in ["deps", ".fingerprint", "build"] {
             for entry in fs::read_dir(profile.join(directory))
