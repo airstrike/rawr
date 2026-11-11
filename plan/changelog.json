@@ -16,7 +16,9 @@
       {"text":"iced_test's `ui.click(\"Increment\")` works: a crate method that takes a selector, which the crate also implements for closures rawr can't write, takes a string, and the selector's `Output` is the one the crate's `&str` impl gives.","issues":[1678]},
       {"text":"An opaque crate iterator fills a crate's `impl IntoIterator` parameter, so iced_test's `ui.simulate(click())` needs no `.collect()`.","issues":[1679]},
       {"text":"`iced_test::simulator(counter.view())` needs no annotation: a crate bound on what the program's `fn .. -> impl Trait` gives takes its theme and renderer from that bound, as rustc does. iced's counter, driven through the simulator, prints what `cargo run` prints.","issues":[1680]},
-      {"text":"A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver.","issues":[1693]}
+      {"text":"A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver.","issues":[1693]},
+      {"text":"rawr cleans up after itself by state, with no timer. Another extraction protocol's directory goes the first time a run opens rawr's home or a project's `target/rawr`, unless an installed rawr uses it or a run is reading it. A development or test build no longer counts as installed, so it no longer keeps old protocols alive. A project's own bindings, staged records, trait facts, extraction tables and API memo now live in `target/rawr/formats/<protocol>`, and the copies an older rawr kept straight under `target/rawr` go at the next run.","issues":[1677]},
+      {"text":"A check after installing a new rawr build starts from the native instances the last build recorded, so it no longer builds the project's crates twice in two rounds.","issues":[1695]}
     ]
   },
   "releases": [

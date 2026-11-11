@@ -17,6 +17,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - An opaque crate iterator fills a crate's `impl IntoIterator` parameter, so iced_test's `ui.simulate(click())` needs no `.collect()`. (#1679)
 - `iced_test::simulator(counter.view())` needs no annotation: a crate bound on what the program's `fn .. -> impl Trait` gives takes its theme and renderer from that bound, as rustc does. iced's counter, driven through the simulator, prints what `cargo run` prints. (#1680)
 - A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver. (#1693)
+- rawr cleans up after itself by state, with no timer. Another extraction protocol's directory goes the first time a run opens rawr's home or a project's `target/rawr`, unless an installed rawr uses it or a run is reading it. A development or test build no longer counts as installed, so it no longer keeps old protocols alive. A project's own bindings, staged records, trait facts, extraction tables and API memo now live in `target/rawr/formats/<protocol>`, and the copies an older rawr kept straight under `target/rawr` go at the next run. (#1677)
+- A check after installing a new rawr build starts from the native instances the last build recorded, so it no longer builds the project's crates twice in two rounds. (#1695)
 
 ## 0.3.182 (2026-11-10)
 
