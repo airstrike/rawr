@@ -19,6 +19,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Items in a function body are scoped to their block, as rustc scopes them. A body's `const` is visible to the `fn` and `impl` items nested in the same block, even before its declaration. Two functions can each declare their own `const MAX`, `struct Point`, `fn helper` or `use … as name`. A nested item can't be named outside its block (E0425), and `{:?}` of a nested struct prints its bare name. (#1631, #1429)
 - A native generic call that takes a program value works in the head of a `for`, `if`, `match` or `while`, so iced's download_progress runs its downloads as cargo does. (#314)
 - serde's `Deserialize` on a unit-variant enum runs. `from_utf8_lossy(&[u8])` gets a scope frame that owns a copy of the bytes, and a match pattern infers the type a call leaves open, as `V` of `EnumAccess::variant::<V>()`. iced's todos now passes `rawr check`. (#1709; part of #1017)
+- A leading `::` path names its crate, as rustc's does: `use ::image as img;` and `use ::image::ColorType;` run beside an `image` the program imports from another crate. iced's screenshot now passes `rawr check`. (#1706)
+- `Option<PathBuf>::as_deref` gives an `Option<&Path>`, as std's `Deref for PathBuf` does, and `Path::extension` works as a function value after it, as in iced's editor. (#1705)
 
 ## 0.3.183 (2026-11-11)
 
