@@ -1218,7 +1218,9 @@ fn validate_identity_schema(
             actual: actual_identity.clone(),
         });
     }
-    if actual_schema != &expected.schema {
+    // A value an earlier generation made stays valid while its
+    // representation does, whatever its type derives now (D553.6).
+    if !actual_schema.same_representation(&expected.schema) {
         return Err(construction::Error::SchemaMismatch {
             target: expected_identity.clone(),
         });

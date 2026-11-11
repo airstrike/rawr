@@ -1592,8 +1592,10 @@ fn main_text(text: &str) -> Option<String> {
 /// (D553.6), in one line for `rawr run` to restart with. `None` when it
 /// swaps in: a body edit, or a new function or type.
 ///
-/// - A script type whose fields or variants changed: rawr can't yet see
-///   which script values native code stores as `rawr::Value`.
+/// - A script type whose fields or variants changed, or that was removed:
+///   rawr can't yet see which script values native code stores as
+///   `rawr::Value`. Its derives aren't its representation: a new derive
+///   swaps in.
 /// - A callable a marked `main`'s own frame gave native code, which no
 ///   longer rebinds: `main` never runs again to give a new one.
 /// - A program that never called from native code into script code: no
@@ -1617,7 +1619,7 @@ pub fn refusal(
             continue;
         };
         match candidate.schemas().get(identity) {
-            Some(next) if next == fingerprint => {}
+            Some(next) if next.same_representation(fingerprint) => {}
             Some(_) => return Some(format!("`{}` changed its fields", path(key))),
             None => return Some(format!("`{}` was removed", path(key))),
         }

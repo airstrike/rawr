@@ -5241,7 +5241,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&12_u32.to_be_bytes())?;
+    stream.write_all(&13_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -5270,7 +5270,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 12_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 13_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -5355,11 +5355,15 @@ enum ResidentResult {
     /// back whole (#397).
     Diagnostic(String),
     Resource(String),
+    /// Why the running `main` can't take the generation (D553.6): the
+    /// owner restarts the program with it, and prepares nothing first.
+    Refused(String),
 }
 
 /// Compile the next generation once, against the running engine (D355).
-/// A native requirement its surface lacks, or a generation the running
-/// `main` can't take, needs the parent's full preparation.
+/// A native requirement its surface lacks needs the parent's full
+/// preparation; a generation the running `main` can't take is refused
+/// with its reason.
 fn compile_resident(
     resident: &Resident<'_>,
     snapshot: &__rawr_internal::package::snapshot::Snapshot,
@@ -5374,10 +5378,11 @@ fn compile_resident(
     };
     let (compiled, ast) = compiled.with_top_level();
     let (candidate, carrier, coverage) = compiled.into_parts();
-    if let Some(running) = resident.running
-        && __rawr_internal::island::refusal(running, &candidate).is_some()
+    if let Some(reason) = resident
+        .running
+        .and_then(|running| __rawr_internal::island::refusal(running, &candidate))
     {
-        return Ok(ResidentResult::Miss);
+        return Ok(ResidentResult::Refused(reason));
     }
     let program = Program {
         engine: resident.engine.clone(),
@@ -5473,6 +5478,7 @@ fn serve_hot(
                 ResidentResult::Miss => (39, String::new()),
                 ResidentResult::Diagnostic(reason) => (40, reason),
                 ResidentResult::Resource(reason) => (42, reason),
+                ResidentResult::Refused(reason) => (50, reason),
             };
             // Every other answer consumes the request it answers.
             resident_response(stream, attempt.response_header(), response, &diagnostic)?;
@@ -6025,7 +6031,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&12_u32.to_be_bytes())?;
+    stream.write_all(&13_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -6054,7 +6060,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 12_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 13_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -6286,7 +6292,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&12_u32.to_be_bytes())?;
+    stream.write_all(&13_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -6315,7 +6321,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 12_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 13_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -25414,9 +25420,10 @@ mod tests {
         assert!(!compile.contains("reconstruct_imported_native"));
         assert!(compile.contains("compiled.with_top_level()"));
         assert!(compile.contains("engine: resident.engine.clone()"));
-        // A generation the running `main` can't take goes to full
-        // preparation, which refuses it with its reason.
+        // A generation the running `main` can't take is refused with its
+        // reason, which the owner restarts with (D553.6).
         assert!(compile.contains("island::refusal(running, &candidate)"));
+        assert!(compile.contains("ResidentResult::Refused(reason)"));
         let serve = source
             .split_once("fn serve_hot(")
             .expect("resident transitions")
@@ -25696,7 +25703,7 @@ mod tests {
             (LIFECYCLE_PROFILE_RUNNER_MAIN, "9 if pending.is_none()"),
         ] {
             let source = std::str::from_utf8(runner).expect("runner source is UTF-8");
-            assert!(source.contains("&12_u32.to_be_bytes()"));
+            assert!(source.contains("&13_u32.to_be_bytes()"));
             assert!(source.contains(prepare_marker));
             assert!(source.contains("25 if payload.len() == 48"));
             assert!(source.contains("26 if payload.len() == 48"));
