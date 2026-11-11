@@ -589,9 +589,17 @@ impl Definition {
         self.exact_arity
     }
 
+    /// Whether `other`, a path to the same type, agrees with this one.
+    ///
+    /// Each path names the type's parameters for its own declaration, so
+    /// only their count is the type's: an opaque type a trait method gives
+    /// names its parameters after the call it is declared beside, as
+    /// `Widget::__rawr_self::explain` names `Message` where `Text::explain`
+    /// names it `impl_1`, and both are iced_widget's one `explain` output
+    /// (#1660).
     pub(crate) fn same_identity_contract(&self, other: &Self) -> bool {
         self.identity == other.identity
-            && self.parameters == other.parameters
+            && self.parameters.len() == other.parameters.len()
             && self.capabilities == other.capabilities
             && self.storage == other.storage
             && self.role == other.role

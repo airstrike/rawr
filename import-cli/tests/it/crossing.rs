@@ -292,6 +292,20 @@ fn an_associated_state_held_as_a_script_value_crosses() {
     );
 }
 
+/// iced's bezier_tool (#990): a script `update` that sets the `&mut
+/// Option<Pending>` state the crate lends it, where `Pending` is the
+/// program's own type. The crate keeps what the update left, as rustc's
+/// does, and `draw` shows it. The output is `cargo run`'s.
+#[test]
+fn a_state_a_script_update_sets_is_kept_by_the_crate() {
+    let (rawr, cargo) = both_printed("pending.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("pressed Increment: canvas[primary pending Some(One { from: 9 })#1]"),
+        "{rawr}"
+    );
+}
+
 /// iced's component: a generic script type implements a crate trait over
 /// the message its boxed callback makes, `view` gives `impl Widget<
 /// Message>` and `fallback` an `Option<Message>`, both of the impl's own
@@ -1575,6 +1589,28 @@ fn an_opaque_output_that_borrows_an_element_is_held_in_its_region() {
     );
 }
 
+/// iced beside iced_test (#1660): `tester` re-exports `parts`, as
+/// iced_test re-exports iced_core, and no path of it reaches `Framed`, as
+/// none of iced_test's reaches iced_widget. `explain` on `parts`'s `Map`
+/// gives one opaque type, declared beside `Framed`'s method in `events` and
+/// beside `Map` in `tester`, each naming its parameters after its own
+/// declaration. The output is `cargo run`'s.
+#[test]
+fn an_opaque_output_two_crates_reach_is_one_type() {
+    let manifest = CROSSING.read("Cargo.toml").replace(
+        "[dependencies]",
+        "[dependencies]\ntester = { path = \"tester\" }",
+    );
+    let main = CROSSING.read("variants/tested.rs");
+    let root = CROSSING.lease(&[("Cargo.toml", &manifest), ("src/main.rs", &main)]);
+    let (rawr, cargo) = both_printed_in(&root, "", &[]);
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 [Increment] 3@50 explain #0000ff map rule 4"),
+        "{rawr}"
+    );
+}
+
 /// `outlined` gives an opaque type of a type no public path names, on an
 /// `Element<'_, ..>`, held in its region as `explain`'s is (#936). It is a
 /// default method of the trait `explain` is one of, and each method's
@@ -1889,6 +1925,20 @@ fn a_closure_beside_a_future_parameter_takes_the_futures_output() {
     let (rawr, cargo) = both_printed("performed.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "Some(Close(7))\nSome(Waited(8, 10))");
+}
+
+/// iced's game_of_life (#1659): `Task::perform(task, Message::Grid.with(version))`
+/// takes the `impl Future + use<>` a program method gives from an async
+/// block beside a crate callable value, and a capturing closure in its
+/// place. Check and run key the call alike. The output is `cargo run`'s.
+#[test]
+fn a_programs_opaque_future_beside_a_crate_callable_value_performs() {
+    let (rawr, cargo) = both_printed("ticked.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Some(Grid(1, Ticked { cells: 15 }))\nSome(Ticked(2, 10))\nqueued 2"
+    );
 }
 
 /// iced's gallery (#570): `card(image, preview, ..).boxed()` in a `map`
