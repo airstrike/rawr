@@ -2,6 +2,7 @@
 
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 /// `work` on each of `items`, across the machine's cores, with the results
 /// in the items' order: what a loop over them gives. `None` when `work`
@@ -107,9 +108,35 @@ pub(crate) fn try_map_with_on<T: Sync, S: Send, R: Send, E: Send>(
     )
 }
 
+/// `work` on each of `items`, taken by value, on at most `workers` threads,
+/// each worker with a state of its own as in [`try_map_with_on`]. The
+/// results are in the items' order; the states come back in no fixed order.
+pub(crate) fn map_owned_with_on<T: Send, S: Send, R: Send>(
+    workers: usize,
+    items: Vec<T>,
+    start: impl Fn() -> S + Sync,
+    work: impl Fn(&mut S, T) -> R + Sync,
+) -> (Vec<R>, Vec<S>) {
+    // Each slot is read by the one worker that claims its index.
+    let slots = items
+        .into_iter()
+        .map(|item| Mutex::new(Some(item)))
+        .collect::<Vec<_>>();
+    let (results, states) = try_map_with_on(workers, &slots, start, |state, slot| {
+        let item = slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .expect("each index is claimed by one worker, once");
+        Ok::<_, std::convert::Infallible>(work(state, item))
+    });
+    let Ok(results) = results;
+    (results, states)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{map_on, try_map_with_on};
+    use super::{map_on, map_owned_with_on, try_map_with_on};
 
     #[test]
     fn results_on_many_workers_are_the_results_of_one_in_item_order() {
@@ -155,5 +182,27 @@ mod tests {
         let (whole, states) = try_map_with_on(8, &items[..300], || 0_usize, work);
         assert_eq!(whole, Ok(items[..300].to_vec()));
         assert_eq!(states.iter().sum::<usize>(), 300, "each item is read once");
+    }
+
+    #[test]
+    fn owned_items_on_many_workers_come_back_in_item_order_each_taken_once() {
+        let items = || {
+            (0..1000_u32)
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        };
+        let work = |seen: &mut usize, item: String| {
+            *seen += 1;
+            item.len()
+        };
+        let (serial, states) = map_owned_with_on(1, items(), || 0_usize, work);
+        assert_eq!(states, [1000]);
+        let (parallel, states) = map_owned_with_on(8, items(), || 0_usize, work);
+        assert_eq!(serial, parallel);
+        assert_eq!(
+            states.iter().sum::<usize>(),
+            1000,
+            "each item is taken once"
+        );
     }
 }
