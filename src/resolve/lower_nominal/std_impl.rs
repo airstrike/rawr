@@ -629,6 +629,16 @@ fn bind(
                     _ => false,
                 };
             }
+            // A type Rawr's std holds as another's value is each std type
+            // it stands for: `PathBuf` is also the `Path` a borrow of it
+            // lends (#1675).
+            if let Ty::Host { proof, .. } = &ty {
+                return arguments.is_empty()
+                    && crate::std_facade::held_forms(&proof.definition.path())
+                        .into_iter()
+                        .filter_map(std_table::definition_of)
+                        .any(|form| form == definition);
+            }
             let Some((given, given_arguments)) = std_definition(&ty) else {
                 return false;
             };

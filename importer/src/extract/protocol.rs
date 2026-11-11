@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 70;
+pub(crate) const SCHEMA: u32 = 71;
 
 #[cfg(all(test, feature = "rustc-driver"))]
 #[test]

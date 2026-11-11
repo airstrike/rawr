@@ -110,6 +110,32 @@ pub(crate) fn crosses(path: &str) -> bool {
         .any(|held| matches!(held, held::Held::Value(value) if value.crosses && held::Value::facade(value.std) == path))
 }
 
+/// The public paths of the std types Rawr's std holds as the facade type
+/// whose definition's path is `definition`, its own first:
+/// `std::path::PathBuf` and `std::path::Path` of
+/// `rawr_std::path::PathBuf`. Empty for a type the facade doesn't hold.
+pub(crate) fn held_forms(definition: &str) -> Vec<&'static str> {
+    held_value(definition)
+        .map(|value| value.forms().collect())
+        .unwrap_or_default()
+}
+
+/// The unsized std type a borrow of the facade type whose definition's
+/// path is `definition` stands for: `std::path::Path` of
+/// `rawr_std::path::PathBuf`, as rustc names a `&Path`.
+pub(crate) fn lent_form(definition: &str) -> Option<&'static str> {
+    held_value(definition)?.lent.first().copied()
+}
+
+/// The held type whose definition's path is `definition`.
+fn held_value(definition: &str) -> Option<held::Value> {
+    let path = definition.strip_prefix(ROOT)?.strip_prefix("::")?;
+    held().into_iter().find_map(|held| match held {
+        held::Held::Value(value) if held::Value::facade(value.std) == path => Some(value),
+        _ => None,
+    })
+}
+
 /// The facade's compile-time definition, built once per thread.
 pub(crate) fn definition() -> facade::Definition {
     thread_local! {

@@ -118,7 +118,7 @@ impl<'a> Parser<'a> {
             }
         };
         let trait_name = std_method::trait_name(definition);
-        let bound = format!("{trait_name}<{}>", borrowed.name(&self.models));
+        let bound = format!("{trait_name}<{}>", self.borrowed_name(&borrowed));
         let checkpoint = self.inference.checkpoint();
         // A literal still to be inferred takes the kind the target names,
         // as std's `impl<T> Borrow<T> for T` binds it.
@@ -140,10 +140,12 @@ impl<'a> Parser<'a> {
         .is_err()
         {
             self.inference.rollback(checkpoint);
-            // A type rawr holds through a facade, as std's `Path` or a
-            // crate's type: std's or the crate's impl for it isn't one
-            // rawr reads or runs yet.
-            if matches!(borrowed, Ty::Host { .. }) {
+            // A crate's type: the crate's impl for it isn't one rawr reads
+            // yet. std's table has every impl of a type Rawr's std holds,
+            // as `Path`.
+            if let Ty::Host { proof, .. } = &borrowed
+                && crate::std_facade::held_forms(&proof.definition.path()).is_empty()
+            {
                 return Err(Error::NotYet {
                     path: format!("impl {bound} for {}", source.name(&self.models)).into(),
                     reference: conversion.span,
@@ -159,15 +161,64 @@ impl<'a> Parser<'a> {
             });
         }
         self.inference.commit(checkpoint);
-        match runs_lending(&source, &self.inference.resolve(&borrowed)) {
+        let borrowed = self.inference.resolve(&borrowed);
+        match runs_lending(&source, &borrowed) {
             Some(op) => Ok(op
                 .map(|op| self.push_op(Op::Prelude(op)))
                 .unwrap_or_default()),
+            // A view Rawr's std holds as a value of its own, as a `&Path`
+            // is a `PathBuf`: the value std's `From` of the receiver
+            // makes, as `Path::new(text)` lends it.
+            None if let Some(helper) = self.held_view(&source, &borrowed, conversion.span)? => {
+                Ok(helper)
+            }
             None => Err(Error::NotYet {
                 path: format!("impl {bound} for {}", source.name(&self.models)).into(),
                 reference: conversion.span,
             }),
         }
+    }
+
+    /// The helper that makes the view `borrowed` of `source` where Rawr's
+    /// std holds `borrowed` as a value of its own (`std_facade::held_forms`):
+    /// std's `From` of the receiver, which gives the value a borrow of it
+    /// stands for, as `PathBuf::from(text)` is the `&Path` that
+    /// `Path::new(text)` lends. `None` for any other view.
+    fn held_view(
+        &mut self,
+        source: &Ty,
+        borrowed: &Ty,
+        span: Span,
+    ) -> Result<Option<String>, Error> {
+        let Ty::Host { proof, .. } = borrowed else {
+            return Ok(None);
+        };
+        if crate::std_facade::held_forms(&proof.definition.path()).is_empty() {
+            return Ok(None);
+        }
+        // A `str` receiver is given as the `&str` rawr holds.
+        let given = match source {
+            Ty::UnsizedStr => Ty::Str,
+            source => source.clone(),
+        };
+        let host = HostInto {
+            forms: Vec::new(),
+            owner: None,
+            receiver: span,
+        };
+        self.host_into_helper(&host, &given, borrowed, span)
+    }
+
+    /// `borrowed` as rustc names the target of a `&` to it: the unsized
+    /// type a borrow of a type Rawr's std holds stands for, as `Path` of
+    /// the `PathBuf` that holds it, else its own name.
+    fn borrowed_name(&self, borrowed: &Ty) -> ImmutableString {
+        if let Ty::Host { proof, .. } = borrowed
+            && let Some(lent) = crate::std_facade::lent_form(&proof.definition.path())
+        {
+            return lent.rsplit("::").next().unwrap_or(lent).into();
+        }
+        borrowed.name(&self.models)
     }
 }
 
@@ -184,7 +235,7 @@ pub(super) struct Lending {
 /// resolved (D711's execution mapping): the value as it is, where the two
 /// have one runtime form, or a prelude op. `None` when rawr doesn't run
 /// it yet. Which impls exist is the table's to say.
-fn runs_lending(source: &Ty, borrowed: &Ty) -> Option<Option<PreludeOp>> {
+pub(super) fn runs_lending(source: &Ty, borrowed: &Ty) -> Option<Option<PreludeOp>> {
     let text = |ty: &Ty| matches!(ty, Ty::String | Ty::Str | Ty::UnsizedStr);
     match (source, borrowed) {
         _ if source == borrowed => Some(None),

@@ -707,3 +707,62 @@ main();
         "{report}"
     );
 }
+
+/// A text's `as_ref()` lends a `&Path` or `&OsStr`, std's facade-held
+/// types, as rustc's `impl AsRef<Path> for String` and `str` do, and a
+/// type std's impls don't lend one to is rustc's E0277, naming `Path`
+/// (#1675).
+#[test]
+fn language_std_as_ref_of_a_text_lends_a_path_or_os_str() {
+    let source = r#"
+use std::ffi::OsStr;
+use std::path::Path;
+
+fn stem(path: &Path) -> String {
+    path.file_stem().unwrap().to_string_lossy().to_string()
+}
+
+fn main() {
+    let s = String::from("dir/a.txt");
+    let p: &Path = s.as_ref();
+    let o: &OsStr = s.as_ref();
+    let q: &Path = "b.rs".as_ref();
+    println!("{} {:?} {:?}", p.display(), o, q.extension());
+    println!("{}", stem(s.as_ref()));
+}
+main();
+"#;
+    assert_eq!(printed(source), "dir/a.txt \"dir/a.txt\" Some(\"rs\")\na\n");
+    let report = refused(
+        "use std::path::Path;\n\
+         fn main() { let v = vec![1u8]; let p: &Path = v.as_ref(); println!(\"{}\", p.display()); }\n\
+         main();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `Vec<u8>: AsRef<Path>` is not satisfied"),
+        "{report}"
+    );
+}
+
+/// A generic `T: AsRef<[u8]>` given a `String` lends its bytes, as std's
+/// `impl AsRef<[u8]> for String` does, and `T: AsRef<str>` its text
+/// (#1676).
+#[test]
+fn language_std_as_ref_of_a_bounded_parameter_lends_the_bound_view() {
+    let source = r#"
+fn first<T: AsRef<[u8]>>(t: T) -> u8 {
+    t.as_ref()[0]
+}
+
+fn size<T: AsRef<str>>(t: T) -> usize {
+    t.as_ref().len()
+}
+
+fn main() {
+    println!("{} {}", first(String::from("abc")), first("xyz"));
+    println!("{} {}", first(vec![7u8, 8]), size(String::from("four")));
+}
+main();
+"#;
+    assert_eq!(printed(source), "97 120\n7 4\n");
+}
