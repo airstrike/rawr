@@ -1735,6 +1735,8 @@ impl<'a> Parser<'a> {
             // `c.slot(1)` of `fn slot(&mut self, i: usize) -> &mut i32`:
             // the place the output borrows.
             let output = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+            #[cfg(feature = "rust-import")]
+            self.note_opaque_value(&output, definition.lifetimes().written_output.as_deref());
             // A `&mut self` method borrows its receiver for the call.
             if matches!(mode, receiver::Mode::Mutable) {
                 self.mutable_use(&value, member_span);

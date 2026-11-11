@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 168;
+const CLASSIFIER_VERSION: u32 = 169;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2552,6 +2552,26 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         *parameters = extended.into_boxed_slice();
     }
 
+    /// The self type of an implementation a relation's case is for: the
+    /// type as any position converts it, or Rawr's string for a shared
+    /// `&str` at any lifetime, as iced_test's `impl Selector for &str {
+    /// type Output = Text; }` is for the literal `click("Increment")`
+    /// takes (#1678).
+    fn case_self(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        match ty {
+            model::Type::Reference {
+                mutability: model::Mutability::Shared,
+                ty: target,
+                ..
+            } if matches!(target.as_ref(), model::Type::Primitive(name) if name.as_ref() == "str") => {
+                Ok(representability::convert::Type::Builtin(
+                    representability::convert::Builtin::Str,
+                ))
+            }
+            ty => self.convert(ty),
+        }
+    }
+
     /// For each projection, the relation that infers its synthetic
     /// parameter: each implementation of the trait whose self type and
     /// associated type Rawr can name, as `impl StatefulWidget for List<'_>
@@ -2574,7 +2594,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 if *id != first.trait_id || implementation.polarity() != model::Polarity::Positive {
                     continue;
                 }
-                let Ok(this) = self.convert(implementation.self_type()) else {
+                let Ok(this) = self.case_self(implementation.self_type()) else {
                     continue;
                 };
                 let value = implementation.associated().find_map(|associated| {

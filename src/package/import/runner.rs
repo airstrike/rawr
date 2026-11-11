@@ -1440,6 +1440,12 @@ fn pattern(
         facade::Type::Variable(index) => Pattern::Variable(*index),
         facade::Type::Range(element) => Pattern::Range(Box::new(pattern(element, nominal)?)),
         facade::Type::Option(element) => Pattern::Option(Box::new(pattern(element, nominal)?)),
+        // A `&str` an implementation is for, as the program's string slice
+        // is (#1678).
+        facade::Type::Reference {
+            mutable: false,
+            target,
+        } if matches!(**target, facade::Type::String) => Pattern::Type(ty(source).ok()?),
         facade::Type::Tuple(members) => Pattern::Tuple(
             members
                 .iter()

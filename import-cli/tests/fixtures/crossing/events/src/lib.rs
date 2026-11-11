@@ -30,7 +30,9 @@ pub mod results;
 pub mod selector;
 pub mod sequences;
 pub mod shelf;
+pub mod shown;
 pub mod signatures;
+pub mod simulator;
 pub mod spans;
 pub mod stock;
 

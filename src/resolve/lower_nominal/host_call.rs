@@ -383,31 +383,7 @@ impl<'a> Parser<'a> {
                     kind: sequence::Kind::Vec,
                 };
             }
-            // A lazy iterator where the host takes an iterable, as iced's
-            // `column(sizes.map(|size| ..))` takes `impl IntoIterator<Item
-            // = Element>`: its items, collected where the call takes them.
-            // rustc's check of the crate holds the parameter to one that
-            // takes an iterator.
-            if let (
-                Ty::Array {
-                    kind: sequence::Kind::Vec,
-                    ..
-                },
-                Ty::Iter(item, _),
-            ) = (
-                self.inference.resolve(expected),
-                self.inference.resolve(&argument.ty),
-            ) {
-                let source = self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]);
-                *argument = self.operator_expr(
-                    source,
-                    Ty::Array {
-                        element: item,
-                        kind: sequence::Kind::Vec,
-                    },
-                    argument.span,
-                );
-            }
+            self.collect_iterable(expected, argument);
             if !profile_mapper {
                 self.fill_fn_bound(expected, argument);
                 self.coerce_expr(expected, argument)?;
@@ -458,6 +434,46 @@ impl<'a> Parser<'a> {
         let kept = self.inference.resolve(&value.ty);
         self.kept_by_call(call, &kept, None, &summary);
         self.scoped_call(value, opens, &places)
+    }
+
+    /// An iterator where the host takes an iterable, as iced's
+    /// `column(sizes.map(|size| ..))` and iced_test's `simulate(click())`
+    /// take `impl IntoIterator<Item = X>`: its items, collected where the
+    /// call takes them. A lazy one's pipeline is collected, and a crate's,
+    /// as the opaque `impl Iterator<Item = Event>` `click()` gives, is
+    /// walked by its own `next` (#1679). rustc's check of the crate holds
+    /// the parameter to one that takes an iterator.
+    fn collect_iterable(&mut self, expected: &Ty, argument: &mut ParsedExpr) {
+        if !matches!(
+            self.inference.resolve(expected),
+            Ty::Array {
+                kind: sequence::Kind::Vec,
+                ..
+            }
+        ) {
+            return;
+        }
+        let (source, item) = match self.inference.resolve(&argument.ty) {
+            Ty::Iter(item, _) => (
+                self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]),
+                item,
+            ),
+            ty @ Ty::Host { .. } if self.type_implements(&ty, "Iterator") => {
+                let Some((source, item)) = self.collected_items(argument) else {
+                    return;
+                };
+                (source, Box::new(item))
+            }
+            _ => return,
+        };
+        *argument = self.operator_expr(
+            source,
+            Ty::Array {
+                element: item,
+                kind: sequence::Kind::Vec,
+            },
+            argument.span,
+        );
     }
 
     #[cfg(feature = "rust-import")]
@@ -1799,6 +1815,7 @@ impl<'a> Parser<'a> {
                     kind: sequence::Kind::Vec,
                 };
             }
+            self.collect_iterable(expected, argument);
             self.fill_fn_bound(expected, argument);
             self.coerce_expr(expected, argument)?;
             self.lend_guarded_place(expected, argument);

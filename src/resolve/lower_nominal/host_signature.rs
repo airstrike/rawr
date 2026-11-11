@@ -1463,6 +1463,15 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Keeps `value`, what a call of a program's function gives, when the
+    /// function's output is written `impl Trait` (`opaque_values`).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn note_opaque_value(&mut self, value: &Ty, written: Option<&type_ref::Type>) {
+        if let Some(written) = written.filter(|written| written.opaque_trait().is_some()) {
+            self.opaque_values.push((value.clone(), written.clone()));
+        }
+    }
+
     /// A bound `bounded: Trait<arguments>` on what a script function of the
     /// call gives, where its signature writes `impl Trait<..>`: rustc knows
     /// the value by that bound alone, so its arguments, the trait's
@@ -1503,6 +1512,13 @@ impl<'a> Parser<'a> {
                     .lifetimes(),
             };
             lifetimes.written_output.as_deref().cloned()
+        });
+        // A value a call of such a function gave, as `counter.view()`.
+        let written = written.or_else(|| {
+            self.opaque_values
+                .iter()
+                .find(|(value, _)| self.inference.resolve(value) == *bounded)
+                .map(|(_, written)| written.clone())
         });
         let Some(type_ref::Type::Path(opaque)) = written else {
             return;

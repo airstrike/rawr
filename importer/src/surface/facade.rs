@@ -14,7 +14,7 @@ mod reexport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 62;
+const SCHEMA: u32 = 63;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -4197,6 +4197,11 @@ fn written_item(
     outcome: crate::classify::Outcome<'_>,
 ) -> Result<Option<Item>, Unwritten> {
     use super::identity::Selector;
+    // Whether the callable form is written: one Rawr can't write leaves
+    // only the form a value fills, as iced_test's `Simulator::click(S)`
+    // takes a `&str` through `Selector`, which it also implements for
+    // closures over a `Candidate<'_>` (#1678).
+    let mut callable_written = true;
     let (kind, signature) = match outcome.representability() {
         Representability::Function(plan) => (
             match outcome.identity().selector() {
@@ -4283,7 +4288,8 @@ fn written_item(
         // uncallable, as cosmic text's `with_buffer_mut` is. iced's
         // `Task::sip` takes two callables, each filled by a slot.
         Representability::Invocation(plan)
-            if plan.call().is_none()
+            if plan.item().values().is_none()
+                && plan.call().is_none()
                 && plan.item().crossings().is_empty()
                 && plan.signature().parameters().iter().any(|parameter| {
                     parameter.kind() == representability::signature::Kind::Callable
@@ -4306,7 +4312,15 @@ fn written_item(
             // is the closure's type, as a function item's is, and a script
             // function fills it as a slot (D594), as iced's
             // `Application::subscription` takes one.
-            item_signature(plan.item())?,
+            match (item_signature(plan.item()), plan.item().values()) {
+                (Ok(signature), _) if !unfilled_callable(plan.item()) => signature,
+                (Ok(_) | Err(Unwritten::Type), Some(values)) => {
+                    callable_written = false;
+                    item_signature(values)?
+                }
+                (Ok(_), None) => return Ok(None),
+                (Err(error), _) => return Err(error),
+            },
         ),
     };
     let values = match outcome.representability() {
@@ -4320,6 +4334,7 @@ fn written_item(
     // `Selector`, which iced also implements for `FnMut` closures.
     let signature = match (outcome.representability(), values.take()) {
         (Representability::FunctionItem(plan), Some(form)) if unfilled_callable(plan) => form,
+        (Representability::Invocation(_), Some(_)) if !callable_written => signature,
         (_, form) => {
             values = form;
             signature
@@ -4418,6 +4433,12 @@ fn relations(
             representability::convert::Type::Option(element) => {
                 Type::Option(Box::new(pattern(element, parameters)?))
             }
+            // A `&str` an implementation is for, as iced_test's `impl
+            // Selector for &str` is: the string the program lends (#1678).
+            representability::convert::Type::Builtin(
+                representability::convert::Builtin::Str
+                | representability::convert::Builtin::StaticStr,
+            ) => input_ty(source, parameters)?,
             // A crate type that names the impl's own parameters, as
             // `Text<'a, Theme, Renderer>` of `From<Text<..>> for Element<..>`.
             representability::convert::Type::Nominal {

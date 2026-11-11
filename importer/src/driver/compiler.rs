@@ -120,9 +120,12 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // names nothing of. Schema 70 walks no crate whole for its table when the
 // plan demands anything (#1665). Schema 71 keeps a blanket implementation
 // that sets a projected associated type to one of its parameters, with that
-// item (#1674). `driver.rs`, `cargo/toolchain.rs` and
-// `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 72;
+// item (#1674). Schema 72 reads whether a crate enum is `#[non_exhaustive]`
+// (#1681). Schema 73 keeps a crate trait's impls for `&str` with the
+// associated type a parameter's projection names (#1678). `driver.rs`,
+// `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
+// move with it.
+const PROTOCOL_SCHEMA: u32 = 73;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2346,6 +2349,25 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 if implementations.len() > RELATION_IMPLEMENTATIONS {
                     return Ok(());
                 }
+            }
+            // Its implementations for `&str`, which no crate type holds and
+            // the program's string fills, as iced_test's `impl Selector for
+            // &str { type Output = Text; }` gives `S::Output` of
+            // `click("Increment")` (#1678).
+            for implementation in self.implementations(obligation.trait_id)? {
+                self.budget.edge(1)?;
+                let Some(reference) = self.tcx.impl_opt_trait_ref(implementation.id()) else {
+                    continue;
+                };
+                if matches!(
+                    reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
+                    ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
+                ) {
+                    implementations.push(implementation);
+                }
+            }
+            if implementations.len() > RELATION_IMPLEMENTATIONS {
+                return Ok(());
             }
             implementations.sort_unstable_by_key(|implementation| {
                 self.tcx.def_path_hash(implementation.id()).0.to_le_bytes()

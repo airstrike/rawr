@@ -13639,7 +13639,9 @@ fn render_scoped_receiver(
     let call = format!("lend(arguments.arena, || {call})");
     // A `&str` the call lends the receiver, as `label(impl IntoFragment<'a>)`
     // takes one, is pinned in the region the receiver is in, at its
-    // lifetime, as a slot's region pins its strings.
+    // lifetime, as a slot's region pins its strings. It is pinned before
+    // the receiver is reached: a `&mut self` reach borrows the region for
+    // the call, as iced_test's `typewrite(&mut self, &str)` takes it.
     let mut pinned = String::new();
     for (position, input) in signature.inputs().iter().enumerate().skip(skip) {
         let position = position - skip;
@@ -13676,9 +13678,9 @@ fn render_scoped_receiver(
         };
         return writeln!(
             output,
-            "    if let Some(scoped) = scoped_value(arguments, 0) {{
+            "    if let Some(scoped) = scoped_value(arguments, 0) {{{pinned}
         #[allow(unused_mut)]
-        let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
+        let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
         let output = {call};
         return {converted};
     }}"
@@ -13698,9 +13700,9 @@ fn render_scoped_receiver(
     writeln!(
         output,
         "    if let Some(scoped) = scoped_value(arguments, 0) {{
-        {given} __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+        {given} __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{{pinned}
             #[allow(unused_mut)]
-            let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;{pinned}
+            let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
             let output = {call};
             {converted}
         }})
