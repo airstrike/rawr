@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-11",
-  "version": "0.3.184",
+  "version": "0.3.185",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,17 +9,19 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]},
-        {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]},
-        {"text":"Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner.","issues":[1670]},
-        {"text":"A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed.","issues":[1722]},
-        {"text":"`rawr run` lowers again only the marked files that name what a save changed: a new function, a derive or a `cfg` on something native code doesn't see re-lowers its own file and the files that name it.","issues":[1718],"refs":[1646]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.185",
+        "date": "2026-11-11",
+        "entries": [
+          {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]},
+          {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]},
+          {"text":"Rebuilding a project's runner uses several cores and recompiles only what changed: each imported crate's adapters are a crate of their own on a shared base, so a new call into one crate recompiles only that crate's adapters and the runner.","issues":[1670]},
+          {"text":"A runner build removes the build state of an imported crate the program no longer imports, so a project's build directory doesn't keep growing after an import is removed.","issues":[1722]},
+          {"text":"`rawr run` lowers again only the marked files that name what a save changed: a new function, a derive or a `cfg` on something native code doesn't see re-lowers its own file and the files that name it.","issues":[1718],"refs":[1646]}
+        ]
+      },
       {
         "version": "0.3.184",
         "date": "2026-11-11",
@@ -3726,7 +3728,7 @@
     {"issue":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
-    {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.185"},
     {"issue":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
@@ -3769,16 +3771,16 @@
     {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
     {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
     {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"closed","category":"Divergences from rustc"},
+    {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"closed","category":"Divergences from rustc","release":"0.3.185"},
     {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"},
     {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"},
-    {"issue":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.185"},
     {"issue":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.185"},
     {"issue":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open","category":"Divergences from rustc"},
     {"issue":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open","category":"Divergences from rustc"},
     {"issue":1721,"title":"The importer's rustc-driver it suite is stale: the p3 runner fails E0599 and tests read src/main.rs for moved code","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.185"},
     {"issue":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1724,"title":"31 rawr lib tests fail on main: account Carrier errors, layout sizes, a missing native binding, rustc-wording drift","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1725,"title":"A runner a native rebuild starts lowers every marked file again, though most files' keys are unchanged","state":"open","category":"Shared dependency cache (D607)"},
