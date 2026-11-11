@@ -10,6 +10,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A save to a marked file that names a crate type through one of several re-export routes, as inboard's theme.rs names `iced::theme::Mode`, now swaps into the running program in about a second instead of rebuilding it (18-97 s in inboard). Every use that names a type, its variant, field or constructor names it by the type's one path, in rawr-import's compile and in the runner's own. (#1688)
 - Under `RAWR_VERBOSE=1`, when a save can't swap in place, the runner names the file, line and column of the use its build doesn't cover, and the item. (#1689)
 - A new rawr install, such as one that only bumps the generator version, no longer canonicalizes an unchanged project's crate API again. Before, that took about 235 s on one core in inboard. The API read from shared tables is no longer keyed by the host directory's path or by the driver binary, so an install regenerates bindings and rebuilds the runner, nothing more. `RAWR_VERBOSE`'s round lines now count canonicalized sidecars. (#1690)
+- A block's last expression, such as a `#[cfg(..)] { .. }` block, is the block's value when a false `#[cfg]` removes every statement after it. iced's pokedex now passes `rawr check`. (#1684)
+- A `let` on the only variant of a crate enum destructures it, unless the enum is `#[non_exhaustive]`, with rustc's E0005 witnesses where it can't. (#1681)
+- A `match` on a `#[non_exhaustive]` crate enum that names every variant but has no wildcard arm is E0004 with `_`, or `&_` through a reference, as rustc has it outside the enum's crate. (#1692)
 
 ## 0.3.182 (2026-11-10)
 
