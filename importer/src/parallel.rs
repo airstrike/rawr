@@ -11,8 +11,7 @@ pub(crate) fn map<T: Sync, R: Send>(
     items: &[T],
     work: impl Fn(&T) -> Option<R> + Sync,
 ) -> Option<Vec<R>> {
-    let workers = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-    map_on(workers, items, work)
+    map_on(workers(), items, work)
 }
 
 /// [`map`] on at most `workers` threads.
@@ -21,9 +20,32 @@ fn map_on<T: Sync, R: Send>(
     items: &[T],
     work: impl Fn(&T) -> Option<R> + Sync,
 ) -> Option<Vec<R>> {
+    let (results, _) = try_map_with_on(workers, items, || (), |(), item| work(item).ok_or(()));
+    results.ok()
+}
+
+/// The machine's cores, as many threads as [`map`] works on.
+pub(crate) fn workers() -> usize {
+    std::thread::available_parallelism().map_or(1, NonZeroUsize::get)
+}
+
+/// `work` on each of `items` on at most `workers` threads, as [`map`] does,
+/// where each worker reads its items with a state of its own that `start`
+/// makes once for it. The states come back beside the results, one for each
+/// worker, in no fixed order. An item whose `work` fails stops the map, and
+/// the error is a loop's: that of the first item in the items' order that
+/// fails, as every item before it has finished by then.
+pub(crate) fn try_map_with_on<T: Sync, S: Send, R: Send, E: Send>(
+    workers: usize,
+    items: &[T],
+    start: impl Fn() -> S + Sync,
+    work: impl Fn(&mut S, &T) -> Result<R, E> + Sync,
+) -> (Result<Vec<R>, E>, Vec<S>) {
     let workers = workers.min(items.len());
     if workers <= 1 {
-        return items.iter().map(work).collect();
+        let mut state = start();
+        let results = items.iter().map(|item| work(&mut state, item)).collect();
+        return (results, vec![state]);
     }
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
@@ -31,18 +53,24 @@ fn map_on<T: Sync, R: Send>(
         let handles = (0..workers)
             .map(|_| {
                 scope.spawn(|| {
+                    let mut state = start();
                     let mut done = Vec::new();
+                    let mut failure = None;
                     while !failed.load(Ordering::Relaxed) {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(item) = items.get(index) else {
                             break;
                         };
-                        match work(item) {
-                            Some(result) => done.push((index, result)),
-                            None => failed.store(true, Ordering::Relaxed),
+                        match work(&mut state, item) {
+                            Ok(result) => done.push((index, result)),
+                            Err(error) => {
+                                failure = Some((index, error));
+                                failed.store(true, Ordering::Relaxed);
+                                break;
+                            }
                         }
                     }
-                    done
+                    (done, failure, state)
                 })
             })
             .collect::<Vec<_>>();
@@ -55,17 +83,33 @@ fn map_on<T: Sync, R: Send>(
             })
             .collect::<Vec<_>>()
     });
-    if failed.into_inner() {
-        return None;
+    let mut results = Vec::new();
+    let mut first_failure: Option<(usize, E)> = None;
+    let mut states = Vec::with_capacity(finished.len());
+    for (done, failure, state) in finished {
+        results.extend(done);
+        states.push(state);
+        if let Some((index, error)) = failure
+            && first_failure
+                .as_ref()
+                .is_none_or(|(first, _)| index < *first)
+        {
+            first_failure = Some((index, error));
+        }
     }
-    let mut results = finished.into_iter().flatten().collect::<Vec<_>>();
+    if let Some((_, error)) = first_failure {
+        return (Err(error), states);
+    }
     results.sort_unstable_by_key(|(index, _)| *index);
-    Some(results.into_iter().map(|(_, result)| result).collect())
+    (
+        Ok(results.into_iter().map(|(_, result)| result).collect()),
+        states,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::map_on;
+    use super::{map_on, try_map_with_on};
 
     #[test]
     fn results_on_many_workers_are_the_results_of_one_in_item_order() {
@@ -89,5 +133,27 @@ mod tests {
         let work = |item: &u32| (*item != 37).then_some(*item);
         assert!(map_on(1, &items, work).is_none());
         assert!(map_on(8, &items, work).is_none());
+    }
+
+    #[test]
+    fn the_error_of_many_workers_is_the_first_failing_items_and_each_keeps_its_state() {
+        let items = (0..1000_u32).collect::<Vec<_>>();
+        let work = |seen: &mut usize, item: &u32| {
+            *seen += 1;
+            if *item == 300 || *item == 700 {
+                Err(*item)
+            } else {
+                Ok(*item)
+            }
+        };
+        let (serial, states) = try_map_with_on(1, &items, || 0_usize, work);
+        assert_eq!(serial, Err(300));
+        assert_eq!(states, [301]);
+        let (parallel, states) = try_map_with_on(8, &items, || 0_usize, work);
+        assert_eq!(parallel, Err(300));
+        assert_eq!(states.len(), 8);
+        let (whole, states) = try_map_with_on(8, &items[..300], || 0_usize, work);
+        assert_eq!(whole, Ok(items[..300].to_vec()));
+        assert_eq!(states.iter().sum::<usize>(), 300, "each item is read once");
     }
 }

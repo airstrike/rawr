@@ -1570,6 +1570,155 @@ pub fn future_parameter_functions() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes the future parameter fixture")
 }
 
+/// Two crates' functions that give one opaque type, each leaving out
+/// another of its captures: `fixture::wait<F: Future>(future: F) -> impl
+/// Sized`, which captures `F`, and `holder::hold<A, F: Future>(value: A,
+/// future: F)`, which gives the same opaque type at `A, F`. A script future
+/// fills each `F`, so `wait` leaves out the opaque type's capture 0 and
+/// `hold` its capture 1.
+pub fn opaque_left_out_functions() -> api::Graph<api::Extracted> {
+    let future = sysroot_definition("c0", identity::Namespace::Type, "core");
+    let output = sysroot_definition("c1", identity::Namespace::Type, "core");
+    let wait = definition("c2", identity::Namespace::Value);
+    let hold = package_definition(
+        "holder",
+        "c3",
+        identity::Namespace::Value,
+        "path+file:///holder",
+    );
+    let opaque = definition("c4", identity::Namespace::Type);
+    let parameter = |owner: &identity::Definition, index: u32| model::Type::Parameter {
+        owner: owner.clone(),
+        index,
+    };
+    // Each name a parameter of `owner`, the last one `F: Future`.
+    let generics = |owner: &identity::Definition, names: &[&str]| {
+        let parameters = names
+            .iter()
+            .zip(0_u32..)
+            .map(|(name, index)| {
+                model::Parameter::new(
+                    owner.clone(),
+                    index,
+                    (*name).into(),
+                    model::ParameterKind::Type {
+                        bounds: Box::default(),
+                        default: model::Default::Absent,
+                    },
+                )
+            })
+            .collect::<Box<[_]>>();
+        let future_index = u32::try_from(names.len() - 1).expect("a fixture has few parameters");
+        model::Generics::new(
+            parameters,
+            Box::from([model::Predicate::Bound {
+                ty: parameter(owner, future_index),
+                bound: model::Bound::Trait {
+                    trait_id: future.clone(),
+                    arguments: Box::default(),
+                    polarity: model::Polarity::Positive,
+                    binders: Box::default(),
+                },
+            }]),
+        )
+    };
+    let function = |id: &identity::Definition, segments: &[&str], names: &[&str], at: u32| {
+        let inputs = (0..u32::try_from(names.len()).expect("a fixture has few parameters"))
+            .map(|index| parameter(id, index))
+            .collect::<Box<[_]>>();
+        // `hold`'s captures are its own parameters in order, as `wait`'s
+        // are: the future is the last.
+        let captures = inputs
+            .iter()
+            .cloned()
+            .map(model::Argument::Type)
+            .collect::<Box<[_]>>();
+        model::Definition::new(
+            id.clone(),
+            path(segments),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Function {
+                signature: model::Signature::new(
+                    model::Safety::Safe,
+                    false,
+                    false,
+                    "\"Rust\"".into(),
+                    false,
+                    Box::default(),
+                    model::Receiver::None,
+                    inputs,
+                    model::Type::ImplTrait {
+                        id: opaque.clone(),
+                        bounds: Box::default(),
+                        captures,
+                    },
+                ),
+                generics: generics(id, names),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let sysroot = |id: &identity::Definition, segments: &[&str], kind: &str, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(segments),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Sysroot {
+                compiler_kind: kind.into(),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let mut definitions = vec![
+        sysroot(&future, &["core", "future", "Future"], "trait", 1000),
+        sysroot(
+            &output,
+            &["core", "future", "Future", "Output"],
+            "associated-type",
+            1011,
+        ),
+        function(&wait, &["fixture", "wait"], &["F"], 1022),
+        function(&hold, &["holder", "hold"], &["A", "F"], 1033),
+    ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
+    let export = |crate_name: &str, name: &str, id: &identity::Definition, at: u32| {
+        ledger::Path::Imported(ledger::Export::new(
+            identity::Export::new(
+                crate_name.into(),
+                Box::from([Box::<str>::from(name)]),
+                identity::Namespace::Value,
+            ),
+            id.clone(),
+            Box::default(),
+            Box::default(),
+            span(at, at + 1),
+        ))
+    };
+    let exports = vec![
+        export("fixture", "wait", &wait, 1044),
+        export("holder", "hold", &hold, 1046),
+    ];
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        definitions,
+        exports,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        &mut allocation,
+    )
+    .expect("opaque left-out fixture seals")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("freshness proof publishes the opaque left-out fixture")
+}
+
 /// Free functions that take a closure, as iced's `sipper` does:
 /// `fixture::sip<F, R>(make: F) -> i64` with `F: FnOnce() -> R, R:
 /// Future`, whose closure returns a future, `fixture::sip_core<F, R>(make:
