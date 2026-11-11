@@ -224,12 +224,18 @@ impl Unbound {
         }
     }
 
-    /// Where the use is and what missed, in one line.
+    /// Where the use is, as its file's path and the line and column it
+    /// starts at, and what missed, in one line.
     pub(crate) fn describe(&self) -> String {
-        let place = self
-            .at
-            .as_ref()
-            .map(|(source, span)| format!("{source:?} at {span:?}"));
+        let place = self.at.as_ref().map(|(source, span)| {
+            let start = span.start();
+            format!(
+                "{}:{}:{}",
+                source.identity(),
+                start.line().unwrap_or(0),
+                start.position().unwrap_or(0)
+            )
+        });
         let miss = self
             .miss
             .as_ref()

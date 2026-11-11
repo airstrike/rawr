@@ -43,6 +43,18 @@ impl ui::Base for Theme {
             Theme::Selected(theme) => &theme.name,
         }
     }
+
+    fn mode(&self) -> ui::theme::Mode {
+        match self {
+            Theme::Selected(theme) => {
+                if theme.name.contains("dark") {
+                    ui::theme::Mode::Dark
+                } else {
+                    ui::theme::Mode::Light
+                }
+            }
+        }
+    }
 }
 
 /// A theme's type, whose native part can't be cloned.

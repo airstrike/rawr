@@ -71,6 +71,34 @@ pub fn catalog<C: Catalog>(catalog: &C) -> String {
 /// What the app's theme names itself by, as `iced::theme::Base`.
 pub trait Base {
     fn name(&self) -> &str;
+    fn mode(&self) -> theme::Mode {
+        theme::Mode::Light
+    }
+}
+
+mod modes {
+    /// Whether a theme is light or dark, as `iced::theme::Mode`, which
+    /// iced's own crate declares where no path of iced reaches it.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum Mode {
+        Light,
+        Dark,
+    }
+}
+
+/// The theme's items, as `iced::theme`.
+pub mod theme {
+    pub use crate::modes::Mode;
+}
+
+/// A longer route to the same items, as iced reaches `iced::theme::Mode`
+/// at `iced::advanced::graphics::core::theme::Mode` too.
+pub mod advanced {
+    pub mod graphics {
+        pub mod core {
+            pub use crate::theme;
+        }
+    }
 }
 
 pub fn base<B: Base>(base: &B) -> String {

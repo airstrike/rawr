@@ -1337,6 +1337,55 @@ fn a_save_that_changes_a_literal_a_native_call_takes_swaps_in_place() {
     assert!(!seen.contains("preparing again"), "{seen}");
 }
 
+/// A crate item two `pub use` routes reach is one native use whatever
+/// route a marked file names it by, as inboard's `iced::theme::Mode` is
+/// also `iced::advanced::graphics::core::theme::Mode`: the compile the
+/// runner is built for and the runner's own compile of a save name it by
+/// one path, so a body edit elsewhere in the file swaps in place.
+#[test]
+fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-route-save");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    let theme = root.join("src/theme.rs");
+    let text = fs::read_to_string(&theme).unwrap();
+    assert!(text.contains("ui::theme::Mode::Light"), "{text}");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    // A save of this islands program is queued for its next native call,
+    // or prepares again.
+    let settled = |text: &str| {
+        text.matches("\"event\":\"queued\"").count()
+            + text.matches("\"event\":\"preparing\"").count()
+    };
+    edit(&theme, "        4.0\n", "        5.0\n");
+    let told = run.told(&events, |text| settled(text) >= 1);
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+    // Under `RAWR_VERBOSE` the runner says which use its build lacks.
+    let seen = run.seen.join("\n");
+    assert!(
+        !told.contains("\"event\":\"preparing\"") && !seen.contains("preparing again"),
+        "{told}\n{seen}"
+    );
+}
+
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
