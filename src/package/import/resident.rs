@@ -78,7 +78,14 @@ impl Engine {
     ) -> Result<Outcome, Error> {
         Ok(match self.compile_covered(snapshot)? {
             Ok(compiled) => Outcome::Compiled(compiled),
-            Err(_) => Outcome::NeedsPreparation,
+            Err(unbound) => {
+                // Under `RAWR_VERBOSE=1`, which use the running build lacks:
+                // what `rawr run` prepares again for.
+                if std::env::var_os("RAWR_VERBOSE").is_some_and(|verbose| verbose == "1") {
+                    eprintln!("rawr runner: not covered: {}", unbound.describe());
+                }
+                Outcome::NeedsPreparation
+            }
         })
     }
 

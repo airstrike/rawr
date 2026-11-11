@@ -169,12 +169,18 @@ impl Output {
                     **held.entry(*entry.identity()).or_insert(&*used.fillers) != *used.fillers
                 });
             let Some(matched) = matched.filter(|_| !shared) else {
+                let what = if shared {
+                    format!("`{path}`: its adapter already holds other script functions")
+                } else {
+                    format!("`{path}` at types {:?}", used.types)
+                };
                 return Coverage::Uncovered(Box::new(Unbound {
                     at: self
                         .sources
                         .get(used.source.index())
                         .map(|source| (source.clone(), used.span)),
                     miss: None,
+                    what: Some(what),
                 }));
             };
             digest.update(matched.digest());
@@ -196,6 +202,8 @@ pub(crate) struct Unbound {
     at: Option<(diagnostic::Source, Span)>,
     /// The lookup's own error, reported when it has no position.
     miss: Option<package::Error>,
+    /// The use the carrier lacks, for `RAWR_VERBOSE`'s line.
+    what: Option<String>,
 }
 
 impl Unbound {
@@ -212,6 +220,26 @@ impl Unbound {
         Self {
             at,
             miss: Some(error),
+            what: None,
+        }
+    }
+
+    /// Where the use is and what missed, in one line.
+    pub(crate) fn describe(&self) -> String {
+        let place = self
+            .at
+            .as_ref()
+            .map(|(source, span)| format!("{source:?} at {span:?}"));
+        let miss = self
+            .miss
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| self.what.clone());
+        match (place, miss) {
+            (Some(place), Some(miss)) => format!("{place}: {miss}"),
+            (Some(place), None) => format!("{place}: a use the carrier doesn't cover"),
+            (None, Some(miss)) => miss,
+            (None, None) => "a use the carrier doesn't cover".to_owned(),
         }
     }
 

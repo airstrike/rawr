@@ -1283,6 +1283,60 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 /// save that adds a line above a function, after which an error below it
 /// names its own line. `RAWR_VERBOSE` says what each save did, in the owner
 /// and in the runner.
+/// A save that changes only a literal a marked body gives a native call,
+/// as inboard's `4.0.into()` into a `Radius` or `.spacing(0)` here, swaps
+/// in place: the native uses it needs are the ones the running build
+/// already covers, whatever the literal's value.
+#[test]
+fn a_save_that_changes_a_literal_a_native_call_takes_swaps_in_place() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-literal-save");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    // inboard's `fn corners(&self) -> Radius { 4.0.into() }`: a float a
+    // crate's `From<f32>` converts, given back to the caller.
+    let home = root.join("src/home.rs");
+    let text = fs::read_to_string(&home).unwrap();
+    assert!(text.contains("column![top_bar].spacing(0)"), "{text}");
+    let text = text.replace(
+        "column![top_bar].spacing(0)",
+        "column![top_bar].spacing(gap())",
+    ) + "\nfn gap() -> ui::Pixels {\n    4.0.into()\n}\n";
+    fs::write(&home, text).unwrap();
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    // A save of this islands program is queued for its next native call,
+    // or prepares again; count both.
+    let settled = |text: &str| {
+        text.matches("\"event\":\"queued\"").count()
+            + text.matches("\"event\":\"preparing\"").count()
+    };
+    edit(&home, "    4.0.into()", "    6.0.into()");
+    run.told(&events, |text| settled(text) >= 1);
+    edit(&home, "    6.0.into()", "    4.0.into()");
+    let told = run.told(&events, |text| settled(text) >= 2);
+    assert!(!told.contains("\"event\":\"preparing\""), "{told}");
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("preparing again"), "{seen}");
+}
+
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
