@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 172;
+const CLASSIFIER_VERSION: u32 = 173;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5587,6 +5587,19 @@ impl<P: api::Phase> Context<'_, P> {
                             receiver,
                         }
                     }
+                    // A compound assignment's impl for a number that takes
+                    // this type, as `impl AddAssign<Turn> for f32`, is this
+                    // type's function of the number, which it gives back
+                    // changed (`classify_operand_member`).
+                    crate::surface::identity::Selector::Method { item, .. }
+                        if assigns_number(
+                            implementation,
+                            definition,
+                            matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == export.target()),
+                        ) =>
+                    {
+                        crate::surface::identity::Selector::AssociatedFunction { item }
+                    }
                     // A member of a trait's impl for a number, `bool` or
                     // `char` is that impl's own function of the scalar
                     // (`surface::scalar`).
@@ -7173,7 +7186,10 @@ impl<P: api::Phase> Context<'_, P> {
     /// The method of a trait's impl for a number that takes another type,
     /// as `mul` of `impl Mul<Radians> for f32`: a function of the number
     /// and the operand whose instance is the number, so the bridge calls
-    /// `<f32>::mul(number, operand)` and rustc selects the impl. Of the
+    /// `<f32>::mul(number, operand)` and rustc selects the impl. One that
+    /// changes the number through `&mut self`, as `add_assign` of `impl
+    /// AddAssign<Radians> for f32`, takes it by value and gives it back
+    /// changed: the bridge lends the impl's function its `&mut`. Of the
     /// trait's `own` impl, as `impl NumCast for u64`, a method that borrows
     /// the number and an associated function are members too, called
     /// through the trait, `<u64 as NumCast>::from(n)`, as `u64` has
@@ -7195,9 +7211,13 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(reject::Kind::GenericImplementation.into());
             };
             // A number's `self` is its type written out, the function's
-            // first input, or a shared borrow of it for `&self`.
+            // first input, or a shared borrow of it for `&self`. A
+            // compound assignment's `&mut self` is the number itself,
+            // which the function gives back.
             let number = implementation.self_type();
+            let assigns = assigns_number(implementation, definition, own);
             let receiver = match signature.receiver() {
+                _ if assigns => Some(number.clone()),
                 model::Receiver::Explicit { ty } | model::Receiver::Value { ty }
                     if ty == number =>
                 {
@@ -7248,13 +7268,29 @@ impl<P: api::Phase> Context<'_, P> {
                 signature.async_function(),
                 signature.abi().into(),
                 signature.variadic(),
-                signature.binders().cloned().collect(),
+                // The `&mut self` a compound assignment lends is the
+                // bridge's own, so its lifetime binds nothing of the call.
+                signature
+                    .binders()
+                    .filter(|binder| {
+                        !assigns
+                            || !matches!(signature.receiver(), model::Receiver::Reference {
+                                lifetime: model::Lifetime::Late { binder: lent, .. },
+                                ..
+                            } if lent == *binder)
+                    })
+                    .cloned()
+                    .collect(),
                 model::Receiver::None,
                 receiver
                     .into_iter()
                     .chain(signature.inputs().cloned())
                     .collect(),
-                signature.output().clone(),
+                if assigns {
+                    number.clone()
+                } else {
+                    signature.output().clone()
+                },
             );
             match self.function(&free, generics)? {
                 Representability::Function(plan) => {
@@ -7262,7 +7298,8 @@ impl<P: api::Phase> Context<'_, P> {
                         plan.signature()
                             .clone()
                             .with_instance(Some(instance))
-                            .with_through(through),
+                            .with_through(through)
+                            .with_assigns(assigns),
                     )))
                 }
                 _ => Err(reject::Kind::GenericImplementation.into()),
@@ -14388,6 +14425,28 @@ fn receiver(kind: &model::Kind) -> Option<representability::ownership::Receiver>
             model::Mutability::Mutable => representability::ownership::Receiver::Mutable,
         }),
     }
+}
+
+/// Whether `definition`, a member of a crate's impl for a number of a
+/// trait other than its `own`, changes the number through `&mut self` and
+/// gives nothing, as `add_assign` of `impl AddAssign<Turn> for f32`: a
+/// function of the number by value that gives it back changed.
+fn assigns_number(
+    implementation: &model::Implementation,
+    definition: &model::Definition,
+    own: bool,
+) -> bool {
+    let model::Kind::Function { signature, .. } = definition.kind() else {
+        return false;
+    };
+    let number = implementation.self_type();
+    !own && is_number(number)
+        && *signature.output() == model::Type::Tuple(Box::default())
+        && matches!(signature.receiver(), model::Receiver::Reference {
+            mutability: model::Mutability::Mutable,
+            ty,
+            ..
+        } if ty == number)
 }
 
 /// Whether `definition`, a member of `implementation`, is declared by the

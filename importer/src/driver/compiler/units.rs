@@ -912,7 +912,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     /// primitive whose operand is `adt`, as iced's `impl Mul<Radians> for
     /// f32`: rustc selects one for `2.0 * angle` as it selects the type's
     /// own, so each is a member of `adt`'s, with the number as its first
-    /// input. Empty for any other trait.
+    /// input. So is a compound assignment's, as `impl AddAssign<Radians>
+    /// for f32` of `y += angle`. Empty for any other trait.
     fn operand_impls(&mut self, trait_id: DefId, adt: DefId) -> Result<Vec<Reached>, String> {
         let tcx = self.tcx;
         let lang = tcx.lang_items();
@@ -927,6 +928,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             lang.bitxor_trait(),
             lang.shl_trait(),
             lang.shr_trait(),
+            lang.add_assign_trait(),
+            lang.sub_assign_trait(),
+            lang.mul_assign_trait(),
+            lang.div_assign_trait(),
+            lang.rem_assign_trait(),
+            lang.bitand_assign_trait(),
+            lang.bitor_assign_trait(),
+            lang.bitxor_assign_trait(),
+            lang.shl_assign_trait(),
+            lang.shr_assign_trait(),
         ];
         if !operators.contains(&Some(trait_id)) {
             return Ok(Vec::new());
