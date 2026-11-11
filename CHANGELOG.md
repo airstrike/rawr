@@ -10,6 +10,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `match` or `if` whose arms give `&str` and `&String` is a `&str`, as in rustc: one arm deref-coerces to the other's type, in either order. (#1673; part of #1018)
 - A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type. (#1660)
 - A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo. (#990)
+- A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build. (#1665)
+- A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9. (#1682; part of #1618)
 
 ## 0.3.181 (2026-11-10)
 

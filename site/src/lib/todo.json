@@ -16,7 +16,9 @@
         {"text":"`s.as_ref()` and `s.borrow()` on a String, str, Vec, array or number lend the view the use expects: a `let` annotation, a parameter, a return, or a later crate trait bound such as iced's `column![self.description.as_ref(), ..]`. The view comes from std's `AsRef` and `Borrow` impls, with rustc's E0282, E0277 and E0505 where rustc gives them.","issues":[1672],"refs":[1632,1018]},
         {"text":"A `match` or `if` whose arms give `&str` and `&String` is a `&str`, as in rustc: one arm deref-coerces to the other's type, in either order.","issues":[1673],"refs":[1018]},
         {"text":"A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type.","issues":[1660]},
-        {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]}
+        {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]},
+        {"text":"A cold `rawr check` or `rawr run` extracts each dependency only for what the program uses, instead of walking every big crate whole for its shared table (about 36,000 units for iced). A later program that uses other items of the crate extracts just its own demand once, and the shared table grows to hold it. Programs whose demand the table already holds still read it with no nightly build.","issues":[1665]},
+        {"text":"A second run of an unchanged program compiles nothing again. A demand round the store already holds now reads its stored resolution instead of rebuilding its API from the shared tables, so the check, profile and runner keep the keys the next run looks for. This had regressed on 2026-11-10 with 3fc6645a9.","issues":[1682],"refs":[1618]}
       ]
     },
     "releases": [
@@ -3656,7 +3658,7 @@
     {"issue":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open","category":"No glue (D593)"},
     {"issue":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
     {"issue":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
@@ -3672,7 +3674,9 @@
     {"issue":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open","category":"Divergences from rustc"},
     {"issue":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open","category":"Divergences from rustc"},
     {"issue":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open","category":"Divergences from rustc"},
-    {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open","category":"Divergences from rustc"}
+    {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open","category":"Divergences from rustc"},
+    {"issue":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4742,7 +4746,7 @@
             {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
             {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
             {"number":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open"},
-            {"number":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"open"},
+            {"number":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"closed"},
             {"number":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed"},
             {"number":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed"},
             {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open"},
@@ -4750,7 +4754,9 @@
             {"number":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed"},
             {"number":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed"},
             {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"},
-            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open"}
+            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open"},
+            {"number":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open"},
+            {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"open"}
           ]
         }
       ]
