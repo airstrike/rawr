@@ -708,6 +708,11 @@ struct Parser<'a> {
     /// its key and the type each generic parameter takes.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     instance_calls: Vec<(crate::item::Key, Vec<Ty>, Span)>,
+    /// In an instance, each parameter its template bounds by `Into<U>`
+    /// into a held std type, by its declaration, with its `U`
+    /// (`Instances::conversions`).
+    #[cfg(feature = "rust-import")]
+    instance_conversions: BTreeMap<Span, Ty>,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -1005,6 +1010,8 @@ impl<'a> Parser<'a> {
             literal_values: Vec::new(),
             trait_parameters: BTreeMap::new(),
             instance_calls: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            instance_conversions: BTreeMap::new(),
             collecting_instances: false,
             reaches_host: false,
             impl_uses: Vec::new(),
@@ -1114,6 +1121,8 @@ impl<'a> Parser<'a> {
                     .insert(name.clone(), Ty::from_resolved(ty));
             }
         }
+        #[cfg(feature = "rust-import")]
+        parser.read_instance_conversions(definition.key(), definition.parameters());
         parser.inference.equalities = generic_equalities(definition.generics());
         parser.copy_out = method_copied(definition, &parser.models)
             .into_iter()
@@ -1241,6 +1250,10 @@ impl<'a> Parser<'a> {
                     .trait_parameters
                     .insert(name.clone(), Ty::from_resolved(ty));
             }
+        }
+        #[cfg(feature = "rust-import")]
+        if let Some(key) = parser.callable.clone() {
+            parser.read_instance_conversions(&key, &definition.parameters);
         }
 
         let receiver = this_parameter(definition);

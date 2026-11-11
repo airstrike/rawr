@@ -499,6 +499,68 @@ impl<'a> Parser<'a> {
         Some((forms, self.models.item_owner(&path).cloned()))
     }
 
+    /// Whether one of the facade type `source`'s own `into` forms gives
+    /// `target`: a crate's `impl From<Its> for PathBuf` is the `into` of
+    /// core's blanket `Into` on `Its`, as `From<Degrees> for f32` is, and
+    /// rustc proves `Its: Into<PathBuf>` from it. An imported type whose
+    /// `into` the program never named is demanded with the failure
+    /// (`demand_into`).
+    pub(super) fn source_into(&mut self, target: &Ty, source: &Ty) -> bool {
+        if !matches!(source, Ty::Host { .. }) {
+            return false;
+        }
+        let Some((forms, _)) = self.conversion_forms(source) else {
+            return false;
+        };
+        #[cfg(feature = "rust-import")]
+        if forms.is_empty() {
+            self.demand_into(source);
+            return false;
+        }
+        forms.iter().any(|item| {
+            let checkpoint = self.inference.checkpoint();
+            let gives = self
+                .instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)
+                .is_ok_and(|signature| self.unify_type(&signature.output, target));
+            self.inference.rollback(checkpoint);
+            gives
+        })
+    }
+
+    /// The conversions of the instance `key` whose `parameters` are this
+    /// body's (`Instances::conversions`), by each parameter's declaration.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn read_instance_conversions(
+        &mut self,
+        key: &crate::item::Key,
+        parameters: &[crate::resolve::item::Parameter],
+    ) {
+        let Some(conversions) = self.models.instances.conversions.get(key) else {
+            return;
+        };
+        self.instance_conversions = conversions
+            .iter()
+            .filter_map(|(name, target)| {
+                let parameter = parameters
+                    .iter()
+                    .find(|parameter| parameter.name.text == *name)?;
+                Some((parameter.name.span, Ty::from_resolved(target)))
+            })
+            .collect();
+    }
+
+    /// The `U` that `value`, an instance's parameter read by its name,
+    /// converts into where its template bounds it by `Into<U>`
+    /// (`Instances::conversions`).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn instance_into_target(&self, value: &ParsedExpr) -> Option<Ty> {
+        if self.instance_conversions.is_empty() || !value.is_local() {
+            return None;
+        }
+        let declaration = self.bindings.get(value.source.as_str())?.declaration;
+        self.instance_conversions.get(&declaration).cloned()
+    }
+
     /// Keep the `into` of the imported type `ty` as a miss when none of
     /// its paths has one yet: a crate's `impl From<Degrees> for f32` makes
     /// it a member of `Degrees`, which the importer brings once it is
@@ -1457,4 +1519,12 @@ pub(super) struct HostInto {
     pub(super) receiver: Span,
     /// The placeholder before text lent at `'static` (`TextInto::lent`).
     pub(super) lent: Option<String>,
+}
+
+/// Whether `ty` is a std type Rawr's std holds (`std_facade::held_forms`),
+/// whose `from`s are std's alone: a crate's `impl From<Its> for PathBuf`
+/// is the `into` it gives `Its`.
+pub(super) fn held_std(ty: &Ty) -> bool {
+    matches!(ty, Ty::Host { proof, .. }
+        if !crate::std_facade::held_forms(&proof.definition.path()).is_empty())
 }
