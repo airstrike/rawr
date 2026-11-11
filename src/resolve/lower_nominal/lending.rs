@@ -36,9 +36,7 @@ impl<'a> Parser<'a> {
             ty => ty.clone(),
         };
         let expression = span(value.span.start(), end);
-        let placeholder = conversion_placeholder(self.pending_conversions.len());
-        let width = placeholder.len() + 1;
-        let placeholder = format!("{placeholder:_<width$}");
+        let placeholder = call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
         let target = self.inference.fresh();
         self.pending_conversions.push(PendingConversion {
             placeholder: placeholder.clone(),

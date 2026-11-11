@@ -62,10 +62,8 @@ impl<'a> Parser<'a> {
         let source = match self.settle_parse(&target, &error, expression, false)? {
             Some(helper) => origin::Fragment::call(&helper, [value.rendered_source()]),
             None => {
-                let placeholder = format!("__rawr_nominal_parse_{:010}", self.parse_count);
+                let placeholder = super::naming::parse_placeholder(self.parse_count);
                 self.parse_count += 1;
-                let width = placeholder.len() + 1;
-                let placeholder = format!("{placeholder:_<width$}");
                 let mut source = origin::Fragment::call(&placeholder, [value.rendered_source()]);
                 source.push_text(")");
                 self.pending_parses

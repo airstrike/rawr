@@ -157,9 +157,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_try_into(&mut self, value: ParsedExpr, end: Position) -> ParsedExpr {
         let source = self.inference.resolve(&value.ty);
         let expression = span(value.span.start(), end);
-        let placeholder = conversion_placeholder(self.pending_conversions.len());
-        let width = placeholder.len() + 1;
-        let placeholder = format!("{placeholder:_<width$}");
+        let placeholder = call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
         let target = self.inference.fresh();
         let error = self.inference.fresh();
         self.pending_conversions.push(PendingConversion {
@@ -395,9 +393,8 @@ impl<'a> Parser<'a> {
         if width.is_some() {
             self.capture_witnesses();
         }
-        // One more than any helper name, for the `(` written after it.
-        let placeholder = conversion_placeholder(self.pending_conversions.len());
-        let width = width.unwrap_or(0).max(placeholder.len() + 1);
+        let placeholder = call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
+        let width = width.unwrap_or(0).max(placeholder.len());
         let placeholder = format!("{placeholder:_<width$}");
         let target = self.inference.fresh();
         self.pending_conversions.push(PendingConversion {
@@ -592,10 +589,7 @@ impl<'a> Parser<'a> {
         end: Position,
     ) -> ParsedExpr {
         let expression = span(value.span.start(), end);
-        let placeholder = conversion_placeholder(self.pending_conversions.len());
-        // Room for the longest helper an op can be named.
-        let width = placeholder.len() + 1;
-        let placeholder = format!("{placeholder:_<width$}");
+        let placeholder = call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
         let target = self.inference.fresh();
         self.pending_conversions.push(PendingConversion {
             placeholder: placeholder.clone(),

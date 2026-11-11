@@ -37,12 +37,31 @@ pub(super) fn function_name(key: &crate::item::Key) -> String {
     stable(FUNCTION_SENTINEL, &private_function_name(key))
 }
 
+/// How many base-62 digits of its symbol's digest a generated name ends
+/// with (`stable`).
+const DIGITS: usize = 12;
+
+/// The length of the longest generated function or method name, which a
+/// placeholder that becomes a call of one has room for (`call_placeholder`).
+const LONGEST_NAME: usize = if FUNCTION_SENTINEL.len() > METHOD_SENTINEL.len() {
+    FUNCTION_SENTINEL.len() + DIGITS
+} else {
+    METHOD_SENTINEL.len() + DIGITS
+};
+
+/// A placeholder named `head` that a call's `helper(` is written over once
+/// the helper is known: one longer than `head` and than any generated
+/// function or method name, for the `(`.
+pub(super) fn call_placeholder(head: &str) -> String {
+    let width = head.len().max(LONGEST_NAME) + 1;
+    format!("{head:_<width$}")
+}
+
 /// `sentinel`, then the first `DIGITS` digits of `symbol`'s digest in
 /// base 62: an identifier no other symbol's reaches but by a 71-bit
-/// collision. It fits a conversion's placeholder (`conversion_placeholder`).
+/// collision.
 fn stable(sentinel: &str, symbol: &str) -> String {
     use sha2::Digest as _;
-    const DIGITS: usize = 12;
     const ALPHABET: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let digest = sha2::Sha256::digest(symbol.as_bytes());
     let mut name = String::with_capacity(sentinel.len() + DIGITS);
@@ -91,10 +110,13 @@ pub(super) fn pattern_name(numbering: &str, index: usize) -> String {
 
 /// The placeholder of the `text.into()` numbered `index`.
 pub(super) fn text_into_placeholder(index: usize) -> String {
-    // One more than any helper name, for the `(` written after it.
-    let head = format!("__rawr_nominal_text_into_{index:010}");
-    let width = head.len() + 1;
-    format!("{head:_<width$}")
+    call_placeholder(&format!("__rawr_nominal_text_into_{index:010}"))
+}
+
+/// The placeholder of the `parse` numbered `index` whose target isn't
+/// known yet (`settle_parses`).
+pub(super) fn parse_placeholder(index: usize) -> String {
+    call_placeholder(&format!("__rawr_nominal_parse_{index:010}"))
 }
 
 /// A trait's name as a generated name holds it: a trait known by its path,

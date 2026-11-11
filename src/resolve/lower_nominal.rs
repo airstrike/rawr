@@ -211,11 +211,12 @@ pub(crate) use naming::DEBUG_DISPATCHER;
 #[cfg(any(test, feature = "debugging"))]
 pub(crate) use naming::DEBUG_GENERIC;
 use naming::{
-    conversion_placeholder, function_name, instance_dispatcher_name, instance_placeholder,
-    instance_text, lent_text_placeholder, method_name, pattern_name, static_dispatcher_name,
-    static_instance_dispatcher_name, static_instance_placeholder, text_into_placeholder,
-    trait_dispatcher_name, witness_placeholder, witness_variable, CLOSURE_SENTINEL,
-    DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, PRIVATE_PREFIX, SENTINEL,
+    call_placeholder, conversion_placeholder, function_name, instance_dispatcher_name,
+    instance_placeholder, instance_text, lent_text_placeholder, method_name, pattern_name,
+    static_dispatcher_name, static_instance_dispatcher_name, static_instance_placeholder,
+    text_into_placeholder, trait_dispatcher_name, witness_placeholder, witness_variable,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, PRIVATE_PREFIX,
+    SENTINEL,
 };
 pub(crate) use naming::{function_display_name, private_function_name};
 #[cfg(test)]
