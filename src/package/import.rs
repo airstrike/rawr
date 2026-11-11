@@ -1000,6 +1000,22 @@ fn rust_miss(
         R::UnknownType { name, .. } => name.to_string(),
         R::UnknownMember { owner, member, .. } => format!("{owner}::{member}"),
         R::NotInModule { module, item, .. } => format!("{module}::{item}"),
+        // A crate's type the program never names, as the `Bytes` of
+        // `response.bytes().await?`, arrives without its impl tables: its
+        // `Debug` is there once the type is demanded. A type of no crate's
+        // index is no miss: its trait is missing (E0277).
+        R::MissingCapability { owner, .. } => {
+            let path = owner.split('<').next().unwrap_or(owner);
+            let crates = path.contains("::")
+                && matches!(
+                    contract.rust_lookup(path),
+                    Some(Lookup::Present | Lookup::ThroughCrate)
+                );
+            return crates.then(|| {
+                let through_alias = contract.reaches_through_crate_alias(path);
+                Miss::Demand(path.to_owned(), through_alias, false)
+            });
+        }
         _ => return None,
     };
     // A member of a type not known yet, as a second pass past a miss may

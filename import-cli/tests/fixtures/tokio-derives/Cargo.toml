@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 futures = "0.3"
+rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wire = { path = "wire" }

@@ -2991,7 +2991,9 @@ impl<T> DefaultAbsent<T> for &DefaultProbe<T> {
 
 /// Turn one value a Rust task or future yielded into a Rawr value, on the
 /// thread that owns the arena. An imported value takes the witness of the
-/// task's output type.
+/// task's output type, and one inside an `Option`, a `Result` or a tuple
+/// the output is, as `reqwest::get`'s `Result<Response, Error>`, takes its
+/// own type argument's.
 #[allow(dead_code)]
 fn materialize(
     witness: Option<&__rawr_internal::host::runtime::Witness>,
@@ -3001,8 +3003,8 @@ fn materialize(
         let mut values: [&mut Dynamic; 0] = [];
         let mut arguments = Arguments { values: &mut values, arena };
         let output = convert(&mut arguments)?;
-        if let (Some(handle), Some(witness)) = (output.read_lock::<NativeHandle>().map(|value| value.clone()), witness) {
-            arguments.arena.attest(handle, witness.clone())?;
+        if let Some(witness) = witness {
+            attest_within(&output, witness, arguments.arena)?;
         }
         Ok(output)
     })
