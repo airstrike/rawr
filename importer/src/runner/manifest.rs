@@ -304,6 +304,32 @@ pub const fn carrier_versions() -> [u32; 5] {
     ]
 }
 
+/// The canonical carrier of a manifest with no files, these entries, an
+/// empty inventory and no source map, as the current versions write it.
+#[doc(hidden)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[must_use]
+pub fn carrier_fixture(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
+    let coverage = coverage::Inventory::empty();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RAWRGM01");
+    bytes.extend_from_slice(&[3; 32]);
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+    for (identity, signature, arguments) in entries {
+        bytes.extend_from_slice(identity);
+        bytes.extend_from_slice(signature);
+        bytes.extend_from_slice(&arguments.to_le_bytes());
+    }
+    bytes.extend_from_slice(&(coverage.bytes().len() as u64).to_le_bytes());
+    bytes.extend_from_slice(coverage.bytes());
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
+    for version in carrier_versions() {
+        bytes.extend_from_slice(&version.to_le_bytes());
+    }
+    bytes
+}
+
 pub(crate) fn carrier_identity(bytes: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"rawr.import.generated-carrier/v2");
@@ -480,41 +506,18 @@ fn take_u32(bytes: &mut &[u8]) -> Result<u32, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Carrier, RUNTIME_VERSION, SCHEMA, WIRE_VERSION};
-
-    fn carrier(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"RAWRGM01");
-        bytes.extend_from_slice(&[3; 32]);
-        bytes.extend_from_slice(&0_u64.to_le_bytes());
-        bytes.extend_from_slice(&(entries.len() as u64).to_le_bytes());
-        for (identity, signature, arguments) in entries {
-            bytes.extend_from_slice(identity);
-            bytes.extend_from_slice(signature);
-            bytes.extend_from_slice(&arguments.to_le_bytes());
-        }
-        let coverage = super::coverage::Inventory::empty();
-        bytes.extend_from_slice(&(coverage.bytes().len() as u64).to_le_bytes());
-        bytes.extend_from_slice(coverage.bytes());
-        bytes.extend_from_slice(&0_u64.to_le_bytes());
-        bytes.extend_from_slice(&SCHEMA.to_le_bytes());
-        bytes.extend_from_slice(&WIRE_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&crate::bridge::generator_version().to_le_bytes());
-        bytes.extend_from_slice(&RUNTIME_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&crate::profile::version().to_le_bytes());
-        bytes
-    }
+    use super::{carrier_fixture, Carrier};
 
     #[test]
     fn generated_carrier_authenticates_only_exact_rows_and_rejects_duplicate_or_tamper() {
-        let bytes = carrier(&[([5; 32], [7; 32], 2)]);
+        let bytes = carrier_fixture(&[([5; 32], [7; 32], 2)]);
         let proof = Carrier::transform(&bytes).expect("canonical carrier authenticates");
         assert!(proof.contains(&[5; 32], &[7; 32], 2));
         assert!(!proof.contains(&[6; 32], &[7; 32], 2));
         assert!(!proof.contains(&[5; 32], &[8; 32], 2));
         assert!(!proof.contains(&[5; 32], &[7; 32], 3));
 
-        let duplicate = carrier(&[([5; 32], [7; 32], 2), ([5; 32], [8; 32], 3)]);
+        let duplicate = carrier_fixture(&[([5; 32], [7; 32], 2), ([5; 32], [8; 32], 3)]);
         assert!(Carrier::transform(&duplicate).is_err());
 
         let mut tampered = bytes;
@@ -524,7 +527,7 @@ mod tests {
 
     #[test]
     fn prior_manifest_schema_and_inventory_versions_fail_closed() {
-        let mut bytes = carrier(&[]);
+        let mut bytes = carrier_fixture(&[]);
         let schema = bytes.len() - 20;
         bytes[schema..schema + 4].copy_from_slice(&6_u32.to_le_bytes());
         assert!(matches!(
@@ -532,7 +535,7 @@ mod tests {
             Err(super::Error::Schema)
         ));
 
-        let mut bytes = carrier(&[]);
+        let mut bytes = carrier_fixture(&[]);
         let generator = bytes.len() - 12;
         bytes[generator] ^= 1;
         assert!(matches!(
@@ -540,7 +543,7 @@ mod tests {
             Err(super::Error::Schema)
         ));
 
-        let mut bytes = carrier(&[]);
+        let mut bytes = carrier_fixture(&[]);
         // Header, build, file count, entry count, inventory byte count.
         let inventory = 8 + 32 + 8 + 8 + 8;
         bytes[inventory..inventory + 4].copy_from_slice(&0_u32.to_le_bytes());

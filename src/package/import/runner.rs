@@ -810,7 +810,7 @@ fn build(
         let shape = match shapes.binary_search_by_key(&identity, |(identity, _)| *identity) {
             Ok(index) => shapes[index].1.clone(),
             Err(index) => {
-                let shape = shape(ty.shape())
+                let shape = shape(ty.shape(), ty.layout())
                     .map_err(|source| entry_error(facade.root(), ty.path(), source))?;
                 retain_shape(&shape, allocation)?;
                 let shape = crate::Shared::new(shape);
@@ -852,7 +852,6 @@ fn build(
                     })
                     .collect(),
                 shape,
-                ty.layout().map(layout),
                 ty.dropped() as usize,
                 allocation,
             )
@@ -1184,13 +1183,18 @@ pub(crate) fn imported_type(
         shape,
     )?
     .with_associated(associated)
-    .with_layout(ty.layout().map(layout))
     .with_dropped(ty.dropped() as usize))
 }
 
 /// rustc's layout of a struct, as the importer gives it.
-pub(crate) fn layout(layout: &rawr_import::api::model::Layout) -> host::type_def::layout::Layout {
-    host::type_def::layout::Layout::new(layout.size(), layout.pointers().into(), layout.varied())
+pub(crate) fn layout(
+    layout: &rawr_import::api::model::Layout,
+) -> Box<host::type_def::layout::Layout> {
+    Box::new(host::type_def::layout::Layout::new(
+        layout.size(),
+        layout.pointers().into(),
+        layout.varied(),
+    ))
 }
 
 fn entry_error(root: &str, path: &str, source: Error) -> Error {
@@ -1215,7 +1219,11 @@ fn rust_item(root: &str, path: &str) -> String {
     }
 }
 
-pub(crate) fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Error> {
+/// The host shape of `shape`, a struct's with rustc's `layout` of it.
+pub(crate) fn shape(
+    shape: &facade::Shape,
+    layout: Option<&rawr_import::api::model::Layout>,
+) -> Result<host::type_def::Shape, Error> {
     if let Some((form, constructor, fields, constructible)) = shape.struct_parts() {
         return Ok(host::type_def::Shape::Struct {
             form: form.into(),
@@ -1234,6 +1242,7 @@ pub(crate) fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Erro
                     ty: unsupported.ty().into(),
                 })
             }),
+            layout: layout.map(self::layout),
         });
     }
     let variants = shape

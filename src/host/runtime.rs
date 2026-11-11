@@ -2221,6 +2221,7 @@ mod tests {
                     fields: Box::default(),
                     constructible: false,
                     unsupported: None,
+                    layout: None,
                 },
                 ImportedShape::Enum => host::type_def::Shape::Enum {
                     variants: Box::default(),

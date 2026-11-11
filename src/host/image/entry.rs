@@ -67,7 +67,7 @@ impl Held {
         let view = self.view();
         let ty = view.type_definition(index)?;
         let shape = self.plan.shapes[view.type_body(index)]
-            .get_or_try_init(|| runner::shape(ty.shape()).map(crate::Shared::new))?
+            .get_or_try_init(|| runner::shape(ty.shape(), ty.layout()).map(crate::Shared::new))?
             .clone();
         runner::imported_type(self.qualified(view.type_path(index))?, &ty, shape)
     }

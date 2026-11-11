@@ -27,11 +27,12 @@ pub(crate) enum Type {
     Result(Box<Type>, Box<Type>),
     /// A tuple `(A, B, ..)`: at runtime an array of exactly its members.
     Tuple(Box<[Type]>),
-    /// A symbolic item taking `inputs` in order.
+    /// A symbolic item taking `inputs` in order. Its item is boxed: it is
+    /// larger than any other type's parts, and few types are callable.
     Callable {
         inputs: Box<[Type]>,
         output: Box<Type>,
-        item: crate::item::Value,
+        item: Box<crate::item::Value>,
     },
     Builtin {
         name: ImmutableString,
@@ -275,7 +276,7 @@ impl Type {
         Self::Callable {
             inputs,
             output: Box::new(output),
-            item,
+            item: Box::new(item),
         }
     }
 

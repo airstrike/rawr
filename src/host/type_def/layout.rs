@@ -4,7 +4,7 @@
 
 /// Where a struct keeps the address words of its pointers that may hold
 /// a static's address, as rustc lays it out.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Layout {
     size: u64,
