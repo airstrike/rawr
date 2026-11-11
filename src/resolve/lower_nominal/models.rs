@@ -437,7 +437,7 @@ impl Models {
                     key: key.clone(),
                     source: shell.source,
                     definition: function.clone(),
-                    generated: function_name(shell.id).into(),
+                    generated: function_name(&key).into(),
                 };
                 let name = (shell.source, function.name.text.clone());
                 match shell.scope() {

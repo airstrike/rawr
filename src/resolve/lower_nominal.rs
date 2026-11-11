@@ -37,6 +37,8 @@ mod host_call;
 mod host_signature;
 mod imported;
 mod inference;
+#[cfg(feature = "rust-import")]
+mod interface;
 mod iterator;
 #[cfg(feature = "rust-import")]
 mod kept;

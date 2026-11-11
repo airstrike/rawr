@@ -172,6 +172,16 @@ impl Places {
         Self(starts.into())
     }
 
+    /// Those of these places from `start` through `end`: what a digest writes one
+    /// declaration's positions by, so a declaration a save adds or removes
+    /// before it in its text writes it the same (#1718).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn between(&self, start: Position, end: Position) -> Self {
+        let from = self.0.partition_point(|place| *place < start);
+        let to = self.0.partition_point(|place| *place <= end).max(from);
+        Self(self.0[from..to].into())
+    }
+
     /// Run `write` with each position this thread writes by `Debug`
     /// written as how many of these places come before it.
     #[cfg(feature = "rust-import")]

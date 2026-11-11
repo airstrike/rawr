@@ -1527,7 +1527,7 @@ impl Parser<'_> {
                         }
                         let items = self.materialized(&pipeline);
                         (
-                            origin::Fragment::call(method_name(definition.id()), [items]),
+                            origin::Fragment::call(method_name(&definition), [items]),
                             target,
                         )
                     }

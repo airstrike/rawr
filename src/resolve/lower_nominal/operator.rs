@@ -1093,7 +1093,7 @@ impl<'a> Parser<'a> {
         let receiver = self.temporary("operand");
         let mut source = origin::Fragment::plain(format!("({{\nlet {receiver} = "));
         source.push(lhs.rendered_source());
-        source.push_text(format!(";\n{receiver}.{}(", method_name(definition.id())));
+        source.push_text(format!(";\n{receiver}.{}(", method_name(&definition)));
         source.push(origin::Fragment::join(arguments, ", "));
         let ty = if symbol.ends_with('=') {
             // `a += b` through a crate's `AddAssign` borrows `a` before `b`

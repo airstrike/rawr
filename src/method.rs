@@ -11,7 +11,7 @@ use crate::{item, program, receiver, signature, type_def, ImmutableString, Span}
 /// ```compile_fail
 /// let _ = rawr::method::Id(0);
 /// ```
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Id(usize);
 
 impl Id {
@@ -19,8 +19,15 @@ impl Id {
         Self(index)
     }
 
+    #[cfg(feature = "rust-import")]
     pub(crate) const fn index(self) -> usize {
         self.0
+    }
+}
+
+impl std::fmt::Debug for Id {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        item::numbered(formatter, "Id", self.0)
     }
 }
 

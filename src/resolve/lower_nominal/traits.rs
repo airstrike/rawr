@@ -1140,7 +1140,7 @@ impl<'a> Parser<'a> {
         arguments: &[origin::Fragment],
     ) -> origin::Fragment {
         let mut call = value.surrounded("(", ")");
-        call.push_text(format!(".{}(", method_name(definition.id())));
+        call.push_text(format!(".{}(", method_name(definition)));
         call.push(origin::Fragment::join(arguments.iter().cloned(), ", "));
         call.push_text(")");
         call

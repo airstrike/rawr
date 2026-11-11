@@ -1666,6 +1666,86 @@ fn a_save_parses_only_the_file_it_changed() {
     assert_eq!(runner, saved, "{seen}");
 }
 
+/// A save lowers again the file it changed and the files that name what
+/// it changed, and no other (#1718): a new function, a derive, a name a
+/// file wrote before any item had it. Each is private, which native code
+/// doesn't see, so the runner swaps it in: the sidebar's own marked child
+/// module, which names the sidebar's private items through `super`.
+#[test]
+fn a_save_lowers_only_the_files_that_name_what_it_changed() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-save-names");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    let sidebar = root.join("src/widget/sidebar.rs");
+    // The child alone names the sidebar's `Aside`, and writes `spare`, a
+    // local's name, which no item has yet.
+    let mut text = fs::read_to_string(&sidebar).unwrap();
+    text.push_str(
+        "\nmod aside;\n\n/// What a sidebar keeps aside, which only its child names.\n\
+         #[derive(Debug)]\nstruct Aside {\n    rows: usize,\n}\n",
+    );
+    fs::write(&sidebar, text).unwrap();
+    fs::create_dir_all(root.join("src/widget/sidebar")).unwrap();
+    fs::write(
+        root.join("src/widget/sidebar/aside.rs"),
+        "// rawr\n//! The rows a sidebar keeps aside.\n\n\
+         pub fn rows() -> usize {\n    let spare = super::Aside { rows: 1 };\n    spare.rows\n}\n",
+    )
+    .unwrap();
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    // A new function: the sidebar, and the child, which writes its name.
+    let mut text = fs::read_to_string(&sidebar)
+        .unwrap()
+        .replace("\"{label} row\"", "\"{label} item\"");
+    text.push_str("\nfn spare() -> usize {\n    2\n}\n");
+    fs::write(&sidebar, text).unwrap();
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
+    // A derive of `Aside`: the sidebar, and the child, which names it.
+    edit(
+        &sidebar,
+        "#[derive(Debug)]\nstruct Aside",
+        "#[derive(Debug, Hash)]\nstruct Aside",
+    );
+    edit(&sidebar, "\"{label} item\"", "\"{label} entry\"");
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick entry styled 0"));
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("preparing again"), "{seen}");
+    // What each save parsed, revealed and lowered: neither lowers
+    // `home.rs`, `theme.rs` or `sidebar.rs`, which name neither.
+    let runner = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a save parsed "))
+        .map(|line| {
+            let (parsed, rest) = line.split_once(" sources, revealed ").unwrap();
+            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
+            let (lowered, _) = rest.split_once(" files").unwrap();
+            [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
+        })
+        .filter(|counts| *counts != [0; 3])
+        .collect::<Vec<_>>();
+    assert_eq!(runner, [[1, 2, 2], [1, 2, 2]], "{seen}");
+}
+
 /// A runner keeps each marked source's lowering and readings under the
 /// project's `target/rawr`, so the next runner's start lowers and reads
 /// only the sources whose key changed. A corrupt file is a miss, made

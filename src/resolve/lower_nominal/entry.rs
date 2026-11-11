@@ -206,7 +206,12 @@ impl Assembly {
     fn place(&mut self, unit: &Unit<'_>, counts: &mut Counts, body: Body<'_>, lowered: Lowered) {
         match body {
             Body::Function(shell, definition) => {
-                let generated_name = function_name(shell.id);
+                let generated_name = function_name(
+                    shell
+                        .key
+                        .as_ref()
+                        .expect("resolved functions retain stable item keys"),
+                );
                 if let Some(index) = this_parameter(definition) {
                     self.receivers.insert(
                         generated_name.as_str().into(),
@@ -248,7 +253,7 @@ impl Assembly {
             Body::Method(definition) => {
                 if definition.receiver().is_some() {
                     self.receivers
-                        .insert(method_name(definition.id()).into(), "self".into());
+                        .insert(method_name(definition).into(), "self".into());
                 }
                 let offset = write_method(&mut self.generated, definition, &lowered, unit.models);
                 retain_locations(
@@ -499,7 +504,7 @@ pub(super) fn lower_with_context(
         .chain(&program.builtin_methods)
         .map(|definition| {
             (
-                method_name(definition.id()).into(),
+                method_name(definition).into(),
                 private_method_name(definition).into(),
             )
         })
@@ -514,12 +519,12 @@ pub(super) fn lower_with_context(
         let item::Kind::Function(function) = &shell.kind else {
             return Vec::new();
         };
+        let key = shell
+            .key
+            .as_ref()
+            .expect("resolved functions retain stable item keys");
         if aggregate {
-            let key = shell
-                .key
-                .as_ref()
-                .expect("resolved functions retain stable item keys");
-            let private = (function_name(shell.id).into(), private_function_name(key));
+            let private = (function_name(key).into(), private_function_name(key));
             // A root function a single file's program also names by its own
             // name (`Executable::into_one_file`) is never a std call's.
             if key.modules().is_empty() && key.owner().is_none() {
@@ -528,7 +533,7 @@ pub(super) fn lower_with_context(
             return vec![private];
         }
         vec![
-            (function_name(shell.id).into(), function.name.text.clone()),
+            (function_name(key).into(), function.name.text.clone()),
             (function.name.text.clone(), NATIVE_ONLY.into()),
         ]
     }));
