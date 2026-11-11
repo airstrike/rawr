@@ -9,6 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use rawr_import::bindings::format::Kept;
+
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/plain-dependency"
@@ -350,7 +352,7 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
     };
     // Each published entry: its key directory and its publication.
     let published = |root: &Path| {
-        let mut entries = fs::read_dir(root.join("target/rawr/inventories"))
+        let mut entries = fs::read_dir(kept(root, Kept::Inventories))
             .map(|entries| {
                 entries
                     .filter_map(|entry| {
@@ -523,8 +525,12 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
             }
         }
         let mut found = Vec::new();
-        for directory in ["extraction", "cache/resolution", "inventories"] {
-            walk(&root.join("target/rawr").join(directory), since, &mut found);
+        for directory in [
+            kept(&root, Kept::Extraction),
+            root.join("target/rawr/cache/resolution"),
+            kept(&root, Kept::Inventories),
+        ] {
+            walk(&directory, since, &mut found);
         }
         walk(&nightly_directory(&home), since, &mut found);
         found
@@ -656,7 +662,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     );
     // camino runs a build script: the first project captured its entry, and
     // published it once its own build gave the nightly's outputs (#403).
-    let local = entries(&first.join("target/rawr/inventories"));
+    let local = entries(&kept(&first, Kept::Inventories));
     let local = local
         .iter()
         .map(|(name, _)| name.as_str())
@@ -671,7 +677,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
         "the second project reads the shared entries back"
     );
     assert!(
-        !entries(&second.join("target/rawr/inventories"))
+        !entries(&kept(&second, Kept::Inventories))
             .iter()
             .any(|(name, _)| name == "camino" || name == "semver"),
         "the second project captures neither"
@@ -717,7 +723,7 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
         assert_eq!(text(&run.stdout), stdout);
     };
     let nightly = |root: &Path| {
-        let probed = fs::read_dir(root.join("target/rawr/extraction"))
+        let probed = fs::read_dir(kept(root, Kept::Extraction))
             .map(|entries| entries.count())
             .unwrap_or_default();
         nightly_built(root) || probed != 0
@@ -815,7 +821,7 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
         assert!(text(&checked.stdout).contains("cargo check passed"));
     };
     let nightly = |root: &Path| {
-        let probed = fs::read_dir(root.join("target/rawr/extraction"))
+        let probed = fs::read_dir(kept(root, Kept::Extraction))
             .map(|entries| entries.count())
             .unwrap_or_default();
         nightly_built(root) || probed != 0
@@ -1000,7 +1006,7 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
     // The second project probed its own crate, and replayed semver's table
     // as the home had it. A table the probe extracted, even in part, is
     // recorded again beside it with what it served.
-    let tables = second.join("target/rawr/extraction");
+    let tables = kept(second, Kept::Extraction);
     let replayed = fs::read(tables.join(key)).unwrap();
     assert_eq!(
         String::from_utf8(replayed).unwrap(),
@@ -2270,8 +2276,11 @@ fn a_table_answers_the_selected_crates_own_macro() {
             }
         }
         let mut found = Vec::new();
-        for directory in ["build", "extraction"] {
-            walk(&root.join("target/rawr").join(directory), since, &mut found);
+        for directory in [
+            root.join("target/rawr/build"),
+            kept(&root, Kept::Extraction),
+        ] {
+            walk(&directory, since, &mut found);
         }
         found
     };
@@ -2280,7 +2289,7 @@ fn a_table_answers_the_selected_crates_own_macro() {
         "100 105\n",
     );
     assert!(
-        root.join("target/rawr/bindings").is_dir(),
+        kept(&root, Kept::Bindings).is_dir(),
         "outer's table is kept with the project"
     );
     std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -2396,8 +2405,11 @@ fn a_save_the_path_dependencys_tables_hold_replays_them() {
             }
         }
         let mut found = Vec::new();
-        for directory in ["build", "extraction"] {
-            walk(&root.join("target/rawr").join(directory), since, &mut found);
+        for directory in [
+            root.join("target/rawr/build"),
+            kept(&root, Kept::Extraction),
+        ] {
+            walk(&directory, since, &mut found);
         }
         found
     };
@@ -2405,24 +2417,23 @@ fn a_save_the_path_dependencys_tables_hold_replays_them() {
     run(bound, "1\n");
     run(bound, "1\n");
     assert!(
-        root.join("target/rawr/bindings").is_dir(),
+        kept(&root, Kept::Bindings).is_dir(),
         "the path crates' tables are kept with the project"
     );
     // One copy of each table (#1355): a settled table is its entry's own,
     // with none left where the driver wrote it, and staged/ keeps none.
-    let rawr = root.join("target/rawr");
-    for entry in fs::read_dir(rawr.join("bindings")).unwrap().flatten() {
+    for entry in fs::read_dir(kept(&root, Kept::Bindings)).unwrap().flatten() {
         let key = entry.file_name();
         if key.to_string_lossy().starts_with('.') {
             continue;
         }
         assert!(entry.path().join("table.json").is_file());
         assert!(
-            !rawr.join("extraction").join(&key).exists(),
+            !kept(&root, Kept::Extraction).join(&key).exists(),
             "a settled table is copied: {key:?}"
         );
     }
-    for entry in fs::read_dir(rawr.join("staged"))
+    for entry in fs::read_dir(kept(&root, Kept::Staged))
         .into_iter()
         .flatten()
         .flatten()
@@ -2970,4 +2981,9 @@ fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
         before.iter().all(|unit| semver.contains(unit)) && semver.len() > before.len(),
         "both variants stay: {before:?} then {semver:?}"
     );
+}
+
+/// Where the project at `root` keeps `kept` for this rawr's protocol.
+fn kept(root: &Path, kept: Kept) -> PathBuf {
+    rawr_import::bindings::format::project(&root.join("target/rawr"), kept)
 }

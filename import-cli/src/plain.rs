@@ -220,8 +220,12 @@ fn acquire(
     // A crate whose whole closure comes from registries and git commits has
     // a machine-wide key, so its entry lives in rawr's home (D608.4). Any
     // other crate is keyed by its native input witness, the project's view
-    // of it, so its entry stays with the project, as its build does.
-    let local = graph.entry_package().root().join("target/rawr/inventories");
+    // of it, so its entry stays with the project, as its build does, in
+    // this rawr's protocol's format there.
+    let local = rawr_import::bindings::format::project(
+        &graph.entry_package().root().join("target/rawr"),
+        rawr_import::bindings::format::Kept::Inventories,
+    );
     // The entries a union of these exact API inputs was made of: read back
     // with no Cargo or nightly process (D609.6).
     let hex = |bytes: &[u8]| {
@@ -496,7 +500,11 @@ fn prepare(
     // A program that used proved applications last time keys its check by
     // the identity of every input its API was read from: its dependencies'
     // facts change only with them, so no facts are read for a warm run.
-    let applied = project.join("target/rawr/inventories/applied");
+    let applied = rawr_import::bindings::format::project(
+        &project.join("target/rawr"),
+        rawr_import::bindings::format::Kept::Inventories,
+    )
+    .join("applied");
     let mut inventory = None;
     let mut keyed;
     let mut current_adapter = None;
