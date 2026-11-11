@@ -694,9 +694,19 @@ pub(in crate::cargo) fn home(request: &Request) -> Result<std::path::PathBuf> {
 /// Build in `shared`, the pinned nightly's build directory, with Cargo's own
 /// freshness rules, so a later resolution, of this project or another,
 /// reuses this one's units.
-pub(in crate::cargo) fn shared_arguments(shared: &Path) -> [OsString; 2] {
+///
+/// A path crate's units there are keyed by its directory, and outlive the
+/// project's `target/`, so Cargo judges them by their files' contents, not
+/// their times: a file put back with an older time than the unit's build,
+/// as a copy or a checkout may, is a change that rebuilds (#1750).
+pub(in crate::cargo) fn shared_arguments(shared: &Path) -> [OsString; 4] {
     let value = toml_edit::Value::from(shared.to_string_lossy().as_ref()).to_string();
-    ["--config".into(), format!("build.build-dir={value}").into()]
+    [
+        "--config".into(),
+        format!("build.build-dir={value}").into(),
+        "-Z".into(),
+        "checksum-freshness".into(),
+    ]
 }
 
 pub(in crate::cargo) fn require_configs(layout: &layout::Layout) -> Result<()> {
