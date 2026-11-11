@@ -10,7 +10,9 @@
       {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]},
       {"text":"A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged.","issues":[1687]},
       {"text":"A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements.","issues":[1018]},
-      {"text":"A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it.","issues":[1075],"refs":[965]}
+      {"text":"A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it.","issues":[1075],"refs":[965]},
+      {"text":"`rawr test` links the package's `[dev-dependencies]` into its tests, general and per-target ones, as `cargo test` does. `rawr run` still builds without them.","issues":[1703]},
+      {"text":"A compound assignment with a number on the left and a crate's type on the right, as `y += turn` with the crate's `impl AddAssign<Turn> for f32`, calls the crate's impl, on a local or a field, as rustc does.","issues":[987]}
     ]
   },
   "releases": [

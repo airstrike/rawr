@@ -17,7 +17,9 @@
         {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]},
         {"text":"A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged.","issues":[1687]},
         {"text":"A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements.","issues":[1018]},
-        {"text":"A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it.","issues":[1075],"refs":[965]}
+        {"text":"A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it.","issues":[1075],"refs":[965]},
+        {"text":"`rawr test` links the package's `[dev-dependencies]` into its tests, general and per-target ones, as `cargo test` does. `rawr run` still builds without them.","issues":[1703]},
+        {"text":"A compound assignment with a number on the left and a crate's type on the right, as `y += turn` with the crate's `impl AddAssign<Turn> for f32`, calls the crate's impl, on a local or a field, as rustc does.","issues":[987]}
       ]
     },
     "releases": [
@@ -3017,7 +3019,7 @@
     {"issue":984,"title":"A crate derive's expansion from the driver","state":"closed","category":"Divergences from rustc","release":"0.3.145"},
     {"issue":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"closed","category":"Divergences from rustc","release":"0.3.147"},
     {"issue":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open","category":"Health"},
-    {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
+    {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"closed","category":"Divergences from rustc"},
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health","release":"0.3.168"},
     {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
@@ -3733,7 +3735,8 @@
     {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed","category":"Divergences from rustc"},
     {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"open","category":"Divergences from rustc"}
+    {"issue":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"closed","category":"Divergences from rustc"},
+    {"issue":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4234,7 +4237,7 @@
             {"number":984,"title":"A crate derive's expansion from the driver","state":"closed"},
             {"number":985,"title":"`rawr check` asks for a crate derive's expansion and checks the items","state":"closed"},
             {"number":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open"},
-            {"number":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open"},
+            {"number":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"closed"},
             {"number":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed"},
             {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"closed"},
             {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"closed"},
@@ -4329,7 +4332,8 @@
             {"number":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed"},
             {"number":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed"},
             {"number":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed"},
-            {"number":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"open"}
+            {"number":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"closed"},
+            {"number":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open"}
           ],
           "milestone": "0.4"
         },
