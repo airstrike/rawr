@@ -53,3 +53,19 @@ pub fn summed<B: AsRef<[u8]>>(bytes: B) -> u32 {
 pub fn shown<T: ToString>(value: T) -> String {
     format!("[{}]", value.to_string())
 }
+
+/// A file a dialog picked, as rfd's `FileHandle`, which the crate turns
+/// into a `PathBuf` by its own `impl From<Picked> for PathBuf`: an impl of
+/// a std trait for a std type.
+pub struct Picked(PathBuf);
+
+/// The file `name` in the picked folder.
+pub fn picked(name: &str) -> Picked {
+    Picked(Path::new("picked").join(name))
+}
+
+impl From<Picked> for PathBuf {
+    fn from(picked: Picked) -> PathBuf {
+        picked.0
+    }
+}

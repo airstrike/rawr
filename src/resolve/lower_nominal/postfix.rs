@@ -4,6 +4,77 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// `value.into()`, read from its `.into`: by the source's own `into`,
+    /// its target's `from`, or a conversion its use fixes.
+    fn parse_value_into(
+        &mut self,
+        value: ParsedExpr,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let end = self.next().1;
+        let source = self.inference.resolve(&value.ty);
+        // A facade type's own `into` another facade type
+        // (`gradient::Linear` into the container style it is the
+        // background of). One into a number is `f32::from`'s.
+        if let Ty::Host { proof, .. } = &source
+            && self
+                .models
+                .host_items(&format!("{}::into", proof.definition.path()))
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.kind() == crate::host::item::Kind::Method
+                            && item.signature().parameters().is_empty()
+                            && matches!(
+                                item.signature().output().shape(),
+                                crate::host::type_ref::Shape::Registered { .. }
+                            )
+                    })
+                })
+        {
+            // Chosen by the type the use site needs, as Rust infers
+            // `Into`'s target: `gradient.into()` is a container style, or a
+            // `Background` through `Background::from`. A generic body's
+            // facade calls carry witnesses, so it calls the type's own
+            // `into`.
+            if self.host_witnesses.is_empty() {
+                return self.parse_host_into(value, &source, end);
+            }
+            self.pending_arguments = Some((Vec::new(), end));
+            return self.parse_host_method(value, "into".into(), member_span);
+        }
+        // A crate type's or std type's `.into()`: the target the use site
+        // needs, through that type's `From` of it, as rustc infers
+        // `Some(color.into())` a `Background` where the field is an
+        // `Option<Background>`, or an `io::Error` a crate error through its
+        // `#[from]`; E0283 where no use fixes it.
+        if let Ty::Host { .. } = &source
+            && self.host_witnesses.is_empty()
+            && self.projected_host_types(&source).is_empty()
+        {
+            return self.parse_host_into(value, &source, end);
+        }
+        // A value no `From` of the program takes, as a number: the target
+        // the use site needs, through that crate type's `From` of it, as
+        // rustc infers `size: 14.0.into()` a `Pixels` through `From<f32>`
+        // and the literal an `f32`, or through std's (`impl From<u8> for
+        // u16`); E0282 or E0283 when no use fixes it.
+        if self.host_witnesses.is_empty()
+            && !matches!(
+                source,
+                Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Host { .. }
+            )
+            && !source.is_text()
+            && self.widget_erasure(&source).is_none()
+            && !self.converts_from(&source)
+        {
+            return Ok(self.parse_target_into(value, &source, Vec::new(), None, end));
+        }
+        if self.projected_host_types(&source).is_empty() && self.converts_from(&source) {
+            return Ok(self.parse_conversion_into(value, end));
+        }
+        self.parse_into(value, end)
+    }
+
     pub(super) fn parse_postfix(&mut self) -> Result<ParsedExpr, Error> {
         let start = self.flow().value_start();
         let value = self.parse_primary()?;
@@ -326,77 +397,16 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if member == "into" && matches!(self.peek(), Token::Unit) && !bounded_into {
-                let end = self.next().1;
-                let source = self.inference.resolve(&value.ty);
-                // A facade type's own `into` another facade type
-                // (`gradient::Linear` into the container style it is the
-                // background of). One into a number is `f32::from`'s.
-                if let Ty::Host { proof, .. } = &source
-                    && self
-                        .models
-                        .host_items(&format!("{}::into", proof.definition.path()))
-                        .is_some_and(|items| {
-                            items.iter().any(|item| {
-                                item.kind() == crate::host::item::Kind::Method
-                                    && item.signature().parameters().is_empty()
-                                    && matches!(
-                                        item.signature().output().shape(),
-                                        crate::host::type_ref::Shape::Registered { .. }
-                                    )
-                            })
-                        })
-                {
-                    // Chosen by the type the use site needs, as Rust infers
-                    // `Into`'s target: `gradient.into()` is a container
-                    // style, or a `Background` through `Background::from`.
-                    // A generic body's facade calls carry witnesses, so it
-                    // calls the type's own `into`.
-                    if self.host_witnesses.is_empty() {
-                        value = self.parse_host_into(value, &source, end)?;
-                    } else {
-                        self.pending_arguments = Some((Vec::new(), end));
-                        value = self.parse_host_method(value, "into".into(), member_span)?;
-                    }
-                    continue;
+                // An instance's parameter its template bounds by `T:
+                // Into<U>` converts into `U`, as rustc reads the generic
+                // body (D629).
+                #[cfg(feature = "rust-import")]
+                let bound = self.instance_into_target(&value);
+                value = self.parse_value_into(value, member_span)?;
+                #[cfg(feature = "rust-import")]
+                if let Some(target) = bound {
+                    self.unify_type(&target, &value.ty);
                 }
-                // A crate type's or std type's `.into()`: the target the
-                // use site needs, through that type's `From` of it, as
-                // rustc infers `Some(color.into())` a `Background` where
-                // the field is an `Option<Background>`, or an `io::Error` a
-                // crate error through its `#[from]`; E0283 where no use
-                // fixes it.
-                if let Ty::Host { .. } = &source
-                    && self.host_witnesses.is_empty()
-                    && self.projected_host_types(&source).is_empty()
-                {
-                    value = self.parse_host_into(value, &source, end)?;
-                    continue;
-                }
-                // A value no `From` of the program takes, as a number: the
-                // target the use site needs, through that crate type's
-                // `From` of it, as rustc infers `size: 14.0.into()` a
-                // `Pixels` through `From<f32>` and the literal an `f32`, or
-                // through std's (`impl From<u8> for u16`); E0282 or E0283
-                // when no use fixes it.
-                if self.host_witnesses.is_empty()
-                    && !matches!(
-                        source,
-                        Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Host { .. }
-                    )
-                    && !source.is_text()
-                    && self.widget_erasure(&source).is_none()
-                    && !self.converts_from(&source)
-                {
-                    value = self.parse_target_into(value, &source, Vec::new(), None, end);
-                    continue;
-                }
-                value = if self.projected_host_types(&source).is_empty()
-                    && self.converts_from(&source)
-                {
-                    self.parse_conversion_into(value, end)
-                } else {
-                    self.parse_into(value, end)?
-                };
                 continue;
             }
             // `Message::Changed.with(id)`: a method of a crate's trait in

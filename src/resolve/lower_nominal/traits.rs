@@ -1000,6 +1000,13 @@ impl<'a> Parser<'a> {
             if self.host_from(&target, &source) {
                 return true;
             }
+            // A crate's `impl From<Its> for PathBuf`, of its type into a
+            // std type Rawr's std holds: the `into` it gives `Its`, which a
+            // generic so bounded runs where it is compiled at `Its`
+            // (`imported::instanced`).
+            if conversion::held_std(&target) && self.source_into(&target, &source) {
+                return true;
+            }
             if trait_name != "From" {
                 return self.type_implements_with(&target, "From", &[source]);
             }

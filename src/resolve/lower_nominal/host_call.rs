@@ -343,6 +343,27 @@ impl<'a> Parser<'a> {
                 return Ok(arguments.pop().expect("one argument"));
             }
             self.inference.rollback(checkpoint);
+            // `PathBuf::from(handle)`: a crate's `impl From<FileHandle> for
+            // PathBuf`, which is the argument's own `into` (core's blanket
+            // `Into`), as `f32::from(degrees)` is. A std type Rawr's std
+            // holds lists only std's `from`s.
+            let target = self
+                .instantiate_host_signature(item, None, None, call)
+                .map(|signature| signature.output);
+            let source = self.inference.resolve(&argument.ty);
+            if let Ok(target) = target
+                && conversion::held_std(&target)
+                && !self.host_from(&target, &source)
+                && self.source_into(&target, &source)
+            {
+                let argument = arguments
+                    .pop()
+                    .expect("the call's one argument was matched above");
+                let (forms, owner) = self.conversion_forms(&source).unwrap_or_default();
+                let value = self.parse_target_into(argument, &source, forms, owner, call.end());
+                self.unify_type(&value.ty, &target);
+                return Ok(value);
+            }
         }
         self.host_turbofish = self.pending_turbofish.take();
         let selected = self.select_host_signature(items, None, &mut arguments, false, call);

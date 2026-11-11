@@ -683,11 +683,71 @@ pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_re
 
 /// Whether rawr compiles `function` once per instantiation its callers use:
 /// a generic parameter of its touches a crate's types, by its signature
-/// naming it inside a crate type or by a bound naming a crate's trait
-/// (D629).
+/// naming it inside a crate type, by a bound naming a crate's trait, or by
+/// an `Into` bound into a std type Rawr's std holds (D629).
 #[cfg(feature = "rust-import")]
 pub(super) fn instanced(function: &item::Function) -> bool {
-    function.generics.iter().any(|generic| generic.host)
+    function
+        .generics
+        .iter()
+        .any(|generic| generic.host || held_into(generic).is_some())
+}
+
+/// The std type Rawr's std holds that `generic`'s `Into` bound converts
+/// into: `PathBuf` of `impl Into<PathBuf>`. A crate's `impl From<Its> for
+/// PathBuf` is a member of `Its` (the `into` of core's blanket `Into`), so
+/// only a body that reads the parameter at the caller's type reaches it,
+/// as rustc's monomorphised body does.
+#[cfg(feature = "rust-import")]
+fn held_into(generic: &item::Generic) -> Option<&type_ref::Type> {
+    generic
+        .trait_arguments
+        .iter()
+        .find_map(|(trait_name, arguments)| match &arguments[..] {
+            [target @ type_ref::Type::Path(type_ref::Path {
+                target: type_ref::Target::Host { definition, .. },
+                ..
+            })] if trait_name.as_str() == "Into"
+                && !crate::std_facade::held_forms(&definition.path()).is_empty() =>
+            {
+                Some(target)
+            }
+            _ => None,
+        })
+}
+
+/// Each of `parameters` its signature writes as one of `generics` bounded
+/// by an `Into` into a held std type (`held_into`), with that type at
+/// `substituted`, an instance's types: `path` of `fn load(path: impl
+/// Into<PathBuf>)`.
+#[cfg(feature = "rust-import")]
+fn held_conversions(
+    parameters: &[item::Parameter],
+    generics: &[item::Generic],
+    substituted: &[(ImmutableString, type_ref::Type)],
+) -> Box<[(ImmutableString, type_ref::Type)]> {
+    parameters
+        .iter()
+        .filter_map(|parameter| {
+            let type_ref::Type::Path(type_ref::Path {
+                name,
+                target: type_ref::Target::Parameter,
+                arguments,
+                ..
+            }) = &parameter.ty
+            else {
+                return None;
+            };
+            if !arguments.is_empty() {
+                return None;
+            }
+            let generic = generics.iter().find(|generic| generic.name.text == *name)?;
+            Some((
+                parameter.name.text.clone(),
+                substitute_parameters(held_into(generic)?, substituted),
+            ))
+        })
+        .collect()
 }
 
 /// Whether rawr compiles the script method `definition` once per
@@ -697,7 +757,10 @@ pub(super) fn instanced(function: &item::Function) -> bool {
 pub(super) fn instanced_method(definition: &method::Definition) -> bool {
     definition.trait_name().is_none()
         && definition.builtin_owner().is_none()
-        && definition.generics().iter().any(|generic| generic.host)
+        && definition
+            .generics()
+            .iter()
+            .any(|generic| generic.host || held_into(generic).is_some())
 }
 
 /// Whether rawr compiles the `from` of a script `impl From<S>` for a
@@ -1175,6 +1238,11 @@ pub(super) fn method_instance(
     let instance = definition.instance(id, key.clone(), name, |ty| {
         substitute_parameters(ty, &substituted)
     });
+    let conversions =
+        held_conversions(definition.parameters(), definition.generics(), &substituted);
+    if !conversions.is_empty() {
+        instances.conversions.insert(key.clone(), conversions);
+    }
     instances.types.insert(key, substituted);
     instance
 }
@@ -1761,6 +1829,14 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 .filter(|(bounded, _)| !substituted.iter().any(|(name, _)| name == bounded))
                 .cloned()
                 .collect();
+            let conversions =
+                held_conversions(&definition.parameters, &definition.generics, &substituted);
+            if !conversions.is_empty() {
+                program
+                    .instances
+                    .conversions
+                    .insert(key.clone(), conversions);
+            }
             program.instances.types.insert(key.clone(), substituted);
             items.push(item::Shell {
                 id: crate::item::Id::from_index(next + offset),
