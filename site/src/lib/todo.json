@@ -14,7 +14,8 @@
       "entries": [
         {"text":"Removing an unused type, or changing its fields, swaps into the running program instead of restarting it. The program restarts only when a live value of the type exists, or a closure native code holds can still make the old one, and it says which.","issues":[1746]},
         {"text":"A declaration added above a `macro_rules!` lowers again only its own file, and an edit to a path crate of the project lowers again only the marked files that name what changed.","issues":[1730,1735,1734]},
-        {"text":"Editing a path crate, such as a workspace member, and starting again from a copy or restore of older files no longer breaks the first start: rawr's shared extraction build checks a path crate's files by their contents, not their times.","issues":[1750]}
+        {"text":"Editing a path crate, such as a workspace member, and starting again from a copy or restore of older files no longer breaks the first start: rawr's shared extraction build checks a path crate's files by their contents, not their times.","issues":[1750]},
+        {"text":"A universe runner build writes its runner to `<dir>/runner` when `RAWR_UNIVERSE_OUT=<dir>` is set, whether rawr built it or reused it, so a web build takes the module from a fixed place; Cargo's leftover copies in rawr's work directory are removed after each compile, so an old module no longer sits where a web build used to look.","issues":[1752]}
       ]
     },
     "releases": [
@@ -3838,7 +3839,8 @@
     {"issue":1749,"title":"Adapters name their crate by its whole facade, so a path-crate edit lowers every file calling its adapters","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1750,"title":"A second run at a project whose path crate was edited before fails its first start (stale read-set, E0432)","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5266,7 +5268,8 @@
             {"number":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"closed"},
             {"number":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"closed"},
             {"number":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open"},
-            {"number":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"open"}
+            {"number":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed"},
+            {"number":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open"}
           ]
         },
         {
