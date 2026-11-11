@@ -207,6 +207,171 @@ fn shuffled_fragments_and_definitions_have_byte_identical_graphs() {
 }
 
 #[test]
+fn fragments_read_on_one_worker_and_on_eight_give_one_graph_and_one_account() {
+    const CRATES: usize = 12;
+    let package = |index: usize| format!("crate{index} 0.1.0 (path+crate{index})");
+    let name = |index: usize| format!("crate{index}");
+    let hash = |index: usize, item: usize| format!("{:032x}", index * 16 + item + 1);
+    // Each crate's structs name the next crate's first struct, which each
+    // fragment also carries, as a selected crate's walk records the
+    // definitions its own items reach.
+    let thing = |index: usize, item: usize, field: Option<Value>| {
+        let path = format!("Thing{item}");
+        struct_definition(
+            &package(index),
+            &name(index),
+            &hash(index, item),
+            [path.as_str()],
+            [field.unwrap_or_else(|| json!({"kind":"primitive", "name":"bool"}))],
+        )
+    };
+    let fragments = (0..CRATES)
+        .map(|index| {
+            let next = (index + 1) % CRATES;
+            let alias = name(index);
+            let mut fragment = fragment(&package(index), &name(index), Some(&alias));
+            let mut definitions = Vec::new();
+            let mut reachable = Vec::new();
+            for item in 0..5 {
+                let field = definition_type(&package(next), &name(next), &hash(next, 0));
+                definitions.push(thing(index, item, (item > 0).then_some(field)));
+                let path = format!("Thing{item}");
+                reachable.push(export(
+                    &alias,
+                    [path.as_str()],
+                    "type",
+                    id(&package(index), &name(index), &hash(index, item)),
+                    [],
+                ));
+            }
+            definitions.push(thing(next, 0, None));
+            definitions.push(definition(
+                &package(index),
+                &name(index),
+                &hash(index, 9),
+                ["Opaque"],
+                json!({"kind":"unknown", "compiler_kind":"future_ty"}),
+            ));
+            reachable.push(export(
+                &alias,
+                ["Opaque"],
+                "type",
+                id(&package(index), &name(index), &hash(index, 9)),
+                [],
+            ));
+            let target = id(&package(index), &name(index), &hash(index, 1));
+            fragment["implementations"] = json!([implementation_record(
+                &package(index),
+                &name(index),
+                &hash(index, 10),
+                [target.clone()],
+                json!({"kind":"inherent"}),
+                json!({"kind":"definition", "id":target, "arguments":[]}),
+                [],
+            )]);
+            fragment["definitions"] = Value::Array(definitions);
+            fragment["reachable"] = Value::Array(reachable);
+            fragment
+        })
+        .collect::<Vec<_>>();
+    let bytes = document(&fragments);
+    let limits = cargo::Limits::standard();
+    let on = |workers: usize| {
+        let Invocations {
+            authority,
+            mut allocation,
+        } = expected(&fragments, &limits);
+        let policy = Policy::empty();
+        let context = api::Context::fixture();
+        allocation
+            .retain(policy.usage)
+            .expect("an empty policy fits the account");
+        let document = protocol::decode_accounted(&bytes, &limits, &mut allocation)
+            .expect("the fixture decodes");
+        let fragments = correlate(document.fragments, &authority, &mut allocation)
+            .expect("the fixture's fragments are the expected units");
+        allocation.category(EvidenceCategory::Candidate);
+        validate_resolution_context(&fragments, &context, &mut allocation)
+            .expect("the fixture's handshakes name the fixture context");
+        let catalog = Catalog::from_fragments(&fragments, &authority, &mut allocation)
+            .expect("the fixture's units are distinct");
+        let candidate =
+            Candidate::from_fragments_on(workers, fragments, &catalog, &limits, &mut allocation)
+                .expect("the fixture's fragments join");
+        let graph = candidate
+            .finish(
+                &policy,
+                &context,
+                &limits,
+                &mut allocation,
+                SealMode::Direct,
+            )
+            .expect("the fixture canonicalizes");
+        (graph, allocation.usage())
+    };
+    let (serial, serial_account) = on(1);
+    let (parallel, parallel_account) = on(8);
+    assert_eq!(serial.definitions().len(), CRATES * 6);
+    assert_eq!(serial.implementations().len(), CRATES);
+    assert_eq!(serial.canonical_bytes(), parallel.canonical_bytes());
+    assert_eq!(serial.fingerprint(), parallel.fingerprint());
+    assert_eq!(
+        serial.semantic_fingerprint(),
+        parallel.semantic_fingerprint()
+    );
+    assert_eq!(serial.transaction(), parallel.transaction());
+    assert_eq!(serial.allocation(), parallel.allocation());
+    assert_eq!(serial_account, parallel_account);
+}
+
+#[test]
+fn a_failing_fragment_fails_one_worker_and_eight_with_the_loops_error() {
+    // The second fragment's definition conflicts with the first's; the
+    // third's has a malformed path. A loop over the fragments meets the
+    // conflict first.
+    let package = |index: usize| format!("crate{index} 0.1.0 (path+crate{index})");
+    let mut fragments = (0..3)
+        .map(|index| fragment(&package(index), &format!("crate{index}"), None))
+        .collect::<Vec<_>>();
+    let shared = |field: Value| {
+        struct_definition(
+            &package(0),
+            "crate0",
+            "11111111111111111111111111111111",
+            ["Thing"],
+            [field],
+        )
+    };
+    fragments[0]["definitions"] = json!([shared(json!({"kind":"primitive", "name":"bool"}))]);
+    fragments[1]["definitions"] = json!([shared(json!({"kind":"primitive", "name":"char"}))]);
+    fragments[2]["definitions"] = json!([definition(
+        &package(2),
+        "crate2",
+        "22222222222222222222222222222222",
+        [],
+        json!({"kind":"module"}),
+    )]);
+    let bytes = document(&fragments);
+    let limits = cargo::Limits::standard();
+    for workers in [1, 8] {
+        let Invocations {
+            authority,
+            mut allocation,
+        } = expected(&fragments, &limits);
+        let document = protocol::decode_accounted(&bytes, &limits, &mut allocation)
+            .expect("the fixture decodes");
+        let fragments = correlate(document.fragments, &authority, &mut allocation)
+            .expect("the fixture's fragments are the expected units");
+        let catalog = Catalog::from_fragments(&fragments, &authority, &mut allocation)
+            .expect("the fixture's units are distinct");
+        assert_code(
+            Candidate::from_fragments_on(workers, fragments, &catalog, &limits, &mut allocation),
+            "conflicting-definition",
+        );
+    }
+}
+
+#[test]
 fn duplicate_crate_names_at_distinct_package_ids_remain_distinct() {
     let mut first = fragment("same 1.0.0 (registry+one)", "same", Some("one"));
     first["definitions"] = json!([struct_definition(

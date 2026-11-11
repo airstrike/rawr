@@ -19,6 +19,7 @@ mod conflict;
     reason = "shared with the driver, which answers and records the units"
 )]
 pub(crate) mod engine;
+mod fragment;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod plan;
 pub(crate) mod protocol;
@@ -1315,6 +1316,30 @@ impl EvidenceCategory {
     }
 }
 
+impl EvidenceCounters {
+    /// Adds the counts another account accumulated. The populations and
+    /// sizes an account records once, for the whole graph, stay this one's.
+    fn add(&mut self, other: &Self) {
+        let sum = |total: &mut usize, amount: usize| *total = total.saturating_add(amount);
+        sum(&mut self.queue_entries, other.queue_entries);
+        sum(&mut self.dedup_entries, other.dedup_entries);
+        sum(&mut self.index_entries, other.index_entries);
+        sum(&mut self.sort_keys, other.sort_keys);
+        sum(&mut self.temporary_conversions, other.temporary_conversions);
+        sum(&mut self.decoded_documents, other.decoded_documents);
+        sum(&mut self.moved_documents, other.moved_documents);
+        sum(&mut self.cloned_ownership, other.cloned_ownership);
+        sum(&mut self.closure_computations, other.closure_computations);
+        sum(&mut self.closure_cache_hits, other.closure_cache_hits);
+        for (total, amount) in self.item_charges.iter_mut().zip(other.item_charges) {
+            sum(total, amount);
+        }
+        for (total, amount) in self.byte_charges.iter_mut().zip(other.byte_charges) {
+            sum(total, amount);
+        }
+    }
+}
+
 impl Allocation {
     pub(crate) fn new(limits: &cargo::Limits) -> Self {
         Self {
@@ -1477,6 +1502,50 @@ impl Allocation {
 
     fn category(&mut self, category: EvidenceCategory) {
         self.evidence_category = category;
+    }
+
+    /// An empty account for one worker of this transaction: this one's
+    /// limits, category and latch, and counters of its own when this one
+    /// keeps evidence.
+    fn worker(&self) -> Self {
+        Self {
+            items: 0,
+            bytes: 0,
+            item_limit: self.item_limit,
+            byte_limit: self.byte_limit,
+            string_limit: self.string_limit,
+            decoded_documents: 0,
+            moved_documents: 0,
+            captured_document_nodes: 0,
+            evidence: self.evidence.map(|_| EvidenceCounters::default()),
+            evidence_category: self.evidence_category,
+            refused: self.refused,
+        }
+    }
+
+    /// Adds what a [`worker`](Self::worker) of this account charged, as
+    /// though this account had charged it, and its latch.
+    fn absorb(&mut self, worker: Self) -> Result<()> {
+        self.refused |= worker.refused;
+        let Some(items) = self.items.checked_add(worker.items) else {
+            return Err(self.overflow("canonical allocation items"));
+        };
+        let Some(bytes) = self.bytes.checked_add(worker.bytes) else {
+            return Err(self.overflow("canonical allocation bytes"));
+        };
+        self.items = items;
+        self.bytes = bytes;
+        self.decoded_documents = self
+            .decoded_documents
+            .saturating_add(worker.decoded_documents);
+        self.moved_documents = self.moved_documents.saturating_add(worker.moved_documents);
+        self.captured_document_nodes = self
+            .captured_document_nodes
+            .saturating_add(worker.captured_document_nodes);
+        if let (Some(evidence), Some(charged)) = (&mut self.evidence, worker.evidence) {
+            evidence.add(&charged);
+        }
+        Ok(())
     }
 
     fn observe(&mut self, observe: impl FnOnce(&mut EvidenceCounters)) {
@@ -3351,6 +3420,42 @@ impl Candidate {
         limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
+        Self::from_fragments_on(
+            crate::parallel::workers(),
+            fragments,
+            catalog,
+            limits,
+            allocation,
+        )
+    }
+
+    /// [`Self::from_fragments`] reading the fragments on at most `workers`
+    /// threads. Each worker charges an account of its own, and the accounts
+    /// join this one once every read has joined, so the candidate and
+    /// every charge are those of one loop over the fragments.
+    fn from_fragments_on(
+        workers: usize,
+        fragments: Vec<protocol::Fragment>,
+        catalog: &Catalog,
+        limits: &cargo::Limits,
+        allocation: &mut Allocation,
+    ) -> Result<Self> {
+        let account = allocation.worker();
+        let (reads, accounts) = crate::parallel::map_owned_with_on(
+            workers,
+            fragments,
+            || account.worker(),
+            |worker, fragment| fragment::Read::new(fragment, catalog, limits, worker),
+        );
+        let joined = Self::join(reads, allocation);
+        for worker in accounts {
+            allocation.absorb(worker)?;
+        }
+        joined
+    }
+
+    /// The candidate of `reads`, joined in fragment order.
+    fn join(reads: Vec<fragment::Read>, allocation: &mut Allocation) -> Result<Self> {
         let mut definitions =
             BTreeMap::<identity::Definition, conflict::Sourced<model::Definition>>::new();
         let mut spellings = BTreeMap::new();
@@ -3364,187 +3469,104 @@ impl Candidate {
         let mut imports = Vec::new();
         let mut invocations = Vec::new();
         let mut index = Vec::new();
-        let mut definition_count = 0_usize;
         let mut edge_count = 0_usize;
-        for fragment in fragments {
-            let protocol::Root::Selected { aliases } = &fragment.handshake.root;
-            let mut root_aliases = BTreeSet::new();
-            for alias in aliases {
-                allocation.items(1)?;
-                root_aliases.insert(alias.as_str());
-            }
-            if !fragment.index.is_empty() {
-                for alias in &root_aliases {
-                    allocation.items(fragment.index.len())?;
-                    index.push(ledger::Index::new(
-                        (*alias).into(),
-                        fragment.index.clone().into_boxed_slice(),
-                    ));
-                }
-            }
-            {
-                let mut fragment_definitions = BTreeSet::new();
-                for raw in &fragment.definitions {
-                    allocation.items(1)?;
-                    if !fragment_definitions.insert(&raw.id) {
-                        return Err(extraction(
-                            "duplicate-definition",
-                            &fragment.handshake.unit_correlation,
-                        ));
-                    }
-                }
-            }
+        for read in reads {
+            let fragment::Read {
+                index: read_index,
+                invocation,
+                definitions: read_definitions,
+                reached,
+                implementations: read_implementations,
+                proofs,
+                edges,
+                failure,
+            } = read;
+            index.extend(read_index);
+            let Some(fragment::Invocation {
+                invocation,
+                source: fragment_source,
+            }) = invocation
+            else {
+                return Err(failure.unwrap_or_else(|| {
+                    extraction("internal-fragment-read", "a read stopped with no failure")
+                }));
+            };
             allocation.reserve(&mut invocations, 1)?;
-            invocations.push(invocation(&fragment, allocation)?);
+            invocations.push(invocation);
             let source = sources.len();
             allocation.reserve(&mut sources, 1)?;
-            sources.push(conflict::Source::new(&fragment.handshake));
-            for raw in fragment.definitions {
-                let local = is_local_id(&raw.id, &fragment.handshake);
-                let sysroot_shape = matches!(&raw.shape, protocol::Shape::Sysroot { .. });
-                if sysroot_shape
-                    && (local
-                        || !catalog.is_sysroot_id(&raw.id)
-                        || !sysroot_owner_matches_kind(&raw.owner, &raw.shape)
-                        || !matches!(&raw.visibility, protocol::Visibility::Public))
-                {
+            sources.push(fragment_source);
+            for read in read_definitions {
+                let (id, local, definition) = match read {
+                    fragment::Definition::Modeled {
+                        id,
+                        local,
+                        definition,
+                    } => (id, local, definition),
+                    fragment::Definition::Rejected { id, outcome } => {
+                        reject(
+                            &id,
+                            outcome,
+                            source,
+                            &sources,
+                            &definitions,
+                            &mut rejected,
+                            allocation,
+                        )?;
+                        continue;
+                    }
+                };
+                if let Some(previous) = rejected.get(&id) {
                     return Err(extraction(
-                        "mismatched-local-definition",
-                        &fragment.handshake.unit_correlation,
+                        "duplicate-definition",
+                        &conflict::mixed(
+                            (&definition, &sources[source]),
+                            &sources[previous.fragment],
+                        ),
                     ));
                 }
-                definition_count = definition_count.saturating_add(1);
-                if catalog.unavailable_identity(&raw.id, allocation)?.is_some() {
-                    validate_unavailable_definition(&raw, catalog)?;
-                    continue;
-                }
-                allocation.protocol_id(&raw.id)?;
-                allocation.cloned_ownership(1);
-                let id = catalog.id_bounded(raw.id.clone(), allocation)?;
-                allocation.protocol_span(&raw.span)?;
-                allocation.cloned_ownership(1);
-                let span = span(raw.span.clone(), allocation)?;
-                match definition(raw, catalog, limits, allocation) {
-                    Ok(definition) => {
-                        if let Some(previous) = rejected.get(&id) {
-                            return Err(extraction(
-                                "duplicate-definition",
-                                &conflict::mixed(
-                                    (&definition, &sources[source]),
-                                    &sources[previous.fragment],
-                                ),
-                            ));
-                        }
-                        match definitions.get_mut(&id) {
-                            Some(previous) if previous.value == definition => {}
-                            // One selected crate extracts the definition for
-                            // shape only and its own crate as a selected root; they
-                            // are one definition under its own crate's spelling.
-                            Some(previous)
-                                if previous.value.same_except_display_path(&definition) =>
-                            {
-                                let other = if local {
-                                    previous.fragment = source;
-                                    std::mem::replace(&mut previous.value, definition)
-                                } else {
-                                    definition
-                                };
-                                let key = allocation.clone_identity(&id)?;
-                                allocation.items(1)?;
-                                spellings
-                                    .insert(key, other.display_path().map(Box::from).collect());
-                            }
-                            Some(previous) => {
-                                return Err(extraction(
-                                    "conflicting-definition",
-                                    &conflict::definition(
-                                        (&previous.value, &sources[previous.fragment]),
-                                        (&definition, &sources[source]),
-                                        conflict::Detail::from_env(),
-                                    ),
-                                ));
-                            }
-                            None => {
-                                let key = allocation.clone_identity(&id)?;
-                                allocation.items(1)?;
-                                definitions.insert(
-                                    key,
-                                    conflict::Sourced {
-                                        value: definition,
-                                        fragment: source,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Err(ShapeFailure::Unknown(kind)) => {
-                        let outcome = Rejected {
-                            reason: ledger::Reason::UnknownCompilerShape {
-                                definition: allocation.clone_identity(&id)?,
-                                compiler_kind: kind,
-                            },
-                            span,
+                match definitions.get_mut(&id) {
+                    Some(previous) if previous.value == definition => {}
+                    // One selected crate extracts the definition for
+                    // shape only and its own crate as a selected root; they
+                    // are one definition under its own crate's spelling.
+                    Some(previous) if previous.value.same_except_display_path(&definition) => {
+                        let other = if local {
+                            previous.fragment = source;
+                            std::mem::replace(&mut previous.value, definition)
+                        } else {
+                            definition
                         };
-                        reject(
-                            &id,
-                            outcome,
-                            source,
-                            &sources,
-                            &definitions,
-                            &mut rejected,
-                            allocation,
-                        )?;
+                        let key = allocation.clone_identity(&id)?;
+                        allocation.items(1)?;
+                        spellings.insert(key, other.display_path().map(Box::from).collect());
                     }
-                    Err(ShapeFailure::UnnameablePrivate) => {
-                        let outcome = Rejected {
-                            reason: ledger::Reason::UnnameablePrivate(
-                                allocation.clone_identity(&id)?,
+                    Some(previous) => {
+                        return Err(extraction(
+                            "conflicting-definition",
+                            &conflict::definition(
+                                (&previous.value, &sources[previous.fragment]),
+                                (&definition, &sources[source]),
+                                conflict::Detail::from_env(),
                             ),
-                            span,
-                        };
-                        reject(
-                            &id,
-                            outcome,
-                            source,
-                            &sources,
-                            &definitions,
-                            &mut rejected,
-                            allocation,
-                        )?;
+                        ));
                     }
-                    Err(ShapeFailure::ExternalAuthorityUnavailable {
-                        crate_name,
-                        stable_crate_id,
-                    }) => {
-                        let outcome = Rejected {
-                            reason: ledger::Reason::ExternalAuthorityUnavailable {
-                                crate_name,
-                                stable_crate_id,
+                    None => {
+                        let key = allocation.clone_identity(&id)?;
+                        allocation.items(1)?;
+                        definitions.insert(
+                            key,
+                            conflict::Sourced {
+                                value: definition,
+                                fragment: source,
                             },
-                            span,
-                        };
-                        reject(
-                            &id,
-                            outcome,
-                            source,
-                            &sources,
-                            &definitions,
-                            &mut rejected,
-                            allocation,
-                        )?;
+                        );
                     }
-                    Err(ShapeFailure::Fatal(error)) => return Err(error),
                 }
             }
-            for raw in fragment.reachable {
-                edge_count = edge_count.saturating_add(1);
-                if !root_aliases.contains(raw.root_alias.as_str()) {
-                    return Err(extraction("mismatched-root-alias", &raw.root_alias));
-                }
-                let binding = raw.binding;
-                let export = export(raw, catalog, allocation)?;
-                match binding {
-                    protocol::Binding::Nameable => {
+            for reached in reached {
+                match reached {
+                    fragment::Reached::Nameable(export) => {
                         let key = key(&export.key, allocation)?;
                         if exports.contains_key(&key) {
                             return Err(extraction("path-namespace-collision", &key.alias));
@@ -3555,64 +3577,30 @@ impl Candidate {
                     // Checked once every fragment is in: a trait another
                     // selected crate spells its own way is spelled so
                     // only when that crate's fragment is.
-                    protocol::Binding::AnonymousImport => {
+                    fragment::Reached::AnonymousImport(export) => {
                         allocation.items(1)?;
                         imports.push(export);
                     }
                 }
             }
-            for raw in fragment.implementations {
-                edge_count = edge_count.saturating_add(1);
-                // An implementation whose crate Cargo cannot join is
-                // unavailable by itself: its types and trait stay.
-                if catalog.unavailable_identity(&raw.id, allocation)?.is_some() {
-                    validate_unavailable_implementation(&raw, catalog)?;
-                    allocation.protocol_span(&raw.span)?;
-                    continue;
-                }
-                let mut relevance = Vec::new();
-                allocation.temporary_conversions(raw.relevance.len());
-                for anchor in &raw.relevance {
-                    if catalog.unavailable_identity(anchor, allocation)?.is_none() {
-                        allocation.protocol_id(anchor)?;
-                        allocation.cloned_ownership(1);
-                        let id = catalog.id_bounded(anchor.clone(), allocation)?;
-                        allocation.reserve(&mut relevance, 1)?;
-                        relevance.push(id);
-                    }
-                }
-                allocation.protocol_span(&raw.span)?;
-                allocation.cloned_ownership(1);
-                let implementation_span = span(raw.span.clone(), allocation)?;
-                // An implementation the extractor cannot model is unavailable
-                // by itself. Its self type, its trait and every other
-                // implementation of either stay available: one `impl Debug
-                // for f16` with an unknown constant must not take `Debug`
-                // and every type that implements it with it.
-                // Its crate's inventory lists it as unsupported, so no proof
-                // reads its trait's domain as complete.
-                let _ = (&relevance, &implementation_span);
-                let id = raw.id.clone();
-                match implementation(raw, catalog, limits, allocation) {
-                    Ok(implementation) => {
+            for implementation in read_implementations {
+                match implementation {
+                    fragment::Implementation::Modeled(implementation) => {
                         allocation.reserve(&mut implementations, 1)?;
                         implementations.push(implementation);
                     }
-                    Err(
-                        ShapeFailure::ExternalAuthorityUnavailable { .. }
-                        | ShapeFailure::Unknown(_)
-                        | ShapeFailure::UnnameablePrivate,
-                    ) => {
-                        allocation.items(1)?;
-                        unmodeled.insert(catalog.id_bounded(id, allocation)?);
+                    fragment::Implementation::Unmodeled(id) => {
+                        unmodeled.insert(id);
                     }
-                    Err(ShapeFailure::Fatal(error)) => return Err(error),
                 }
             }
-            for raw in fragment.scalar_predicate_proofs {
-                edge_count = edge_count.saturating_add(1);
+            for proof in proofs {
                 allocation.reserve(&mut scalar_predicate_proofs, 1)?;
-                scalar_predicate_proofs.push(scalar_predicate_proof(raw, catalog, allocation)?);
+                scalar_predicate_proofs.push(proof);
+            }
+            edge_count = edge_count.saturating_add(edges);
+            if let Some(failure) = failure {
+                return Err(failure);
             }
         }
         let definitions: BTreeMap<_, _> = definitions
