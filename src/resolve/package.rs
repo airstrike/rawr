@@ -163,6 +163,10 @@ struct Resolver<'a> {
     /// the crate's name (`Graph::island_mirrors`, #1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// The roots of the facades of the program's own crate and its
+    /// binary's (`Program::own`).
+    #[cfg(feature = "rust-import")]
+    own: Box<[ImmutableString]>,
     /// The instances native code calls marked generic functions at
     /// (`Graph::native_instances`, D869).
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
@@ -199,6 +203,23 @@ impl<'a> Resolver<'a> {
         let natives = graph.native_instances();
         let (packages, sources, parsed, entry_package, entry_source) = graph.into_parts();
         let package: ImmutableString = packages[entry_package.index()].name().into();
+        // The facades of the program's own crate and its binary's, which
+        // rawr's copy of the crate is built as.
+        #[cfg(feature = "rust-import")]
+        let own = {
+            let entry = &packages[entry_package.index()];
+            entry
+                .rust_crate()
+                .map(ImmutableString::from)
+                .into_iter()
+                .chain(
+                    entry
+                        .bin()
+                        .is_some()
+                        .then(|| ImmutableString::from(crate::package::island::BIN)),
+                )
+                .collect()
+        };
         // Each mirror by its package's path, and by its Rust path from the
         // crate's name, as rawr's copy of the crate declares it.
         #[cfg(feature = "rust-import")]
@@ -304,6 +325,8 @@ impl<'a> Resolver<'a> {
             expanded,
             #[cfg(feature = "rust-import")]
             mirrors,
+            #[cfg(feature = "rust-import")]
+            own,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             natives,
         };
@@ -993,6 +1016,8 @@ impl<'a> Resolver<'a> {
             entry_crate,
             #[cfg(feature = "rust-import")]
             mirrors: self.mirrors,
+            #[cfg(feature = "rust-import")]
+            own: self.own,
             crates: prelude,
             features,
             aliases,

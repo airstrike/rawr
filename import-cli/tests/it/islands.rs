@@ -1519,8 +1519,8 @@ fn a_save_parses_only_the_file_it_changed() {
         run.until(|line| line.starts_with("tick ") && line.ends_with(&tick));
     }
     // A derive and a `cfg` change what native code is built from: a new
-    // native build, whose runner lowers every file, and the program runs
-    // on.
+    // native build, whose runner lowers again only the files that name what
+    // changed, and the program runs on.
     edit(
         &root.join("src/home.rs"),
         "#[derive(Debug)]\npub struct State {",
@@ -1575,8 +1575,9 @@ fn a_save_parses_only_the_file_it_changed() {
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
-    // Only the derive and the `cfg` build native code again, and the
-    // runner each starts lowers every marked file.
+    // Only the derive and the `cfg` build native code again. The runner
+    // each starts lowers again only the files that name what the save
+    // changed, from what the earlier runner kept (#1725).
     let prepared = run
         .seen
         .iter()
@@ -1594,14 +1595,17 @@ fn a_save_parses_only_the_file_it_changed() {
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
+        .map(|line| {
+            let (_, rest) = line.split_once(" sources, revealed ").unwrap();
+            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
+            let lowered = rest.strip_suffix(" files").unwrap();
+            [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
+        })
         .collect::<Vec<_>>();
-    assert!(
-        started.len() == 3
-            && started[1..]
-                .iter()
-                .all(|line| line.ends_with(", revealed 5 files, lowered 5 files")),
-        "{seen}"
-    );
+    // The derive: `home.rs` alone, which declares `State`. The `cfg`: the
+    // sidebar it changed, and `sidebar.rs` and `theme.rs`, which write
+    // `default`.
+    assert_eq!(started[1..], [[1, 1], [3, 3]], "{seen}");
     // Each save says what it did; one the watcher heard twice compiles the
     // same text again and parses nothing.
     let parsed = |prefix: &str, rest: &str| {
@@ -1759,6 +1763,84 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
         runner,
         [[1, 2, 2], [1, 2, 2], [1, 1, 1], [1, 1, 1]],
         "{seen}"
+    );
+}
+
+/// A save that adds a function native code sees needs a new native build
+/// and a new runner, whose start lowers again only the file the save
+/// changed and the files that name what it added, from what the earlier
+/// runner kept (#1725): its own build of rawr wrote them, and each file's
+/// key holds what it reads of the native surface.
+#[test]
+fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-new-native");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let _ = fs::remove_dir_all(root.join("src"));
+    let _ = fs::remove_dir_all(root.join("target/rawr/lowered"));
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(THEME), &root);
+    // `home.rs` writes `spare_rows`, a local's name, which no item has yet.
+    let home = root.join("src/home.rs");
+    let mut text = fs::read_to_string(&home).unwrap();
+    text.push_str("\nfn spared() -> usize {\n    let spare_rows = 1;\n    spare_rows\n}\n");
+    fs::write(&home, text).unwrap();
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    // A new public function of the marked `sidebar.rs`: native code can see
+    // it, so the program starts again with a new native build.
+    let sidebar = root.join("src/sidebar.rs");
+    let mut text = fs::read_to_string(&sidebar).unwrap();
+    text.push_str("\npub fn spare_rows() -> usize {\n    2\n}\n");
+    fs::write(&sidebar, text).unwrap();
+    // The new program runs, and ends when told to.
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 2
+    });
+    fs::write(&stop, "").unwrap();
+    let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
+    run.child.kill().unwrap();
+    run.wait();
+    let seen = run.seen.join("\n");
+    assert!(
+        told.contains("{\"event\":\"ended\",\"status\":0}")
+            && seen.contains(
+                "stderr: rawr: preparing again: native code can now see `sidebar::spare_rows`"
+            )
+            && run
+                .seen
+                .iter()
+                .filter(|line| line.starts_with("default Selected("))
+                .count()
+                == 2,
+        "{told}\n{seen}"
+    );
+    // What each runner's start revealed and lowered: the first every file;
+    // the second `sidebar.rs`, which it changed, and `home.rs`, which names
+    // what it added.
+    let started = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
+        .map(|line| {
+            let (_, rest) = line.split_once(" sources, revealed ").unwrap();
+            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
+            let lowered = rest.strip_suffix(" files").unwrap();
+            [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        started.len() == 2 && started[0][1] > 2 && started[1] == [2, 2],
+        "{started:?}\n{seen}"
     );
 }
 

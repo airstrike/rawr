@@ -112,6 +112,11 @@ pub struct Program {
     /// crate's name (#1249).
     #[cfg(feature = "rust-import")]
     mirrors: BTreeMap<Box<[ImmutableString]>, Box<[ImmutableString]>>,
+    /// The roots of the facades of the program's own crate and its
+    /// binary's: the crate rawr builds from the program's marked sources,
+    /// whose facade a save that changes what native code sees changes.
+    #[cfg(feature = "rust-import")]
+    own: Box<[ImmutableString]>,
     /// The crates a package's manifest names, which its paths may start
     /// with as rustc's extern prelude has them: none for a lone file.
     /// `None` for a source compiled alone, whose host decides what it
@@ -689,6 +694,8 @@ fn resolve_with_evidence_and_namespace(
         entry_crate: None,
         #[cfg(feature = "rust-import")]
         mirrors: BTreeMap::new(),
+        #[cfg(feature = "rust-import")]
+        own: Box::new([]),
         crates: None,
         features: crate::project::cargo::features::Enabled::default(),
         aliases,

@@ -82,6 +82,9 @@ pub(crate) struct Definition {
     identity: [u8; 32],
     signature: [u8; 32],
     arguments: u32,
+    /// The runner's carrier that holds the adapter; a stored one is the
+    /// reading runner's (`stored::carrier`).
+    #[cfg_attr(feature = "rust-import", serde(with = "crate::stored::carrier"))]
     manifest: [u8; 32],
     kind: Kind,
     instance: Option<[u8; 32]>,

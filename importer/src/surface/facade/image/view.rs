@@ -63,6 +63,20 @@ impl<'bytes> Image<'bytes> {
         })
     }
 
+    /// The bytes of the type body at `body`, as the image holds them.
+    #[must_use]
+    pub fn type_body_bytes(&self, body: usize) -> &'bytes [u8] {
+        let (offset, length) = self.record(self.header(2), stride::BLOB, body);
+        self.blob(offset, length)
+    }
+
+    /// The bytes of the item body at `body`, as the image holds them.
+    #[must_use]
+    pub fn item_body_bytes(&self, body: u32) -> &'bytes [u8] {
+        let (offset, length) = self.record(self.header(4), stride::BLOB, body as usize);
+        self.blob(offset, length)
+    }
+
     /// The first two words of record `index` of the table at `offset`.
     fn record(&self, offset: u32, stride: usize, index: usize) -> (u32, u32) {
         let at = offset as usize + 4 * stride * index;
@@ -306,6 +320,12 @@ impl<'bytes> Facade<'bytes> {
         self.text(Field::TraitHeaders, stride::HEADER, index, 0)
     }
 
+    /// The bytes of the trait header at `index`, as the image holds them.
+    #[must_use]
+    pub fn trait_header_bytes(&self, index: usize) -> &'bytes [u8] {
+        self.bytes(Field::TraitHeaders, stride::HEADER, index, 2)
+    }
+
     /// The trait header at `index`.
     pub fn trait_header(&self, index: usize) -> Result<TraitHeader, crate::surface::Error> {
         serde_json::from_slice(self.bytes(Field::TraitHeaders, stride::HEADER, index, 2))
@@ -316,6 +336,12 @@ impl<'bytes> Facade<'bytes> {
     #[must_use]
     pub fn impls(&self) -> usize {
         self.count(Field::Impls)
+    }
+
+    /// The bytes of the impl header at `index`, as the image holds them.
+    #[must_use]
+    pub fn impl_bytes(&self, index: usize) -> &'bytes [u8] {
+        self.bytes(Field::Impls, stride::BLOB, index, 0)
     }
 
     /// The impl header at `index`, in the facade's order.
@@ -406,6 +432,22 @@ impl<'bytes> Facade<'bytes> {
         })
     }
 
+    /// The bytes of the facade's macros, its re-exported modules and its
+    /// type aliases, as the image holds them.
+    #[must_use]
+    pub fn tables_bytes(&self) -> [&'bytes [u8]; 3] {
+        [Field::Macros, Field::Reexports, Field::TypeAliases].map(|field| {
+            let (offset, length) = self.field(field);
+            self.image.blob(offset, length)
+        })
+    }
+
+    /// The image the facade is in.
+    #[must_use]
+    pub fn image(&self) -> Image<'bytes> {
+        self.image
+    }
+
     /// The facade's `macro_rules!` macros, in path order.
     pub fn macros(&self) -> Result<Vec<Macro>, crate::surface::Error> {
         self.json(Field::Macros)
@@ -464,6 +506,12 @@ impl<'bytes> Group<'bytes> {
         self.list(2)
             .map(|body| self.facade.image.item(path, body))
             .collect()
+    }
+
+    /// The indices of the bodies of the items at the path, among the
+    /// image's item bodies, in the order the facade declares them.
+    pub fn bodies(&self) -> impl ExactSizeIterator<Item = u32> + 'bytes {
+        self.list(2)
     }
 
     /// The indices, among the facade's macros, of those at the path.

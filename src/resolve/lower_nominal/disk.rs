@@ -3,11 +3,11 @@
 //! again only the sources whose key changed (#1638).
 //!
 //! Each source's part has one file, named for the source's path, holding
-//! the key it was made at. A file another build of the runner wrote, a file
+//! the key it was made at. A file another build of rawr wrote, a file
 //! whose key isn't the one asked for, and a file that doesn't decode are
 //! each a miss: the part is made again and its file written over.
 
-use crate::stored::type_id::Known;
+use crate::stored::Known;
 use crate::Engine;
 use sha2::{Digest as _, Sha256};
 use std::path::PathBuf;
@@ -16,16 +16,16 @@ const MAGIC: &[u8; 4] = b"RKLW";
 
 /// Bumped when what a file holds changes in a way the build stamp doesn't
 /// show.
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 /// A runner's files of kept lowerings and readings.
 pub(crate) struct Disk {
     directory: PathBuf,
-    /// The build that writes and reads them: a file another build wrote is
-    /// never decoded.
+    /// The build of rawr that writes and reads them: a file another build
+    /// wrote is never decoded.
     stamp: [u8; 32],
-    /// The types a file may name, by how many facades were registered when
-    /// they were found.
+    /// The types and facades a file may name, by how many facades were
+    /// registered when they were found.
     known: Option<(usize, Known)>,
 }
 
@@ -48,27 +48,20 @@ pub(super) struct Entry<'a> {
 }
 
 impl Disk {
-    /// Files in `directory`, for this build of the runner; `None` when the
-    /// build can't be told apart from another.
-    pub(crate) fn new(directory: PathBuf) -> Option<Self> {
-        let executable = std::env::current_exe().ok()?;
-        let metadata = std::fs::metadata(&executable).ok()?;
-        let modified = metadata
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
+    /// Files in `directory`, for this build of rawr. Any runner of the
+    /// project with this build reads the files another wrote (#1725): each
+    /// file's key holds what its lowering read of the runner's native
+    /// surface.
+    pub(crate) fn new(directory: PathBuf) -> Self {
         let mut stamp = Sha256::new();
         stamp.update(FORMAT.to_le_bytes());
         stamp.update(env!("CARGO_PKG_VERSION").as_bytes());
-        stamp.update(executable.as_os_str().as_encoded_bytes());
-        stamp.update(metadata.len().to_le_bytes());
-        stamp.update(modified.as_nanos().to_le_bytes());
-        Some(Self {
+        stamp.update(env!("RAWR_BUILD_DIGEST").as_bytes());
+        Self {
             directory,
             stamp: stamp.finalize().into(),
             known: None,
-        })
+        }
     }
 
     /// What `entry`'s file holds, when this build wrote it at the entry's
@@ -116,9 +109,9 @@ impl Disk {
         }
     }
 
-    /// The types a file may name: the runtime's own value types and those
-    /// the engine's facades link, found again when a facade was registered
-    /// since.
+    /// What a file may name: the runtime's own value types and those the
+    /// engine's facades link, the engine's facades and its runner's carrier,
+    /// found again when a facade was registered since.
     fn known(&mut self, engine: &Engine) -> Known {
         let registered = Engine::registered_facades();
         if let Some((found, known)) = &self.known
@@ -126,8 +119,14 @@ impl Disk {
         {
             return known.clone();
         }
-        let known =
-            Known::new(super::ty::Ty::native_type_ids().chain(engine.host_registry.linked()));
+        let known = Known::new(
+            super::ty::Ty::native_type_ids().chain(engine.host_registry.linked()),
+            engine.host_registry.facades(),
+            engine
+                .imported_native
+                .as_ref()
+                .map(|native| *native.carrier().identity()),
+        );
         self.known = Some((registered, known.clone()));
         known
     }

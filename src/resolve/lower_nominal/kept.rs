@@ -20,7 +20,7 @@ use super::constant::{included, Place};
 use super::disk::{self, Disk};
 use super::entry::Lowered;
 use super::imported::ImplUse;
-use super::interface::{framed, Interface, Outlined, Written};
+use super::interface::{framed, Interface, Native, Outlined, Written};
 use super::models::Models;
 use super::op::ExecutableOp;
 use super::surface::ImportedUse;
@@ -184,6 +184,10 @@ pub(crate) struct Lowerings {
     /// The outlines of the sources the last interface read, by their texts
     /// and bodies (`outlines`).
     outlines: Outlined,
+    /// What the last interface read of the native surface, by how many
+    /// facades were registered when it was read: a runner's image doesn't
+    /// change while it runs (#1725).
+    native: Option<(usize, crate::Shared<Native>)>,
     /// How many sources this compiler's compiles lowered rather than
     /// reusing what an earlier compile lowered.
     lowered: usize,
@@ -201,6 +205,7 @@ impl Lowerings {
             kept: BTreeMap::new(),
             scanned: BTreeMap::new(),
             outlines: BTreeMap::new(),
+            native: None,
             lowered: 0,
             revealed: 0,
             disk: None,
@@ -627,20 +632,44 @@ fn lock(engine: &Engine) -> std::sync::MutexGuard<'_, Lowerings> {
 }
 
 /// What each source's lowering reads of `program`; `None` when it can't
-/// be written. The compiler keeps the outlines of its sources' texts.
+/// be written. The compiler keeps the outlines of its sources' texts, and
+/// what they read of its native surface.
 fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Interface> {
-    let mut outlined = std::mem::take(&mut lock(engine).outlines);
-    let interface = Interface::new(engine, program, models, &mut outlined);
-    lock(engine).outlines = outlined;
+    let registered = Engine::registered_facades();
+    let (mut outlined, kept) = {
+        let mut lowerings = lock(engine);
+        let kept = lowerings
+            .native
+            .take()
+            .filter(|(at, native)| *at == registered && native.is_of(&program.own));
+        (std::mem::take(&mut lowerings.outlines), kept)
+    };
+    let native = kept.map_or_else(
+        || crate::Shared::new(Native::new(program, &models.host)),
+        |(_, native)| native,
+    );
+    // A facade's proof is what every source reads of another crate's
+    // facade, and of the program's own, its entries a name reaches.
+    let interface = crate::host::facade::Fingerprint::rooted(|| {
+        Interface::new(engine, program, models, &mut outlined, &native)
+    });
+    let mut lowerings = lock(engine);
+    lowerings.outlines = outlined;
+    lowerings.native = Some((registered, native));
     interface
 }
 
 impl ExecutableOp {
     /// This op for a new generation of the program: a default value made
     /// again in its model, a witnessed op with no instance yet. `None` when
-    /// the default can't be made.
+    /// the default can't be made, or when the runner admitted no adapter
+    /// the op calls, as a runner whose files another runner wrote may not
+    /// have (#1725).
     fn renewed(&self, models: &Models) -> Option<Self> {
         Some(match self {
+            Self::Imported { proof } if !models.host.admits_structural(proof.definition()) => {
+                return None;
+            }
             Self::Default { definition, .. } => Self::Default {
                 value: models
                     .runtime
