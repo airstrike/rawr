@@ -233,6 +233,32 @@ fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
     assert!(failure.contains("mismatched types"), "{failure}");
 }
 
+/// A supervised run whose program ends says `ended` and waits for a save.
+/// A wait for a line the program never printed ends there, with what the
+/// run printed, instead of waiting for that save.
+#[test]
+fn a_wait_ends_when_the_program_ends_without_its_line() {
+    let root = crate::support::fresh("islands-ended");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    copy(Path::new(FIXTURE), &root);
+    // The program stops before its first tick.
+    fs::write(&stop, "").unwrap();
+    let mut run = start(
+        &root,
+        &[("ISLANDS_STOP", stop), ("RAWR_MCP_EVENTS", events)],
+    );
+    let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.until(|line| parse(line).is_some())
+    }));
+    let failure = waited.expect_err("the program ticked");
+    let failure = failure.downcast_ref::<String>().map_or("", String::as_str);
+    assert!(
+        failure.starts_with("the program ended ({\"event\":\"ended\",\"status\":0}) without it"),
+        "{failure}"
+    );
+}
+
 /// A package whose `target` holds a big subtree that git ignores, as a
 /// real app's does: the watcher stands for the program's inputs, not the
 /// tree, so a save of the marked file still reaches the running program,
@@ -1274,9 +1300,11 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
 }
 
 /// An install of another Rawr build takes the instance record the last
-/// build's check kept as its first guess. Its own host directory keys every
-/// resolution apart, but with the record's demand the tables the last
-/// build shared answer it: one round with no nightly build. Read as none,
+/// build's check kept as its first guess. Its host directory is its own,
+/// but its harness names rawr at the Cargo view of the host's manifests,
+/// which no source edit changes, so it asks Cargo nothing, and with the
+/// record's demand the tables the last build shared answer it: one round
+/// with no resolution and no nightly build. Read as none,
 /// the record cost a first round that built the crates only to record the
 /// same instances, then a second. The record it keeps then names this
 /// build.
@@ -1317,7 +1345,7 @@ fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
     let said = check("second");
     assert!(
         said.contains(
-            "rawr-import: check rounds 1, Cargo resolutions 1, nightly builds 0, probes 0\n"
+            "rawr-import: check rounds 1, Cargo resolutions 0, nightly builds 0, probes 0\n"
         ),
         "{said}"
     );
@@ -1644,13 +1672,35 @@ fn a_save_parses_only_the_file_it_changed() {
         let tick = format!(" tick {next} styled 0");
         run.until(|line| line.starts_with("tick ") && line.ends_with(&tick));
     }
-    // A derive and a `cfg` change what native code is built from: a new
-    // native build, whose runner lowers again only the files that name what
-    // changed, and the program runs on.
+    // A new field of a type native code keeps and a `cfg` change what
+    // native code is built from: a new native build, whose runner lowers
+    // again only the files that name what changed, and the program runs
+    // on. A new derive swaps in place instead (#1737). The save's wait ends
+    // on the event that settles it, whichever that is: a program that took
+    // it in place prints no new start for a wait on that to end on.
+    let settled = |text: &str| {
+        ["queued", "preparing", "restarting"]
+            .iter()
+            .map(|event| text.matches(&format!("\"event\":\"{event}\"")).count())
+            .sum::<usize>()
+    };
+    let before = fs::read_to_string(&events).unwrap();
+    let home = root.join("src/home.rs");
     edit(
-        &root.join("src/home.rs"),
-        "#[derive(Debug)]\npub struct State {",
-        "#[derive(Debug, Default)]\npub struct State {",
+        &home,
+        "    title: String,\n",
+        "    title: String,\n    visits: u32,\n",
+    );
+    edit(
+        &home,
+        "            wizard: None,\n",
+        "            wizard: None,\n            visits: 0,\n",
+    );
+    let told = run.told(&events, |text| settled(text) > settled(&before));
+    assert!(
+        told[before.len()..].contains("\"event\":\"preparing\""),
+        "{told}\n{}",
+        run.seen.join("\n")
     );
     // The new program's start.
     run.until(|line| line.starts_with("default Selected("));
@@ -1701,7 +1751,7 @@ fn a_save_parses_only_the_file_it_changed() {
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
-    // Only the derive and the `cfg` build native code again. The runner
+    // Only the field and the `cfg` build native code again. The runner
     // each starts lowers again only the files that name what the save
     // changed, from what the earlier runner kept (#1725).
     let prepared = run
@@ -1728,7 +1778,7 @@ fn a_save_parses_only_the_file_it_changed() {
             [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
         })
         .collect::<Vec<_>>();
-    // The derive: `home.rs` alone, which declares `State`. The `cfg`: the
+    // The field: `home.rs` alone, which declares `State`. The `cfg`: the
     // sidebar it changed, and `sidebar.rs` and `theme.rs`, which write
     // `default`.
     assert_eq!(started[1..], [[1, 1], [3, 3]], "{seen}");

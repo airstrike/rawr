@@ -17,8 +17,8 @@ mod profile;
 pub mod request;
 pub(crate) mod source_map;
 
-const REQUEST_SCHEMA: u32 = 11;
-const GENERATOR_VERSION: u32 = 292;
+const REQUEST_SCHEMA: u32 = 12;
+const GENERATOR_VERSION: u32 = 293;
 
 /// Exact pre-build cache lookup identity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -140,6 +140,11 @@ pub(crate) fn build_request_key<B: crate::surface::Runner>(
     digest.update(b"rawr.import.build-request/v2");
     digest.update(REQUEST_SCHEMA.to_le_bytes());
     digest.update(GENERATOR_VERSION.to_le_bytes());
+    // The sources of the rawr the runner compiles: a runner is generated
+    // and built again for another build of rawr, not kept from it, even
+    // when its generated files and the Cargo view naming rawr are the same
+    // (#1712).
+    digest.update(crate::host::DIGEST);
     digest.update(request.contract.as_bytes());
     digest.update(request.fingerprint.as_bytes());
     digest.update(native.native()?.as_bytes());

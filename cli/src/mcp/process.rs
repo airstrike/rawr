@@ -1,6 +1,6 @@
 //! The processes the server starts. Each leads a process group of its own,
-//! so ending it ends what it started there, and each is told the server's
-//! pid ([`crate::events::PARENT`]) so the server's death ends it too.
+//! so ending it ends what it started there, and each watches the server
+//! ([`crate::events::watch_parent`]), so the server's death ends it too.
 
 use std::io::Write as _;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -53,17 +53,14 @@ impl Cancel {
     }
 }
 
-/// Start `command` as the leader of a new process group, told the
-/// server's pid.
+/// Start `command` as the leader of a new process group.
 pub fn spawn(command: &mut Command) -> std::io::Result<Child> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
-    command
-        .env(crate::events::PARENT, std::process::id().to_string())
-        .spawn()
+    command.spawn()
 }
 
 /// Send `signal` to the group `group` leads.

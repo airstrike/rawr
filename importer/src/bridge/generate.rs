@@ -5602,7 +5602,9 @@ fn serve_entry(
         }
     };
     if let Err(error) = serve() {
-        eprintln!("runner protocol failed: {error}");
+        // The owner may be gone and its pipes with it: a print that
+        // panics would end this thread, not the program.
+        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("runner protocol failed: {error}\n"));
         exit(1);
     }
 }
@@ -5847,7 +5849,9 @@ fn finish(result: std::io::Result<()>) -> ! {
     match result {
         Ok(()) => exit(0),
         Err(error) => {
-            eprintln!("runner protocol failed: {error}");
+            // The owner may be gone and its pipes with it: a print that
+            // panics would end this thread, not the program.
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("runner protocol failed: {error}\n"));
             exit(1);
         }
     }
@@ -6281,7 +6285,9 @@ pub(super) fn main() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
     }
     if let Err(error) = run_protocol() {
-        eprintln!("runner protocol failed: {error}");
+        // The owner may be gone and its pipes with it: a print that
+        // panics would end this thread, not the program.
+        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("runner protocol failed: {error}\n"));
         std::process::exit(1);
     }
 }
@@ -6970,7 +6976,9 @@ pub(super) fn main() {
         let _ = (adapter.identity, adapter.signature, adapter.invoke);
     }
     if let Err(error) = run_protocol() {
-        eprintln!("runner protocol failed: {error}");
+        // The owner may be gone and its pipes with it: a print that
+        // panics would end this thread, not the program.
+        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("runner protocol failed: {error}\n"));
         std::process::exit(1);
     }
 }
