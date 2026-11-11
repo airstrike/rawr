@@ -859,6 +859,22 @@ impl Registry {
             .filter(|definition| definition.visibility() == type_def::Visibility::Public)
     }
 
+    /// The one path of the crate type at `path`, whatever route `path`
+    /// takes to it: its first in its facade, the one its signatures name
+    /// it by. `iced::theme::Mode` and `iced::advanced::graphics::core::
+    /// theme::Mode` are one type with one such path. `None` when `path`
+    /// names no crate type.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn imported_type_path(&self, path: &str) -> Option<&path::Path> {
+        let identity = self.type_(path)?.identity().imported()?;
+        let owner = self.type_owner(path)?;
+        Some(
+            self.imported_type(identity, owner, None)?
+                .definition
+                .path_ref(),
+        )
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn imported_type(
         &self,

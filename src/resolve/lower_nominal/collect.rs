@@ -108,6 +108,24 @@ impl<'a> Parser<'a> {
                     .dependencies,
             );
         }
+        // A use whose selector names no item, as a type's variant or field,
+        // is told apart from another item's by its path, which a runner's
+        // build must hold byte for byte. The compile a runner is built for
+        // and the runner's own compile reach a re-exported item through
+        // different registries, which can each take another route to it,
+        // so each names the type by its one path: `iced::theme::Mode::
+        // Light` is the variant of the one `Mode` whatever route it took.
+        let path: ImmutableString = match selector {
+            rawr_import::surface::identity::Selector::Declaration
+            | rawr_import::surface::identity::Selector::StructConstructor(_)
+            | rawr_import::surface::identity::Selector::StructField(_)
+            | rawr_import::surface::identity::Selector::EnumVariant { .. } => self
+                .models
+                .host
+                .imported_type_path(path)
+                .map_or_else(|| path.into(), |route| route.to_string().into()),
+            _ => path.into(),
+        };
         let index = self.reserve_imported_use(path.len(), selector)?;
         let context = self
             .imported
@@ -131,7 +149,7 @@ impl<'a> Parser<'a> {
         };
         context.uses.push(ImportedUse {
             source: context.source,
-            path: path.into(),
+            path,
             selector,
             types: Box::default(),
             constants: Box::default(),
