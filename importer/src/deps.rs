@@ -8,6 +8,8 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::bridge::generate::member;
+
 /// The project's Cargo build directory, created if absent.
 pub(crate) fn directory(build: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(build)?;
@@ -251,11 +253,10 @@ fn unit_key_at(name: &str) -> Option<(&str, &str)> {
 }
 
 /// The runner's unit hashes in the profiles' deps directories: those whose
-/// dep-info names a file in `sources`, the runner's source directory. The
-/// runner takes the script crate's name (D594), and so does the project's own
-/// binary in the same build directory, so the name alone does not tell them
-/// apart.
-fn runner_hashes(profiles: &[PathBuf], runner: &str, sources: &str) -> BTreeSet<String> {
+/// dep-info names a file in `sources`, the runner's source directory. Every
+/// runner building in a shared directory has the runner's name, so the name
+/// alone does not tell this workspace's apart.
+fn runner_hashes(profiles: &[PathBuf], sources: &str) -> BTreeSet<String> {
     let mut hashes = BTreeSet::new();
     for profile in profiles {
         for entry in fs::read_dir(profile.join("deps"))
@@ -267,7 +268,7 @@ fn runner_hashes(profiles: &[PathBuf], runner: &str, sources: &str) -> BTreeSet<
             let Some(hash) = file
                 .to_str()
                 .and_then(|file| file.strip_suffix(".d"))
-                .and_then(|stem| stem.strip_prefix(runner))
+                .and_then(|stem| stem.strip_prefix(RUNNER_CRATE))
                 .and_then(|rest| rest.strip_prefix('-'))
                 .filter(|hash| {
                     hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -290,17 +291,14 @@ fn runner_hashes(profiles: &[PathBuf], runner: &str, sources: &str) -> BTreeSet<
 
 /// The newest linked runner binary among the runner's unit `hashes`, and its
 /// hash.
-fn current_runner(
-    profiles: &[PathBuf],
-    runner: &str,
-    hashes: &BTreeSet<String>,
-) -> Option<(String, PathBuf)> {
+fn current_runner(profiles: &[PathBuf], hashes: &BTreeSet<String>) -> Option<(String, PathBuf)> {
     let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
     for profile in profiles {
         for hash in hashes {
-            let binary = profile
-                .join("deps")
-                .join(format!("{runner}-{hash}{}", std::env::consts::EXE_SUFFIX));
+            let binary = profile.join("deps").join(format!(
+                "{RUNNER_CRATE}-{hash}{}",
+                std::env::consts::EXE_SUFFIX
+            ));
             let Ok(modified) = fs::metadata(&binary).and_then(|metadata| metadata.modified())
             else {
                 continue;
@@ -361,14 +359,16 @@ fn debug_map_objects(binary: &Path) -> Option<std::collections::HashSet<String>>
 /// what this build's Cargo messages (JSON) name and remove what they supersede:
 /// a unit of a crate this build used under another hash (an earlier
 /// install's `rawr_iced`) that no other workspace building in `shared` last
-/// used, the runner's own outputs this build did not write (each incremental
-/// build leaves a new set of codegen objects beside the binary), and
-/// incremental state of the runner's this build did not touch. `work` is the
-/// runner's workspace, where `incremental-directories` lists the runner's
-/// incremental directories, since the project's own binary may share the
-/// runner's crate name. Crates this build did not use are kept, and so is
-/// every crate that is not Rawr's, since `cargo build` shares the directory.
-/// Best effort; the caller holds the build lock.
+/// used, the units of a runner member this build no longer has (the adapters
+/// of a root the program stopped importing), the runner's own outputs this
+/// build did not write (each incremental build leaves a new set of codegen
+/// objects beside the binary), and the members' incremental state that no
+/// current member names or that a rebuilt one did not touch. `work` is the
+/// runner's workspace, where `incremental-directories` lists the members'
+/// incremental directories, since the base's library may take a project
+/// crate's name. Crates this build did not use are kept, and so is every
+/// crate that is not Rawr's, since `cargo build` shares the directory. Best
+/// effort; the caller holds the build lock.
 pub(crate) fn prune_superseded(
     shared: &Path,
     messages: &[u8],
@@ -387,42 +387,29 @@ pub(crate) fn prune_superseded(
             }
         }
     };
-    let mut rebuilt = false;
-    // The runner's binary target, named as the script's crate when its
-    // proxies stand for script types (D594).
-    let mut runner = String::from("rawr_generated_runner");
+    let mut members = Members::default();
     // The directory of the runner's sources, which its dep-info names.
     let mut sources = None;
     for line in messages.split(|byte| *byte == b'\n') {
         let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
             continue;
         };
-        let is_runner = (message
-            .get("package_id")
+        members.note(&message);
+        let is_runner = message
+            .pointer("/target/name")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|package| package.contains("rawr-generated-runner"))
-            || message
-                .pointer("/target/name")
-                .and_then(serde_json::Value::as_str)
-                == Some("rawr-generated-runner"))
+            == Some(member::RUNNER)
             && message
                 .pointer("/target/kind/0")
                 .and_then(serde_json::Value::as_str)
                 == Some("bin");
-        if is_runner
-            && let Some(name) = message
-                .pointer("/target/name")
-                .and_then(serde_json::Value::as_str)
-        {
-            runner = name.replace('-', "_");
+        if is_runner {
             sources = message
                 .pointer("/target/src_path")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|path| Path::new(path).parent())
                 .map(|directory| directory.to_string_lossy().into_owned());
         }
-        rebuilt |=
-            message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false) && is_runner;
         for file in message
             .get("filenames")
             .and_then(serde_json::Value::as_array)
@@ -439,7 +426,7 @@ pub(crate) fn prune_superseded(
         return;
     }
     let others = shared_units(shared, work, &live);
-    let runner = runner.as_str();
+    let rebuilt = members.rebuilt.contains(RUNNER_CRATE);
     let before = |path: &Path| {
         fs::metadata(path)
             .and_then(|metadata| metadata.modified())
@@ -459,7 +446,7 @@ pub(crate) fn prune_superseded(
     }
     let hashes = sources
         .as_deref()
-        .map(|sources| runner_hashes(&profiles, runner, sources))
+        .map(|sources| runner_hashes(&profiles, sources))
         .unwrap_or_default();
     // The runner this build linked, and the object files its debug map names
     // (macOS keeps debug info in them, by path): a rebuilt runner's earlier
@@ -467,12 +454,10 @@ pub(crate) fn prune_superseded(
     // Without a Mach-O debug map (an ELF runner on Linux) the other hashes
     // still go, and every object of the current one stays.
     let linked = rebuilt
-        .then(|| current_runner(&profiles, runner, &hashes))
+        .then(|| current_runner(&profiles, &hashes))
         .flatten()
         .map(|(hash, binary)| (hash, debug_map_objects(&binary)));
-    if rebuilt {
-        prune_incremental(&profiles, runner, record, &before);
-    }
+    prune_incremental(&profiles, &members, record, &before);
     for profile in &profiles {
         for directory in ["deps", ".fingerprint", "build"] {
             for entry in fs::read_dir(profile.join(directory))
@@ -488,14 +473,14 @@ pub(crate) fn prune_superseded(
                     // or one a build that is still running wrote, stays.
                     let key = format!("{krate}-{hash}");
                     let superseded = owned(&krate)
-                        && crates.contains(&krate)
+                        && (crates.contains(&krate) || is_member_crate(&krate))
                         && !live.contains(&key)
                         && !others.contains(&key)
                         && before(&entry.path());
-                    if krate == runner {
+                    if krate == RUNNER_CRATE {
                         // A binary unit's messages name its uplifted copy, not
-                        // its hash. A unit of this name that is not the
-                        // runner's is the project's binary.
+                        // its hash. A unit of this name that is not this
+                        // runner's is another workspace's.
                         directory == "deps"
                             && hashes.contains(hash)
                             && linked.as_ref().is_some_and(|(current, objects)| {
@@ -572,18 +557,83 @@ fn shared_units(shared: &Path, work: &Path, live: &BTreeSet<String>) -> BTreeSet
     others
 }
 
-/// Remove the runner's incremental directories that `record` lists and this
-/// rebuilt runner did not touch, then record the ones it did. A directory is
-/// `<crate>-<stable crate id>`, so the project's own binary of the runner's
-/// crate name has one of the same shape; only a recorded one is the runner's.
+/// The runner's crate, as Cargo names its units.
+const RUNNER_CRATE: &str = "rawr_generated_runner";
+
+/// Whether `krate` is the runner's crate or one of its members' by name:
+/// all but a base whose library takes the script crate's name.
+fn is_member_crate(krate: &str) -> bool {
+    krate.starts_with(RUNNER_CRATE)
+}
+
+/// The crates of the runner's workspace members (`bridge::generate::member`)
+/// that a build's Cargo messages name, as their units and incremental
+/// directories spell them.
+#[derive(Default)]
+struct Members {
+    /// Every member this build has, fresh or not.
+    current: BTreeSet<String>,
+    /// The members this build compiled.
+    rebuilt: BTreeSet<String>,
+}
+
+impl Members {
+    /// Take a member's library or binary from a `compiler-artifact` message.
+    fn note(&mut self, message: &serde_json::Value) {
+        let package = message
+            .get("package_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(package_name);
+        let compiled = message
+            .pointer("/target/kind/0")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| matches!(kind, "lib" | "rlib" | "bin"));
+        let Some(target) = message
+            .pointer("/target/name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|_| compiled && package.is_some_and(member::is_runner_package))
+        else {
+            return;
+        };
+        let krate = target.replace('-', "_");
+        if message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false) {
+            self.rebuilt.insert(krate.clone());
+        }
+        self.current.insert(krate);
+    }
+}
+
+/// The package name of a Cargo package id: `path+file:///a#name@0.1.0`,
+/// `path+file:///a/name#0.1.0` or `name 0.1.0 (path+file:///a)`.
+fn package_name(id: &str) -> Option<&str> {
+    let Some((url, fragment)) = id.split_once('#') else {
+        return id.split_once(' ').map(|(name, _)| name);
+    };
+    match fragment.split_once('@') {
+        Some((name, _)) => Some(name),
+        None => url.rsplit('/').next(),
+    }
+}
+
+/// Update `record`, the runner members' incremental directories, from this
+/// build: a recorded directory goes when no current member names its crate,
+/// or when its member was rebuilt and did not touch it, and each directory a
+/// rebuilt member touched is recorded. A directory is `<crate>-<stable crate
+/// id>`, so a project crate of a member's library name has one of the same
+/// shape; only a recorded one is the runner's.
 fn prune_incremental(
     profiles: &[PathBuf],
-    runner: &str,
+    members: &Members,
     record: &Path,
     before: &dyn Fn(&Path) -> bool,
 ) {
-    let prefix = format!("{runner}-");
-    let mut current = Vec::new();
+    let krate = |path: &Path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.rsplit_once('-'))
+            .map(|(krate, _)| krate.to_owned())
+    };
+    let mut touched = BTreeSet::new();
     for profile in profiles {
         for entry in fs::read_dir(profile.join("incremental"))
             .into_iter()
@@ -591,22 +641,31 @@ fn prune_incremental(
             .flatten()
         {
             let path = entry.path();
-            if entry.file_name().to_string_lossy().starts_with(&prefix) && !before(&path) {
-                current.push(path);
+            if krate(&path).is_some_and(|krate| members.rebuilt.contains(&krate)) && !before(&path)
+            {
+                touched.insert(path);
             }
         }
     }
+    let mut kept = touched.clone();
     for recorded in fs::read_to_string(record).unwrap_or_default().lines() {
-        let recorded = Path::new(recorded);
-        if !current.iter().any(|path| path == recorded)
-            && profiles.iter().any(|profile| recorded.starts_with(profile))
-            && before(recorded)
+        let recorded = PathBuf::from(recorded);
+        if touched.contains(&recorded)
+            || !profiles.iter().any(|profile| recorded.starts_with(profile))
         {
-            let _ = fs::remove_dir_all(recorded);
+            continue;
+        }
+        let stale = krate(&recorded).is_none_or(|krate| {
+            !members.current.contains(&krate) || members.rebuilt.contains(&krate)
+        });
+        if !stale {
+            kept.insert(recorded);
+        } else if before(&recorded) {
+            let _ = fs::remove_dir_all(&recorded);
         }
     }
     let mut text = String::new();
-    for path in &current {
+    for path in &kept {
         text.push_str(&path.to_string_lossy());
         text.push('\n');
     }
@@ -735,45 +794,77 @@ mod tests {
         let iced_host = write(host.join(format!("deps/librawr_iced-{}.rlib", hash('c'))));
         let serde = write(target.join(format!("deps/libserde-{}.rlib", hash('d'))));
         let serde_other = write(target.join(format!("deps/libserde-{}.rlib", hash('9'))));
-        // The runner takes the script crate's name, `app` (D594), and the
-        // project's own binary of that name shares the build directory.
+        // Another workspace's runner, of the same name, shares the build
+        // directory.
         let runner_sources = project.path().join("runner/src");
-        let project_binary = write(target.join(format!("deps/app-{}", hash('3'))));
+        let elsewhere_binary =
+            write(target.join(format!("deps/rawr_generated_runner-{}", hash('3'))));
         fs::write(
-            target.join(format!("deps/app-{}.d", hash('3'))),
+            target.join(format!("deps/rawr_generated_runner-{}.d", hash('3'))),
             format!(
                 "{}: {}\n",
-                project_binary.display(),
-                project.path().join("app/src/main.rs").display()
+                elsewhere_binary.display(),
+                project.path().join("elsewhere/src/main.rs").display()
             ),
         )
         .unwrap();
-        let project_incremental = target.join("incremental/app-project");
-        fs::create_dir_all(&project_incremental).unwrap();
+        let elsewhere_incremental = target.join("incremental/rawr_generated_runner-elsewhere");
+        fs::create_dir_all(&elsewhere_incremental).unwrap();
+        // The adapters of a root the program still imports, and of one it
+        // stopped importing.
+        let adapters = write(target.join(format!(
+            "deps/librawr_generated_runner_adapters_iced-{}.rlib",
+            hash('4')
+        )));
+        let adapters_gone = write(target.join(format!(
+            "deps/librawr_generated_runner_adapters_gone-{}.rlib",
+            hash('5')
+        )));
+        let adapters_incremental =
+            target.join("incremental/rawr_generated_runner_adapters_iced-kept");
+        let gone_incremental = target.join("incremental/rawr_generated_runner_adapters_gone-old");
+        for directory in [&adapters_incremental, &gone_incremental] {
+            fs::create_dir_all(directory).unwrap();
+        }
         let derive = write(host.join(format!("deps/libserde_derive-{}.dylib", hash('e'))));
         let harness = write(target.join(format!(
             "deps/librawr_resolution_harness-{}.rlib",
             hash('f')
         )));
-        let old_objects = write(target.join(format!("deps/app-{}.cgu.old.rcgu.o", hash('1'))));
-        let other_runner = write(host.join(format!("deps/app-{}", hash('2'))));
+        let old_objects = write(target.join(format!(
+            "deps/rawr_generated_runner-{}.cgu.old.rcgu.o",
+            hash('1')
+        )));
+        let other_runner = write(host.join(format!("deps/rawr_generated_runner-{}", hash('2'))));
         for (profile, digit) in [(&target, '1'), (&host, '2')] {
             fs::write(
-                profile.join(format!("deps/app-{}.d", hash(digit))),
-                format!("app: {}\n", runner_sources.join("main.rs").display()),
+                profile.join(format!("deps/rawr_generated_runner-{}.d", hash(digit))),
+                format!("runner: {}\n", runner_sources.join("main.rs").display()),
             )
             .unwrap();
         }
-        let old_incremental = target.join("incremental/app-old");
+        let old_incremental = target.join("incremental/rawr_generated_runner-old");
         fs::create_dir_all(&old_incremental).unwrap();
         let record = project.path().join("incremental-directories");
-        fs::write(&record, format!("{}\n", old_incremental.display())).unwrap();
+        fs::write(
+            &record,
+            format!(
+                "{}\n{}\n{}\n",
+                old_incremental.display(),
+                adapters_incremental.display(),
+                gone_incremental.display()
+            ),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         let started = std::time::SystemTime::now();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let new_objects = write(target.join(format!("deps/app-{}.cgu.new.rcgu.o", hash('1'))));
+        let new_objects = write(target.join(format!(
+            "deps/rawr_generated_runner-{}.cgu.new.rcgu.o",
+            hash('1')
+        )));
         // A linked runner whose debug map (one `N_OSO` stab) names the new set.
-        let binary = target.join(format!("deps/app-{}", hash('1')));
+        let binary = target.join(format!("deps/rawr_generated_runner-{}", hash('1')));
         let oso = format!("\0{}\0", new_objects.display()).into_bytes();
         let mut macho = Vec::new();
         for word in [0xfeed_facf_u32, 0x0100_000c, 0, 2, 1, 24, 0, 0] {
@@ -788,7 +879,7 @@ mod tests {
         macho.extend_from_slice(&0_u64.to_le_bytes());
         macho.extend_from_slice(&oso);
         fs::write(&binary, macho).unwrap();
-        let new_incremental = target.join("incremental/app-new");
+        let new_incremental = target.join("incremental/rawr_generated_runner-new");
         fs::create_dir_all(&new_incremental).unwrap();
         let artifact = |file: &std::path::Path, name: &str, kind: &str, fresh: bool| {
             format!(
@@ -802,9 +893,13 @@ mod tests {
                 artifact(&serde, "serde", "lib", true),
                 artifact(&derive, "serde_derive", "proc-macro", true),
                 format!(
-                    r#"{{"reason":"compiler-artifact","package_id":"path+file:///runner#rawr-generated-runner@0.0.0","target":{{"name":"app","kind":["bin"],"src_path":"{}"}},"fresh":{fresh},"filenames":["{}"],"executable":null}}"#,
+                    r#"{{"reason":"compiler-artifact","package_id":"path+file:///runner/rawr-crates/adapters-iced#rawr-generated-runner-adapters-iced@0.0.0","target":{{"name":"rawr_generated_runner_adapters_iced","kind":["lib"]}},"fresh":true,"filenames":["{}"],"executable":null}}"#,
+                    adapters.display()
+                ),
+                format!(
+                    r#"{{"reason":"compiler-artifact","package_id":"path+file:///runner#rawr-generated-runner@0.0.0","target":{{"name":"rawr-generated-runner","kind":["bin"],"src_path":"{}"}},"fresh":{fresh},"filenames":["{}"],"executable":null}}"#,
                     runner_sources.join("main.rs").display(),
-                    project.path().join("runner/target/app").display()
+                    project.path().join("runner/target/rawr-generated-runner").display()
                 ),
             ]
             .join("\n")
@@ -817,6 +912,14 @@ mod tests {
             project.path(),
         );
         assert!(old_objects.exists() && old_incremental.exists() && other_runner.exists());
+        assert!(
+            adapters_incremental.exists(),
+            "a fresh member's incremental state"
+        );
+        assert!(
+            !gone_incremental.exists() && !adapters_gone.exists(),
+            "the state of a member the runner no longer has"
+        );
         assert!(
             !iced_old.exists() && !iced_host.exists(),
             "superseded rawr_iced units"
@@ -836,8 +939,10 @@ mod tests {
             &new_objects,
             &binary,
             &new_incremental,
-            &project_incremental,
-            &project_binary,
+            &elsewhere_incremental,
+            &elsewhere_binary,
+            &adapters,
+            &adapters_incremental,
         ] {
             assert!(kept.exists(), "{} is kept", kept.display());
         }
@@ -852,7 +957,11 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(&record).unwrap(),
-            format!("{}\n", new_incremental.display())
+            format!(
+                "{}\n{}\n",
+                new_incremental.display(),
+                adapters_incremental.display()
+            )
         );
         assert_eq!(
             super::unit_key("librawr_iced-0123456789abcdef.rlib"),
