@@ -405,7 +405,7 @@ impl Definition {
             framework,
             protected,
             semantic,
-            identity: hosted(semantic, &crate::host::DIGEST),
+            identity: hosted(semantic, &crate::host::cargo_digest()),
             unbound: identity,
             target: target.into(),
             cargo_profile,
@@ -427,13 +427,13 @@ impl Definition {
                     self.cargo_commit,
                 ],
             );
-            definition.identity = hosted(definition.semantic, &crate::host::DIGEST);
+            definition.identity = hosted(definition.semantic, &crate::host::cargo_digest());
             definition.target = target.into();
         }
         definition
     }
 
-    /// The same universe compiled into a Rawr build of other sources.
+    /// The same universe compiled into a Rawr build of other manifests.
     #[cfg(test)]
     pub(crate) fn hosted_by(mut self, host: &[u8; 32]) -> Self {
         self.identity = hosted(self.semantic, host);
@@ -640,9 +640,11 @@ fn bound(mut identity: Sha256, values: [&str; 4]) -> Digest {
     Digest(identity.finalize().into())
 }
 
-/// A universe's identity in the Rawr build whose sources are `host`, baked
-/// in at build time. A new Rawr simply addresses new cache entries; it is
-/// never refused, and what it resolves means what it did (`semantic`).
+/// A universe's identity in the Rawr build whose Cargo view is `host`
+/// (`host::cargo_digest`). A Rawr whose manifests differ simply addresses
+/// new cache entries; it is never refused, and what it resolves means what
+/// it did (`semantic`). One whose manifests agree resolves alike, whatever
+/// else of its sources changed.
 fn hosted(semantic: Digest, host: &[u8; 32]) -> Digest {
     let mut identity = Sha256::new();
     identity.update(b"rawr.import.cargo.resolution-universe.hosted/v1");
