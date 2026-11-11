@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Removing an unused type, or changing its fields, swaps into the running program instead of restarting it. The program restarts only when a live value of the type exists, or a closure native code holds can still make the old one, and it says which.","issues":[1746]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.187",
@@ -3825,8 +3830,9 @@
     {"issue":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open","category":"Divergences from rustc"},
     {"issue":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5052,8 +5058,9 @@
             {"number":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"open"},
             {"number":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open"},
             {"number":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed"},
-            {"number":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"open"},
-            {"number":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open"}
+            {"number":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"closed"},
+            {"number":1747,"title":"One dependency graph decides re-lowering, native rebuilds and restarts","state":"open"},
+            {"number":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open"}
           ]
         }
       ]
