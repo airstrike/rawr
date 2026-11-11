@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"iced's `Task::sip`/`finish` shape works again: a closure takes `<S as Future>::Output` of an `S: Core`, because a crate trait whose one blanket implementation also needs a crate trait, as sipper's `Core` needs a stream, no longer reads as a plain future.","issues":[1699]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.183",
@@ -3719,7 +3724,7 @@
     {"issue":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.183"},
     {"issue":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
-    {"issue":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"open","category":"Divergences from rustc"},
+    {"issue":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed","category":"Divergences from rustc"},
     {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"open","category":"Divergences from rustc"},
     {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"}
   ],
@@ -4314,7 +4319,7 @@
             {"number":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"closed"},
             {"number":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"open"},
             {"number":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"closed"},
-            {"number":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"open"},
+            {"number":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed"},
             {"number":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"open"},
             {"number":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed"}
           ],
