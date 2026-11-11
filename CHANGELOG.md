@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.183 (2026-11-11)
+
 - A crate function whose output future's `Output` is its future parameter's `S::Output`, as futures' adapters keep their input's output, is imported. Before, the parameter's output was declared twice and Bind stopped with E0403 "the name `SOutput` is already used for a generic parameter", which stopped inboard's check. This had regressed with #1674. (#1685)
 - A new rawr build no longer classifies and generates an unchanged project's API again, also when the project's crates came from a cold extraction or a later run reads them from shared tables. The API names the resolution universe without the digest of the rawr build that compiled it, and a shared-table run names its resolution as a complete one does. After an install, inboard's "building API" had taken 237 s on one core. (#1686)
 - A save to a marked file that names a crate type through one of several re-export routes, as inboard's theme.rs names `iced::theme::Mode`, now swaps into the running program in about a second instead of rebuilding it (18-97 s in inboard). Every use that names a type, its variant, field or constructor names it by the type's one path, in rawr-import's compile and in the runner's own. (#1688)
