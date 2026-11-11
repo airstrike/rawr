@@ -1872,6 +1872,19 @@ fn a_closure_takes_the_output_a_native_opaque_future_binds() {
     assert_eq!(rawr, "Some(Finished(Ok(27)))");
 }
 
+/// A native generic call that takes a program value, `wrapped(Message::Add)`,
+/// stages its argument before the call. In the head of a `for`, an `if`, a
+/// `match` and a `while`, the staging is part of the head, as a headless run
+/// of iced's download_progress loops over a task's outputs (#314). Before,
+/// the runner refused the `for` as a block where its iterable goes. The
+/// output is `cargo run`'s.
+#[test]
+fn a_staged_native_call_in_a_loop_or_branch_head_runs() {
+    let (rawr, cargo) = both_printed("headed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "for Download(3)\nif one\nmatch one\nwhile 1");
+}
+
 /// iced's gallery (#637): `Task::future(image.download(size))`, where the
 /// program's own native method gives `impl Straw<Bytes, u32, String>`, so
 /// `Task::future`'s T is the `Result<Bytes, String>` the opaque type's
