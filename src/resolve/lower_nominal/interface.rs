@@ -167,7 +167,7 @@ fn every(
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v6");
+    written.0.update(b"rawr.lowering.interface/v7");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
