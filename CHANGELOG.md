@@ -9,6 +9,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A save that adds or removes a struct or enum lowers again only its own file and the files that name it. (#1726)
 - After a save that changes what native code sees, such as a new public function, a derive or a `cfg`, the restarted runner lowers again only the marked files that name what changed. (#1725)
 - Adding or removing a derive on a private type in a marked file swaps into the running program instead of restarting it. A save the running program can't take, such as a new field or a removed type, restarts it at once with its reason, without first preparing a native build. (#1728)
+- A pub marked type's new `#[derive(..)]` swaps into the running program instead of preparing a native build. A derive that goes away still builds again, and the restart line names it instead of saying the fields changed. (#1737)
 
 ## 0.3.185 (2026-11-11)
 
