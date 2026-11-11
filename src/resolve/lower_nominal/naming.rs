@@ -152,6 +152,13 @@ pub(super) fn trait_dispatcher_name(trait_name: &str, method: &str) -> String {
     format!("{DISPATCH_SENTINEL}{}__{method}", identifier(trait_name))
 }
 
+/// A placeholder before the text of a pending `text.into()`, long enough
+/// for the helper that marks the text lent at `'static`, which it becomes
+/// where the impl the use selects borrows the text, and blank elsewhere.
+pub(super) fn lent_text_placeholder(index: usize) -> String {
+    format!("__rawr_nominal_lent_text_{index:010}")
+}
+
 /// A placeholder long enough for any method helper name it becomes.
 pub(super) fn conversion_placeholder(index: usize) -> String {
     format!("__rawr_nominal_conversion_{index:010}")

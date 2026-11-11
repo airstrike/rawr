@@ -454,6 +454,37 @@ fn a_parameter_an_impls_associated_type_fixes_runs() {
     );
 }
 
+/// iced's screenshot (#1632): `picture(handle)` of a `&Handle` a pattern
+/// binds, boxed by a method call in one arm of an `if`, takes the handle
+/// that the renderer the element's later use fixes gives through the
+/// widget impl's `Renderer: imaging::Renderer<Handle = Handle>`, not the
+/// argument's own `&Handle` (E0271 before). The output is `cargo run`'s.
+#[test]
+fn a_handle_a_later_renderer_fixes_through_a_boxed_method_runs() {
+    let (rawr, cargo) = both_printed("screened.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Press the button@16 [Increment]")
+            && rawr.contains("2 view pad 0 picture Handle { name: \"shot\" }@1 [Increment]"),
+        "{rawr}"
+    );
+}
+
+/// iced's editor (#1633): `action(new_icon(), ..)` calls the program's
+/// `fn new_icon<Message>() -> impl Widget<Message>`, whose `Message` only
+/// the bound of `action`'s parameter fixes, from the message a later
+/// argument gives, as rustc infers it. The output is `cargo run`'s.
+#[test]
+fn a_generic_functions_parameter_the_expected_bound_fixes_runs() {
+    let (rawr, cargo) = both_printed("iconed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Increment")
+            && rawr.contains("3 view pad 0 pad 0 <'Increment'> New@16 pad 0 <S@12> Save@16 2@16"),
+        "{rawr}"
+    );
+}
+
 /// iced's gallery (#1213): `tile(picture(handle))` given by a function
 /// written `-> impl Widget<Message> + 'a`, and by one written `->
 /// Option<impl Widget<Message>>`, where only the output's defaulted

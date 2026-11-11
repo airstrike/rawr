@@ -1418,9 +1418,15 @@ impl<'a> Parser<'a> {
                 &substitution,
             );
             #[cfg(feature = "rust-import")]
-            self.note_opaque_value(
-                &output,
-                function.definition.lifetimes.written_output.as_deref(),
+            let output = self.note_opaque_value(
+                output,
+                function
+                    .definition
+                    .lifetimes
+                    .written_output
+                    .as_deref()
+                    .or(function.definition.output.as_ref()),
+                &substitution,
             );
             witnesses = self.witness_arguments(&function.definition.generics, &substitution, call);
             let kept = self.inference.resolve(&output);

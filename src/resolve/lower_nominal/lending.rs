@@ -205,6 +205,7 @@ impl<'a> Parser<'a> {
             forms: Vec::new(),
             owner: None,
             receiver: span,
+            lent: None,
         };
         self.host_into_helper(&host, &given, borrowed, span)
     }

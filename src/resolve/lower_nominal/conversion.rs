@@ -544,6 +544,7 @@ impl<'a> Parser<'a> {
                 forms,
                 owner,
                 receiver: value.span,
+                lent: None,
             }),
             try_from: None,
             lending: None,
@@ -671,8 +672,17 @@ impl<'a> Parser<'a> {
         };
         // A value that borrows the text opens a scope frame (D558 tier 1),
         // which only a conversion whose target is known as it is parsed
-        // opens ahead of its statement (`text_from_target`).
-        if item.opens() && source.is_text() {
+        // opens ahead of its statement (`text_from_target`). A literal is
+        // lent at `'static` and opens none, as a call's literal argument
+        // does (`lend_static_texts`), whenever the target is known (#1328).
+        if item.opens()
+            && source.is_text()
+            && let Some(lent) = &host.lent
+            && item.frame() == Some(crate::host::item::Frame::Inputs)
+        {
+            let helper = self.push_op(Op::Prelude(PreludeOp::StaticText));
+            self.write_over(lent, &helper);
+        } else if item.opens() && source.is_text() {
             let target = target.name(&self.models);
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
@@ -925,6 +935,7 @@ impl<'a> Parser<'a> {
             forms: Vec::new(),
             owner: None,
             receiver: into.span,
+            lent: into.lent.clone(),
         };
         let helper = self.host_into_helper(&host, &into.source, target, into.span)?;
         if helper.is_none() {
@@ -948,6 +959,7 @@ impl<'a> Parser<'a> {
             forms: Vec::new(),
             owner: None,
             receiver: conversion.span,
+            lent: None,
         };
         let source = self.inference.resolve(&conversion.source);
         let helper = self.host_into_helper(&host, &source, target, conversion.span)?;
@@ -1044,6 +1056,10 @@ impl<'a> Parser<'a> {
                 },
             };
             self.write_over(&into.placeholder, &format!("{helper}("));
+            // Text no impl borrows, or one that is the value itself.
+            if let Some(lent) = &into.lent {
+                self.write_over(lent, "");
+            }
         }
         self.finish_formats()?;
         for (placeholder, text) in std::mem::take(&mut self.settled_parses) {
@@ -1329,6 +1345,9 @@ impl<'a> Parser<'a> {
             let call = span(value.span.start(), end);
             return Err(self.no_widget_conversion(&source, &target, "into", call));
         }
+        // A string literal or a `const` of `&str`, which an impl that
+        // borrows the text takes at `'static`, opening no scope frame.
+        let lent = self.static_text(&value);
         value.span = span(value.span.start(), end);
         value.lvalue = None;
         // Text converts into the std type its `let` or caller expects
@@ -1370,8 +1389,16 @@ impl<'a> Parser<'a> {
         // placeholder written as the conversion once it is known.
         if source.is_text() {
             let target = self.inference.fresh();
-            let placeholder = text_into_placeholder(self.text_into.len());
-            let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+            let index = self.text_into.len();
+            let placeholder = text_into_placeholder(index);
+            // `placeholder(lent(text)))`: `lent` marks a literal lent at
+            // `'static` where the impl the use selects borrows it.
+            let lent = lent.then(|| lent_text_placeholder(index));
+            let text = match &lent {
+                Some(lent) => origin::Fragment::call(lent, [value.rendered_source()]),
+                None => value.rendered_source(),
+            };
+            let mut rendered = origin::Fragment::call(&placeholder, [text]);
             rendered.push_text(")");
             value.source = rendered;
             value.prelude = origin::Fragment::default();
@@ -1380,6 +1407,7 @@ impl<'a> Parser<'a> {
                 source,
                 target: target.clone(),
                 placeholder,
+                lent,
             });
             value.ty = target;
         }
@@ -1395,6 +1423,9 @@ pub(super) struct TextInto {
     pub(super) source: Ty,
     pub(super) target: Ty,
     pub(super) placeholder: String,
+    /// The placeholder before a literal's text, written as the helper that
+    /// marks it lent at `'static` where the selected impl borrows it.
+    pub(super) lent: Option<String>,
 }
 
 pub(super) struct PendingConversion {
@@ -1424,4 +1455,6 @@ pub(super) struct HostInto {
     pub(super) forms: Vec<crate::host::item::Definition>,
     pub(super) owner: Option<crate::host::facade::Dependency>,
     pub(super) receiver: Span,
+    /// The placeholder before text lent at `'static` (`TextInto::lent`).
+    pub(super) lent: Option<String>,
 }
