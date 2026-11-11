@@ -312,3 +312,78 @@ fn futures_try_join_takes_script_futures_through_its_blanket_trait() {
     assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(stdout, expected);
 }
+
+/// iced's pokedex's run with a local server in reqwest's shape (#1018):
+/// `Task::perform` runs `Pokemon::search()` on one of tokio's workers,
+/// `try_join` joins `get(&url).await?.json().await` into nested
+/// `Deserialize` structs defined in the fn's body with `fetch_image`'s
+/// `Result<Handle, wire::Error>`, `rand`'s `OsRng` picks the id, and a
+/// failed request becomes the program's `Error` through its `From` impl.
+/// The output is `cargo run`'s.
+#[test]
+fn pokedex_searches_on_a_worker_thread_as_cargo_runs_it() {
+    let program = DERIVES.read("pokedex.rs");
+    let root = DERIVES.lease(&[("src/main.rs", &program)]);
+    let cargo = Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&*root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let expected = String::from_utf8_lossy(&cargo.stdout);
+    assert!(
+        cargo.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cargo.stderr)
+    );
+    assert_eq!(
+        expected,
+        "Loading - Pokédex\n\
+         BULBASAUR - Pokédex\n\
+         true A strange seed was planted on its back at birth.\n\
+         Handle(Bytes([137, 80, 78, 71]))\n\
+         Loading - Pokédex\n\
+         PokemonFound(Err(APIError))\n\
+         Whoops! - Pokédex\n"
+    );
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(stdout, expected);
+    // `dbg!` in the `From` impl shows the crate's error.
+    assert!(stderr.contains("error sending request for url"), "{stderr}");
+}
+
+/// A crate's type the program never names, `wire::Bytes` of
+/// `wire::get(..).await?.bytes().await?`, has the `Debug` its crate
+/// derives: the check demands the type, which brings its impls (#1018).
+#[test]
+fn an_unnamed_crate_type_from_a_future_has_its_debug() {
+    let program = DERIVES.read("unnamed.rs");
+    let root = DERIVES.lease(&[("src/main.rs", &program)]);
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(stdout, "Ok(\"Bytes([137, 80, 78, 71])\")\n");
+}
