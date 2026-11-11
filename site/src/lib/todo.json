@@ -14,7 +14,9 @@
       "entries": [
         {"text":"Bind classifies a project's definitions and exports across the machine's cores, with byte-identical contracts. An opaque type's left-out captures are now set by the function that gives it, whatever is classified first.","issues":[1669]},
         {"text":"`s.as_ref()` and `s.borrow()` on a String, str, Vec, array or number lend the view the use expects: a `let` annotation, a parameter, a return, or a later crate trait bound such as iced's `column![self.description.as_ref(), ..]`. The view comes from std's `AsRef` and `Borrow` impls, with rustc's E0282, E0277 and E0505 where rustc gives them.","issues":[1672],"refs":[1632,1018]},
-        {"text":"A `match` or `if` whose arms give `&str` and `&String` is a `&str`, as in rustc: one arm deref-coerces to the other's type, in either order.","issues":[1673],"refs":[1018]}
+        {"text":"A `match` or `if` whose arms give `&str` and `&String` is a `&str`, as in rustc: one arm deref-coerces to the other's type, in either order.","issues":[1673],"refs":[1018]},
+        {"text":"A program that depends on both iced and iced_test runs: an opaque output such as `explain`'s, reached through two crates' paths that name its parameters differently, is one type.","issues":[1660]},
+        {"text":"A canvas program's `update` keeps what it writes to its `&mut` state, as in bezier_tool's `*state = Some(Pending::One { .. })`, so a third click on its canvas draws a curve, as it does under cargo.","issues":[990]}
       ]
     },
     "releases": [
@@ -2979,7 +2981,7 @@
     {"issue":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open","category":"Divergences from rustc"},
     {"issue":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":989,"title":"rawr mcp: send input events to a started program","state":"closed","category":"Health","release":"0.3.168"},
-    {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open","category":"Divergences from rustc"},
+    {"issue":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"closed","category":"Divergences from rustc"},
     {"issue":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed","category":"Divergences from rustc","release":"0.3.150"},
@@ -3648,8 +3650,8 @@
     {"issue":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed","category":"No glue (D593)","release":"0.3.180"},
     {"issue":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
-    {"issue":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"open","category":"Divergences from rustc"},
-    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open","category":"Divergences from rustc"},
+    {"issue":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"closed","category":"Divergences from rustc"},
+    {"issue":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"closed","category":"Divergences from rustc"},
     {"issue":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open","category":"No glue (D593)"},
     {"issue":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open","category":"No glue (D593)"},
     {"issue":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.181"},
@@ -3666,7 +3668,11 @@
     {"issue":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"open","category":"Divergences from rustc"},
     {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"open","category":"Divergences from rustc"},
-    {"issue":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open","category":"Divergences from rustc"},
+    {"issue":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open","category":"Divergences from rustc"},
+    {"issue":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open","category":"Divergences from rustc"},
+    {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4169,7 +4175,7 @@
             {"number":986,"title":"An expansion miss runs the whole facts probe for its artifacts","state":"open"},
             {"number":987,"title":"A compound assignment with a number on the left and a crate's or script's type on the right","state":"open"},
             {"number":988,"title":"Script impls of one trait for both f32 and f64 are a duplicate method","state":"closed"},
-            {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"open"},
+            {"number":990,"title":"bezier_tool: check a click on the canvas after the by-value Option output fix","state":"closed"},
             {"number":991,"title":"layout: a Column passed to column_ is 'not of the type this call takes'","state":"closed"},
             {"number":992,"title":"Re-expand a crate derive when the derive crate changes","state":"open"},
             {"number":993,"title":"A program type passed to a crate function generic over a crate trait panics with a rawr bug","state":"closed"},
@@ -4243,14 +4249,18 @@
             {"number":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open"},
             {"number":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"open"},
             {"number":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open"},
-            {"number":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"open"},
-            {"number":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"open"},
+            {"number":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"closed"},
+            {"number":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"closed"},
             {"number":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"closed"},
             {"number":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"open"},
             {"number":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"open"},
             {"number":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"open"},
             {"number":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"open"},
-            {"number":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open"}
+            {"number":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open"},
+            {"number":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open"},
+            {"number":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open"},
+            {"number":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open"},
+            {"number":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"open"}
           ],
           "milestone": "0.4"
         },
