@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]}
+    ]
   },
   "releases": [
     {

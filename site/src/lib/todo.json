@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.184",
@@ -3762,7 +3767,10 @@
     {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open","category":"Divergences from rustc"},
     {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"},
-    {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"}
+    {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"},
+    {"issue":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4369,7 +4377,8 @@
             {"number":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"closed"},
             {"number":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open"},
             {"number":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open"},
-            {"number":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open"}
+            {"number":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open"},
+            {"number":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -4874,7 +4883,8 @@
             {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"closed"},
             {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"},
             {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"},
-            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open"}
+            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open"},
+            {"number":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open"}
           ]
         }
       ]

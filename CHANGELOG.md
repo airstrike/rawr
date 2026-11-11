@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees. (#1716; part of #1646)
 
 ## 0.3.184 (2026-11-11)
 
