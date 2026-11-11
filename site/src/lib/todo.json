@@ -19,7 +19,11 @@
         {"text":"A new rawr install, such as one that only bumps the generator version, no longer canonicalizes an unchanged project's crate API again. Before, that took about 235 s on one core in inboard. The API read from shared tables is no longer keyed by the host directory's path or by the driver binary, so an install regenerates bindings and rebuilds the runner, nothing more. `RAWR_VERBOSE`'s round lines now count canonicalized sidecars.","issues":[1690]},
         {"text":"A block's last expression, such as a `#[cfg(..)] { .. }` block, is the block's value when a false `#[cfg]` removes every statement after it. iced's pokedex now passes `rawr check`.","issues":[1684]},
         {"text":"A `let` on the only variant of a crate enum destructures it, unless the enum is `#[non_exhaustive]`, with rustc's E0005 witnesses where it can't.","issues":[1681]},
-        {"text":"A `match` on a `#[non_exhaustive]` crate enum that names every variant but has no wildcard arm is E0004 with `_`, or `&_` through a reference, as rustc has it outside the enum's crate.","issues":[1692]}
+        {"text":"A `match` on a `#[non_exhaustive]` crate enum that names every variant but has no wildcard arm is E0004 with `_`, or `&_` through a reference, as rustc has it outside the enum's crate.","issues":[1692]},
+        {"text":"iced_test's `ui.click(\"Increment\")` works: a crate method that takes a selector, which the crate also implements for closures rawr can't write, takes a string, and the selector's `Output` is the one the crate's `&str` impl gives.","issues":[1678]},
+        {"text":"An opaque crate iterator fills a crate's `impl IntoIterator` parameter, so iced_test's `ui.simulate(click())` needs no `.collect()`.","issues":[1679]},
+        {"text":"`iced_test::simulator(counter.view())` needs no annotation: a crate bound on what the program's `fn .. -> impl Trait` gives takes its theme and renderer from that bound, as rustc does. iced's counter, driven through the simulator, prints what `cargo run` prints.","issues":[1680]},
+        {"text":"A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver.","issues":[1693]}
       ]
     },
     "releases": [
@@ -3688,9 +3692,9 @@
     {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed","category":"Divergences from rustc","release":"0.3.182"},
     {"issue":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open","category":"Divergences from rustc"},
-    {"issue":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open","category":"Divergences from rustc"},
-    {"issue":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open","category":"Divergences from rustc"},
+    {"issue":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"closed","category":"Divergences from rustc"},
+    {"issue":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"closed","category":"Divergences from rustc"},
+    {"issue":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"closed","category":"Divergences from rustc"},
     {"issue":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"closed","category":"Divergences from rustc"},
     {"issue":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.182"},
     {"issue":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open","category":"Shared dependency cache (D607)"},
@@ -3702,7 +3706,9 @@
     {"issue":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"open","category":"No glue (D593)"},
     {"issue":1690,"title":"A new rawr install canonicalized an unchanged project's whole API again on one core","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1691,"title":"A stored API replayed from shared tables decodes the whole tables document when only the handshakes are needed","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"open","category":"Divergences from rustc"}
+    {"issue":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"open","category":"Divergences from rustc"},
+    {"issue":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"open","category":"Divergences from rustc"},
+    {"issue":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4287,12 +4293,14 @@
             {"number":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"closed"},
             {"number":1672,"title":"A native value's as_ref() or borrow() was E0599 even when the use fixes its target","state":"closed"},
             {"number":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"closed"},
-            {"number":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"open"},
-            {"number":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"open"},
-            {"number":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"open"},
+            {"number":1678,"title":"iced_test's Simulator::click(selector) is refused: it takes a closure whose type isn't supported","state":"closed"},
+            {"number":1679,"title":"An opaque impl Iterator<Item = Event> can't fill an impl IntoIterator<Item = Event> parameter","state":"closed"},
+            {"number":1680,"title":"iced_test::simulator(view()) can't infer Theme and Renderer from the view's impl Widget<Message> (E0282)","state":"closed"},
             {"number":1681,"title":"A single-variant crate enum in a let pattern is refused as refutable (E0005)","state":"closed"},
             {"number":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"closed"},
-            {"number":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"open"}
+            {"number":1692,"title":"A match on a #[non_exhaustive] crate enum without a wildcard was accepted, not rustc's E0004","state":"open"},
+            {"number":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"open"},
+            {"number":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"open"}
           ],
           "milestone": "0.4"
         },

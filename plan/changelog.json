@@ -12,7 +12,11 @@
       {"text":"A new rawr install, such as one that only bumps the generator version, no longer canonicalizes an unchanged project's crate API again. Before, that took about 235 s on one core in inboard. The API read from shared tables is no longer keyed by the host directory's path or by the driver binary, so an install regenerates bindings and rebuilds the runner, nothing more. `RAWR_VERBOSE`'s round lines now count canonicalized sidecars.","issues":[1690]},
       {"text":"A block's last expression, such as a `#[cfg(..)] { .. }` block, is the block's value when a false `#[cfg]` removes every statement after it. iced's pokedex now passes `rawr check`.","issues":[1684]},
       {"text":"A `let` on the only variant of a crate enum destructures it, unless the enum is `#[non_exhaustive]`, with rustc's E0005 witnesses where it can't.","issues":[1681]},
-      {"text":"A `match` on a `#[non_exhaustive]` crate enum that names every variant but has no wildcard arm is E0004 with `_`, or `&_` through a reference, as rustc has it outside the enum's crate.","issues":[1692]}
+      {"text":"A `match` on a `#[non_exhaustive]` crate enum that names every variant but has no wildcard arm is E0004 with `_`, or `&_` through a reference, as rustc has it outside the enum's crate.","issues":[1692]},
+      {"text":"iced_test's `ui.click(\"Increment\")` works: a crate method that takes a selector, which the crate also implements for closures rawr can't write, takes a string, and the selector's `Output` is the one the crate's `&str` impl gives.","issues":[1678]},
+      {"text":"An opaque crate iterator fills a crate's `impl IntoIterator` parameter, so iced_test's `ui.simulate(click())` needs no `.collect()`.","issues":[1679]},
+      {"text":"`iced_test::simulator(counter.view())` needs no annotation: a crate bound on what the program's `fn .. -> impl Trait` gives takes its theme and renderer from that bound, as rustc does. iced's counter, driven through the simulator, prints what `cargo run` prints.","issues":[1680]},
+      {"text":"A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver.","issues":[1693]}
     ]
   },
   "releases": [

@@ -13,6 +13,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A block's last expression, such as a `#[cfg(..)] { .. }` block, is the block's value when a false `#[cfg]` removes every statement after it. iced's pokedex now passes `rawr check`. (#1684)
 - A `let` on the only variant of a crate enum destructures it, unless the enum is `#[non_exhaustive]`, with rustc's E0005 witnesses where it can't. (#1681)
 - A `match` on a `#[non_exhaustive]` crate enum that names every variant but has no wildcard arm is E0004 with `_`, or `&_` through a reference, as rustc has it outside the enum's crate. (#1692)
+- iced_test's `ui.click("Increment")` works: a crate method that takes a selector, which the crate also implements for closures rawr can't write, takes a string, and the selector's `Output` is the one the crate's `&str` impl gives. (#1678)
+- An opaque crate iterator fills a crate's `impl IntoIterator` parameter, so iced_test's `ui.simulate(click())` needs no `.collect()`. (#1679)
+- `iced_test::simulator(counter.view())` needs no annotation: a crate bound on what the program's `fn .. -> impl Trait` gives takes its theme and renderer from that bound, as rustc does. iced's counter, driven through the simulator, prints what `cargo run` prints. (#1680)
+- A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver. (#1693)
 
 ## 0.3.182 (2026-11-10)
 
