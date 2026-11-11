@@ -7,6 +7,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - `RAWR_VERBOSE` says what each start of the program ran: Cargo resolutions, nightly builds, probes, runner builds and the check's rounds. (#1742; part of #1739)
 - A new pub item no native code names (a struct, fn, trait, impl or re-export) swaps into the running program instead of rebuilding native code. A new `Drop` impl, or a new impl of the crate's own trait that native code could hold as a `dyn` value, still rebuilds. An item taken away rebuilds, and the restart line names each one. (#1741)
+- A new pub struct native code sees no longer makes the restarted runner lower every marked file; only the files that name it are lowered again. (#1740)
+- A new build of rawr builds its own runner instead of reusing an older one, and the program ends with its `rawr run`: a killed run, or a run whose parent process ends, no longer leaves the program behind. (#1712)
 
 ## 0.3.186 (2026-11-11)
 
