@@ -19,7 +19,10 @@
         {"text":"A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements.","issues":[1018]},
         {"text":"A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it.","issues":[1075],"refs":[965]},
         {"text":"`rawr test` links the package's `[dev-dependencies]` into its tests, general and per-target ones, as `cargo test` does. `rawr run` still builds without them.","issues":[1703]},
-        {"text":"A compound assignment with a number on the left and a crate's type on the right, as `y += turn` with the crate's `impl AddAssign<Turn> for f32`, calls the crate's impl, on a local or a field, as rustc does.","issues":[987]}
+        {"text":"A compound assignment with a number on the left and a crate's type on the right, as `y += turn` with the crate's `impl AddAssign<Turn> for f32`, calls the crate's impl, on a local or a field, as rustc does.","issues":[987]},
+        {"text":"A generic function written `-> impl Trait` takes its type parameters from the bound of the parameter its value is passed to, as iced's editor's `action(new_icon(), ..)` infers `new_icon`'s message.","issues":[1633]},
+        {"text":"A conversion's target that only a later renderer fixes, through an impl's `Renderer: image::Renderer<Handle = Handle>`, is that handle, also through a method call such as `image(handle).boxed()`, as in iced's screenshot.","issues":[1632]},
+        {"text":"A string literal's `.into()` into a crate type whose `From<&str>` borrows the text runs where only a later use gives the target, as in `Row::with_children([.., \"b\".into()])`.","issues":[1328]}
       ]
     },
     "releases": [
@@ -3360,7 +3363,7 @@
     {"issue":1325,"title":"A returned `&mut` place re-calls its method on every access; a field store calls it twice","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1327,"title":"A program's own unit struct is a value through a module path","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open","category":"Divergences from rustc"},
+    {"issue":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"closed","category":"Divergences from rustc"},
     {"issue":1329,"title":"Crate values lent by two scope frames passed to one call","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1331,"title":"`#[cfg(..)]` on a struct-literal field, a match arm, an array element or an expression statement","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3664,8 +3667,8 @@
     {"issue":1629,"title":"A program with recorded generated crates never kept its extracted tables for the next demand round","state":"closed","category":"No glue (D593)","release":"0.3.177"},
     {"issue":1630,"title":"A crate macro including a file relative to a native module, as wgpu::include_wgsl!, can't find it","state":"closed","category":"No glue (D593)","release":"0.3.177"},
     {"issue":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open","category":"Divergences from rustc"},
-    {"issue":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"open","category":"Divergences from rustc"},
-    {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open","category":"Divergences from rustc"},
+    {"issue":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"closed","category":"Divergences from rustc"},
+    {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"closed","category":"Divergences from rustc"},
     {"issue":1634,"title":"A check parsed every program source again in each demand round","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"closed","category":"No glue (D593)","release":"0.3.178"},
     {"issue":1636,"title":"A demand round built and sealed a new bundle even when an earlier round built the same crates","state":"closed","category":"No glue (D593)","release":"0.3.178"},
@@ -3736,7 +3739,10 @@
     {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"closed","category":"Divergences from rustc"},
-    {"issue":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1705,"title":"rawr doesn't run Option::as_deref, as iced's editor's self.file.as_deref().and_then(Path::extension)","state":"open","category":"Divergences from rustc"},
+    {"issue":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"open","category":"Divergences from rustc"},
+    {"issue":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4300,7 +4306,7 @@
             {"number":1319,"title":"`use m::{self, f}` binds both a module and its same-named function","state":"closed"},
             {"number":1320,"title":"A struct's constructor is no separate rejected export","state":"closed"},
             {"number":1326,"title":"`Into::<Slot<'_, _>>::into(\"text\")` in a crate macro: a literal doesn't take the crate's From<&str>/From<String>","state":"closed"},
-            {"number":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"open"},
+            {"number":1328,"title":"A text conversion whose value borrows the text, where only a later use gives the target","state":"closed"},
             {"number":1329,"title":"Crate values lent by two scope frames passed to one call","state":"closed"},
             {"number":1330,"title":"A crate function whose signature has an array type (`[Slot<'a, M>; N]`, `[u8; 4]`)","state":"closed"},
             {"number":1336,"title":"Selecting among many generic From impls by the argument's type: `Into::<Slot<'_, _>>::into(icon().size(12))`","state":"closed"},
@@ -4311,8 +4317,8 @@
             {"number":1373,"title":"Call ratatui's Terminal::draw from rawr, and resolve TestBackend's Error","state":"open"},
             {"number":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open"},
             {"number":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open"},
-            {"number":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"open"},
-            {"number":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"open"},
+            {"number":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"closed"},
+            {"number":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"closed"},
             {"number":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"closed"},
             {"number":1660,"title":"A program that depends on iced and iced_test is refused: two facades' Element::explain opaque outputs conflict","state":"closed"},
             {"number":1658,"title":"Debug of a crate value printed NativeHandle for crate values a program value inside it holds","state":"closed"},
@@ -4333,7 +4339,10 @@
             {"number":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed"},
             {"number":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed"},
             {"number":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"closed"},
-            {"number":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open"}
+            {"number":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open"},
+            {"number":1705,"title":"rawr doesn't run Option::as_deref, as iced's editor's self.file.as_deref().and_then(Path::extension)","state":"open"},
+            {"number":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"open"},
+            {"number":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open"}
           ],
           "milestone": "0.4"
         },

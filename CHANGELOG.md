@@ -13,6 +13,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it. (#1075; part of #965)
 - `rawr test` links the package's `[dev-dependencies]` into its tests, general and per-target ones, as `cargo test` does. `rawr run` still builds without them. (#1703)
 - A compound assignment with a number on the left and a crate's type on the right, as `y += turn` with the crate's `impl AddAssign<Turn> for f32`, calls the crate's impl, on a local or a field, as rustc does. (#987)
+- A generic function written `-> impl Trait` takes its type parameters from the bound of the parameter its value is passed to, as iced's editor's `action(new_icon(), ..)` infers `new_icon`'s message. (#1633)
+- A conversion's target that only a later renderer fixes, through an impl's `Renderer: image::Renderer<Handle = Handle>`, is that handle, also through a method call such as `image(handle).boxed()`, as in iced's screenshot. (#1632)
+- A string literal's `.into()` into a crate type whose `From<&str>` borrows the text runs where only a later use gives the target, as in `Row::with_children([.., "b".into()])`. (#1328)
 
 ## 0.3.183 (2026-11-11)
 
