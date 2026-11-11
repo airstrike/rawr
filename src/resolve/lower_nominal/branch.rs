@@ -1418,8 +1418,15 @@ impl<'a> Parser<'a> {
         let value = parse(self);
         self.no_struct = outer;
         // A head that is a block, as `matches!(..)`'s match, is wrapped so
-        // the script reads it as the head and not as the body.
+        // the script reads it as the head and not as the body. So is one
+        // with statements before its value, as a call that stages its
+        // arguments (`for x in native::wrapped(value)`) renders, which
+        // becomes its block.
         value.map(|mut value| {
+            if !value.prelude.is_empty() {
+                value.source = value.rendered_block();
+                value.prelude = origin::Fragment::default();
+            }
             if value.source.as_str().trim_start().starts_with('{') {
                 value.source = std::mem::take(&mut value.source).surrounded("(", ")");
             }

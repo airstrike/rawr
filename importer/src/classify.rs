@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 174;
+const CLASSIFIER_VERSION: u32 = 175;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -11195,7 +11195,8 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// A method whose own lifetimes the output borrows only through inputs
     /// the call can copy, as quick-xml's `read_event_into<'b>(&mut self,
-    /// buf: &'b mut Vec<u8>) -> Result<Event<'b>>`: it opens a scope frame
+    /// buf: &'b mut Vec<u8>) -> Result<Event<'b>>` and serde's
+    /// `from_utf8_lossy(bytes: &[u8]) -> Cow<'_, str>`: it opens a scope frame
     /// that owns the copies and holds the output (D558 tier 1, slice 2).
     /// The receiver is borrowed for the call alone.
     fn late_binders_open_copies(&self, signature: &model::Signature) -> bool {
@@ -11221,7 +11222,9 @@ impl<P: api::Phase> Context<'_, P> {
                         lifetime: model::Lifetime::Late { .. },
                         ..
                     }
-                ) && (is_str_reference(input) || self.copied_vec(input).is_some())
+                ) && (is_str_reference(input)
+                    || is_scalar_slice_reference(input)
+                    || self.copied_vec(input).is_some())
             })
             && signature.inputs().any(|input| {
                 matches!(
@@ -12506,6 +12509,14 @@ fn leased(ty: representability::convert::Type) -> Result<representability::conve
 /// operator impl for a std type, as `impl Mul<Radians> for f32`.
 fn is_number(ty: &model::Type) -> bool {
     matches!(ty, model::Type::Primitive(name) if !matches!(&**name, "str" | "!"))
+}
+
+/// Whether `ty` is `&[T]` of a scalar `T`, as serde's `from_utf8_lossy(bytes:
+/// &[u8]) -> Cow<'_, str>` takes: a call takes it as a copy of Rawr's array,
+/// which a scope frame owns while the output borrows it.
+fn is_scalar_slice_reference(ty: &model::Type) -> bool {
+    matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
+        if matches!(&**ty, model::Type::Slice(element) if is_number(element)))
 }
 
 fn is_str_reference(ty: &model::Type) -> bool {

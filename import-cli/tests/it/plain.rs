@@ -2047,8 +2047,10 @@ fn a_crates_derive_runs_from_its_expansion() {
     // and one `#[serde(skip)]` leaves, uuid's own impls, a unit-variant
     // enum that serializes, a `Vec` of a program struct, and
     // `to_string_pretty`. Each derive's `__Field` is an item of its own.
-    // The enum's `Deserialize` names `de::Unexpected<'_>`, a crate value
-    // with a lifetime, which Rawr doesn't take yet, so the field skips it.
+    // The enum's `Deserialize` names its `VARIANTS` from a nested visitor
+    // (#1631), lends `from_utf8_lossy` its bytes in a scope frame, and
+    // infers `variant::<V>()`'s `V` from the arm's pattern, so a field of
+    // it reads back and an unknown variant is serde's error (#1017).
     fs::copy(root.join("programs/saved.rs"), root.join("src/main.rs")).unwrap();
     let run = rawr_import(&root, &["run"]);
     assert!(
@@ -2071,11 +2073,13 @@ fn a_crates_derive_runs_from_its_expansion() {
             "    }\n",
             "  ]\n",
             "}\n",
-            "SavedState { input_value: \"pie\", filter: All, tasks: [Task { id: ",
+            "SavedState { input_value: \"pie\", filter: Active, tasks: [Task { id: ",
             "67e55044-10b1-426f-9247-bb680e5fe0c8, description: \"write\", completed: true, ",
             "state: Idle }] }\n",
             "true Idle new\n",
             "\"All\"\n",
+            "Err(\"unknown variant `Done`, expected one of `All`, `Active`, `Completed` ",
+            "at line 1 column 6\")\n",
         )
     );
 

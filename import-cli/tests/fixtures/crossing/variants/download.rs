@@ -118,3 +118,10 @@ impl events::Sip for Finished {
         vec![self.0]
     }
 }
+
+/// `value` alone in a `Vec`, as a headless run of iced's download_progress
+/// collects a task's outputs: a generic function the program's own type
+/// fills.
+pub fn wrapped<T>(value: T) -> Vec<T> {
+    vec![value]
+}
