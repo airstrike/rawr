@@ -886,12 +886,19 @@ pub fn __rawr_scope_release_v1(nonce: u64, shared: bool) {
 /// which owns the program from now on, and on every other thread. Async
 /// steps run in it too (D513.3).
 pub fn publish(bootstrap: Bootstrap) {
+    install(Current::new(bootstrap));
+}
+
+/// Make `current` the generation this thread's calls from native code
+/// run in, and any thread's.
+fn install(current: Current) {
     // A panic on any of its threads names its place in the program's
     // files, each by its path from the package's root, as Cargo names it.
     #[cfg(feature = "debugging")]
-    if let Some(located) = bootstrap.located() {
+    if let Some(located) = current.bootstrap.located() {
         let located = Arc::clone(located);
-        let root = bootstrap
+        let root = current
+            .bootstrap
             .generation()
             .source()
             .entry_package()
@@ -901,7 +908,7 @@ pub fn publish(bootstrap: Bootstrap) {
             located.report(error, |file| cargo_named(file, &root))
         });
     }
-    let current = Rc::new(Current::new(bootstrap));
+    let current = Rc::new(current);
     crate::future::serve(current.clone());
     #[cfg(feature = "sync")]
     {
@@ -1307,6 +1314,18 @@ fn current() -> Option<Rc<Current>> {
     CURRENT.with(|slot| slot.borrow().clone())
 }
 
+/// The free function at `path` of the generation published on this
+/// thread, as a callable native code holds, for a test.
+#[cfg(all(test, feature = "sync"))]
+pub(crate) fn callable(path: &str) -> Option<crate::future::Callable> {
+    let current = current()?;
+    let function = current.calls.items.get(&(false, path.to_owned()))?.clone();
+    Some(crate::future::Callable::of_item(
+        function,
+        current.shared.clone(),
+    ))
+}
+
 fn failure(message: &str) -> Vec<u8> {
     let mut reply = Vec::with_capacity(1 + message.len());
     reply.push(1);
@@ -1592,10 +1611,15 @@ fn main_text(text: &str) -> Option<String> {
 /// (D553.6), in one line for `rawr run` to restart with. `None` when it
 /// swaps in: a body edit, or a new function or type.
 ///
-/// - A script type whose fields or variants changed, or that was removed:
-///   rawr can't yet see which script values native code stores as
-///   `rawr::Value`. Its derives aren't its representation: a new derive
-///   swaps in.
+/// - A script type whose fields or variants changed, or that was removed,
+///   while a live value of it is held: the running program's state, a
+///   value native code holds as a handle, a pending task or a captured
+///   closure (#1746). A static of a script type holds none: each read is
+///   its initializer (D862). One nothing holds swaps in, and its derives
+///   aren't its representation: a new derive swaps in. [`admit`] checks
+///   again where the generation is admitted, with the callables native
+///   code holds. A type native code names rebuilds by the island's shape
+///   instead (D932).
 /// - A callable a marked `main`'s own frame gave native code, which no
 ///   longer rebinds: `main` never runs again to give a new one.
 /// - A program that never called from native code into script code: no
@@ -1606,23 +1630,10 @@ pub fn refusal(
     current: &crate::reload::Generation,
     candidate: &crate::reload::Candidate,
 ) -> Option<String> {
-    let path = |key: &type_def::Key| {
-        key.modules()
-            .iter()
-            .map(ImmutableString::as_str)
-            .chain([key.name()])
-            .collect::<Vec<_>>()
-            .join("::")
-    };
-    for (identity, fingerprint) in current.schemas().iter() {
-        let type_def::Identity::Script(key) = identity else {
-            continue;
-        };
-        match candidate.schemas().get(identity) {
-            Some(next) if next.same_representation(fingerprint) => {}
-            Some(_) => return Some(format!("`{}` changed its fields", path(key))),
-            None => return Some(format!("`{}` was removed", path(key))),
-        }
+    if let Some(reason) = departure(current.schemas(), candidate.schemas(), |identity, _| {
+        crate::types::nominal::census::holds(identity).then_some(Hold::Value)
+    }) {
+        return Some(reason);
     }
     if !crate::future::called_from_native() {
         return Some("the source changed".to_owned());
@@ -1659,6 +1670,122 @@ pub fn refusal(
             });
         }
     }
+    None
+}
+
+/// What still depends on a script type a save removed or changed the
+/// fields of (#1746).
+#[cfg(feature = "sync")]
+enum Hold {
+    /// A value of it lives.
+    Value,
+    /// A callable native code holds, which won't rebind in the new
+    /// generation, runs code that makes the old type.
+    Code,
+}
+
+/// Why `next` can't replace `current` for a script type `current` has
+/// and `next` removed or changed the fields of, which `hold` says still
+/// depends on it: given the type and its schema in `next`. A removed type
+/// is named first, as a type whose fields hold it changed only because it
+/// went. `None` when nothing depends on any.
+#[cfg(feature = "sync")]
+fn departure(
+    current: &program::schema::Manifest,
+    next: &program::schema::Manifest,
+    hold: impl Fn(&type_def::Identity, Option<&program::schema::Fingerprint>) -> Option<Hold>,
+) -> Option<String> {
+    let path = |key: &type_def::Key| {
+        key.modules()
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([key.name()])
+            .collect::<Vec<_>>()
+            .join("::")
+    };
+    let mut changed = None;
+    for (identity, fingerprint) in current.iter() {
+        let type_def::Identity::Script(key) = identity else {
+            continue;
+        };
+        let schema = next.get(identity);
+        if schema.is_some_and(|schema| schema.same_representation(fingerprint)) {
+            continue;
+        }
+        let Some(held) = hold(identity, schema) else {
+            continue;
+        };
+        match (schema, held) {
+            (Some(_), held) => {
+                changed.get_or_insert((key, held));
+            }
+            (None, Hold::Value) => {
+                return Some(format!(
+                    "`{}` was removed, but a live value holds it",
+                    path(key)
+                ));
+            }
+            (None, Hold::Code) => {
+                return Some(format!(
+                    "`{}` was removed, but a closure native code holds can still make one",
+                    path(key)
+                ));
+            }
+        }
+    }
+    changed.map(|(key, held)| match held {
+        Hold::Value => format!(
+            "`{}` changed its fields, but a live value holds it",
+            path(key)
+        ),
+        Hold::Code => format!(
+            "`{}` changed its fields, but a closure native code holds can still make the old one",
+            path(key)
+        ),
+    })
+}
+
+/// The status a runner ends with when [`admit`] refuses a generation it
+/// committed, having said why: `rawr run` starts the program again, with
+/// the new code (#1746).
+pub const REFUSED: i32 = 75;
+
+/// Admit `bootstrap`, a generation committed beside the running one, at
+/// the outermost entry from native code on the thread that owns the
+/// program (D553.3), where no call of the running generation is under
+/// way on it. A type the save removed or changed the fields of is checked
+/// again here, as values made since its compile may hold it (#1746): no
+/// value of it may live, and no callable native code holds that won't
+/// rebind in `bootstrap` may run code that makes it. `Some` says why it
+/// can't, and the running generation stays.
+#[cfg(feature = "sync")]
+#[must_use]
+pub fn admit(bootstrap: Bootstrap) -> Option<String> {
+    let next = Current::new(bootstrap);
+    if let Some(running) = CURRENT.with(|slot| slot.borrow().clone()) {
+        let kept = crate::future::kept();
+        let reason = departure(
+            running.bootstrap.generation().schemas(),
+            next.bootstrap.generation().schemas(),
+            |identity, schema| {
+                if crate::types::nominal::census::holds(identity) {
+                    return Some(Hold::Value);
+                }
+                kept.iter()
+                    .any(|(function, program)| {
+                        !crate::future::Remote::rebinds(&*next.shared, function, program.as_ref())
+                            && program.makes(identity).is_some_and(|made| {
+                                schema.is_none_or(|schema| !made.same_representation(schema))
+                            })
+                    })
+                    .then_some(Hold::Code)
+            },
+        );
+        if reason.is_some() {
+            return reason;
+        }
+    }
+    install(next);
     None
 }
 
@@ -1777,6 +1904,10 @@ impl crate::future::Remote for Shared {
         self.layouts
             .get(&enclosing(closure)?)
             .map(|closures| &**closures)
+    }
+
+    fn makes(&self, identity: &type_def::Identity) -> Option<&program::schema::Fingerprint> {
+        self.authority.model().schema(identity)
     }
 }
 

@@ -907,6 +907,16 @@ fn reaped(
             rawr_cli::events::restarting(reason);
             Ok(Some(Ended::Restart(reason.to_owned())))
         }
+        // The runner refused, as it admitted it, a save a value or a
+        // callable made since its compile depends on the old types of, and
+        // said why: the program starts again with the new code (#1746).
+        Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
+            rawr::island::REFUSED,
+        )))) if swapped_marked && lifecycle == rawr_import::process::Lifecycle::Run => {
+            let reason = "a value made before a save took effect holds its old types";
+            rawr_cli::events::restarting(reason);
+            Ok(Some(Ended::Restart(reason.to_owned())))
+        }
         Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(code))))
             if lifecycle == rawr_import::process::Lifecycle::Run =>
         {

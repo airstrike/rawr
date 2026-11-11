@@ -689,6 +689,16 @@ pub trait Remote: crate::func::SendSync {
         let _ = closure;
         None
     }
+
+    /// The schema of the script type `identity` this program's code makes
+    /// values of; `None` when it has no such type (#1746).
+    fn makes(
+        &self,
+        identity: &crate::type_def::Identity,
+    ) -> Option<&crate::program::schema::Fingerprint> {
+        let _ = identity;
+        None
+    }
 }
 
 /// A program any thread may call into.
@@ -803,9 +813,10 @@ pub fn outermost() -> bool {
     DEPTH.with(Cell::get) == 0
 }
 
-/// A callable a marked `main`'s own frame gave native code. `main` never
-/// runs again to make another, so a generation it can't run in restarts
-/// the program (D553.5).
+/// A callable native code holds, by its function and the program that
+/// made it. One a marked `main`'s own frame gave is in [`HELD`] too: `main`
+/// never runs again to make another, so a generation it can't run in
+/// restarts the program (D553.5).
 pub struct Held {
     function: item::Value,
     program: Program,
@@ -836,6 +847,52 @@ pub fn held() -> Vec<(item::Value, Program)> {
         held.iter()
             .filter_map(std::sync::Weak::upgrade)
             .map(|held| (held.function.clone(), held.program.clone()))
+            .collect()
+    })
+}
+
+/// Each callable script code gave native code, while native code holds
+/// it: code of the generation that made it, which runs when the callable
+/// doesn't rebind in a newer one (#1746).
+#[cfg(feature = "sync")]
+static KEPT: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
+
+#[cfg(not(feature = "sync"))]
+thread_local! {
+    static KEPT: RefCell<Vec<std::sync::Weak<Held>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn with_kept<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Held>>) -> R) -> R {
+    #[cfg(feature = "sync")]
+    return work(&mut lock(&KEPT));
+    #[cfg(not(feature = "sync"))]
+    return KEPT.with_borrow_mut(work);
+}
+
+/// `function` of `program` as a callable native code holds, kept in
+/// [`KEPT`] while it is held. A full list first lets go of the callables
+/// native code dropped, so keeping one costs a push.
+fn keep(function: &item::Value, program: &Program) -> Arc<Held> {
+    let kept = Arc::new(Held {
+        function: function.bind(Vec::new()),
+        program: program.clone(),
+    });
+    with_kept(|all| {
+        if all.len() == all.capacity() {
+            all.retain(|kept| kept.strong_count() > 0);
+        }
+        all.push(Arc::downgrade(&kept));
+    });
+    kept
+}
+
+/// Each callable native code holds, with the program that made it.
+pub fn kept() -> Vec<(item::Value, Program)> {
+    with_kept(|kept| {
+        kept.retain(|kept| kept.strong_count() > 0);
+        kept.iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .map(|kept| (kept.function.clone(), kept.program.clone()))
             .collect()
     })
 }
@@ -887,8 +944,9 @@ pub(crate) fn clone_value(value: &Dynamic) -> Option<RawrResultOf<Dynamic>> {
 pub struct Callable {
     function: item::Value,
     program: Program,
-    /// Set when a marked `main`'s own frame made it.
-    _held: Option<Arc<Held>>,
+    /// What [`KEPT`] holds it by, and [`HELD`] too when a marked `main`'s
+    /// own frame made it.
+    _kept: Arc<Held>,
 }
 
 impl std::fmt::Debug for Callable {
@@ -907,18 +965,14 @@ impl Callable {
         let program = with_host(|host| host.share())
             .flatten()
             .ok_or_else(|| failure("rawr: no program runs closures on this thread"))?;
-        let held = outermost().then(|| {
-            let held = Arc::new(Held {
-                function: function.bind(Vec::new()),
-                program: program.clone(),
-            });
-            with_held(|all| all.push(Arc::downgrade(&held)));
-            held
-        });
+        let kept = keep(&function, &program);
+        if outermost() {
+            with_held(|all| all.push(Arc::downgrade(&kept)));
+        }
         Ok(Self {
             function,
             program,
-            _held: held,
+            _kept: kept,
         })
     }
 
@@ -926,10 +980,11 @@ impl Callable {
     /// through a proxy (D594).
     #[cfg(feature = "sync")]
     pub(crate) fn of_item(function: item::Value, program: Program) -> Self {
+        let kept = keep(&function, &program);
         Self {
             function,
             program,
-            _held: None,
+            _kept: kept,
         }
     }
 

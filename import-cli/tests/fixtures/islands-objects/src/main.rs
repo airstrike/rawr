@@ -79,4 +79,16 @@ fn main() {
         println!("{}", shown[1].summary(2));
     });
     println!("{}", badge::described(7));
+    // Run on, as a running program does, till told to stop: native code
+    // keeps a marked page and updates and views it each tick.
+    if let Some(stop) = std::env::var_os("ISLANDS_STOP") {
+        let mut spare = badge::spare();
+        let mut tick = 0;
+        while !std::path::Path::new(&stop).exists() {
+            tick += 1;
+            spare.update(Message::Bump(1));
+            println!("tick {tick} {}", spare.view());
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }

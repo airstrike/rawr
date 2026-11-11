@@ -259,7 +259,8 @@ impl Reloader {
         // reload's replaces it first.
         future::offer(move || {
             let outcome = match swap(&state.engine, candidate) {
-                Ok(()) => Outcome::Swapped,
+                Ok(None) => Outcome::Swapped,
+                Ok(Some(reason)) => Outcome::Restarting { reason },
                 Err(error) => Outcome::Failed {
                     message: error.to_string(),
                 },
@@ -318,13 +319,13 @@ fn bind(
 }
 
 /// Bind `candidate` to a next generation of the running program's runtime,
-/// evaluate its top level there and publish it: its next calls from native
-/// code run in it.
-fn swap(engine: &Shared<Engine>, candidate: reload::Candidate) -> Result<(), Error> {
+/// evaluate its top level there and admit it: its next calls from native
+/// code run in it. `Some` says why it can't replace the running program
+/// now, which keeps running (#1746).
+fn swap(engine: &Shared<Engine>, candidate: reload::Candidate) -> Result<Option<String>, Error> {
     let bootstrap = bind(engine, candidate, None)?;
     bootstrap.evaluate_top_level().map_err(Error::Evaluate)?;
-    island::publish(bootstrap);
-    Ok(())
+    Ok(island::admit(bootstrap))
 }
 
 /// Run the published program's `main` to its status, as a generated runner

@@ -90,3 +90,57 @@ pub fn described(page_index: usize) -> String {
         page.count
     )
 }
+
+/// A page of a private type native code keeps while the program runs, as
+/// a `Box<dyn page::Page>`: the running program holds its value, and its
+/// step's, which native code never names (#1746).
+#[derive(Clone, Debug)]
+struct Spare {
+    ticks: usize,
+    step: Step,
+}
+
+/// How far a spare page counts at each update.
+#[derive(Clone, Debug)]
+struct Step {
+    by: usize,
+}
+
+impl page::Page for Spare {
+    fn title(&self) -> String {
+        "spare".to_string()
+    }
+
+    fn update(&mut self, _message: Message) -> Task {
+        self.ticks += self.step.by;
+        Task::None
+    }
+
+    fn view(&self) -> String {
+        format!("spare {}", self.ticks)
+    }
+
+    fn summary(&self, _index: usize) -> String {
+        self.view()
+    }
+
+    fn label(&self) -> &str {
+        "spare"
+    }
+
+    fn items(&self) -> &[String] {
+        &[]
+    }
+
+    fn draw(&self) -> page::Drawn<'_> {
+        page::drawn("spare")
+    }
+}
+
+/// The page native code keeps while the program runs.
+pub fn spare() -> Box<dyn page::Page> {
+    Box::new(Spare {
+        ticks: 0,
+        step: Step { by: 1 },
+    })
+}
