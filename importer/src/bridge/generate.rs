@@ -7913,6 +7913,21 @@ fn render_source(
             }
         }
     }
+    // Without a facade plan the demand is the program, which names each
+    // trait whose members it reaches through the trait.
+    if facade.is_none() {
+        let named = plans
+            .iter()
+            .filter_map(demanded_trait)
+            .collect::<std::collections::BTreeSet<_>>();
+        for path in named {
+            writeln!(
+                traits,
+                "#[allow(unused_imports, deprecated)]\npub use {path} as _;"
+            )
+            .map_err(request::unwritable)?;
+        }
+    }
     output
         .write_all(
             b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\n",
@@ -20742,7 +20757,8 @@ fn render_container_path(
         instance => concrete_type(instance),
     });
     if let Some(instance) = instance {
-        let instance = match through_trait(signature, substitutions)? {
+        let owner = is_trait_member(signature).then_some(path);
+        let instance = match through_trait(signature, substitutions, owner)? {
             _ if type_position => instance,
             Some(through) => format!("<{instance} as {through}>"),
             None => format!("<{instance}>"),
@@ -24107,7 +24123,7 @@ fn render_method_head(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
-    let Some(through) = through_trait(signature, substitutions)? else {
+    let Some(through) = through_trait(signature, substitutions, None)? else {
         write!(output, "receiver.{name}").map_err(encoding)?;
         render_item_turbofish(
             signature,
@@ -24143,10 +24159,12 @@ fn render_method_head(
 /// (`signature::Signature::through`): one the call leaves open is `_`, and
 /// trailing ones the trait defaults are left to their defaults. `None` for
 /// a method called on its receiver, or a trait or argument with no Rust
-/// spelling.
+/// spelling. A trait no facade spells is at `owner`, the path of the trait
+/// the method is a member of ([`is_trait_member`]), when the caller has it.
 fn through_trait(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
+    owner: Option<&str>,
 ) -> Result<Option<String>, request::Error> {
     let Some(convert::Type::Nominal {
         definition,
@@ -24155,7 +24173,9 @@ fn through_trait(
     else {
         return Ok(None);
     };
-    let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+    let Some(path) = TYPE_PATHS
+        .with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+        .or_else(|| owner.map(str::to_owned))
     else {
         return Ok(None);
     };
@@ -24186,6 +24206,28 @@ fn through_trait(
         .map(|argument| argument.unwrap_or_else(|| "_".to_owned()))
         .collect::<Vec<_>>();
     Ok(Some(format!("{path}<{}>", written.join(", "))))
+}
+
+/// Whether a method called through a trait is a member of the trait's impl
+/// for a number or an object (`surface::scalar`, `surface::object`), which
+/// has no path of its own, so its container's path is the trait's.
+fn is_trait_member(signature: &crate::classify::representability::signature::Signature) -> bool {
+    signature.through().is_some()
+        && matches!(
+            signature.instance(),
+            Some(convert::Type::Builtin(_) | convert::Type::Object(_))
+        )
+}
+
+/// The trait a demand reaches `plan` through when it is a member of the
+/// trait ([`is_trait_member`]), by the plan's path to it.
+fn demanded_trait(plan: &Plan) -> Option<String> {
+    let (Operation::Method { signature, .. } | Operation::Function { signature, .. }) =
+        plan.operation()
+    else {
+        return None;
+    };
+    is_trait_member(signature).then(|| rust_path(plan))
 }
 
 fn render_item_turbofish(
