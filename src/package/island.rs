@@ -29,10 +29,12 @@
 //!
 //! The generated files are the island's shape: a save that changes them
 //! (a signature, a struct's fields, a constant native code reads) needs a
-//! new native build, so the program restarts. A save that leaves them
-//! unchanged (a function body, a private item) swaps in the running
-//! program at the next call through a trampoline, and so does a type's new
-//! derive, whose impl the native code built without it never calls.
+//! new native build, so the program restarts, and so does one that takes
+//! an item away from native code. A save that leaves them unchanged (a
+//! function body, a private item) swaps in the running program at the
+//! next call through a trampoline, and so does a type's new derive or a
+//! new item native code can see, which the native code built without it
+//! never names (#1737, #1741).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -159,7 +161,8 @@ pub(crate) struct Shadow {
 /// derives apart from its text. Two shapes are equal exactly when the
 /// generated files differ at most in their comments, their layout and
 /// their inert attributes, which rustc builds the same, so an unchanged
-/// shape needs no new native build (#1646).
+/// shape needs no new native build (#1646). [`Shape::change`] says which
+/// other changes need none.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Shape {
     entries: BTreeMap<String, Entry>,
@@ -180,6 +183,12 @@ enum Kind {
     Type,
     Function,
     Constant,
+    /// What built native code reaches without naming it, so a new one
+    /// needs a new native build: a `Drop` impl's `drop`, which the drop
+    /// glue of each value native code drops calls, and a stand-in, whose
+    /// maker the runner looks up to give a marked value to native code as
+    /// a `dyn Trait` (#1741).
+    Implicit,
     Other,
 }
 
@@ -201,6 +210,17 @@ impl Shape {
     /// and so does one that changes what else is generated for its type,
     /// as `Copy` ends the tracking of its drops and a native trait
     /// object's stand-in takes each std derive: the line names the derive.
+    ///
+    /// A new item native code can see needs none either, by the same
+    /// reasoning (#1741): a function, type, constant, trait, module or
+    /// re-export, an impl's function, or a trait's impl for a type, which
+    /// native code built without it never names. A marked value at a native
+    /// generic's new instance, as a new impl's type at a native bound, is a
+    /// use the running build doesn't cover, which the runner's compile
+    /// finds. A new [`Kind::Implicit`] entry does need one: native code
+    /// reaches a `Drop` impl and a stand-in without naming them. An item
+    /// that goes away needs one, as native code may name it and rustc must
+    /// say so, and so does one whose text changes, as a signature does.
     #[must_use]
     pub fn change(&self, newer: &Self) -> Option<String> {
         if self == newer {
@@ -210,7 +230,7 @@ impl Shape {
             Kind::Type => "its fields",
             Kind::Function => "its signature",
             Kind::Constant => "its value, which native code reads",
-            Kind::Other => "what native code sees of it",
+            Kind::Implicit | Kind::Other => "what native code sees of it",
         };
         // An entry of a type whose derives changed, its own or one
         // generated for it (`Ball as dyn Trait`), changed with them.
@@ -224,19 +244,30 @@ impl Shape {
         };
         for (path, entry) in &newer.entries {
             let changed = match self.entries.get(path) {
-                None => format!("native code can now see `{path}`"),
+                None if entry.kind == Kind::Implicit => {
+                    format!("native code can now see `{path}`")
+                }
                 Some(old) if old != entry => format!("`{path}` changed {}", what(entry.kind)),
-                Some(_) => continue,
+                None | Some(_) => continue,
             };
             return Some(derived(path).unwrap_or(changed));
         }
-        if let Some(path) = self
+        let removed = self
             .entries
             .keys()
-            .find(|path| !newer.entries.contains_key(*path))
-        {
+            .filter(|path| !newer.entries.contains_key(*path))
+            .collect::<Vec<_>>();
+        if let Some(first) = removed.first() {
+            // Each item gone, without the members of one that went with it.
+            let items = removed
+                .iter()
+                .filter(|path| !removed.iter().any(|owner| member(path, owner)))
+                .map(|path| format!("`{path}`"))
+                .collect::<Vec<_>>();
+            let items = items.iter().map(String::as_str).collect::<Vec<_>>();
             return Some(
-                derived(path).unwrap_or_else(|| format!("native code can no longer see `{path}`")),
+                derived(first)
+                    .unwrap_or_else(|| format!("native code can no longer see {}", listed(&items))),
             );
         }
         self.derives
@@ -248,6 +279,18 @@ impl Shape {
                     .is_some_and(|kept| !derives.is_subset(kept))
             })
             .find_map(|(path, _)| self.derive_change(newer, path))
+    }
+
+    /// The first item native code can see in `newer` that it can't in
+    /// `self`, in a line that names it, as "native code can now see
+    /// `theme::Inset`"; `None` when there is none.
+    #[must_use]
+    pub fn added(&self, newer: &Self) -> Option<String> {
+        newer
+            .entries
+            .keys()
+            .find(|path| !self.entries.contains_key(*path))
+            .map(|path| format!("native code can now see `{path}`"))
     }
 
     /// The first type whose derives differ from `self` to `newer`, in a
@@ -295,6 +338,14 @@ impl Shape {
         }
         shape
     }
+}
+
+/// Whether the entry at `path` is a member of the item at `owner`, its
+/// impl's function (`physics::Ball::fall`) or a stand-in for it
+/// (`physics::Ball as dyn page::Page`).
+fn member(path: &str, owner: &str) -> bool {
+    path.strip_prefix(owner)
+        .is_some_and(|rest| rest.starts_with("::") || rest.starts_with(' '))
 }
 
 /// `names` in a line: `A`, `A and B`, `A, B and C`.
@@ -2078,6 +2129,11 @@ impl<'a> Generator<'a> {
             );
         }
         let formats = trait_.is_some_and(formatting);
+        // Drop glue calls a `Drop` impl's `drop` unnamed.
+        let kind = match trait_.and_then(|path| path.segments.last()) {
+            Some(last) if last.name.text == "Drop" => Kind::Implicit,
+            _ => Kind::Function,
+        };
         let mut beside = Vec::new();
         for function in functions {
             let member = format!("{prefix}::{}", function.name.text);
@@ -2097,7 +2153,7 @@ impl<'a> Generator<'a> {
                     shape.insert(
                         member,
                         Entry {
-                            kind: Kind::Function,
+                            kind,
                             text: format!("{header}\n{stub}{entries}"),
                         },
                     );
@@ -2324,7 +2380,7 @@ impl<'a> Generator<'a> {
         place.shape.insert(
             format!("{path} as dyn {written}"),
             Entry {
-                kind: Kind::Other,
+                kind: Kind::Implicit,
                 text: text.clone(),
             },
         );
@@ -7846,6 +7902,58 @@ mod tests {
             Some("`physics::Id` derives Copy now")
         );
         assert_eq!(id("").shape.change(&id("#[derive(Debug)]\n").shape), None);
+    }
+
+    /// Native code built without an item never names it: a new item keeps
+    /// the shape, unless native code reaches it unnamed, as a `Drop` impl
+    /// or a stand-in, and the items that go away are named (#1741).
+    #[test]
+    fn a_new_item_keeps_the_shape_and_the_lost_ones_are_named() {
+        let ball = |more: &str| {
+            generate(&format!(
+                "// rawr\nuse crate::page;\npub struct Ball {{ pub x: f64 }}\n\
+                 pub fn fall(ball: &mut Ball) {{ ball.x -= 1.0; }}\n{more}"
+            ))
+        };
+        let before = ball("");
+        let added = ball(
+            "#[derive(Debug)]\npub struct Inset { pub radius: f32 }\n\
+             pub fn inset() -> Inset { Inset { radius: 1.0 } }\n\
+             pub const RADIUS: f32 = 1.0;\npub trait Rounded { fn round(&self) -> f32; }\n\
+             impl Ball { pub fn rise(&mut self) { self.x += 1.0; } }\n\
+             impl Default for Ball { fn default() -> Ball { Ball { x: 0.0 } } }\n",
+        );
+        assert_ne!(before.files, added.files);
+        assert_eq!(before.shape.change(&added.shape), None);
+        assert_eq!(
+            before.shape.added(&added.shape).as_deref(),
+            Some("native code can now see `physics::Ball::Default::default`")
+        );
+        assert_eq!(
+            added.shape.change(&before.shape).as_deref(),
+            Some(
+                "native code can no longer see `physics::Ball::Default::default`, \
+                 `physics::Ball::rise`, `physics::Inset`, `physics::RADIUS`, \
+                 `physics::Rounded` and `physics::inset`"
+            )
+        );
+        // A type's members go with it.
+        let point = ball("pub struct Point { pub y: f64 }\nimpl Point { pub fn up(&self) {} }\n");
+        assert_eq!(
+            point.shape.change(&before.shape).as_deref(),
+            Some("native code can no longer see `physics::Point`")
+        );
+        let dropped = ball("impl Drop for Ball { fn drop(&mut self) {} }\n");
+        assert_eq!(
+            before.shape.change(&dropped.shape).as_deref(),
+            Some("native code can now see `physics::Ball::Drop::drop`")
+        );
+        let held =
+            ball("impl page::Page for Ball { fn title(&self) -> String { String::new() } }\n");
+        assert_eq!(
+            before.shape.change(&held.shape).as_deref(),
+            Some("native code can now see `physics::Ball as dyn page::Page`")
+        );
     }
 
     #[test]
