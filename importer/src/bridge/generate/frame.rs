@@ -45,7 +45,7 @@ impl Frame {
         cohort: &super::Cohort<'_>,
     ) -> Result<Self, request::Error> {
         let drift = request::drift;
-        let prefix = format!("{}::__rawr_self::", script.trait_path());
+        let trait_path = root_spelling(script.trait_path());
         let mut found = BTreeMap::<(usize, Option<String>), convert::Type>::new();
         let mut named = Vec::new();
         for plan in cohort.plans {
@@ -66,7 +66,10 @@ impl Frame {
             else {
                 continue;
             };
-            if !path.starts_with(&prefix) {
+            if path
+                .rsplit_once("::__rawr_self::")
+                .is_none_or(|(owner, _)| root_spelling(owner) != trait_path)
+            {
                 continue;
             }
             let Some((method, index, projection)) = crate::surface::opaque::parameter_of(&path)
@@ -431,6 +434,17 @@ impl<{header}> Frame for {name}<{arguments}> {{
                 &format!("self.mutable_{slot}(arguments.arena, receiver, "),
             ))
     }
+}
+
+/// The path of the trait `path` names, as its root spells it: an impl may
+/// name its trait by another of its paths than the one the facade declares
+/// its methods' opaque types under, as `serde::de::Deserialize` is
+/// `serde::Deserialize` (#1711).
+fn root_spelling(path: &str) -> String {
+    super::PATH_IDENTITIES
+        .with_borrow(|identities| identities.get(path).copied())
+        .and_then(|identity| super::root_trait_path(&identity))
+        .unwrap_or_else(|| path.to_owned())
 }
 
 /// Whether `ty` is the opaque type of a trait method's type parameter, or

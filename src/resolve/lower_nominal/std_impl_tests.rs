@@ -428,6 +428,37 @@ main();
 }
 
 #[test]
+fn language_a_vec_of_a_type_without_default_is_default() {
+    // `Vec<T>: Default` and `VecDeque<T>: Default` hold for any `T`, so
+    // `mem::take` empties a `Vec` of a struct that is not `Default`, as
+    // iced's todos takes its tasks (#1711). `[T; 1]` asks it of `T`.
+    let source = r#"
+use std::collections::VecDeque;
+
+#[derive(Debug)]
+struct Task {
+    name: String,
+}
+
+fn main() {
+    let mut tasks = vec![Task { name: String::from("write") }];
+    let taken = std::mem::take(&mut tasks);
+    println!("{} {:?}", tasks.len(), taken);
+    let mut queue = VecDeque::from(vec![Task { name: String::from("read") }]);
+    let drained = std::mem::take(&mut queue);
+    println!("{} {}", queue.len(), drained.len());
+}
+main();
+"#;
+    assert_eq!(printed(source), "0 [Task { name: \"write\" }]\n0 1\n");
+    let report = refused(
+        "struct Task;\nfn main() {\n    let mut one = [Task];\n    \
+         let _ = std::mem::take(&mut one);\n}\nmain();\n",
+    );
+    assert!(report.contains("Default"), "{report}");
+}
+
+#[test]
 fn language_try_into_takes_its_error_type_from_the_impl_its_target_selects() {
     // `let c: Result<Color, _> = x.try_into();` is a `Result<Color,
     // IntoColorError>` from that statement on, as rustc infers it once

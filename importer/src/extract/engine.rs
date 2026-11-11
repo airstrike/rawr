@@ -1518,10 +1518,17 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 ));
             }
             let mut reexports = inherited.to_vec();
-            // A derive names no definition, so the crates its re-export
-            // passes through, a proc macro's among them, aren't loaded.
-            if names_only && !matches!(export.target, ChildTarget::Derive) {
-                for hop in &export.hops {
+            // Each hop's crate registers, since the re-export names it. A
+            // sysroot crate's authority comes only from registration, so its
+            // hop registers on any walk, a derive's too: serde's
+            // `__private::fmt::Debug` passes through alloc, whose items a
+            // walk may extract none of (#1710). A Cargo crate's comes from
+            // its unit, so its hop registers only where the walk extracts
+            // nothing, and never a derive's: the crates a derive passes
+            // through, a proc macro's among them, aren't loaded.
+            let derive = matches!(export.target, ChildTarget::Derive);
+            for hop in &export.hops {
+                if hop.sysroot || names_only && !derive {
                     self.register(hop.clone())?;
                 }
             }
@@ -2336,12 +2343,20 @@ mod tests {
                 span: span(),
                 reexports: Vec::new(),
                 // Through the proc-macro crate that defines it, which the
-                // walk doesn't load.
-                hops: vec![super::Crate {
-                    sysroot: false,
-                    crate_name: "fixture_derive".to_owned(),
-                    stable_crate_id: "fedcba9876543210".to_owned(),
-                }],
+                // walk doesn't load, and through alloc, which registers as
+                // serde's `__private::fmt::Debug` passes through it (#1710).
+                hops: vec![
+                    super::Crate {
+                        sysroot: false,
+                        crate_name: "fixture_derive".to_owned(),
+                        stable_crate_id: "fedcba9876543210".to_owned(),
+                    },
+                    super::Crate {
+                        sysroot: true,
+                        crate_name: "alloc".to_owned(),
+                        stable_crate_id: "0123456789abcdef".to_owned(),
+                    },
+                ],
                 target: ChildTarget::Derive,
             }),
         });
@@ -2372,6 +2387,14 @@ mod tests {
                 .crates
                 .iter()
                 .all(|krate| krate.crate_name != "fixture_derive"),
+            "{:?}",
+            extracted.crates
+        );
+        assert!(
+            extracted
+                .crates
+                .iter()
+                .any(|krate| krate.sysroot && krate.crate_name == "alloc"),
             "{:?}",
             extracted.crates
         );
