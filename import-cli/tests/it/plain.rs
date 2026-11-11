@@ -680,17 +680,20 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
 
 /// A crate's bindings are shared per machine: a second project with the
 /// same program reads them from rawr's home, with no nightly build and no
-/// probe, and its next run takes the resolution back with no Cargo. semver
-/// is small enough to be read whole, so a program that uses other items of
-/// it reads them from the home too (D609.4).
+/// probe, and its next run takes the resolution back with no Cargo. The
+/// table holds what the first program demanded, not the crate whole: a
+/// program that uses other items of it probes them once, and the table it
+/// grows in the home answers that program in another project (D609.4,
+/// #1665).
 #[test]
 fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     // This test owns its binding namespace. Old protocol generations in the
     // suite's general home are valid retained entries, not extra publications
     // by this run. Preserve the runtime while starting with cold bindings.
     let home = crate::support::scratch().join("semver-sharing-home");
-    let bindings = home.join("bindings");
-    let _ = fs::remove_dir_all(&bindings);
+    // Each protocol keeps its own bindings, under `formats/<protocol>`.
+    let formats = home.join("formats");
+    let _ = fs::remove_dir_all(&formats);
     let projects = ["first", "second", "other", "other-again"]
         .map(|name| crate::support::scratch().join(format!("shared-{name}")));
     for root in &projects {
@@ -725,8 +728,14 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
         nightly(first),
         "the first project starts with cold bindings"
     );
-    let published = fs::read_dir(&bindings)
+    let published = fs::read_dir(&formats)
         .unwrap()
+        .flatten()
+        .flat_map(|format| {
+            fs::read_dir(format.path().join("bindings"))
+                .into_iter()
+                .flatten()
+        })
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             let meta = fs::read_to_string(path.join("meta.json")).ok()?;
@@ -735,7 +744,10 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
         .collect::<Vec<_>>();
     assert_eq!(published.len(), 1, "{published:?}");
     let table = fs::read_to_string(published[0].join("table.json")).unwrap();
-    assert!(table.contains("\"whole\":true"), "semver is read whole");
+    assert!(
+        table.contains("\"whole\":false"),
+        "a cold run walks semver for its demand alone"
+    );
 
     // The same program in a second project: no nightly build, and a run
     // after it takes its resolution back.
@@ -764,10 +776,15 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
         "the remembered run resolved again"
     );
 
-    // Other items of the crate replay from the whole table, and the same
-    // program in another project takes them from the home again.
+    // Other items of the crate are probed once and grow the home's table,
+    // and the same program in another project takes them from it.
     run(other, "true\n");
-    assert!(!nightly(other));
+    assert!(nightly(other), "the table lacks `VersionReq`");
+    let grown = fs::read_to_string(published[0].join("table.json")).unwrap();
+    assert!(
+        grown.len() > table.len(),
+        "the new demand grows the home's table"
+    );
     run(again, "true\n");
     assert!(!nightly(again));
 }
@@ -2124,11 +2141,11 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     );
 }
 
-/// A crate's whole table, made by a program that called none of its
-/// macros, still answers a later program's macro whose `$crate` names
-/// another crate (#281): the whole walk keeps every crate's `$crate` root.
+/// A crate's table, made by a program that called none of its macros,
+/// grows to answer a later program's macro whose `$crate` names another
+/// crate (#281, #1665).
 #[test]
-fn a_whole_table_answers_a_later_macros_crate_root() {
+fn a_table_grows_for_a_later_macros_crate_root() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
     let root = crate::support::scratch().join("whole-macro-roots");
     let _ = fs::remove_dir_all(&root);
@@ -2157,11 +2174,12 @@ fn a_whole_table_answers_a_later_macros_crate_root() {
 }
 
 /// A macro defined in the selected crate itself, whose `$crate` is that
-/// crate, replays from the crate's whole table with no nightly process
-/// (#404). The crates sit outside the project, so they aren't workspace
-/// members and their tables are kept with the project (#398).
+/// crate, replays from the table a program that called it made, with no
+/// nightly process (#404). The crates sit outside the project, so they
+/// aren't workspace members and their tables are kept with the project
+/// (#398).
 #[test]
-fn a_whole_table_answers_the_selected_crates_own_macro() {
+fn a_table_answers_the_selected_crates_own_macro() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
     let base = crate::support::scratch().join("whole-own-macro");
     let crates = base.join("crates");
@@ -2219,19 +2237,19 @@ fn a_whole_table_answers_the_selected_crates_own_macro() {
         found
     };
     run(
-        "// rawr\nfn main() {\n    println!(\"{}\", outer::__offset());\n}\n",
-        "100\n",
+        "// rawr\nfn main() {\n    println!(\"{} {}\", outer::__offset(), outer::offset!(5));\n}\n",
+        "100 105\n",
     );
     assert!(
         root.join("target/rawr/bindings").is_dir(),
-        "outer's whole table is kept with the project"
+        "outer's table is kept with the project"
     );
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let saved = std::time::SystemTime::now();
     std::thread::sleep(std::time::Duration::from_millis(1100));
     run(
-        "// rawr\nfn main() {\n    println!(\"{} {}\", outer::__offset(), outer::offset!(5));\n}\n",
-        "100 105\n",
+        "// rawr\nfn main() {\n    println!(\"{}\", outer::offset!(7));\n}\n",
+        "107\n",
     );
     let traces = traces(saved);
     assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
@@ -2277,12 +2295,12 @@ fn a_project_dependency_the_runner_also_needs_coexists() {
     );
 }
 
-/// A save that names a new path of a path dependency, here a function,
-/// replays the crates' whole tables kept with the project, after checking
-/// their files: no nightly build runs (#398). A changed path crate is
-/// extracted again.
+/// A save that names other paths of a path dependency, here one function
+/// of the two the first program named, replays the crates' tables kept
+/// with the project, after checking their files: no nightly build runs
+/// (#398). The tables hold what was demanded, never a crate whole (#1665).
 #[test]
-fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
+fn a_save_the_path_dependencys_tables_hold_replays_them() {
     let base = crate::support::scratch().join("path-tables");
     let crates = base.join("crates");
     let root = base.join("app");
@@ -2344,8 +2362,7 @@ fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
         }
         found
     };
-    let bound =
-        "// rawr\nfn main() {\n    let _bound = facts_a::left();\n    println!(\"{}\", 1);\n}\n";
+    let bound = "// rawr\nfn main() {\n    let _bound = facts_a::left();\n    let both = facts_a::both();\n    let _ = both;\n    println!(\"{}\", 1);\n}\n";
     run(bound, "1\n");
     run(bound, "1\n");
     assert!(
@@ -2381,7 +2398,7 @@ fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
     let saved = std::time::SystemTime::now();
     std::thread::sleep(std::time::Duration::from_millis(1100));
     run(
-        "// rawr\nfn main() {\n    let _bound = facts_a::left();\n    let both = facts_a::both();\n    let _ = both;\n    println!(\"{}\", 2);\n}\n",
+        "// rawr\nfn main() {\n    let both = facts_a::both();\n    let _ = both;\n    println!(\"{}\", 2);\n}\n",
         "2\n",
     );
     let traces = nightly(saved);
