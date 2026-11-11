@@ -3824,7 +3824,8 @@
     {"issue":1742,"title":"RAWR_VERBOSE says what each start ran: Cargo resolutions, nightly builds, probes, runner builds and rounds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
     {"issue":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open","category":"Divergences from rustc"},
-    {"issue":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed","category":"Shared dependency cache (D607)"}
+    {"issue":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5049,7 +5050,8 @@
             {"number":1741,"title":"A new pub item no native code uses prepares a native build; it could swap as a new derive does","state":"closed"},
             {"number":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"open"},
             {"number":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open"},
-            {"number":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed"}
+            {"number":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed"},
+            {"number":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"open"}
           ]
         }
       ]
