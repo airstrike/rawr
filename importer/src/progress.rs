@@ -328,8 +328,9 @@ pub fn work() -> Work {
 /// harnesses it bound, how many units the nightly compiled, how many build
 /// outputs it copied into a resolution bundle and how many bundles it
 /// sealed, whether the probe ran, how many definitions the round read from
-/// the API and classified, how many classified paths it generated bindings
-/// for, and how many of the program's sources it parsed. A stage a cache
+/// the API, how many compiler sidecars it canonicalized into an API, how
+/// many definitions it classified, how many classified paths it generated
+/// bindings for, and how many of the program's sources it parsed. A stage a cache
 /// answered counts nothing.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Round {
@@ -339,6 +340,7 @@ pub struct Round {
     sealed: usize,
     probed: usize,
     read: usize,
+    canonicalized: usize,
     classified: usize,
     generated: usize,
     parsed: usize,
@@ -349,13 +351,14 @@ impl std::fmt::Display for Round {
         write!(
             formatter,
             "harnesses {}, compiled {}, copied {}, sealed {}, probes {}, read {}, \
-             classified {}, generated {}, parsed {}",
+             canonicalized {}, classified {}, generated {}, parsed {}",
             self.harnessed,
             self.compiled,
             self.copied,
             self.sealed,
             self.probed,
             self.read,
+            self.canonicalized,
             self.classified,
             self.generated,
             self.parsed
@@ -395,6 +398,11 @@ fn count_round(stage: impl FnOnce(&mut Round) -> &mut usize, amount: usize) {
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn read(definitions: usize) {
     count_round(|round| &mut round.read, definitions);
+}
+
+/// Count the compiler `sidecars` canonicalized into an API in this round.
+pub(crate) fn canonicalized(sidecars: usize) {
+    count_round(|round| &mut round.canonicalized, sidecars);
 }
 
 /// Count `definitions` classified in this round.

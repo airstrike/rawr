@@ -49,6 +49,34 @@ pub(crate) fn key(
     Some(digest.finalize().into())
 }
 
+/// The memo key for an API read from shared tables. Its `request` names the
+/// tables and the context they were read under, which is all the API is a
+/// function of. The toolchain attestation its node sits under also names the
+/// driver's path and bytes, which every install replaces while no table
+/// changes; keyed apart from it, a new install stages the API it read last
+/// instead of canonicalizing the tables again.
+pub(crate) fn shared_key(
+    request: &[u8; 32],
+    policy: &[u8; 32],
+    store_context: &[u8; 32],
+    limits: &crate::limits::Limits,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    let mut field = |bytes: &[u8]| {
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    };
+    field(b"rawr.api.memo.shared/v1");
+    field(&super::CANONICALIZER_VERSION.to_le_bytes());
+    field(&crate::extract::protocol::SCHEMA.to_le_bytes());
+    field(&Product::SCHEMA.to_le_bytes());
+    field(request);
+    field(policy);
+    field(store_context);
+    field(format!("{limits:?}").as_bytes());
+    digest.finalize().into()
+}
+
 fn path(context: &crate::context::Context, key: &[u8; 32]) -> PathBuf {
     context
         .rawr()

@@ -1136,7 +1136,8 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
             .to_owned()
     };
     assert!(
-        round(1).ends_with("probes 0, read 0, classified 0, generated 0, parsed 0"),
+        round(1)
+            .ends_with("probes 0, read 0, canonicalized 0, classified 0, generated 0, parsed 0"),
         "{said}"
     );
     for number in 2..=4 {

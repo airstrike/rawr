@@ -634,6 +634,9 @@ pub(crate) struct Input {
     path: PathBuf,
     digest: Option<Digest>,
     role: Role,
+    /// Whether this is the manifest of Rawr's own crate, whose path is the
+    /// host directory of the Rawr build that resolves it.
+    rawr: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -2845,6 +2848,7 @@ impl Authority {
                 path: lock.clone(),
                 digest: None,
                 role: Role::Lock,
+                rawr: false,
             });
             if present {
                 let lock = canonical_file("Cargo authority lock", &lock)?;
@@ -2883,6 +2887,7 @@ impl Authority {
             path: manifest.to_path_buf(),
             digest: Some(digest(&bytes)),
             role: Role::Manifest,
+            rawr: false,
         });
         if let Some(input) = lock_input {
             inputs.push(input);
@@ -3166,14 +3171,24 @@ fn versioned_request_identity(
     provisional_manifest: &str,
 ) -> Digest {
     Digest(
-        versioned_view(request, definition.identity(), provisional_manifest)
-            .finalize()
-            .into(),
+        versioned_view(
+            request,
+            definition.identity(),
+            provisional_manifest,
+            Rendered::Harness,
+        )
+        .finalize()
+        .into(),
     )
 }
 
-fn versioned_view(request: &Request, universe: &[u8; 32], provisional_manifest: &str) -> Sha256 {
-    let mut identity = cargo_view(request, universe, provisional_manifest);
+fn versioned_view(
+    request: &Request,
+    universe: &[u8; 32],
+    provisional_manifest: &str,
+    rendered: Rendered,
+) -> Sha256 {
+    let mut identity = cargo_view(request, universe, provisional_manifest, rendered);
     // Demand changes what the probe extracts. An empty demand keeps
     // every existing identity; v2 is demand-seeded extraction.
     if !request.demand.is_empty() {
@@ -3199,17 +3214,23 @@ fn cargo_identity(
     provisional_manifest: &str,
 ) -> Digest {
     Digest(
-        cargo_view(request, definition.identity(), provisional_manifest)
-            .finalize()
-            .into(),
+        cargo_view(
+            request,
+            definition.identity(),
+            provisional_manifest,
+            Rendered::Harness,
+        )
+        .finalize()
+        .into(),
     )
 }
 
 /// The request as the API's semantics name it: [`versioned_request_identity`]
 /// with the universe as it resolves, and Rawr's own crate named by its alias
-/// alone. Its path is the host directory of the Rawr build that resolves it,
-/// which moves with every build while no extracted crate's API changes; the
-/// lockfile the API's context names pins its version.
+/// alone, in the manifest and among the inputs. Its path is the host
+/// directory of the Rawr build that resolves it, which moves with every
+/// build while no extracted crate's API changes; the lockfile the API's
+/// context names pins its version.
 fn semantic_request_identity(
     request: &Request,
     definition: &universe::Definition,
@@ -3217,11 +3238,24 @@ fn semantic_request_identity(
     let manifest = render(request, None, Rendered::Semantic)?;
     let mut identity = Sha256::new();
     identity.update(b"rawr.import.cargo.semantic-request/v1");
-    identity.update(versioned_view(request, definition.semantic_identity(), &manifest).finalize());
+    identity.update(
+        versioned_view(
+            request,
+            definition.semantic_identity(),
+            &manifest,
+            Rendered::Semantic,
+        )
+        .finalize(),
+    );
     Ok(Digest(identity.finalize().into()))
 }
 
-fn cargo_view(request: &Request, universe: &[u8; 32], provisional_manifest: &str) -> Sha256 {
+fn cargo_view(
+    request: &Request,
+    universe: &[u8; 32],
+    provisional_manifest: &str,
+    rendered: Rendered,
+) -> Sha256 {
     let mut identity = Sha256::new();
     identity.update(b"rawr.import.cargo.resolution-request/v2");
     if request.inventory {
@@ -3239,9 +3273,21 @@ fn cargo_view(request: &Request, universe: &[u8; 32], provisional_manifest: &str
     identity.update(request.config.digest().as_bytes());
     identity.update((request.target.len() as u64).to_le_bytes());
     identity.update(request.target.as_bytes());
-    for input in &request.inputs {
-        identity.update((input.path.as_os_str().len() as u64).to_le_bytes());
-        identity.update(input.path.as_os_str().as_encoded_bytes());
+    // The semantic view names Rawr's own manifest by its alias, after the
+    // other inputs: in path order it would move with the host directory.
+    let semantic = rendered == Rendered::Semantic;
+    let (rawr, others) = request
+        .inputs
+        .iter()
+        .partition::<Vec<_>, _>(|input| semantic && input.rawr);
+    for input in others.into_iter().chain(rawr) {
+        let path = if semantic && input.rawr {
+            config::INTERNAL_ALIAS.as_bytes()
+        } else {
+            input.path.as_os_str().as_encoded_bytes()
+        };
+        identity.update((path.len() as u64).to_le_bytes());
+        identity.update(path);
         match &input.digest {
             Some(digest) => {
                 identity.update([1]);
@@ -4121,6 +4167,7 @@ fn authority_inputs(
     dependencies: &[config::Selected],
 ) -> Result<Box<[Input]>> {
     let mut paths = BTreeSet::new();
+    let mut rawr = None;
     for input in &authority.inputs {
         paths.insert((input.path.clone(), input.role));
     }
@@ -4128,11 +4175,15 @@ fn authority_inputs(
         if let config::Source::Path(path) = dependency.source() {
             let candidate = path.join("Cargo.toml");
             let manifest = canonical_file("dependency manifest", &candidate)?;
+            if dependency.alias() == config::INTERNAL_ALIAS {
+                rawr = Some(manifest.clone());
+            }
             paths.insert((manifest, Role::Manifest));
         }
     }
     let mut inputs = Vec::with_capacity(paths.len());
     for (path, role) in paths {
+        let is_rawr = role == Role::Manifest && rawr.as_ref() == Some(&path);
         if let Some(original) = authority
             .inputs
             .iter()
@@ -4142,6 +4193,7 @@ fn authority_inputs(
                 path,
                 digest: original.digest,
                 role,
+                rawr: is_rawr,
             });
             continue;
         }
@@ -4150,6 +4202,7 @@ fn authority_inputs(
             path,
             digest: Some(digest(&bytes)),
             role,
+            rawr: is_rawr,
         });
     }
     Ok(inputs.into_boxed_slice())
@@ -4885,6 +4938,27 @@ mod universe_placement_tests {
         assert_ne!(
             semantic,
             semantic_request_identity(&changed, &definition()).expect("identity")
+        );
+        // Another build's host directory, which sorts before every other
+        // input, names Rawr's manifest at another path with the same bytes.
+        let mut moved = request(&project, false, &limits);
+        let mut inputs = std::mem::take(&mut moved.inputs).into_vec();
+        let manifest = inputs
+            .iter_mut()
+            .find(|input| input.rawr)
+            .expect("the request reads Rawr's own manifest");
+        manifest.path = PathBuf::from("/0/hosts/another-build/Cargo.toml");
+        inputs.sort_by(|left, right| left.path.cmp(&right.path));
+        moved.inputs = inputs.into_boxed_slice();
+        assert_ne!(
+            versioned_request_identity(&current, &definition(), &provisional),
+            versioned_request_identity(&moved, &definition(), &provisional),
+            "each host directory keys a resolution of its own"
+        );
+        assert_eq!(
+            semantic,
+            semantic_request_identity(&moved, &definition()).expect("identity"),
+            "the API's request names no host directory"
         );
     }
 
