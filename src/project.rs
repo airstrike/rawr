@@ -411,7 +411,7 @@ fn reaches_marked(root: &Path, package: Option<&cargo::Package>) -> Result<bool,
         if features.is_none() && text.contains("cfg") {
             let target = package.and_then(|package| Some((package, package.target_at(root)?)));
             features = Some(match target {
-                Some((package, target)) => cargo::Unit::of(package, target)
+                Some((package, target)) => cargo::Unit::of(package, target, cargo::Mode::Build)
                     .map_err(|source| Error::Cargo {
                         manifest: package.manifest().to_path_buf(),
                         source,

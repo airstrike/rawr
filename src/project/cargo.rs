@@ -55,6 +55,18 @@ pub enum Kind {
     Binary,
 }
 
+/// How Cargo builds a target: as `cargo build` builds it, or as `cargo
+/// test` builds its test harness, which alone links the package's
+/// `[dev-dependencies]`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Mode {
+    /// `cargo build`.
+    #[default]
+    Build,
+    /// `cargo test`.
+    Test,
+}
+
 /// What one target builds with on the host, from Cargo's unit graph: the
 /// crates its code reaches by name (rustc's `--extern`s), with every
 /// `[target.'cfg(..)']` table and feature evaluated as Cargo does, the
@@ -66,6 +78,7 @@ pub struct Unit {
     build_crates: Box<[Box<str>]>,
     features: features::Enabled,
     panic: Panic,
+    mode: Mode,
 }
 
 /// A profile's `panic` setting.
@@ -115,11 +128,12 @@ struct Described {
     workspace: Arc<Workspace>,
 }
 
-/// One kept unit-graph answer, by its package's manifest, its target and
-/// the feature flags it was asked with.
+/// One kept unit-graph answer, by its package's manifest, its target, the
+/// mode it builds in and the feature flags it was asked with.
 struct Built {
     manifest: PathBuf,
     target: Target,
+    mode: Mode,
     selection: features::Selection,
     inputs: Inputs,
     unit: Unit,
@@ -458,10 +472,11 @@ impl Target {
 }
 
 impl Unit {
-    /// What `target` of `package` builds with on the host, as `cargo
-    /// build` builds it in the dev profile, with the process's feature
-    /// flags ([`features::Selection::selected`]).
-    pub fn of(package: &Package, target: &Target) -> Result<Self, Error> {
+    /// What `target` of `package` builds with on the host in `mode`, as
+    /// `cargo build` builds it in the dev profile or `cargo test` in the
+    /// test profile, with the process's feature flags
+    /// ([`features::Selection::selected`]).
+    pub fn of(package: &Package, target: &Target, mode: Mode) -> Result<Self, Error> {
         let selection = features::Selection::selected();
         let files = || {
             let mut files = vec![
@@ -479,6 +494,7 @@ impl Unit {
             .find(|kept| {
                 kept.manifest == package.manifest
                     && kept.target == *target
+                    && kept.mode == mode
                     && kept.selection == selection
                     && kept.inputs == now
             })
@@ -486,14 +502,17 @@ impl Unit {
         if let Some(unit) = kept {
             return Ok(unit);
         }
-        let unit = Self::ask(package, target, &selection)?;
+        let unit = Self::ask(package, target, mode, &selection)?;
         // Cargo may have written the lockfile, so the inputs are read after.
         let inputs = Inputs::read(files(), Vec::new());
         let mut built = lock(&BUILT);
-        built.retain(|kept| !(kept.manifest == package.manifest && kept.target == *target));
+        built.retain(|kept| {
+            !(kept.manifest == package.manifest && kept.target == *target && kept.mode == mode)
+        });
         built.push(Built {
             manifest: package.manifest.clone(),
             target: target.clone(),
+            mode,
             selection,
             inputs,
             unit: unit.clone(),
@@ -516,6 +535,7 @@ impl Unit {
             build_crates: Box::default(),
             features: features::Enabled::default(),
             panic: Panic::Unwind,
+            mode: Mode::Build,
         }
     }
 
@@ -547,16 +567,27 @@ impl Unit {
         self.panic
     }
 
+    /// The mode the target builds in.
+    #[must_use]
+    pub const fn mode(&self) -> Mode {
+        self.mode
+    }
+
     fn ask(
         package: &Package,
         target: &Target,
+        mode: Mode,
         selection: &features::Selection,
     ) -> Result<Self, Error> {
         let mut command = cargo();
         // The unit graph is a nightly feature of any Cargo.
+        command.env("RUSTC_BOOTSTRAP", "1");
+        match mode {
+            Mode::Build => command.arg("build"),
+            Mode::Test => command.args(["test", "--no-run"]),
+        };
         command
-            .env("RUSTC_BOOTSTRAP", "1")
-            .args(["build", "--unit-graph", "-Z", "unstable-options"])
+            .args(["--unit-graph", "-Z", "unstable-options"])
             .arg("--manifest-path")
             .arg(&package.manifest)
             .args(selection.flags());
@@ -625,6 +656,7 @@ impl Unit {
             build_crates: build_crates.into_boxed_slice(),
             features: features::Enabled::of_unit(root).with_target(target),
             panic,
+            mode,
         })
     }
 }

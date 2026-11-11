@@ -30,9 +30,12 @@ pub(crate) struct Cargo {
     pub(crate) dependencies: Box<[rust::Dependency]>,
     /// `[build-dependencies]`, in the same form.
     pub(crate) build_dependencies: Box<[rust::Dependency]>,
+    /// `[dev-dependencies]`, in the same form, which [`Cargo::on_host`]
+    /// joins to `dependencies` for a test build.
+    pub(crate) dev_dependencies: Box<[rust::Dependency]>,
     /// Each `[target.'<platform>']` table's dependencies, as written, until
-    /// [`Cargo::on_host`] joins those that hold on the host to the two
-    /// lists above.
+    /// [`Cargo::on_host`] joins those that hold on the host to the lists
+    /// above.
     pub(crate) targets: Box<[Targeted]>,
     /// `[features]`.
     pub(crate) features: Features,
@@ -55,6 +58,7 @@ pub(crate) struct Targeted {
     pub(crate) platform: Box<str>,
     pub(crate) dependencies: Box<[rust::Dependency]>,
     pub(crate) build_dependencies: Box<[rust::Dependency]>,
+    pub(crate) dev_dependencies: Box<[rust::Dependency]>,
 }
 
 /// Which `[target.'<platform>']` dependencies hold on the host.
@@ -62,10 +66,10 @@ pub(crate) struct Targeted {
 pub(crate) enum Host<'a> {
     /// Those Cargo's unit graph of the target being built links.
     Built(&'a crate::project::cargo::Unit),
-    /// Every table's, when Cargo was not asked: a runner's snapshot, whose
-    /// parent resolved the program against Cargo's answer. The runner
-    /// reads only the dependencies' names.
-    Unasked,
+    /// Every table's, when Cargo was not asked, for a build in this mode:
+    /// a runner's snapshot, whose parent resolved the program against
+    /// Cargo's answer. The runner reads only the dependencies' names.
+    Unasked(crate::project::cargo::Mode),
 }
 
 impl Cargo {
@@ -123,7 +127,7 @@ impl Cargo {
                             .filter_map(|(_, target)| target.as_table_like()),
                     )
                     .any(|table| {
-                        ["dependencies", "build-dependencies"].iter().any(|kind| {
+                        DEPENDENCY_KINDS.iter().any(|kind| {
                             table.get(kind).and_then(Item::as_table_like).is_some_and(
                                 |dependencies| dependencies.iter().any(|(_, item)| inherits(item)),
                             )
@@ -154,15 +158,22 @@ impl Cargo {
             .and_then(|item| item.get("name"))
             .and_then(|item| item.as_str())
             .map_or_else(|| name.replace('-', "_"), str::to_owned);
-        let inherits_normal = inherited.as_ref().map(|inherited| &inherited.dependencies);
-        let inherits_build = inherited
-            .as_ref()
-            .map(|inherited| &inherited.build_dependencies);
+        let inherits = Inherits {
+            normal: inherited.as_ref().map(|inherited| &inherited.dependencies),
+            build: inherited
+                .as_ref()
+                .map(|inherited| &inherited.build_dependencies),
+            dev: inherited
+                .as_ref()
+                .map(|inherited| &inherited.dev_dependencies),
+        };
         let dependencies =
-            rust::cargo_dependencies(&text, root, table.get("dependencies"), inherits_normal)?;
+            rust::cargo_dependencies(&text, root, table.get("dependencies"), inherits.normal)?;
         let build_dependencies =
-            rust::cargo_dependencies(&text, root, table.get("build-dependencies"), inherits_build)?;
-        let targets = self::targets(&text, root, table, inherits_normal, inherits_build)?;
+            rust::cargo_dependencies(&text, root, table.get("build-dependencies"), inherits.build)?;
+        let dev_dependencies =
+            rust::cargo_dependencies(&text, root, table.get("dev-dependencies"), inherits.dev)?;
+        let targets = self::targets(&text, root, table, inherits)?;
         let features = Features::parse(&text, table)?;
         let directory = path.parent().unwrap_or(root);
         let build = match package.get("build").and_then(Item::as_value) {
@@ -191,6 +202,7 @@ impl Cargo {
             edition,
             dependencies,
             build_dependencies,
+            dev_dependencies,
             targets,
             features,
             build,
@@ -204,26 +216,41 @@ impl Cargo {
     /// on `host` joined to its kind's list, as Cargo builds the package
     /// there. A table whose `cfg(..)` doesn't hold for the target Cargo
     /// builds for joins nothing, so a dependency two tables declare for
-    /// two targets is the one its target's table gives (#1395). A key the
-    /// list already has keeps its first entry.
+    /// two targets is the one its target's table gives (#1395). A test
+    /// build's dev-dependencies, the general ones and then the tables',
+    /// join the normal list after its own, as `cargo test` links them
+    /// into the test harness alone. A key the list already has keeps its
+    /// first entry.
     #[must_use]
     pub(crate) fn on_host(mut self, host: Host<'_>) -> Self {
-        let (crates, build_crates) = match host {
-            Host::Built(unit) => (Some(unit.crates()), Some(unit.build_crates())),
-            Host::Unasked => (None, None),
+        let (crates, build_crates, mode) = match host {
+            Host::Built(unit) => (Some(unit.crates()), Some(unit.build_crates()), unit.mode()),
+            Host::Unasked(mode) => (None, None, mode),
         };
-        for target in std::mem::take(&mut self.targets) {
-            if let Host::Built(unit) = host
-                && platform_holds(&target.platform, unit.features()) == Some(false)
-            {
-                continue;
-            }
+        let targets: Vec<Targeted> = std::mem::take(&mut self.targets)
+            .into_vec()
+            .into_iter()
+            .filter(|target| match host {
+                Host::Built(unit) => {
+                    platform_holds(&target.platform, unit.features()) != Some(false)
+                }
+                Host::Unasked(_) => true,
+            })
+            .collect();
+        for target in &targets {
             join(&mut self.dependencies, &target.dependencies, crates);
             join(
                 &mut self.build_dependencies,
                 &target.build_dependencies,
                 build_crates,
             );
+        }
+        let dev_dependencies = std::mem::take(&mut self.dev_dependencies);
+        if mode == crate::project::cargo::Mode::Test {
+            join(&mut self.dependencies, &dev_dependencies, crates);
+            for target in &targets {
+                join(&mut self.dependencies, &target.dev_dependencies, crates);
+            }
         }
         self
     }
@@ -235,15 +262,25 @@ impl Cargo {
     }
 }
 
-/// Each `[target.'<platform>']` table's dependencies and build
-/// dependencies, as written. `table` is the manifest parsed from `text`,
-/// and `normal` and `build` the workspace's entries of each kind.
+/// The dependency kinds a manifest's tables declare, as Cargo spells them.
+const DEPENDENCY_KINDS: [&str; 3] = ["dependencies", "build-dependencies", "dev-dependencies"];
+
+/// The workspace's entries of each dependency kind, which a member's
+/// `foo.workspace = true` inherits.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Inherits<'a> {
+    pub(super) normal: Option<&'a BTreeMap<String, rust::Dependency>>,
+    pub(super) build: Option<&'a BTreeMap<String, rust::Dependency>>,
+    pub(super) dev: Option<&'a BTreeMap<String, rust::Dependency>>,
+}
+
+/// Each `[target.'<platform>']` table's dependencies of each kind, as
+/// written. `table` is the manifest parsed from `text`.
 pub(super) fn targets(
     text: &str,
     root: &Path,
     table: &toml_edit::Table,
-    normal: Option<&BTreeMap<String, rust::Dependency>>,
-    build: Option<&BTreeMap<String, rust::Dependency>>,
+    inherits: Inherits<'_>,
 ) -> Result<Box<[Targeted]>, Error> {
     let mut targets = Vec::new();
     for (platform, target) in table
@@ -255,12 +292,23 @@ pub(super) fn targets(
         let kind = |kind: &str| target.as_table_like().and_then(|target| target.get(kind));
         targets.push(Targeted {
             platform: platform.into(),
-            dependencies: rust::cargo_dependencies(text, root, kind("dependencies"), normal)?,
+            dependencies: rust::cargo_dependencies(
+                text,
+                root,
+                kind("dependencies"),
+                inherits.normal,
+            )?,
             build_dependencies: rust::cargo_dependencies(
                 text,
                 root,
                 kind("build-dependencies"),
-                build,
+                inherits.build,
+            )?,
+            dev_dependencies: rust::cargo_dependencies(
+                text,
+                root,
+                kind("dev-dependencies"),
+                inherits.dev,
             )?,
         });
     }
@@ -381,7 +429,7 @@ console_log = "1.0"
             ["iced", "tracing_subscriber", "open"]
         );
         assert_eq!(
-            aliases(&cargo.on_host(super::Host::Unasked)),
+            aliases(&cargo.on_host(super::Host::Unasked(crate::project::cargo::Mode::Build))),
             ["iced", "tracing_subscriber", "open", "console_log"]
         );
     }

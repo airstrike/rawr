@@ -187,7 +187,9 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
     let base = script.parent().unwrap_or(Path::new("/"));
     let dependencies =
         super::rust::cargo_dependencies(&padded, base, table.get("dependencies"), None)?;
-    let targets = super::cargo::targets(&padded, base, table, None, None)?;
+    let dev_dependencies =
+        super::rust::cargo_dependencies(&padded, base, table.get("dev-dependencies"), None)?;
+    let targets = super::cargo::targets(&padded, base, table, super::cargo::Inherits::default())?;
     let features = super::features::Features::parse(&padded, table)?;
     let expanded =
         expand(script, &text[range], &name, &edition, script).map_err(|message| Error {
@@ -203,6 +205,7 @@ pub(crate) fn cargo(script: &Path, text: &str) -> Result<Option<Cargo>, Error> {
         edition: Some(edition),
         dependencies,
         build_dependencies: Box::default(),
+        dev_dependencies,
         targets,
         features,
         build: None,
