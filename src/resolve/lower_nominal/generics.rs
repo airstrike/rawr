@@ -326,14 +326,14 @@ impl<'a> Parser<'a> {
     }
 
     /// The witness of a type a `Default`-bounded parameter takes: its script
-    /// definition index, a negative code for a builtin, or the caller's own
+    /// id's number, by its key, a negative code for a builtin, or the caller's own
     /// witness for one of its generic parameters.
     pub(super) fn witness(&self, ty: &Ty, parameter: &str, span: Span) -> Result<String, Error> {
         if let Some(code) = builtin_code(ty) {
             return Ok(code.to_string());
         }
         Ok(match ty {
-            Ty::Script(id, _) => id.index().to_string(),
+            Ty::Script(id, _) => id.number().to_string(),
             Ty::Param(name) if self.has_witness(name) => witness_variable(name),
             Ty::Infer(_) => {
                 return Err(Error::TypeAnnotationsNeeded {
