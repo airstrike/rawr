@@ -12,8 +12,11 @@ mod tests;
 /// The exact `Cargo.toml` the admitted native owner consumed, and what
 /// native code sees of the marked modules when the crate root is native
 /// (D501). Comparing them conservatively routes any declaration edit, and
-/// any edit that changes a trampoline, to preparation. The last field is a
-/// marked root's async `main` entry (D513.4).
+/// any edit that changes a trampoline, to preparation; a new derive or a
+/// new item native code can see goes to the running program's compile
+/// first, which prepares only for a native use it finds uncovered
+/// (#1737, #1741). The last field is a marked root's async `main` entry
+/// (D513.4).
 #[derive(Clone, Eq, PartialEq)]
 pub struct Manifests(
     Box<[(PathBuf, Box<str>)]>,
@@ -104,9 +107,10 @@ impl Manifests {
             shape
                 .change(next_shape)
                 .or_else(native)
-                // A new derive needs a new native build only for a native
-                // use of its impl, as a marked call at a native bound.
+                // A new derive or item needs a new native build only for a
+                // native use of it, as a marked call at a native bound.
                 .or_else(|| shape.derived(next_shape))
+                .or_else(|| shape.added(next_shape))
                 // No runner runs to compare with, or an earlier native
                 // build is still owed.
                 .unwrap_or_else(|| "the program needs a new native build".to_owned()),

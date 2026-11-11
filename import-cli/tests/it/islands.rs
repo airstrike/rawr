@@ -141,6 +141,73 @@ fn a_pub_type_s_new_derives_swap_and_a_native_use_or_lost_derive_builds_again() 
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// Native code built without an item never names it: a new pub struct
+/// and a new pub fn swap in the running program, and once a native build
+/// has them, taking them away builds again and names them (#1741).
+#[test]
+fn a_new_pub_item_swaps_and_a_lost_one_builds_again_naming_it() {
+    let root = crate::support::fresh("islands-pub-items");
+    copy(Path::new(FIXTURE), &root);
+    let physics = root.join("src/physics.rs");
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+
+    // New items marked code uses, and a body edit that says the program
+    // runs the save, in one write.
+    let text = fs::read_to_string(&physics).unwrap();
+    fs::write(
+        &physics,
+        text.replace("const SCALE: i64 = 1;", "const SCALE: i64 = 100;")
+            .replace(
+                "counter.ticks * SCALE)",
+                "counter.ticks * SCALE + inset().radius as i64 - 1)",
+            )
+            + "\n#[derive(Debug)]\npub struct Inset {\n    pub radius: f32,\n}\n\n\
+               pub fn inset() -> Inset {\n    Inset { radius: 1.0 }\n}\n",
+    )
+    .unwrap();
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
+    let (tick, _) = parse(&swapped).unwrap();
+    let seen = run.seen.join("\n");
+    assert!(tick > 3, "{seen}");
+    assert!(
+        run.seen
+            .iter()
+            .all(|line| !line.contains("preparing again") && !line.contains("restarting")),
+        "{seen}"
+    );
+
+    // A native edit that names neither: its new native build has them.
+    edit(
+        &root.join("src/main.rs"),
+        "from_millis(100)",
+        "from_millis(99)",
+    );
+    run.until(|line| parse(line) == Some((1, 100)));
+    let restarts = run.seen.len();
+
+    // Both gone: native code may name them, so it builds again.
+    let text = fs::read_to_string(&physics).unwrap();
+    let (kept, _) = text.split_once("\n#[derive(Debug)]").unwrap();
+    fs::write(
+        &physics,
+        kept.replace(" + inset().radius as i64 - 1)", ")") + "\n",
+    )
+    .unwrap();
+    run.until(|line| parse(line) == Some((1, 100)));
+    let seen = run.seen.join("\n");
+    assert!(
+        run.seen[restarts..].iter().any(|line| line
+            == "stderr: rawr: native code can no longer see `physics::Inset` and \
+                `physics::inset`; restarting the program"),
+        "{seen}"
+    );
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 /// A supervised run whose marked file fails its check says `failed` and
 /// waits for a save. A wait for the program's output ends there, with the
 /// error rustc gives, instead of waiting for that save (#1585).
@@ -1939,11 +2006,13 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
     );
 }
 
-/// A save that adds a function native code sees needs a new native build
+/// A save that adds a function native code calls needs a new native build
 /// and a new runner, whose start lowers again only the file the save
 /// changed and the files that name what it added, from what the earlier
 /// runner kept (#1725): its own build of rawr wrote them, and each file's
-/// key holds what it reads of the native surface.
+/// key holds what it reads of the native surface. Native code's call is
+/// what needs the build, as a new function no native code calls swaps
+/// (#1741).
 #[test]
 fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -1969,12 +2038,18 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
-    // A new public function of the marked `sidebar.rs`: native code can see
-    // it, so the program starts again with a new native build.
+    // A new public function of the marked `sidebar.rs`, and native code
+    // that calls it, so the program starts again with a new native build.
     let sidebar = root.join("src/sidebar.rs");
     let mut text = fs::read_to_string(&sidebar).unwrap();
     text.push_str("\npub fn spare_rows() -> usize {\n    2\n}\n");
     fs::write(&sidebar, text).unwrap();
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"clones {}\", theme::clones());\n",
+        "    println!(\"clones {}\", theme::clones());\n    \
+         println!(\"spare {}\", sidebar::spare_rows());\n",
+    );
     // The new program runs, and ends when told to.
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 2
@@ -1986,9 +2061,7 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     let seen = run.seen.join("\n");
     assert!(
         told.contains("{\"event\":\"ended\",\"status\":0}")
-            && seen.contains(
-                "stderr: rawr: preparing again: native code can now see `sidebar::spare_rows`"
-            )
+            && run.seen.iter().any(|line| line == "spare 2")
             && run
                 .seen
                 .iter()
@@ -1998,8 +2071,8 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         "{told}\n{seen}"
     );
     // What each runner's start revealed and lowered: the first every file;
-    // the second `sidebar.rs`, which it changed, and `home.rs`, which names
-    // what it added.
+    // the second `sidebar.rs` and `main.rs`, which the edit changed, and
+    // `home.rs`, which names what it added.
     let started = run
         .seen
         .iter()
@@ -2012,7 +2085,7 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         })
         .collect::<Vec<_>>();
     assert!(
-        started.len() == 2 && started[0][1] > 2 && started[1] == [2, 2],
+        started.len() == 2 && started[0][1] > 2 && started[1] == [3, 3],
         "{started:?}\n{seen}"
     );
 }
