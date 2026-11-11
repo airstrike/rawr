@@ -1116,6 +1116,28 @@ impl<'a> Parser<'a> {
             let projection = relation.trait_identity().is_none();
             #[cfg(not(feature = "rust-import"))]
             let projection = false;
+            // One the call leaves open, as the `Renderer` of `picture(h)
+            // .boxed()` that only the element's later use fixes, waits for
+            // it, as rustc's projection obligation does: the parameter it
+            // names then takes the associated type, as `Handle` the
+            // renderer's (#1632).
+            #[cfg(feature = "rust-import")]
+            if argument.is_none()
+                && projection
+                && let Some(open) = parameters
+                    .get(relation.parameter())
+                    .filter(|ty| matches!(self.inference.resolve(ty), Ty::Infer(_)))
+                    .cloned()
+            {
+                self.defer_projection(
+                    relation,
+                    open,
+                    parameters,
+                    (&item_path, span),
+                    owner.as_ref(),
+                )?;
+                continue;
+            }
             let Some(argument) = argument.or_else(|| {
                 parameters
                     .get(relation.parameter())
@@ -1339,6 +1361,51 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// The projection `relation` that ties `<open as Trait>::Name` to the
+    /// parameter its one argument names, with each of its cases, pending in
+    /// `Inference::projections` for `open` to be known
+    /// (`finish_projections`).
+    #[cfg(feature = "rust-import")]
+    fn defer_projection(
+        &mut self,
+        relation: &crate::host::signature::Relation,
+        open: Ty,
+        parameters: &mut BTreeMap<ImmutableString, Ty>,
+        (operation, span): (&str, Span),
+        owner: Option<&crate::host::facade::Dependency>,
+    ) -> Result<(), Error> {
+        let [declared] = relation.arguments() else {
+            return Ok(());
+        };
+        let value = self.pattern_type(
+            declared,
+            &mut BTreeMap::new(),
+            parameters,
+            (operation, span),
+            owner,
+        )?;
+        let mut cases = Vec::with_capacity(relation.cases().len());
+        for case in relation.cases() {
+            let [given] = case.arguments() else {
+                continue;
+            };
+            let mut own = BTreeMap::new();
+            // A case of a type this program doesn't reach fits no type it has.
+            if let (Ok(this), Ok(given)) = (
+                self.pattern_type(case.this(), &mut own, parameters, (operation, span), owner),
+                self.pattern_type(given, &mut own, parameters, (operation, span), owner),
+            ) {
+                cases.push((this, given));
+            }
+        }
+        self.inference.projections.push(ImplProjection {
+            ty: open,
+            value,
+            cases: cases.into_boxed_slice(),
+        });
+        Ok(())
+    }
+
     /// Whether `case` of `relation` fits by its trait arguments as well as
     /// by its self type, `bindings` what the self type bound. A case whose
     /// self type is a bare variable, as core's reflexive `impl<T> From<T>
@@ -1430,7 +1497,14 @@ impl<'a> Parser<'a> {
                 continue;
             };
             let bounded = self.inference.resolve(&bounded);
-            if matches!(bounded, Ty::Infer(_)) {
+            // A value still to be inferred is known by its bound only when
+            // a call of a function written `-> impl Trait` gave it.
+            if matches!(bounded, Ty::Infer(_))
+                && !self
+                    .opaque_values
+                    .iter()
+                    .any(|value| self.inference.resolve(&value.value) == bounded)
+            {
                 continue;
             }
             let mut arguments = Vec::with_capacity(relation.arguments().len());
@@ -1444,6 +1518,9 @@ impl<'a> Parser<'a> {
                 )?);
             }
             self.take_opaque_arguments(&bounded, identity, &arguments, operands);
+            if matches!(bounded, Ty::Infer(_)) {
+                continue;
+            }
             // A script type in the bound is followed even when nothing is
             // open, for the script impls it uses (D629).
             if !arguments
@@ -1464,12 +1541,35 @@ impl<'a> Parser<'a> {
     }
 
     /// Keeps `value`, what a call of a program's function gives, when the
-    /// function's output is written `impl Trait` (`opaque_values`).
+    /// function's output is written `impl Trait` (`opaque_values`). The
+    /// written output is the one kept where the hidden type is revealed,
+    /// else the function's output, which is still the written one. Its
+    /// generic parameters are at the types `substitution` gives them. The value
+    /// is the one the call gives, or, while a generic function compiled per
+    /// instantiation (D629) has no instance for the call yet, a type to be
+    /// inferred that rustc knows by the bound alone: `new_icon::<_>()` of
+    /// `fn new_icon<M>() -> impl Widget<M>` takes its `M` from the bound of
+    /// the parameter it is passed to (#1633).
     #[cfg(feature = "rust-import")]
-    pub(super) fn note_opaque_value(&mut self, value: &Ty, written: Option<&type_ref::Type>) {
-        if let Some(written) = written.filter(|written| written.opaque_trait().is_some()) {
-            self.opaque_values.push((value.clone(), written.clone()));
-        }
+    pub(super) fn note_opaque_value(
+        &mut self,
+        value: Ty,
+        written: Option<&type_ref::Type>,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+    ) -> Ty {
+        let Some(written) = written.filter(|written| written.opaque_trait().is_some()) else {
+            return value;
+        };
+        let value = match self.inference.resolve(&value) {
+            Ty::Unknown if self.collecting_instances => self.inference.fresh(),
+            _ => value,
+        };
+        self.opaque_values.push(OpaqueValue {
+            value: value.clone(),
+            written: written.clone(),
+            substitution: substitution.clone(),
+        });
+        value
     }
 
     /// A bound `bounded: Trait<arguments>` on what a script function of the
@@ -1486,6 +1586,7 @@ impl<'a> Parser<'a> {
         arguments: &[Ty],
         operands: &[(Ty, Span, bool)],
     ) {
+        let substitution = BTreeMap::new();
         let written = operands.iter().find_map(|(ty, _, _)| {
             let Ty::Callable {
                 output,
@@ -1514,13 +1615,20 @@ impl<'a> Parser<'a> {
             lifetimes.written_output.as_deref().cloned()
         });
         // A value a call of such a function gave, as `counter.view()`.
-        let written = written.or_else(|| {
-            self.opaque_values
-                .iter()
-                .find(|(value, _)| self.inference.resolve(value) == *bounded)
-                .map(|(_, written)| written.clone())
-        });
-        let Some(type_ref::Type::Path(opaque)) = written else {
+        let (written, substitution) = match written {
+            Some(written) => (written, &substitution),
+            None => {
+                let Some(value) = self
+                    .opaque_values
+                    .iter()
+                    .find(|value| self.inference.resolve(&value.value) == *bounded)
+                else {
+                    return;
+                };
+                (value.written.clone(), &value.substitution.clone())
+            }
+        };
+        let type_ref::Type::Path(opaque) = written else {
             return;
         };
         let Some(trait_name) = type_ref::Type::Path(opaque.clone())
@@ -1568,7 +1676,9 @@ impl<'a> Parser<'a> {
             .arguments
             .iter()
             .filter_map(|argument| match argument {
-                type_ref::Argument::Type(ty) => Some(Ty::from_resolved(ty)),
+                type_ref::Argument::Type(ty) => {
+                    Some(instantiate(&Ty::from_resolved(ty), substitution))
+                }
                 type_ref::Argument::Lifetime(_) => None,
             })
             .collect::<Vec<_>>();
@@ -2322,4 +2432,15 @@ impl<'a> Parser<'a> {
             })
             .collect()
     }
+}
+
+/// What a call of a program's function written `-> impl Trait` gave
+/// (`Parser::opaque_values`): the value, the written output, and the types
+/// the call gave the function's generic parameters, which that output
+/// names.
+#[cfg(feature = "rust-import")]
+pub(super) struct OpaqueValue {
+    pub(super) value: Ty,
+    pub(super) written: type_ref::Type,
+    pub(super) substitution: BTreeMap<ImmutableString, Ty>,
 }

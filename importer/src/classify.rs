@@ -2488,6 +2488,62 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         projected
     }
 
+    /// Each where-clause bound `<R as Trait>::Name == H` that ties one type
+    /// parameter's associated type to another parameter, as iced's `impl
+    /// Widget for Image<Handle>` has `Renderer: image::Renderer<Handle =
+    /// Handle>`: the projection of `R` whose synthetic is `H` itself, so the
+    /// type that fills `R`, at the call or by a later use, fixes `H`, as
+    /// rustc's projection does (#1632).
+    fn equated_projections(&self, generics: &model::Generics) -> Vec<Projected> {
+        let mut equated = Vec::new();
+        for predicate in generics.predicates() {
+            let model::Predicate::ProjectionEquality {
+                projection,
+                ty: model::Type::Parameter { index: target, .. },
+            } = predicate
+            else {
+                continue;
+            };
+            let Some((index, chain)) = projection_chain(projection) else {
+                continue;
+            };
+            let [(trait_id, associated)] = &chain[..] else {
+                continue;
+            };
+            if self.is_core_trait(trait_id, "Future")
+                || matches!(
+                    self.definition_name(trait_id),
+                    Some("Fn" | "FnMut" | "FnOnce")
+                )
+                || !generics
+                    .parameters()
+                    .any(|parameter| parameter.index() == index)
+                || !generics
+                    .parameters()
+                    .any(|parameter| parameter.index() == *target)
+            {
+                continue;
+            }
+            let Some(name) = self.definition_name(associated) else {
+                continue;
+            };
+            equated.push(Projected {
+                parameter: index,
+                hops: Box::new([Hop {
+                    trait_id: trait_id.clone(),
+                    trait_name: self
+                        .definition_name(trait_id)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    associated: associated.clone(),
+                    name: name.to_owned(),
+                }]),
+                synthetic: *target,
+            });
+        }
+        equated
+    }
+
     /// `generics` with each projection of `projected` its bounds name
     /// written as its synthetic parameter, as a callable's `Fn(&P::State)`
     /// takes the synthetic for `P::State`. `None` when there is none.
@@ -9666,6 +9722,7 @@ impl<P: api::Phase> Context<'_, P> {
                 .any(|(future, _)| *future == projection.parameter)
         });
         relations.extend(self.projection_relations(related)?);
+        relations.extend(self.projection_relations(&self.equated_projections(generics))?);
         let relations = relations.into_boxed_slice();
         let signature_plan = representability::signature::Signature::new(
             parameters,

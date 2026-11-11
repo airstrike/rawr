@@ -185,6 +185,8 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("tokens after a method body"));
         }
 
+        #[cfg(feature = "rust-import")]
+        self.settle_collected_tail(Some(definition.output()));
         let expected = self.tail_expected(Some(definition.output()));
         self.coerce_tail(&expected, definition.body())?;
         #[cfg(feature = "rust-import")]
@@ -298,6 +300,27 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// While a body's calls are collected, before its tail meets the output
+    /// the body is read with: a tail still to be inferred that a call of a
+    /// function written `-> impl Trait` gave is known by that function's
+    /// bound, and the body's written output fixes its arguments, as rustc
+    /// proves the opaque output's bound: `glyph(name)` in `fn new_icon<M>()
+    /// -> impl Widget<M>` is a `glyph::<M>` (#1633).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn settle_collected_tail(&mut self, written: Option<&type_ref::Type>) {
+        let Some(written) = written else {
+            return;
+        };
+        let tail = self.last_type.clone();
+        if self.collecting_instances
+            && self.revealing.is_none()
+            && self.last_expression.is_some()
+            && matches!(self.inference.resolve(&tail), Ty::Infer(_))
+        {
+            let _ = self.fix_opaque(written, &tail);
+        }
+    }
+
     /// `fix_opaque` with the generic parameters `written` names at the
     /// types `substitution` gives them, as a generic function's bound
     /// `impl Widget<Message>` is at a call (D629).
@@ -312,7 +335,15 @@ impl<'a> Parser<'a> {
             return Ok(());
         };
         let resolved = self.inference.resolve(hidden);
-        if matches!(resolved, Ty::Infer(_)) {
+        // A value still to be inferred is known by its own bound, when a
+        // call of a function written `-> impl Trait` gave it.
+        let pending = matches!(resolved, Ty::Infer(_));
+        if pending
+            && !self
+                .opaque_values
+                .iter()
+                .any(|value| self.inference.resolve(&value.value) == resolved)
+        {
             return Ok(());
         }
         let type_ref::Type::Path(opaque) = written else {
@@ -364,6 +395,13 @@ impl<'a> Parser<'a> {
             };
             parameters.insert(name.clone(), ty.clone());
             arguments.push(ty);
+        }
+        // `action(new_icon(), ..)`: the bound `impl Widget<Message>` of
+        // `action` and the one `new_icon` is written with name the same
+        // value, so their arguments are one (#1633).
+        if pending {
+            self.take_opaque_arguments(&resolved, header.identity, &arguments, &[]);
+            return Ok(());
         }
         let span = match written {
             type_ref::Type::Unit(span)
@@ -519,6 +557,8 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("tokens after a function body"));
         }
 
+        #[cfg(feature = "rust-import")]
+        self.settle_collected_tail(definition.output.as_ref());
         let expected = self.tail_expected(definition.output.as_ref());
         self.coerce_tail(&expected, definition.body.span)?;
         #[cfg(feature = "rust-import")]

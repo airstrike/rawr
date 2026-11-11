@@ -615,6 +615,20 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     );
 }
 
+/// A literal's `.into()` into a crate's `Slot<'a, M>` that borrows it, in
+/// an array whose row alone gives the target, as `Row::with_children([..,
+/// "b".into()])` and `wrap(Row::with_children(["w".into()]))`: the literal
+/// is lent at `'static`, so no scope frame is needed ahead of the
+/// statement, as rustc accepts it (#1328).
+#[test]
+fn a_literal_into_a_borrowing_slot_a_later_use_types_runs() {
+    runs_as_cargo_does(
+        "lent",
+        "string badge default 2 [composed row 2 [str a]] | str b\ncomposed row 0 [str w]\n\
+         str view | str slot\n",
+    );
+}
+
 /// A crate function whose signature has an array type, as a component
 /// crate's `Row::with_children<const N: usize>(children: [Slot<'a, M>; N])`
 /// and `fill(&mut [u8; 4], u8)`: an array literal or value crosses by

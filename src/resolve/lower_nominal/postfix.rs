@@ -1736,7 +1736,15 @@ impl<'a> Parser<'a> {
             // the place the output borrows.
             let output = instantiate(&Ty::from_resolved(definition.output()), &substitution);
             #[cfg(feature = "rust-import")]
-            self.note_opaque_value(&output, definition.lifetimes().written_output.as_deref());
+            let output = self.note_opaque_value(
+                output,
+                definition
+                    .lifetimes()
+                    .written_output
+                    .as_deref()
+                    .or(Some(definition.output())),
+                &substitution,
+            );
             // A `&mut self` method borrows its receiver for the call.
             if matches!(mode, receiver::Mode::Mutable) {
                 self.mutable_use(&value, member_span);
@@ -3657,6 +3665,7 @@ impl<'a> Parser<'a> {
                 forms,
                 owner,
                 receiver: value.span,
+                lent: None,
             };
             let Some(helper) = self.host_into_helper(&host, &error, &returned, value.span)? else {
                 // An imported error whose `from` the program never named,

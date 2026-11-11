@@ -208,7 +208,7 @@ pub(crate) use naming::DEBUG_DISPATCHER;
 pub(crate) use naming::DEBUG_GENERIC;
 use naming::{
     conversion_placeholder, function_name, instance_dispatcher_name, instance_placeholder,
-    instance_text, method_name, pattern_name, static_dispatcher_name,
+    instance_text, lent_text_placeholder, method_name, pattern_name, static_dispatcher_name,
     static_instance_dispatcher_name, static_instance_placeholder, text_into_placeholder,
     trait_dispatcher_name, witness_placeholder, witness_variable, CLOSURE_SENTINEL,
     DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, PRIVATE_PREFIX, SENTINEL,
@@ -639,7 +639,7 @@ struct Parser<'a> {
     /// the value by its bound alone (`take_opaque_arguments`), as iced_test's
     /// `simulator(counter.view())` takes it.
     #[cfg(feature = "rust-import")]
-    opaque_values: Vec<(Ty, type_ref::Type)>,
+    opaque_values: Vec<host_signature::OpaqueValue>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.

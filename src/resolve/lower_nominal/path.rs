@@ -1611,13 +1611,21 @@ impl<'a> Parser<'a> {
         let summary = self.method_summary(&definition);
         let kept = instantiate(&Ty::from_resolved(definition.output()), &substitution);
         #[cfg(feature = "rust-import")]
-        self.note_opaque_value(&kept, definition.lifetimes().written_output.as_deref());
+        let kept = self.note_opaque_value(
+            kept,
+            definition
+                .lifetimes()
+                .written_output
+                .as_deref()
+                .or(Some(definition.output())),
+            &substitution,
+        );
         let kept = self.inference.resolve(&kept);
         self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
             source,
-            ty: instantiate(&Ty::from_resolved(definition.output()), &substitution),
+            ty: kept,
             span: span(owner_span.start(), end),
             lvalue: None,
             outcome: crate::host::usage::Outcome::Conservative,
