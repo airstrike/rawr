@@ -899,6 +899,32 @@ impl Parser<'_> {
     }
 }
 
+/// Whether std's `Deref` for the std type Rawr's std holds as the facade
+/// type at `definition`, and its `DerefMut` with `mutable`, targets
+/// another std type the same value stands for: `Path` of `PathBuf`.
+fn held_deref(definition: &str, mutable: bool) -> bool {
+    let forms = crate::std_facade::held_forms(definition)
+        .into_iter()
+        .filter_map(std_table::definition_of)
+        .collect::<Vec<_>>();
+    let Some(own) = forms.first() else {
+        return false;
+    };
+    let target = std_table::impls("core::ops::deref::Deref", own)
+        .find_map(|line| line.associated("Target"))
+        .and_then(|target| match std_table::written(target) {
+            Written::Path {
+                path, arguments, ..
+            } if arguments.is_empty() => std_table::definition_of(path),
+            _ => None,
+        });
+    target.is_some_and(|target| forms.contains(&target))
+        && (!mutable
+            || std_table::impls("core::ops::deref::DerefMut", own)
+                .next()
+                .is_some())
+}
+
 /// One step of a deref, and how rawr runs it (D711's execution mapping
 /// for std's `Deref` impls).
 #[derive(Clone)]
@@ -957,6 +983,14 @@ impl Parser<'_> {
                 "Target".into(),
             ));
             return Some((target, DerefCall::Program(Box::new(call))));
+        }
+        // A type Rawr's std holds as the value of each std type it stands
+        // for is its own target where std's impl gives another of those,
+        // as a `PathBuf`'s `Path` is the `PathBuf` (#1705).
+        if let Ty::Host { proof, .. } = &ty
+            && held_deref(&proof.definition.path(), mutable)
+        {
+            return Some((ty, DerefCall::Value));
         }
         #[cfg(feature = "rust-import")]
         if matches!(ty, Ty::Host { .. })
@@ -1191,6 +1225,10 @@ impl Parser<'_> {
             let Some((ty, call)) = self.deref_reference(&reference, true) else {
                 break;
             };
+            // A `PathBuf`'s `Path` is rawr's type of it already.
+            if ty == reference {
+                break;
+            }
             steps.push((target, ty.clone(), call));
             probed = ty;
         }
