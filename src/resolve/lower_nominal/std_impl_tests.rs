@@ -100,6 +100,33 @@ main();
     assert_eq!(printed(source), "Some([1, 2])\nSome(\"hi\")\nSome([9])\n");
 }
 
+/// An `Option<PathBuf>`'s `as_deref` is an `Option<&Path>`, by std's
+/// `impl Deref for PathBuf`, and `Path::extension` and `OsStr::to_str` go
+/// on as function values, as iced's editor picks its highlighting (#1705).
+#[test]
+fn language_as_deref_of_an_optional_path_buf_lends_a_path() {
+    let source = r#"
+use std::ffi;
+use std::path::{Path, PathBuf};
+
+fn main() {
+    let file: Option<PathBuf> = Some(PathBuf::from("src/main.rs"));
+    let none: Option<PathBuf> = None;
+    let path: Option<&Path> = file.as_deref();
+    println!("{:?}", path);
+    let kind = file
+        .as_deref()
+        .and_then(Path::extension)
+        .and_then(ffi::OsStr::to_str)
+        .unwrap_or("txt");
+    let other = none.as_deref().and_then(Path::extension).and_then(ffi::OsStr::to_str);
+    println!("{kind} {:?}", other);
+}
+main();
+"#;
+    assert_eq!(printed(source), "Some(\"src/main.rs\")\nrs None\n");
+}
+
 #[test]
 fn language_sequences_text_maps_and_cells_compare_by_stds_impls() {
     let source = r#"
