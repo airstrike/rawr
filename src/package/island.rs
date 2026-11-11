@@ -31,7 +31,8 @@
 //! (a signature, a struct's fields, a constant native code reads) needs a
 //! new native build, so the program restarts. A save that leaves them
 //! unchanged (a function body, a private item) swaps in the running
-//! program at the next call through a trampoline.
+//! program at the next call through a trampoline, and so does a type's new
+//! derive, whose impl the native code built without it never calls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -154,12 +155,19 @@ pub(crate) struct Shadow {
 }
 
 /// What native code sees of a crate's marked modules: each item's path
-/// and generated text as rustc builds it (`built`). Two shapes are equal
-/// exactly when the generated files differ at most in their comments,
-/// their layout and their inert attributes, which rustc builds the same,
-/// so an unchanged shape needs no new native build (#1646).
+/// and generated text as rustc builds it (`built`), and each type's
+/// derives apart from its text. Two shapes are equal exactly when the
+/// generated files differ at most in their comments, their layout and
+/// their inert attributes, which rustc builds the same, so an unchanged
+/// shape needs no new native build (#1646).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Shape(BTreeMap<String, Entry>);
+pub struct Shape {
+    entries: BTreeMap<String, Entry>,
+    /// The derives each type writes, by its path, which its entry's text
+    /// leaves out. Native code built without a derive's impl never calls
+    /// it, so a new derive alone needs no new native build (#1737).
+    derives: BTreeMap<String, BTreeSet<String>>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Entry {
@@ -179,11 +187,20 @@ impl Shape {
     /// Whether the crate has no marked item native code sees.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.entries.is_empty()
     }
 
     /// Why native code must be built again when the shape goes from `self`
-    /// to `newer`, in one line; `None` when they are the same.
+    /// to `newer`, in one line; `None` when it needn't be.
+    ///
+    /// A type's new derive alone needs none: native code built without the
+    /// derive's impl doesn't call it, native code edited to call it is a
+    /// native change of its own, and a marked call that needs it at a
+    /// native function is a native use the running build doesn't cover
+    /// (#1737). A derive that goes away does, as native code may call it,
+    /// and so does one that changes what else is generated for its type,
+    /// as `Copy` ends the tracking of its drops and a native trait
+    /// object's stand-in takes each std derive: the line names the derive.
     #[must_use]
     pub fn change(&self, newer: &Self) -> Option<String> {
         if self == newer {
@@ -195,20 +212,126 @@ impl Shape {
             Kind::Constant => "its value, which native code reads",
             Kind::Other => "what native code sees of it",
         };
-        for (path, entry) in &newer.0 {
-            match self.0.get(path) {
-                None => return Some(format!("native code can now see `{path}`")),
-                Some(old) if old != entry => {
-                    return Some(format!("`{path}` changed {}", what(entry.kind)));
-                }
-                Some(_) => {}
-            }
+        // An entry of a type whose derives changed, its own or one
+        // generated for it (`Ball as dyn Trait`), changed with them.
+        let derived = |path: &str| {
+            newer.derives.keys().find_map(|owner| {
+                let own = path
+                    .strip_prefix(owner.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '));
+                own.then(|| self.derive_change(newer, owner)).flatten()
+            })
+        };
+        for (path, entry) in &newer.entries {
+            let changed = match self.entries.get(path) {
+                None => format!("native code can now see `{path}`"),
+                Some(old) if old != entry => format!("`{path}` changed {}", what(entry.kind)),
+                Some(_) => continue,
+            };
+            return Some(derived(path).unwrap_or(changed));
         }
-        self.0
+        if let Some(path) = self
+            .entries
             .keys()
-            .find(|path| !newer.0.contains_key(*path))
-            .map(|path| format!("native code can no longer see `{path}`"))
+            .find(|path| !newer.entries.contains_key(*path))
+        {
+            return Some(
+                derived(path).unwrap_or_else(|| format!("native code can no longer see `{path}`")),
+            );
+        }
+        self.derives
+            .iter()
+            .filter(|(path, derives)| {
+                newer
+                    .derives
+                    .get(*path)
+                    .is_some_and(|kept| !derives.is_subset(kept))
+            })
+            .find_map(|(path, _)| self.derive_change(newer, path))
     }
+
+    /// The first type whose derives differ from `self` to `newer`, in a
+    /// line that names them, as "`physics::Ball` derives Clone now";
+    /// `None` when no type's do.
+    #[must_use]
+    pub fn derived(&self, newer: &Self) -> Option<String> {
+        newer
+            .derives
+            .keys()
+            .find_map(|path| self.derive_change(newer, path))
+    }
+
+    /// How the derives of the type at `path` changed from `self` to
+    /// `newer`, in one line; `None` when they didn't, or when one of the
+    /// shapes has no such type.
+    fn derive_change(&self, newer: &Self, path: &str) -> Option<String> {
+        let (old, new) = (self.derives.get(path)?, newer.derives.get(path)?);
+        let added = new.difference(old).map(String::as_str).collect::<Vec<_>>();
+        let removed = old.difference(new).map(String::as_str).collect::<Vec<_>>();
+        match (added.as_slice(), removed.as_slice()) {
+            ([], []) => None,
+            (added, []) => Some(format!("`{path}` derives {} now", listed(added))),
+            ([], removed) => Some(format!("`{path}` no longer derives {}", listed(removed))),
+            (added, removed) => Some(format!(
+                "`{path}` derives {} now and no longer derives {}",
+                listed(added),
+                listed(removed)
+            )),
+        }
+    }
+
+    /// The shape of the generated `entries`, each as rustc builds it, a
+    /// type's derives apart from its text.
+    fn built(entries: BTreeMap<String, Entry>) -> Self {
+        let mut shape = Self::default();
+        for (path, Entry { kind, text }) in entries {
+            let mut text = built(&text);
+            if kind == Kind::Type {
+                let (rest, derives) = without_derives(&text);
+                text = rest;
+                shape.derives.insert(path.clone(), derives);
+            }
+            shape.entries.insert(path, Entry { kind, text });
+        }
+        shape
+    }
+}
+
+/// `names` in a line: `A`, `A and B`, `A, B and C`.
+fn listed(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The `built` text of a type without the derive attributes it starts
+/// with, and the paths they derive as written (`Clone`, `serde::Serialize`).
+fn without_derives(built: &str) -> (String, BTreeSet<String>) {
+    let mut kept = String::with_capacity(built.len());
+    let mut derives = BTreeSet::new();
+    let mut rest = built;
+    while let Some(attribute) = rest.strip_prefix("#[") {
+        let Some(length) = bracketed(attribute) else {
+            break;
+        };
+        match attribute[..length]
+            .strip_prefix("derive(")
+            .and_then(|inside| inside.strip_suffix(')'))
+        {
+            Some(inside) => derives.extend(
+                inside
+                    .split(',')
+                    .filter(|derived| !derived.is_empty())
+                    .map(str::to_owned),
+            ),
+            None => kept.push_str(&rest[..length + 3]),
+        }
+        rest = &attribute[length + 1..];
+    }
+    kept.push_str(rest);
+    (kept, derives)
 }
 
 /// One marked source: a file, or an inline module inside one.
@@ -522,15 +645,7 @@ pub(crate) fn shadow<'a>(
     Shadow {
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         files,
-        shape: Shape(
-            shape
-                .into_iter()
-                .map(|(path, Entry { kind, text })| {
-                    let text = built(&text);
-                    (path, Entry { kind, text })
-                })
-                .collect(),
-        ),
+        shape: Shape::built(shape),
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         refused,
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
@@ -3978,6 +4093,13 @@ fn inert_attribute(text: &str) -> Option<usize> {
     if !crate::item::inert(path.split("::")) {
         return None;
     }
+    Some(opened + 1 + bracketed(inside)? + 1)
+}
+
+/// How long `inside`, the text after an attribute's `[`, is up to the `]`
+/// that closes it, past nested brackets and literals; `None` when none
+/// does.
+fn bracketed(inside: &str) -> Option<usize> {
     let mut depth = 1_usize;
     let mut at = 0;
     while at < inside.len() {
@@ -3989,7 +4111,7 @@ fn inert_attribute(text: &str) -> Option<usize> {
         let character = rest.chars().next()?;
         match character {
             '[' => depth += 1,
-            ']' if depth == 1 => return Some(opened + 1 + at + 1),
+            ']' if depth == 1 => return Some(at),
             ']' => depth -= 1,
             _ => {}
         }
@@ -7446,7 +7568,7 @@ mod tests {
             ),
             "{text}"
         );
-        let paths = shadow.shape.0.keys().cloned().collect::<Vec<_>>();
+        let paths = shadow.shape.entries.keys().cloned().collect::<Vec<_>>();
         assert_eq!(
             paths,
             [
@@ -7673,14 +7795,57 @@ mod tests {
              ball.x -= G;\n}\n",
         );
         assert_eq!(before.shape.change(&inert.shape), None);
-        let derived = generate(
-            "// rawr\n#[derive(Clone)]\npub struct Ball { pub x: f64 }\nconst G: f64 = 9.8;\n\
-             pub fn fall(ball: &mut Ball) { ball.x -= G; }\n",
+    }
+
+    /// Native code built without a derive's impl doesn't call it: a new
+    /// derive keeps the shape, and one that goes away, or that changes
+    /// what else is generated for its type, names the derive (#1737).
+    #[test]
+    fn a_new_derive_keeps_the_shape_and_a_lost_one_names_the_derive() {
+        let ball = |derives: &str| {
+            generate(&format!(
+                "// rawr\n{derives}pub struct Ball {{ pub x: f64 }}\n\
+                 pub fn fall(ball: &mut Ball) {{ ball.x -= 1.0; }}\n"
+            ))
+        };
+        let before = ball("");
+        let derived = ball("#[derive(Clone)]\n");
+        assert_ne!(before.files, derived.files);
+        assert_eq!(before.shape.change(&derived.shape), None);
+        assert_eq!(
+            before.shape.derived(&derived.shape).as_deref(),
+            Some("`physics::Ball` derives Clone now")
+        );
+        let more = ball("#[derive(Debug, Clone)]\n#[derive(PartialEq)]\n");
+        assert_eq!(derived.shape.change(&more.shape), None);
+        assert_eq!(
+            more.shape.change(&before.shape).as_deref(),
+            Some("`physics::Ball` no longer derives Clone, Debug and PartialEq")
         );
         assert_eq!(
-            before.shape.change(&derived.shape).as_deref(),
-            Some("`physics::Ball` changed its fields")
+            more.shape
+                .change(&ball("#[derive(Hash)]\n").shape)
+                .as_deref(),
+            Some(
+                "`physics::Ball` derives Hash now and no longer derives Clone, Debug and PartialEq"
+            )
         );
+        // A crossing struct with no field native code sees tells the runner
+        // when it drops (#1492), unless it is `Copy`.
+        let id = |derives: &str| {
+            generate(&format!(
+                "// rawr\n{derives}pub struct Id {{ value: i64 }}\n\
+                 pub fn id() -> Id {{ Id {{ value: 1 }} }}\n"
+            ))
+        };
+        assert_eq!(
+            id("#[derive(Clone)]\n")
+                .shape
+                .change(&id("#[derive(Clone, Copy)]\n").shape)
+                .as_deref(),
+            Some("`physics::Id` derives Copy now")
+        );
+        assert_eq!(id("").shape.change(&id("#[derive(Debug)]\n").shape), None);
     }
 
     #[test]
