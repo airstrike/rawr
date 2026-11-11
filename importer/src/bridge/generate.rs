@@ -5104,9 +5104,17 @@ mod __rawr_profile {
     /// Make `program`, compiled beside the running program, the generation
     /// its next calls from native code run in (D553.3). This
     /// runs on the thread that owns the program, at an outermost entry. The
-    /// arena stays: its native values live on (D553.4).
+    /// arena stays: its native values live on (D553.4). One that values
+    /// made since its compile, or code native code still holds, depend on
+    /// the old types of ends the runner, saying why, and `rawr run` starts
+    /// the program again (#1746).
     pub fn admit(mut program: super::Program) -> Result<(), String> {
-        __rawr_internal::island::publish(bind(&mut program)?);
+        if let Some(reason) = __rawr_internal::island::admit(bind(&mut program)?) {
+            use std::io::Write as _;
+            eprintln!("rawr: {reason}; restarting the program");
+            let _ = std::io::stdout().flush();
+            std::process::exit(__rawr_internal::island::REFUSED);
+        }
         ADMITTED.set(Some(program));
         super::admitted();
         Ok(())

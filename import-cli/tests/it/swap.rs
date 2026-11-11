@@ -1,7 +1,8 @@
 //! A marked `main` that hands control to a native loop keeps running across
 //! a save (D553): the loop's next call into script code runs the new body,
-//! in the same process, and a script type's new field restarts the program
-//! with a one-line reason. Build the driver first, as for `islands`.
+//! in the same process, a new field of a script type no live value holds
+//! swaps in too, and an edit to `main` restarts the program with a one-line
+//! reason. Build the driver first, as for `islands`.
 
 use std::fs;
 use std::path::Path;
@@ -52,27 +53,27 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
     );
     assert!(run.seen.contains(&pid));
 
-    // A new field: native code may hold the old shape, so the program
-    // restarts from its first tick with the reason.
-    edit(
+    // A new field, in one write with a body edit that says the program
+    // runs it: no value of `Scale` outlives a call, so it swaps in too
+    // (#1746).
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(
         &main,
-        "    factor: i64,\n}",
-        "    factor: i64,\n    name: String,\n}",
-    );
-    edit(
-        &main,
-        "Scale { factor: 100 }",
-        "Scale { factor: 100, name: String::new() }",
-    );
-    let restarted = run.until(|line| parse(line) == Some((1, 100)));
-    assert_eq!(restarted, "1 value 100");
-    assert!(
-        run.seen
-            .iter()
-            .any(|line| line == "stderr: rawr: `Scale` changed its fields; restarting the program"),
-        "{}",
-        run.seen.join("\n")
-    );
+        text.replace(
+            "    factor: i64,\n}",
+            "    factor: i64,\n    name: String,\n}",
+        )
+        .replace(
+            "Scale { factor: 100 }",
+            "Scale { factor: 200, name: String::new() }",
+        ),
+    )
+    .unwrap();
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 200));
+    let (grown, _) = parse(&swapped).unwrap();
+    let seen = run.seen.join("\n");
+    assert!(grown > tick, "{seen}");
+    assert!(!seen.contains("restarting"), "{seen}");
 
     // `main` ran once: an edit to it restarts the program.
     edit(
@@ -80,7 +81,7 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
         "ticker::run(step, 3000);",
         "ticker::run(step, 2999);",
     );
-    run.until(|line| parse(line) == Some((1, 100)));
+    run.until(|line| parse(line) == Some((1, 200)));
     assert!(
         run.seen
             .iter()
@@ -115,7 +116,8 @@ fn reload_ticker(name: &str) -> Scratch {
 
 /// A program with an editor of its own hears what each save did: a body
 /// edit `swapped` (after `queued`, when it hears that), a failing one
-/// `failed` with its position, and a new field restarts it, and the new
+/// `failed` with its position, a new field of a type no live value holds
+/// `swapped` (#1746), and an edit to `main` restarts it, and the new
 /// process hears `restarted` with the reason first (#1166). Under cargo it
 /// hears nothing.
 #[test]
@@ -159,21 +161,32 @@ fn a_program_hears_what_each_save_did_and_why_it_restarted() {
     edit(&main, "tick * scale.missing", "tick * scale.factor");
     run.until(|line| line == "outcome swapped");
 
+    // A new field of a type no live value holds swaps in (#1746).
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(
+        &main,
+        text.replace(
+            "    factor: i64,\n}",
+            "    factor: i64,\n    name: String,\n}",
+        )
+        .replace(
+            "Scale { factor: 100 }",
+            "Scale { factor: 100, name: String::new() }",
+        ),
+    )
+    .unwrap();
+    run.until(|line| line == "outcome swapped");
+
     edit(
         &main,
-        "    factor: i64,\n}",
-        "    factor: i64,\n    name: String,\n}",
-    );
-    edit(
-        &main,
-        "Scale { factor: 100 }",
-        "Scale { factor: 100, name: String::new() }",
+        "ticker::run(step, 3000);",
+        "ticker::run(step, 2999);",
     );
     run.until(|line| line.starts_with("pid ") && *line != first_pid);
     let restarted = run.until(|line| line.starts_with("outcome "));
     assert_eq!(
         restarted,
-        "outcome restarted: `Scale` changed its fields",
+        "outcome restarted: `main` changed",
         "{}",
         run.seen.join("\n")
     );

@@ -15,6 +15,14 @@ type EnumConstruction = (
     schema::Fingerprint,
     nominal::variant::Id,
     Box<[Dynamic]>,
+    nominal::census::Token,
+);
+
+type StructConstruction = (
+    type_def::Identity,
+    schema::Fingerprint,
+    Box<[Dynamic]>,
+    nominal::census::Token,
 );
 
 /// The immutable nominal runtime model paired with one executable generation.
@@ -101,6 +109,9 @@ struct Definition {
     shape: Shape,
     /// An enum's `#[default]` variant, which a derived `Default` builds.
     default_variant: Option<nominal::variant::Id>,
+    /// What counts the type's live values, which each value it makes
+    /// holds (#1746).
+    census: nominal::census::Entry,
 }
 
 #[derive(Clone)]
@@ -132,6 +143,7 @@ pub(crate) struct Construction {
     schema: schema::Fingerprint,
     target: Target,
     members: Box<[Dynamic]>,
+    census: nominal::census::Token,
 }
 
 enum Target {
@@ -221,8 +233,10 @@ impl Model {
                 | item::Kind::Trait(_)
                 | item::Kind::Function(_) => continue,
             };
+            let identity = type_def::Identity::Script(definition.key().clone());
+            let census = nominal::census::Entry::of(&identity);
             runtime.insert(
-                type_def::Identity::Script(definition.key().clone()),
+                identity,
                 Definition {
                     names,
                     generics,
@@ -230,6 +244,7 @@ impl Model {
                     capabilities: definition.capabilities(),
                     shape,
                     default_variant,
+                    census,
                 },
             );
         }
@@ -411,6 +426,7 @@ impl Model {
             schema: schema.clone(),
             target: Target::Struct,
             members,
+            census: definition.census.token(),
         })
     }
 
@@ -442,6 +458,7 @@ impl Model {
             schema: schema.clone(),
             target: Target::Enum(variant.clone()),
             members,
+            census: definition.census.token(),
         })
     }
 
@@ -1140,8 +1157,7 @@ impl Construction {
         model: &Model,
         expected_identity: &type_def::Identity,
         expected_schema: &schema::Fingerprint,
-    ) -> Result<(type_def::Identity, schema::Fingerprint, Box<[Dynamic]>), construction::Error>
-    {
+    ) -> Result<StructConstruction, construction::Error> {
         self.verify(model, expected_identity, expected_schema)?;
         if !matches!(self.target, Target::Struct) {
             return Err(construction::Error::KindMismatch {
@@ -1150,7 +1166,7 @@ impl Construction {
                 actual: construction::Kind::Enum,
             });
         }
-        Ok((self.identity, self.schema, self.members))
+        Ok((self.identity, self.schema, self.members, self.census))
     }
 
     pub(crate) fn into_enum(
@@ -1175,7 +1191,13 @@ impl Construction {
                 actual: actual_variant.name().into(),
             });
         }
-        Ok((self.identity, self.schema, actual_variant, self.members))
+        Ok((
+            self.identity,
+            self.schema,
+            actual_variant,
+            self.members,
+            self.census,
+        ))
     }
 
     fn verify(

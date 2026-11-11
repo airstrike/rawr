@@ -119,9 +119,9 @@ mod checked_places {
         let _restore =
             Restore(HOST.with_borrow_mut(|host| host.replace(Rc::new(Running(program.clone())))));
         let callable = Callable {
+            _kept: super::keep(&function, &program),
             function,
             program,
-            _held: None,
         };
         let registry = Registry::new();
         let text = registry.witness_for(&Type::builtin("String", TypeId::of::<ImmutableString>()));

@@ -1,5 +1,6 @@
 //! Runtime values for resolved Rawr structs and enums.
 
+pub(crate) mod census;
 pub(crate) mod variant;
 
 use crate::resolve::type_ref;
@@ -13,6 +14,9 @@ pub(crate) struct Struct {
     identity: type_def::Identity,
     schema: program::schema::Fingerprint,
     fields: Box<[Dynamic]>,
+    /// Counts this value while it lives (#1746).
+    #[allow(dead_code)]
+    census: census::Token,
 }
 
 /// An ordered runtime value of a resolved Rawr enum variant.
@@ -22,6 +26,9 @@ pub(crate) struct Enum {
     schema: program::schema::Fingerprint,
     variant: variant::Id,
     payload: Box<[Dynamic]>,
+    /// Counts this value while it lives (#1746).
+    #[allow(dead_code)]
+    census: census::Token,
 }
 
 impl fmt::Display for Struct {
@@ -44,11 +51,12 @@ impl Struct {
         schema: &program::schema::Fingerprint,
         proof: program::model::Construction,
     ) -> Result<Self, program::construction::Error> {
-        let (identity, schema, fields) = proof.into_struct(model, identity, schema)?;
+        let (identity, schema, fields, census) = proof.into_struct(model, identity, schema)?;
         Ok(Self {
             identity,
             schema,
             fields,
+            census,
         })
     }
 
@@ -99,13 +107,14 @@ impl Enum {
         variant: &variant::Id,
         proof: program::model::Construction,
     ) -> Result<Self, program::construction::Error> {
-        let (identity, schema, variant, payload) =
+        let (identity, schema, variant, payload, census) =
             proof.into_enum(model, identity, schema, variant)?;
         Ok(Self {
             identity,
             schema,
             variant,
             payload,
+            census,
         })
     }
 
@@ -505,6 +514,7 @@ mod tests {
             identity: identity.clone(),
             schema: definition.schema().clone(),
             fields: vec![Dynamic::UNIT].into_boxed_slice(),
+            census: super::census::Entry::of(&identity).token(),
         };
         let mut shared = Dynamic::from(malformed).into_shared();
         let cycle = shared.clone();

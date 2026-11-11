@@ -991,6 +991,107 @@ fn a_marked_type_becomes_a_native_trait_object() {
     }
 }
 
+/// A private marked type whose value the running program holds, inside the
+/// page native code keeps as a `Box<dyn Page>`, though native code never
+/// names it (#1746): a body edit swaps in and the page keeps its count, but
+/// the type's new field, and its removal, restart the program with their
+/// reason, which says a live value holds it.
+#[test]
+fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds_it() {
+    const OBJECTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-objects"
+    );
+    const STEP: &str = "/// How far a spare page counts at each update.\n\
+                        #[derive(Clone, Debug)]\nstruct Step {\n    by: usize,\n    \
+                        twice: bool,\n}\n\n";
+    let root = crate::support::fresh("islands-objects-held");
+    let stop = root.join("stop");
+    let _ = fs::remove_file(&stop);
+    copy(Path::new(OBJECTS), &root);
+    let badge = root.join("src/component/badge.rs");
+    let mut run = start(&root, &[("ISLANDS_STOP", stop.clone())]);
+    // `tick N {word} M`, for the word the page's view says.
+    let ticks = |word: &'static str| {
+        move |line: &str| -> Option<(usize, usize)> {
+            let (tick, rest) = line.strip_prefix("tick ")?.split_once(' ')?;
+            let count = rest.strip_prefix(word)?.strip_prefix(' ')?;
+            Some((tick.parse().ok()?, count.parse().ok()?))
+        }
+    };
+    let first = ticks("spare");
+    run.until(|line| first(line).is_some_and(|(tick, _)| tick >= 3));
+    // Each save is one write: the changes, and the view's word, which says
+    // the program runs the save.
+    let said = std::cell::RefCell::new("spare".to_owned());
+    let save = |changes: &[(&str, &str)], word: &str| {
+        let view = |word: &str| format!("format!(\"{word} {{}}\", self.ticks)");
+        let (was, now) = (view(&said.borrow()), view(word));
+        let mut text = fs::read_to_string(&badge).unwrap();
+        for (from, to) in changes.iter().copied().chain([(&*was, &*now)]) {
+            assert!(text.contains(from), "{from}\n{text}");
+            text = text.replace(from, to);
+        }
+        fs::write(&badge, text).unwrap();
+        *said.borrow_mut() = word.to_owned();
+    };
+
+    // A body edit: the page native code keeps counts on in the new code.
+    save(&[], "kept");
+    let kept = ticks("kept");
+    let line = run.until(|line| kept(line).is_some());
+    let (tick, count) = kept(&line).unwrap();
+    let seen = run.seen.join("\n");
+    assert!(tick > 3 && count == tick, "{seen}");
+    assert!(!seen.contains("restarting"), "{seen}");
+
+    // The step's new field: the kept page's step has the old fields.
+    save(
+        &[
+            ("    by: usize,\n}", "    by: usize,\n    twice: bool,\n}"),
+            ("Step { by: 1 }", "Step { by: 1, twice: false }"),
+        ],
+        "grown",
+    );
+    let grown = ticks("grown");
+    run.until(|line| grown(line) == Some((1, 1)));
+
+    // The step removed: the kept page still holds one.
+    save(
+        &[
+            (STEP, ""),
+            ("    step: Step,\n", ""),
+            ("self.ticks += self.step.by;", "self.ticks += 1;"),
+            ("        step: Step { by: 1, twice: false },\n", ""),
+        ],
+        "plain",
+    );
+    let plain = ticks("plain");
+    run.until(|line| plain(line) == Some((1, 1)));
+
+    fs::write(&stop, "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    let restarts = run
+        .seen
+        .iter()
+        .filter(|line| line.contains("restarting the program"))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        restarts,
+        [
+            "stderr: rawr: `component::badge::Step` changed its fields, but a live value holds \
+             it; restarting the program",
+            "stderr: rawr: `component::badge::Step` was removed, but a live value holds it; \
+             restarting the program",
+        ],
+        "{seen}"
+    );
+    assert!(!seen.contains("preparing again"), "{seen}");
+}
+
 /// A marked leaf writes its page as a native module's enum, whose fields
 /// are `&'static str`, `Option<&'static str>` and `&'static [Block]`, from
 /// literals: a `pub static BLOCKS` native code reads as a Rust item, and
@@ -1898,9 +1999,8 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
         .replace("\"{label} entry\"", "\"{label} cell\"");
     fs::write(&sidebar, text).unwrap();
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick cell styled 0"));
-    // The struct removed: the sidebar alone again. The running program
-    // then refuses the swap, as a type it was given is gone, and restarts
-    // at once, with no preparation (#1728).
+    // The struct removed: the sidebar alone again. No value of it lives,
+    // so the running program takes it in place (#1746).
     let text = fs::read_to_string(&sidebar)
         .unwrap()
         .replace(CORNERS, "")
@@ -1917,9 +2017,7 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     assert!(
         run.seen
             .iter()
-            .all(|line| !line.contains("preparing again"))
-            && run.seen.iter().any(|line| line
-                == "stderr: rawr: `widget::sidebar::Corners` was removed; restarting the program"),
+            .all(|line| !line.contains("preparing again") && !line.contains("restarting")),
         "{seen}"
     );
     // What each save parsed, revealed and lowered: none lowers `home.rs`,
@@ -1944,15 +2042,20 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     );
 }
 
-/// A private struct's new derives swap in place: a live value depends on
-/// its fields, their types and their order, which stay, and the new impls
-/// are new code the swap installs. A new field, and the struct's removal,
-/// restart the program at once with their reason, and prepare no native
-/// build first: the runner's own compile refused them and said why (#1728).
+/// A private struct's new derives, new field and removal swap in place
+/// while no value of it lives: nothing the running program holds depends
+/// on it (#1746). A static of a script type holds no value either, as each
+/// read is its initializer (D862), so a struct only a static and the row
+/// read takes its new field and its removal in place too. No save
+/// prepares a native build or restarts the program.
 #[test]
-fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_once() {
+fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     const DERIVED: &str = "#[derive(Debug, Clone, Copy, PartialEq)]\nstruct Corners {\n";
+    const INSET: &str = "#[derive(Debug)]\nstruct Inset {\n    width: f32,\n}\n\n\
+                         static INSET: Inset = Inset { width: 1.0 };\n\n";
+    const GROWN: &str = "#[derive(Debug)]\nstruct Inset {\n    width: f32,\n    \
+                         depth: f32,\n}\n\nstatic INSET: Inset = Inset { width: 1.0, depth: 2.0 };\n\n";
     let root = crate::support::fresh("islands-theme-derives");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -1972,39 +2075,69 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
-    // Each save is one write: the struct's change, and the row's label,
+    // Each save is one write: the structs' changes, and the row's label,
     // which says the program runs the save.
-    let save = |change: (&str, &str), label: (&str, &str)| {
-        let text = fs::read_to_string(&sidebar).unwrap();
-        assert!(text.contains(change.0) && text.contains(label.0), "{text}");
+    let save = |changes: &[(&str, &str)], label: &str| {
+        let mut text = fs::read_to_string(&sidebar).unwrap();
+        let (_, last) = text.split_once("\"{label} ").unwrap();
+        let (last, _) = last.split_once('"').unwrap();
+        let last = format!("\"{{label}} {last}\"");
+        for (from, to) in changes {
+            assert!(text.contains(from), "{from}\n{text}");
+            text = text.replace(from, to);
+        }
         fs::write(
             &sidebar,
-            text.replace(change.0, change.1).replace(label.0, label.1),
+            text.replace(&last, &format!("\"{{label}} {label}\"")),
         )
         .unwrap();
     };
-    // New derives, the fields the same: the running program takes them.
+    let ticks = |label: &str| {
+        let ending = format!(" tick {label} styled 0");
+        move |line: &str| line.starts_with("tick ") && line.ends_with(&ending)
+    };
+    // New derives, the fields the same.
+    save(&[("#[derive(Debug)]\nstruct Corners {\n", DERIVED)], "item");
+    run.until(ticks("item"));
+    // A new field.
     save(
-        ("#[derive(Debug)]\nstruct Corners {\n", DERIVED),
-        ("\"{label} row\"", "\"{label} item\""),
+        &[("    radius: f32,\n", "    radius: f32,\n    depth: f32,\n")],
+        "entry",
     );
-    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
-    let swapped = run.seen.len();
-    // A new field: a restart, at once.
+    run.until(ticks("entry"));
+    // The struct removed.
     save(
-        ("    radius: f32,\n", "    radius: f32,\n    depth: f32,\n"),
-        ("\"{label} item\"", "\"{label} entry\""),
-    );
-    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick entry styled 0"));
-    // The struct removed: a restart, at once.
-    save(
-        (
+        &[(
             &format!("{DERIVED}    radius: f32,\n    depth: f32,\n}}\n\n"),
             "",
-        ),
-        ("\"{label} entry\"", "\"{label} cell\""),
+        )],
+        "cell",
     );
-    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick cell styled 0"));
+    run.until(ticks("cell"));
+    // A struct a static gives, which the row reads each tick.
+    save(
+        &[
+            ("/// A sidebar row:", &format!("{INSET}/// A sidebar row:")),
+            (
+                "    ui::label(&format!(",
+                "    let _ = INSET.width;\n    ui::label(&format!(",
+            ),
+        ],
+        "line",
+    );
+    run.until(ticks("line"));
+    // Its new field.
+    save(
+        &[
+            ("    width: f32,\n", "    width: f32,\n    depth: f32,\n"),
+            ("Inset { width: 1.0 }", "Inset { width: 1.0, depth: 2.0 }"),
+        ],
+        "word",
+    );
+    run.until(ticks("word"));
+    // The struct and its static removed.
+    save(&[(GROWN, ""), ("    let _ = INSET.width;\n", "")], "name");
+    run.until(ticks("name"));
     fs::write(&stop, "").unwrap();
     run.told(&events, |text| {
         text.contains("{\"event\":\"ended\",\"status\":0}")
@@ -2013,33 +2146,12 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
     run.wait();
     let seen = run.seen.join("\n");
     assert!(
-        run.seen[..swapped]
-            .iter()
-            .all(|line| !line.contains("restarting")),
-        "{seen}"
-    );
-    assert!(
         run.seen
             .iter()
-            .all(|line| !line.contains("preparing again")),
+            .all(|line| !line.contains("restarting") && !line.contains("preparing again")),
         "{seen}"
     );
-    let restarts = run
-        .seen
-        .iter()
-        .filter(|line| line.contains("restarting the program"))
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        restarts,
-        [
-            "stderr: rawr: `widget::sidebar::Corners` changed its fields; restarting the program",
-            "stderr: rawr: `widget::sidebar::Corners` was removed; restarting the program",
-        ],
-        "{seen}"
-    );
-    // A runner for each program, and each save compiled in the runner
-    // that ran it.
+    // One runner, and each save compiled in it.
     let count = |prefix: &str| {
         run.seen
             .iter()
@@ -2051,24 +2163,7 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
             count("stderr: rawr runner: a start parsed "),
             count("stderr: rawr runner: a save parsed ")
         ),
-        (3, 3),
-        "{seen}"
-    );
-    // Nothing native changed: each restart runs the running program's
-    // runner build again, with no Cargo resolution, nightly build, probe
-    // or runner build of its own (#1739).
-    let starts = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a start ran "))
-        .skip(1)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        starts,
-        [
-            "Cargo resolutions 0, nightly builds 0, probes 0, runner builds 0, rounds 1",
-            "Cargo resolutions 0, nightly builds 0, probes 0, runner builds 0, rounds 1",
-        ],
+        (1, 6),
         "{seen}"
     );
 }
