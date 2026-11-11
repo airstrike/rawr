@@ -2279,6 +2279,16 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// entry of a path crate's facade is a declaration of its own (#1735).
 #[test]
 fn an_edit_to_a_path_crate_s_function_lowers_only_the_files_that_name_it() {
+    // Twice at one path: the second project's copy puts the path crate's
+    // file back with the time it had before the first one's edit, older
+    // than what rawr's home built from the edit, so only the file's
+    // contents tell that its units must build again (#1750).
+    for _ in 0..2 {
+        edit_a_path_crate_s_function();
+    }
+}
+
+fn edit_a_path_crate_s_function() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     // A fresh project: the edit below changes the path crate's files.
     let root = crate::support::fresh("islands-theme-path-edit");
