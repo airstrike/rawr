@@ -35,8 +35,10 @@ use model::{
 
 /// The format of a recorded unit table. A table of another format is not
 /// read; it is extracted again. A table of 7 could name implementations of
-/// crates outside its key (#1097).
-pub(crate) const TABLE_SCHEMA: u32 = 8;
+/// crates outside its key (#1097). A table of 8 records whether the
+/// crate's whole walk failed; no walk is whole unless nothing is demanded
+/// (#1665).
+pub(crate) const TABLE_SCHEMA: u32 = 9;
 
 /// The compiler kind of a derive macro's public path, as serde's
 /// `Serialize`: its export is unsupported with this kind, and the facade
@@ -385,10 +387,10 @@ pub(crate) struct Root {
 /// Everything units answered for one crate, kept to be replayed.
 #[derive(Default)]
 pub(crate) struct Memo {
+    /// Every public path of the crate was walked, as a request that
+    /// demands nothing walks it. Otherwise the table holds what demand
+    /// reached, and grows with each demand it lacks (#1665).
     pub(crate) whole: bool,
-    /// The crate's whole walk failed, so its table grows with demand and
-    /// the walk is not tried again.
-    pub(crate) large: bool,
     pub(crate) units: BTreeMap<Unit, Answer<Emission>>,
     pub(crate) modules: BTreeMap<Hash, Answer<Child>>,
     pub(crate) segments: BTreeMap<String, Option<Segment>>,
@@ -468,7 +470,6 @@ pub(crate) struct Table {
     pub(crate) crate_hash: String,
     pub(crate) root: Root,
     pub(crate) whole: bool,
-    pub(crate) large: bool,
     pub(crate) units: Vec<(Unit, Answer<Emission>)>,
     pub(crate) modules: Vec<Module>,
     pub(crate) segments: Vec<(String, Option<Segment>)>,
@@ -479,7 +480,6 @@ impl Memo {
     pub(crate) fn from_table(table: Table) -> Self {
         Self {
             whole: table.whole,
-            large: table.large,
             units: table.units.into_iter().collect(),
             modules: table
                 .modules
@@ -497,7 +497,6 @@ impl Memo {
             crate_hash: String::new(),
             root,
             whole: self.whole,
-            large: self.large,
             units: self
                 .units
                 .iter()
@@ -523,7 +522,6 @@ impl Memo {
     /// Take every answer `other` holds that this memo lacks.
     pub(crate) fn absorb(&mut self, other: &Self) {
         self.whole |= other.whole;
-        self.large |= other.large;
         for (unit, emissions) in &other.units {
             self.units
                 .entry(unit.clone())

@@ -117,9 +117,10 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // 65 leaves out a std trait's impls for scalars. Schema 67 writes each id
 // of a body once, in its leading `ids`, and names it by index elsewhere.
 // Schema 69 extracts only the names of a crate a plan that demands anything
-// names nothing of. `driver.rs`, `cargo/toolchain.rs` and
+// names nothing of. Schema 70 walks no crate whole for its table when the
+// plan demands anything (#1665). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 69;
+const PROTOCOL_SCHEMA: u32 = 70;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -1163,8 +1164,8 @@ type Extracted = (Vec<Sysroot>, Vec<ExternalCrate>, Vec<u8>);
 /// external crates. The walk is the engine's (`engine.rs`). A table that
 /// recorded every unit the demand needs replays it with no compiler work;
 /// otherwise the compiler answers, and what it answered joins the table, so
-/// the table grows with each demand a crate meets. The crate is walked whole
-/// as well, once, so its table answers any later demand.
+/// the table grows with each demand a crate meets. Only a request that
+/// demands nothing walks the crate whole (#1665).
 #[allow(
     clippy::too_many_arguments,
     reason = "the extraction joins the session, the crate and its recorded table"
@@ -1209,20 +1210,21 @@ fn extract<'tcx>(
     let key = tables.map(|tables| tables.key_for(invocation, crate_hash));
     // A demand that grows the one the table was made from, as each round of
     // a first run's demand does, cannot replay: neither read nor merge it.
-    let outgrown = tables
-        .zip(key.as_deref())
-        .and_then(|(tables, key)| tables.outgrown(key, session, invocation.seed().paths(), used));
-    let served = match &outgrown {
-        Some(_) => None,
-        None => tables
-            .zip(key.as_deref())
-            .and_then(|(tables, key)| tables.served(key)),
-    };
-    let kept = match &outgrown {
-        Some(_) => None,
-        None => tables
-            .zip(key.as_deref())
-            .map(|(tables, key)| tables.load(key, &root, crate_hash, used)),
+    // The settled table still joins what this walk records.
+    let outgrown = tables.zip(key.as_deref()).is_some_and(|(tables, key)| {
+        tables.outgrown(key, session, invocation.seed().paths(), used)
+    });
+    let (served, kept) = if outgrown {
+        (None, None)
+    } else {
+        (
+            tables
+                .zip(key.as_deref())
+                .and_then(|(tables, key)| tables.served(key)),
+            tables
+                .zip(key.as_deref())
+                .map(|(tables, key)| tables.load(key, &root, crate_hash, used)),
+        )
     };
     if let Some(Some(memo)) = &kept {
         let mut replay = engine::Replay(memo);
@@ -1269,43 +1271,15 @@ fn extract<'tcx>(
         // Whether a table that was read holds only known demands.
         let read = matches!(kept, Some(Some(_)));
         let mut kept = kept.flatten().unwrap_or_default();
-        if let Some(outgrown) = &outgrown {
-            kept.large = outgrown.large();
+        if outgrown && let Some(settled) = tables.settled(key, &root, crate_hash) {
+            kept.absorb(&settled);
         }
         let seed = invocation.seed();
+        // The table holds what demand reached, never the crate whole: a
+        // cold check pays for its own demand alone, and a later demand the
+        // table lacks is walked then and joins it (#1665).
         if let engine::Seed::Whole = seed {
             memo.whole = true;
-        } else if !seed.paths().is_empty() && !kept.whole && !kept.large {
-            // The whole crate, so a later program's other items replay
-            // with no nightly (#281): iced's whole walk is about 36,000
-            // units. A walk that fails is dropped, and marked so that it is
-            // not tried again: its crate's table grows with each demand. A
-            // crate the program names nothing of is not walked: that walk is
-            // the work its seed saves.
-            let mut whole = engine::Memo::default();
-            whole.absorb(&kept);
-            whole.absorb(&memo);
-            let complete = {
-                let mut record = engine::Record {
-                    live: &mut builder,
-                    memo: &mut whole,
-                };
-                engine::Engine::new(
-                    &mut record,
-                    root.clone(),
-                    aliases.clone(),
-                    session.to_owned(),
-                )
-                .own_segment(crate_segment(tcx, selected))
-                .run(engine::Seed::Whole)
-                .is_ok()
-            };
-            if complete {
-                whole.whole = true;
-                memo = whole;
-            } else {
-                memo.large = true;
-            }
         }
         kept.absorb(&memo);
         let made = table::Served::new(session, seed.paths(), &kept);
@@ -5878,7 +5852,7 @@ fn hex(bytes: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::path::PathBuf;
 
     use super::{
@@ -6200,6 +6174,183 @@ mod tests {
                     std::fs::read_to_string(root.join("kept")).unwrap(),
                     "the stale table is retired"
                 );
+            }
+        }
+    }
+
+    /// A plan that demands one item of a crate walks that item's units, not
+    /// the crate's, and keeps them as the crate's table. A later demand the
+    /// table lacks walks it and grows the table; a demand the table holds
+    /// replays it (#1665).
+    #[test]
+    fn a_demand_walks_its_own_units_and_a_new_demand_grows_the_table() {
+        use sha2::Digest as _;
+        const CHILD: &str = "RAWR_EXTRACTION_DEMAND_TEST";
+        const ROOT: &str = "RAWR_EXTRACTION_DEMAND_ROOT";
+        const LIBRARY: &str = "#![no_std]\n\
+            pub mod alpha {\n    pub struct Alpha;\n    impl Alpha {\n        pub fn new() -> Self {\n            Alpha\n        }\n    }\n}\n\
+            pub mod bravo {\n    pub struct Bravo(pub u8);\n    pub fn make() -> Bravo {\n        Bravo(1)\n    }\n}\n\
+            pub mod charlie {\n    pub struct Charlie {\n        pub value: u32,\n    }\n    pub trait Named {\n        fn name(&self) -> u32;\n    }\n    impl Named for Charlie {\n        fn name(&self) -> u32 {\n            self.value\n        }\n    }\n}\n";
+        let Some(step) = std::env::var_os(CHILD) else {
+            let root =
+                std::env::temp_dir().join(format!("rawr-extraction-demand-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir(&root).unwrap();
+            let root = std::fs::canonicalize(root).unwrap();
+            let library = root.join("library.rs");
+            std::fs::write(&library, LIBRARY).unwrap();
+            assert!(std::process::Command::new("rustc")
+                .args([
+                    "--crate-name=fixture",
+                    "--crate-type=rlib",
+                    "--emit=metadata",
+                    "--edition=2024",
+                ])
+                .arg(&library)
+                .arg("-o")
+                .arg(root.join("libfixture.rmeta"))
+                .status()
+                .unwrap()
+                .success());
+            // One compiler session per process: each step is a probe run in
+            // its own bundle-like directory.
+            for step in ["whole", "first", "second", "again"] {
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "compiler::tests::a_demand_walks_its_own_units_and_a_new_demand_grows_the_table",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, step)
+                    .env(ROOT, &root)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "step {step}");
+            }
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        let step = step.to_str().unwrap();
+        let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+        let path = |segments: &[&str]| {
+            segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect::<Vec<_>>()
+        };
+        // The whole walk keeps its own tables; the demands share theirs.
+        let (cache, demand) = match step {
+            "whole" => (root.join("whole-tables"), None),
+            "second" => (
+                root.join("cache"),
+                Some(vec![path(&["fixture", "bravo", "make"])]),
+            ),
+            _ => (
+                root.join("cache"),
+                Some(vec![path(&["fixture", "alpha", "Alpha"])]),
+            ),
+        };
+        std::fs::create_dir_all(&cache).unwrap();
+        let bundle = root.join(step);
+        std::fs::create_dir(&bundle).unwrap();
+        let artifact = root.join("libfixture.rmeta");
+        let source = bundle.join("probe.rs");
+        std::fs::write(&source, "#![no_std]\npub struct Probe;").unwrap();
+        let protocol = bundle.join("protocol");
+        std::fs::create_dir(&protocol).unwrap();
+        let identity = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let bytes = std::fs::read(&artifact).unwrap();
+        let mut row = invocation(&["fixture"]);
+        row.demand = demand;
+        row.invocation_nonce = identity.to_owned();
+        row.unit_correlation = identity.to_owned();
+        row.protocol_directory = protocol.clone();
+        row.artifact.path = artifact.to_str().unwrap().to_owned();
+        row.artifact.length = bytes.len() as u64;
+        row.artifact.digest = super::hex(&sha2::Sha256::digest(&bytes)).unwrap();
+        row.artifact.probe_alias = "fixture".to_owned();
+        let arguments = vec![
+            "rustc".to_owned(),
+            "--crate-name=probe".to_owned(),
+            "--crate-type=rlib".to_owned(),
+            "--emit=metadata".to_owned(),
+            "-Zunstable-options".to_owned(),
+            format!("--extern=force,noprelude:fixture={}", artifact.display()),
+            source.to_str().unwrap().to_owned(),
+        ];
+        let previous_directory = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&bundle).unwrap();
+        let result = super::run(
+            arguments,
+            vec![row],
+            Budget::standard(),
+            false,
+            Some(cache.clone()),
+        );
+        std::env::set_current_dir(previous_directory).unwrap();
+        assert_eq!(result.unwrap(), std::process::ExitCode::SUCCESS);
+        let sidecar = std::fs::read_to_string(protocol.join(format!("{identity}.json"))).unwrap();
+        let kept: Vec<_> = std::fs::read_dir(&cache)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_none())
+            .collect();
+        assert_eq!(kept.len(), 1, "one table per probed crate: {kept:?}");
+        let table: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&kept[0]).unwrap()).unwrap();
+        // Each unit the walks asked the compiler, as the table records it.
+        let units = table["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry[0].to_string())
+            .collect::<BTreeSet<_>>();
+        std::fs::write(
+            root.join(format!("{step}.units")),
+            serde_json::to_vec(&units).unwrap(),
+        )
+        .unwrap();
+        let recorded = |step: &str| -> BTreeSet<String> {
+            serde_json::from_slice(&std::fs::read(root.join(format!("{step}.units"))).unwrap())
+                .unwrap()
+        };
+        match step {
+            "whole" => {
+                assert_eq!(table["whole"], true, "nothing demanded walks it whole");
+            }
+            "first" => {
+                assert_eq!(table["whole"], false, "a demand walks no crate whole");
+                let whole = recorded("whole");
+                assert!(
+                    units.len() < whole.len(),
+                    "one item's walk asks {} units, the whole walk {}",
+                    units.len(),
+                    whole.len()
+                );
+                assert!(units.is_subset(&whole));
+                assert!(sidecar.contains("\"Alpha\""));
+            }
+            "second" => {
+                let first = recorded("first");
+                assert!(
+                    first.is_subset(&units) && first.len() < units.len(),
+                    "a new demand grows the table"
+                );
+                assert!(units.len() < recorded("whole").len());
+                assert!(sidecar.contains("\"make\""), "the new item is extracted");
+                // Mark a recorded name, so only a replay can carry the
+                // mark into the next sidecar.
+                let marked = std::fs::read_to_string(&kept[0])
+                    .unwrap()
+                    .replace("\"Alpha\"", "\"Alpah\"");
+                std::fs::write(&kept[0], marked).unwrap();
+            }
+            _ => {
+                assert!(
+                    sidecar.contains("\"Alpah\""),
+                    "a demand the grown table holds replays it"
+                );
+                assert_eq!(units, recorded("second"), "the replay asks nothing");
             }
         }
     }

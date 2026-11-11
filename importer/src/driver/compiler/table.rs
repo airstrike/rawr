@@ -51,7 +51,6 @@ pub(super) struct Served {
     session: String,
     demand: BTreeSet<Vec<String>>,
     whole: bool,
-    large: bool,
 }
 
 impl Served {
@@ -60,13 +59,7 @@ impl Served {
             session: session.to_owned(),
             demand: demand.iter().cloned().collect(),
             whole: memo.whole,
-            large: memo.large,
         }
-    }
-
-    /// Whether the crate's whole walk failed.
-    pub(super) const fn large(&self) -> bool {
-        self.large
     }
 
     /// This record with `other`'s demands too, when both are of one
@@ -75,7 +68,6 @@ impl Served {
         (self.session == other.session).then(|| {
             self.demand.extend(other.demand.iter().cloned());
             self.whole |= other.whole;
-            self.large |= other.large;
             self
         })
     }
@@ -108,26 +100,29 @@ impl Tables {
     }
 
     /// Whether `demand` in `session` strictly grows every demand `key`'s
-    /// table was made from: the table cannot answer it, and a live walk of
-    /// it records every unit the table holds, so the table is neither read
-    /// nor merged. The answer is that record.
+    /// own table was made from: the table cannot answer it, and a live walk
+    /// of it records every unit the table holds, so the table is neither
+    /// read nor merged. A settled table the importer names is still merged
+    /// ([`Tables::settled`]): another project's demand may have grown it.
     pub(super) fn outgrown(
         &self,
         key: &str,
         session: &str,
         demand: &[Vec<String>],
         used: &mut Vec<String>,
-    ) -> Option<Served> {
-        let served = self.served(key)?;
+    ) -> bool {
+        let Some(served) = self.served(key) else {
+            return false;
+        };
         let demand = demand.iter().collect::<BTreeSet<_>>();
         let outgrown = served.session == session
             && !served.whole
             && served.demand.len() < demand.len()
             && served.demand.iter().all(|path| demand.contains(path));
-        outgrown.then(|| {
+        if outgrown {
             used.push(key.to_owned());
-            served
-        })
+        }
+        outgrown
     }
 
     /// The key of `invocation`'s table: the importer's shared key, or this
@@ -185,8 +180,10 @@ impl Tables {
     }
 
     /// The crate's recorded units, when a table of this format for this very
-    /// crate is kept. A table that fails to read is extracted again. The
-    /// key of a crate from registries and git commits alone names the crate
+    /// crate is kept: the driver's own, with the settled one the importer
+    /// names, which another project's demand may have grown since (#1665).
+    /// A table that fails to read is extracted again. The key of a crate
+    /// from registries and commits alone names the crate
     /// (`extract::shared`), so its table holds whichever nightly artifact
     /// it came from: another project's build of the same crate gives
     /// another crate hash (#672).
@@ -198,11 +195,24 @@ impl Tables {
         used: &mut Vec<String>,
     ) -> Option<Memo> {
         used.push(key.to_owned());
-        let bytes = fs::read(self.directory.join(key)).ok().or_else(|| {
-            let shared = self.shared.values().find(|shared| shared.key == key)?;
-            fs::read(shared.table.as_ref()?).ok()
-        })?;
-        let table: Table = super::sidecar::read(&bytes).ok()?;
+        let own = self.read(&self.directory.join(key), key, root, crate_hash);
+        match (own, self.settled(key, root, crate_hash)) {
+            (Some(mut own), Some(settled)) => {
+                own.absorb(&settled);
+                Some(own)
+            }
+            (own, settled) => own.or(settled),
+        }
+    }
+
+    /// The settled table the importer names for `key`, read in place.
+    pub(super) fn settled(&self, key: &str, root: &Root, crate_hash: &str) -> Option<Memo> {
+        let shared = self.shared.values().find(|shared| shared.key == key)?;
+        self.read(shared.table.as_ref()?, key, root, crate_hash)
+    }
+
+    fn read(&self, path: &Path, key: &str, root: &Root, crate_hash: &str) -> Option<Memo> {
+        let table: Table = super::sidecar::read(&fs::read(path).ok()?).ok()?;
         let shared = self
             .shared
             .values()
@@ -323,19 +333,19 @@ mod tests {
         drop(tables);
         let tables = Tables::open(&directory).unwrap();
         let mut used = Vec::new();
-        assert!(tables.outgrown(&key, "s", &grown, &mut used).is_some());
+        assert!(tables.outgrown(&key, "s", &grown, &mut used));
         assert_eq!(used, std::slice::from_ref(&key));
         // The same demand replays, another session's may need what the
         // table holds, and so may a demand that drops a path.
-        assert!(tables.outgrown(&key, "s", &first, &mut used).is_none());
-        assert!(tables.outgrown(&key, "t", &grown, &mut used).is_none());
-        assert!(tables.outgrown(&key, "s", &grown[1..], &mut used).is_none());
+        assert!(!tables.outgrown(&key, "s", &first, &mut used));
+        assert!(!tables.outgrown(&key, "t", &grown, &mut used));
+        assert!(!tables.outgrown(&key, "s", &grown[1..], &mut used));
         // A table with no record, as one read from rawr's home, is read.
         tables.store(&key, &root, "hash", &memo, None);
         drop(tables);
         let tables = Tables::open(&directory).unwrap();
         assert!(!directory.join(format!("{key}.{SERVED}")).exists());
-        assert!(tables.outgrown(&key, "s", &grown, &mut used).is_none());
+        assert!(!tables.outgrown(&key, "s", &grown, &mut used));
         // Records of two sessions do not merge.
         let other = Served::new("t", &first, &memo);
         assert!(Served::new("s", &grown, &memo).merged(&other).is_none());
@@ -440,9 +450,11 @@ mod tests {
     }
 
     /// A settled table the importer names is read where it settled, with
-    /// no copy beside the driver's own; one the driver wrote comes first.
+    /// no copy beside the driver's own. One the driver wrote comes first,
+    /// and the settled one's answers join it: another project's demand may
+    /// have grown it (#1665).
     #[test]
-    fn a_named_settled_table_is_read_in_place() {
+    fn a_named_settled_table_is_read_in_place_and_joins_the_drivers_own() {
         let directory =
             std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
                 .join(format!("rawr-named-table-{}", std::process::id()));
@@ -454,13 +466,14 @@ mod tests {
             module: [3; 16],
             krate: "crate".to_owned(),
         };
-        let whole = Memo {
-            whole: true,
-            ..Memo::default()
+        let answered = |segment: &str| {
+            let mut memo = Memo::default();
+            memo.segments.insert(segment.to_owned(), None);
+            memo
         };
         Tables::open(&settled)
             .unwrap()
-            .store(&key, &root, "hash", &whole, None);
+            .store(&key, &root, "hash", &answered("settled"), None);
         std::fs::create_dir_all(&extraction).unwrap();
         std::fs::write(
             extraction.join(super::KEYS),
@@ -472,12 +485,17 @@ mod tests {
         .unwrap();
         let tables = Tables::open(&extraction).unwrap();
         let mut used = Vec::new();
-        assert!(tables
-            .load(&key, &root, "hash", &mut used)
-            .is_some_and(|memo| memo.whole));
+        let segments = |memo: Memo| memo.segments.into_keys().collect::<Vec<_>>();
+        assert_eq!(
+            segments(tables.load(&key, &root, "hash", &mut used).unwrap()),
+            ["settled"]
+        );
         assert!(!extraction.join(&key).exists());
-        tables.store(&key, &root, "hash", &Memo::default(), None);
-        assert!(!tables.load(&key, &root, "hash", &mut used).unwrap().whole);
+        tables.store(&key, &root, "hash", &answered("own"), None);
+        assert_eq!(
+            segments(tables.load(&key, &root, "hash", &mut used).unwrap()),
+            ["own", "settled"]
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
