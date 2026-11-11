@@ -593,6 +593,45 @@ main();
     );
 }
 
+/// A `match` or `if` whose arms give `&str` and `&String` is a `&str`: rustc
+/// deref-coerces the `&String` arm to the type of the others, before it or
+/// after it, as pokedex's `title` matches `"Loading"` and
+/// `&pokemon.name` (#1018).
+#[test]
+fn language_deref_coerces_an_arm_to_the_type_another_arm_gives() {
+    let source = r#"
+enum P {
+    A,
+    B { name: String },
+}
+
+fn title(p: &P) -> String {
+    let subtitle = match p {
+        P::A => "Loading",
+        P::B { name } => &name,
+    };
+    format!("{subtitle} - x")
+}
+
+fn main() {
+    let name = String::from("y");
+    let n = 1;
+    let s = if n == 0 { "a" } else { &name };
+    let t = match n {
+        0 => &name,
+        _ => "b",
+    };
+    println!("{} {} {s} {t}", title(&P::B { name: String::from("z") }), title(&P::A));
+}
+main();
+"#;
+    assert_eq!(printed(source), "z - x Loading - x y b\n");
+    // Arms no coercion joins: rustc's E0308.
+    let report =
+        refused("fn main() { let n = 1; let t = match n { 0 => 1, _ => \"b\" }; }\nmain();\n");
+    assert!(report.starts_with("error[E0308]"), "{report}");
+}
+
 /// A native value's `as_ref()` and `borrow()` lend the view the use
 /// expects, from std's `AsRef` and `Borrow` impls for its type: a `let`
 /// annotation, a parameter or a return fixes the target, as rustc infers

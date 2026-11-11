@@ -867,6 +867,15 @@ impl<'a> Parser<'a> {
                 self.inference.rollback(checkpoint);
             }
             let Some((target, patch)) = selected else {
+                // rustc coerces each later arm to the type the ones before
+                // give, or those to the later arm's, as `"Loading"` then
+                // `&pokemon.name` deref-coerces the `&String` to the `&str`,
+                // in either order.
+                for target in &sources {
+                    if let Some(target) = self.coerce_each(target, branches) {
+                        return Ok(target);
+                    }
+                }
                 let (actual, expression) = branches
                     .iter()
                     .find(|branch| {
