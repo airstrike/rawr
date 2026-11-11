@@ -4541,7 +4541,7 @@
           "start": 78,
           "size": 2,
           "state": "now",
-          "note": "inboard, a workspace of 1016 packages, runs under rawr run with theme.rs and home.rs marked (2026-11-09). It starts in about 6.5 min after an install, and a body edit in either file swaps in place, queued in about 3.5 s; the window shows it at its next message (#1490). Next: sidebar.rs, whose generic builders native code calls (#1556), then inbox.rs behind tracing's macros (#1547). elevato.rs runs on rawr's universe, and icedxdy's browser example runs.",
+          "note": "inboard (about 1,070 crates) with theme.rs, home.rs and sidebar.rs marked, measured 2026-11-11 on main fe921a46c. A body edit swaps in place in 0.76 s, re-lowering 1 file, where it rebuilt for 97 s (#1688). A warm start reaches the app's first output in about 18 s, lowering 0 files (#1638). A cold check takes 225 s (it was about 420 s), and a cold start reaches its window in about 158 s (it was 6.5 to 10 min). Left: a start after a rawr install spends about 235 s in building API on one core (#1687).",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
