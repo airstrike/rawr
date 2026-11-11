@@ -2021,7 +2021,7 @@ fn rawr_test_links_dev_dependencies_into_the_tests() {
 /// and enum, a struct in a function's body and one in an inline module
 /// named by its path, and prints what `cargo run` prints. So do serde's
 /// `Serialize` and `Deserialize` through serde_json, on the saved state of
-/// iced's todos too.
+/// iced's todos too, and so does a program's own `Deserialize`.
 #[test]
 fn a_crates_derive_runs_from_its_expansion() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
@@ -2082,6 +2082,20 @@ fn a_crates_derive_runs_from_its_expansion() {
             "at line 1 column 6\")\n",
         )
     );
+
+    // A hand-written `Deserialize` that names its trait through
+    // `serde::de`, which serde's facade declares the method's `D` under
+    // `serde::Deserialize`: the runner's impl takes `D` and its frame keeps
+    // it, whatever the parameter's name (#1711).
+    fs::copy(root.join("programs/celsius.rs"), root.join("src/main.rs")).unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "Celsius(21.5)\n");
 
     fs::write(
         root.join("src/main.rs"),
