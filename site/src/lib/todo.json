@@ -3665,7 +3665,8 @@
     {"issue":1673,"title":"A match or if whose arms give &str and &String was E0308","state":"open","category":"Divergences from rustc"},
     {"issue":1674,"title":"futures::future::try_join can't be called: its signature has an associated type projection (pokedex's search)","state":"open","category":"Divergences from rustc"},
     {"issue":1675,"title":"A String's or str's as_ref() into &Path or &OsStr is rawr's not-yet error, naming PathBuf","state":"open","category":"Divergences from rustc"},
-    {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"open","category":"Divergences from rustc"}
+    {"issue":1676,"title":"A generic T: AsRef<[u8]> given a String lends the text, not its bytes","state":"open","category":"Divergences from rustc"},
+    {"issue":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4738,7 +4739,8 @@
             {"number":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed"},
             {"number":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed"},
             {"number":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed"},
-            {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"}
+            {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"},
+            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"open"}
           ]
         }
       ]
