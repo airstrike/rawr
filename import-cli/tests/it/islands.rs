@@ -1161,6 +1161,58 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// An install of another Rawr build takes the instance record the last
+/// build's check kept as its first guess. Its own host directory keys every
+/// resolution apart, but with the record's demand the tables the last
+/// build shared answer it: one round with no nightly build. Read as none,
+/// the record cost a first round that built the crates only to record the
+/// same instances, then a second. The record it keeps then names this
+/// build.
+#[test]
+fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::scratch().join("islands-theme-install");
+    let _ = fs::remove_dir_all(&root);
+    copy(Path::new(THEME), &root);
+    let check = |host: &str| {
+        let checked = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("check")
+            .arg(&root)
+            .env("RAWR_HOME", crate::support::runtime_home())
+            .env(
+                "RAWR_RUNTIME_HOME",
+                crate::support::scratch().join(format!("islands-theme-install-{host}")),
+            )
+            .env("RAWR_VERBOSE", "1")
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&checked.stderr).into_owned();
+        assert!(checked.status.success(), "{said}");
+        said
+    };
+    check("first");
+    let location = root.join("target/rawr/instances.json");
+    let kept = fs::read(&location).unwrap();
+    assert!(
+        String::from_utf8_lossy(&kept).contains("\"instances\":[{"),
+        "the fixture's native code calls a marked generic"
+    );
+    // The same record, as another build of rawr kept it.
+    let mut other = kept.clone();
+    other[..64].fill(b'f');
+    fs::write(&location, other).unwrap();
+    let said = check("second");
+    assert!(
+        said.contains(
+            "rawr-import: check rounds 1, Cargo resolutions 1, nightly builds 0, probes 0\n"
+        ),
+        "{said}"
+    );
+    assert_eq!(fs::read(&location).unwrap(), kept, "this build keeps it");
+}
+
 /// Each file under `directory` with its modification time.
 fn modified(
     directory: &Path,

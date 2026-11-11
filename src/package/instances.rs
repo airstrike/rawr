@@ -4,7 +4,8 @@
 //! project's other rawr files ([`store`]), where the shadow crate's support
 //! table ([`super::island::support`]) and the resolver, which compiles each
 //! instance, both read it, so they never disagree. The record names the
-//! build of rawr that kept it, and only that build reads it.
+//! build of rawr that kept it, and only that build reads it; a check of
+//! another build takes it as its first guess ([`adopt`]).
 
 use std::fs;
 use std::io;
@@ -75,6 +76,43 @@ pub fn store(root: &Path, record: &Record) -> io::Result<bool> {
     }
     fs::write(&path, bytes)?;
     Ok(true)
+}
+
+/// Take the record another build of rawr kept at `root` as this build's
+/// first guess, so a check after an install starts from the instances the
+/// last check recorded rather than from none. The guess is checked
+/// as any kept record is: the build's identity keys every resolution, so
+/// this build resolves again, and a build whose check records other
+/// instances stops before its probe and checks again with them (D869). A
+/// record of this build, or none, is left as it is.
+///
+/// # Errors
+///
+/// The record can't be written.
+pub fn adopt(root: &Path) -> io::Result<()> {
+    let Ok(bytes) = fs::read(location(root)) else {
+        return Ok(());
+    };
+    let Some((kept_by, record)) = bytes
+        .split_first_chunk::<64>()
+        .and_then(|(line, rest)| Some((line, rest.strip_prefix(b"\n")?)))
+    else {
+        return Ok(());
+    };
+    if *kept_by == *build().as_bytes() || !kept_by.iter().all(u8::is_ascii_hexdigit) {
+        return Ok(());
+    }
+    // A record of another layout is none, as `Record::read` reads it.
+    let layout = serde_json::from_slice::<serde_json::Value>(record)
+        .ok()
+        .and_then(|record| record.get("schema")?.as_u64());
+    if layout != Some(u64::from(rawr_import::record::SCHEMA)) {
+        return Ok(());
+    }
+    match serde_json::from_slice::<Record>(record) {
+        Ok(record) => store(root, &record).map(drop),
+        Err(_) => Ok(()),
+    }
 }
 
 /// The record the project at `root` keeps, or none.
@@ -150,5 +188,34 @@ mod tests {
         // A record kept before records named their build is another's.
         let unnamed = serde_json::to_vec(&record).expect("the record encodes");
         assert_eq!(super::decode("aa", &unnamed), Record::default());
+    }
+
+    #[test]
+    fn a_record_another_build_kept_is_adopted_as_this_builds() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/tmp")
+            .join(format!("instances-adopt-{}", std::process::id()));
+        let record = Record::new(vec![Instance {
+            path: "widget::row_group".into(),
+            name: "(app::Message,)".into(),
+            types: vec!["crate::Message".into()],
+        }]);
+        let location = super::location(&root);
+        std::fs::create_dir_all(location.parent().expect("the record has a directory"))
+            .expect("the directory is written");
+        let other = "f".repeat(64);
+        std::fs::write(&location, super::encode(&other, &record).expect("encodes"))
+            .expect("the record is written");
+        assert_eq!(super::kept(&root), Record::default());
+        super::adopt(&root).expect("the record is adopted");
+        assert_eq!(super::kept(&root), record);
+        // Adopted, it is this build's: storing it again changes nothing.
+        assert!(!super::store(&root, &record).expect("the record is stored"));
+        // A record that names no build stays none.
+        let unnamed = serde_json::to_vec(&record).expect("the record encodes");
+        std::fs::write(&location, unnamed).expect("the record is written");
+        super::adopt(&root).expect("nothing is adopted");
+        assert_eq!(super::kept(&root), Record::default());
+        std::fs::remove_file(&location).expect("the record is removed");
     }
 }
