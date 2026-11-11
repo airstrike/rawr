@@ -13,7 +13,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::support::{copy, start_with, Fixture};
+use crate::support::{copy, start_with, Fixture, Scratch};
 
 static ISLANDS: Fixture = Fixture::new("islands-tui");
 
@@ -39,9 +39,8 @@ const KEYS: &[&str] = &[
 
 /// `examples/tui`'s marked `app.rs` and `ui.rs` beside the headless
 /// driver, which draws each frame on a `TestBackend`.
-fn draw_fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
+fn draw_fixture(name: &str) -> Scratch {
+    let root = crate::support::fresh(name);
     copy(Path::new(DRAW), &root);
     for file in ["app.rs", "ui.rs"] {
         fs::copy(Path::new(EXAMPLE).join(file), root.join("src").join(file)).unwrap();
@@ -148,8 +147,7 @@ const STATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tui-sta
 /// leave are what `cargo run` prints.
 #[test]
 fn a_lent_list_state_goes_to_render_stateful_widget_as_cargo_run_does() {
-    let root = crate::support::scratch().join("tui-state");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("tui-state");
     copy(Path::new(STATE), &root);
     let native = Command::new("cargo")
         .args(["run", "--quiet"])

@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{copy, start};
+use crate::support::{copy, start, Scratch};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/marked-ticker");
 
@@ -24,9 +24,7 @@ fn edit(path: &Path, from: &str, to: &str) {
 
 #[test]
 fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
-    let root = crate::support::scratch().join("marked-ticker");
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("marked-ticker");
     copy(Path::new(FIXTURE), &root);
     let main = root.join("src/main.rs");
     let mut run = start(&root, &[("TICKER_STOP", root.join("stop"))]);
@@ -100,10 +98,8 @@ const RELOAD_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixture
 
 /// The reload-ticker fixture under `name` in the scratch directory, its
 /// host naming `rawr-reload` by its absolute path.
-fn reload_ticker(name: &str) -> std::path::PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
+fn reload_ticker(name: &str) -> Scratch {
+    let root = crate::support::fresh(name);
     copy(Path::new(RELOAD_FIXTURE), &root);
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     edit(

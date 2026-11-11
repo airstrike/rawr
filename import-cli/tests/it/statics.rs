@@ -11,17 +11,15 @@
 //! `islands`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use crate::support::{copy, start};
+use crate::support::{copy, start, Scratch};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/marked-statics");
 
-fn fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
+fn fixture(name: &str) -> Scratch {
+    let root = crate::support::fresh(name);
     copy(Path::new(FIXTURE), &root);
     root
 }

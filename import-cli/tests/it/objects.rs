@@ -44,8 +44,7 @@ fn rawr_import(command: &str, root: &Path) -> std::process::Output {
 /// What the fixture `name` prints, once `rawr-import check` passes it and
 /// `rawr-import run` prints what `cargo run` does.
 fn runs_as_cargo(name: &str) -> String {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh(name);
     copy(&Path::new(FIXTURES).join(name), &root);
     let check = rawr_import("check", &root);
     assert!(
@@ -121,8 +120,7 @@ fn trait_objects_lent_in_a_slice_are_borrowed_by_what_the_call_makes_of_them() {
 /// (#1620).
 #[test]
 fn a_borrowed_local_for_a_static_object_field_does_not_live_long_enough() {
-    let root = crate::support::scratch().join("trait-objects-field");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("trait-objects-field");
     copy(&Path::new(FIXTURES).join("trait-objects"), &root);
     fs::write(
         root.join("src/main.rs"),

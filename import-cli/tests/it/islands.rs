@@ -35,9 +35,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = crate::support::scratch().join("islands");
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands");
     copy(Path::new(FIXTURE), &root);
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
@@ -89,7 +87,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
 /// error rustc gives, instead of waiting for that save (#1585).
 #[test]
 fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
-    let root = crate::support::scratch().join("islands-failed-check");
+    let root = crate::support::fresh("islands-failed-check");
     let events = root.join("events.jsonl");
     let _ = fs::remove_file(&events);
     let _ = fs::remove_dir_all(root.join("src"));
@@ -115,8 +113,7 @@ fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
 /// and writes under `target` while it runs are no save.
 #[test]
 fn a_save_reaches_a_native_main_beside_a_big_ignored_target() {
-    let root = crate::support::scratch().join("islands-big-target");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("islands-big-target");
     copy(Path::new(FIXTURE), &root);
     fs::write(root.join(".gitignore"), "/target\n").unwrap();
     let big = root.join("target/big");
@@ -167,7 +164,7 @@ fn an_idle_native_main_outlives_a_stop_and_takes_a_save_at_its_next_call() {
     const IDLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-idle");
     // How long the runner can't answer.
     const STOPPED: Duration = Duration::from_secs(12);
-    let root = crate::support::scratch().join("islands-idle");
+    let root = crate::support::fresh("islands-idle");
     let go = root.join("go");
     let events = root.join("events.jsonl");
     let _ = fs::remove_file(&go);
@@ -218,7 +215,7 @@ fn an_idle_native_main_outlives_a_stop_and_takes_a_save_at_its_next_call() {
 #[test]
 fn swapped_is_told_before_the_call_that_admits_the_save_runs() {
     const ADMIT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-admit");
-    let root = crate::support::scratch().join("islands-admit");
+    let root = crate::support::fresh("islands-admit");
     let go = root.join("go");
     let stop = root.join("stop");
     let events = root.join("events.jsonl");
@@ -282,7 +279,7 @@ fn swapped_is_told_before_the_call_that_admits_the_save_runs() {
 #[test]
 fn an_idle_event_loop_redraws_with_a_save_without_input() {
     const REDRAW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-redraw");
-    let root = crate::support::scratch().join("islands-redraw");
+    let root = crate::support::fresh("islands-redraw");
     let events = root.join("events.jsonl");
     let _ = fs::remove_file(&events);
     let _ = fs::remove_dir_all(root.join("src"));
@@ -312,8 +309,7 @@ fn a_native_main_runs_on_the_process_main_thread() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-main-thread"
     );
-    let root = crate::support::scratch().join("islands-main-thread");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-main-thread");
     copy(Path::new(MAIN_THREAD), &root);
     let mut run = start(&root, &[]);
     let line = run.until(|line| line.starts_with("main thread "));
@@ -342,8 +338,7 @@ fn a_native_main_runs_on_the_process_main_thread() {
 #[test]
 fn a_native_main_calls_marked_modules_named_as_old_engine_keywords() {
     const NAMES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-names");
-    let root = crate::support::scratch().join("islands-names");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-names");
     copy(Path::new(NAMES), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -379,8 +374,7 @@ fn a_native_main_takes_and_gives_its_own_values_to_a_marked_leaf() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-natives"
     );
-    let root = crate::support::scratch().join("islands-natives");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-natives");
     copy(Path::new(NATIVES), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -423,8 +417,7 @@ fn a_marked_module_names_the_items_of_its_native_crate_root() {
         "narrow x10",
         "wide x10",
     ];
-    let root = crate::support::scratch().join("islands-root");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-root");
     copy(Path::new(ROOT), &root);
     let cargo = |arguments: &[&str]| {
         std::process::Command::new("cargo")
@@ -490,8 +483,7 @@ fn a_marked_module_names_the_items_of_a_native_module() {
         "home",
         "10 17 140",
     ];
-    let root = crate::support::scratch().join("islands-native-module");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-native-module");
     copy(Path::new(MODULE), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -548,8 +540,7 @@ fn a_marked_module_names_crate_aliases_through_a_used_module() {
         "/tests/fixtures/islands-aliases"
     );
     const PRINTED: [&str; 2] = ["mail 2 / 7 of 2 / mail,notes / inbox,home", "4"];
-    let root = crate::support::scratch().join("islands-aliases");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-aliases");
     copy(Path::new(ALIASES), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -610,9 +601,7 @@ fn a_marked_module_below_native_modules_runs_and_swaps_a_body_edit() {
         "wizard home 2 20",
         "7",
     ];
-    let root = crate::support::scratch().join("islands-nested");
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-nested");
     copy(Path::new(NESTED), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -688,8 +677,7 @@ fn a_marked_module_below_native_modules_runs_and_swaps_a_body_edit() {
 fn a_native_root_s_modules_load_as_cargo_configures_them_for_the_target() {
     const CFG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-cfg");
     let printed = ["42", if cfg!(unix) { "unix" } else { "other" }];
-    let root = crate::support::scratch().join("islands-cfg");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-cfg");
     copy(Path::new(CFG), &root);
     edit(
         &root.join("src/main.rs"),
@@ -763,8 +751,7 @@ fn a_marked_type_becomes_a_native_trait_object() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-objects"
     );
-    let root = crate::support::scratch().join("islands-objects");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-objects");
     copy(Path::new(OBJECTS), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -950,8 +937,7 @@ fn a_marked_type_becomes_a_native_trait_object() {
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-theme");
     copy(Path::new(THEME), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -1171,8 +1157,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
 #[test]
 fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-install");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("islands-theme-install");
     copy(Path::new(THEME), &root);
     let check = |host: &str| {
         let checked = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -1181,7 +1166,7 @@ fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
             .env("RAWR_HOME", crate::support::runtime_home())
             .env(
                 "RAWR_RUNTIME_HOME",
-                crate::support::scratch().join(format!("islands-theme-install-{host}")),
+                crate::support::fresh(format!("islands-theme-install-{host}")),
             )
             .env("RAWR_VERBOSE", "1")
             .env_remove("CARGO_TARGET_DIR")
@@ -1240,8 +1225,7 @@ fn modified(
 #[test]
 fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-warm");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-theme-warm");
     copy(Path::new(THEME), &root);
     let mut first = start(&root, &[]);
     let status = first.wait();
@@ -1306,7 +1290,7 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
 #[test]
 fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-swap");
+    let root = crate::support::fresh("islands-theme-swap");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1359,7 +1343,7 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 #[test]
 fn a_save_that_changes_a_literal_a_native_call_takes_swaps_in_place() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-literal-save");
+    let root = crate::support::fresh("islands-theme-literal-save");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1414,7 +1398,7 @@ fn a_save_that_changes_a_literal_a_native_call_takes_swaps_in_place() {
 #[test]
 fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-route-save");
+    let root = crate::support::fresh("islands-theme-route-save");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1458,7 +1442,7 @@ fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-save-work");
+    let root = crate::support::fresh("islands-theme-save-work");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1674,7 +1658,7 @@ fn a_save_parses_only_the_file_it_changed() {
 #[test]
 fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-save-names");
+    let root = crate::support::fresh("islands-theme-save-names");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1785,7 +1769,7 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
 #[test]
 fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-start");
+    let root = crate::support::fresh("islands-theme-start");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let lowered = root.join("target/rawr/lowered");
@@ -1864,7 +1848,7 @@ fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
 #[test]
 fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-panic");
+    let root = crate::support::fresh("islands-theme-panic");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1940,7 +1924,7 @@ fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it(
 #[test]
 fn a_generic_marked_types_method_native_code_calls_swaps() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-method-swap");
+    let root = crate::support::fresh("islands-theme-method-swap");
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let _ = fs::remove_dir_all(root.join("src"));
@@ -1984,8 +1968,7 @@ fn a_generic_marked_types_method_native_code_calls_swaps() {
 #[test]
 fn a_marked_module_reads_a_native_crate_s_static_text_and_slice_constants() {
     const CONSTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-consts");
-    let root = crate::support::scratch().join("islands-consts");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-consts");
     copy(Path::new(CONSTS), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -2057,8 +2040,7 @@ fn a_marked_module_reads_a_native_crate_s_static_text_and_slice_constants() {
 #[test]
 fn a_marked_static_of_native_blocks_is_read_by_native_code() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
-    let root = crate::support::scratch().join("islands-blocks");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-blocks");
     copy(Path::new(BLOCKS), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -2144,7 +2126,7 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
          pub fn named() -> usize {\n    \
          let text = String::from(\"local\");\n    \
          page::named(&text)\n}\n";
-    let root = crate::support::scratch().join("islands-blocks-local");
+    let root = crate::support::fresh("islands-blocks-local");
     // cargo check's positions: the borrow `&blocks` at column 25 and
     // `&text` at column 17 of the line that holds it, which the fixture's
     // length places.
@@ -2194,8 +2176,7 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
 #[test]
 fn an_unused_import_of_a_native_module_is_no_error() {
     const BLOCKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-blocks");
-    let root = crate::support::scratch().join("islands-blocks-icon");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-blocks-icon");
     copy(Path::new(BLOCKS), &root);
     fs::write(
         root.join("src/icon.rs"),
@@ -2257,8 +2238,7 @@ fn a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_alone() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-supertrait"
     );
-    let root = crate::support::scratch().join("islands-supertrait");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-supertrait");
     copy(Path::new(SUPERTRAIT), &root);
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
@@ -2291,8 +2271,7 @@ fn a_run_of_a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_a
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-supertrait"
     );
-    let root = crate::support::scratch().join("islands-supertrait-run");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-supertrait-run");
     copy(Path::new(SUPERTRAIT), &root);
     let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
@@ -2325,8 +2304,7 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-arguments"
     );
-    let root = crate::support::scratch().join("islands-arguments");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-arguments");
     copy(Path::new(ARGUMENTS), &root);
     let words = root.join("src/words.rs");
     let events = root.join("events.jsonl");
@@ -2388,8 +2366,7 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
 #[test]
 fn a_native_crate_reads_its_package_files_where_cargo_does() {
     const ASSETS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-assets");
-    let project = crate::support::scratch().join("islands-assets");
-    let _ = fs::remove_dir_all(project.join("app/src"));
+    let project = crate::support::fresh("islands-assets");
     copy(Path::new(ASSETS), &project);
     let root = project.join("app");
     // With the stop file present, `cargo run` prints what the package read
@@ -2481,8 +2458,7 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-workspace"
     );
-    let project = crate::support::scratch().join("islands-workspace");
-    let _ = fs::remove_dir_all(&project);
+    let project = crate::support::fresh("islands-workspace");
     copy(Path::new(WORKSPACE), &project);
     let root = project.join("app");
     let cargo = || {
@@ -2585,9 +2561,7 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
 #[test]
 fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
-    let root = crate::support::scratch().join("islands-home");
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-home");
     copy(Path::new(HOME), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -2773,8 +2747,7 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
 #[test]
 fn a_native_main_gives_marked_functions_any_value_of_an_impl_trait() {
     const HOME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-home");
-    let root = crate::support::scratch().join("islands-home-impl");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-home-impl");
     copy(Path::new(HOME), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -2838,7 +2811,7 @@ fn a_literal_edit_above_a_native_function_passed_by_name_swaps() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-literal"
     );
-    let root = crate::support::scratch().join("islands-literal");
+    let root = crate::support::fresh("islands-literal");
     let events = root.join("events.jsonl");
     let _ = fs::remove_file(root.join("stop"));
     let _ = fs::remove_file(&events);
@@ -2906,8 +2879,7 @@ fn a_marked_home_screen_with_inboard_s_shapes_runs_as_cargo_runs_it() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-greeting"
     );
-    let root = crate::support::scratch().join("islands-greeting");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-greeting");
     copy(Path::new(GREETING), &root);
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
@@ -3020,8 +2992,7 @@ fn checks_and_prints(root: &Path, printed: &str) {
 #[test]
 fn a_marked_module_uses_log_s_and_tracing_s_macro_pieces() {
     const LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-log");
-    let root = crate::support::scratch().join("islands-log");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-log");
     copy(Path::new(LOG), &root);
     let printed = cargo_prints(&root);
     assert!(
@@ -3058,8 +3029,7 @@ fn a_marked_module_logs_through_a_crate_that_re_exports_tracing_s_macros() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-log-through"
     );
-    let root = crate::support::scratch().join("islands-log-through");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-log-through");
     copy(Path::new(THROUGH), &root);
     let printed = cargo_prints(&root);
     assert_eq!(
@@ -3080,8 +3050,7 @@ fn a_marked_module_logs_through_a_crate_that_re_exports_tracing_s_macros() {
 #[test]
 fn a_marked_module_calls_a_method_with_elided_lifetimes_whose_output_borrows_self() {
     const ORG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-org");
-    let root = crate::support::scratch().join("islands-org");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("islands-org");
     copy(Path::new(ORG), &root);
     let printed = cargo_prints(&root);
     assert_eq!(printed, "invited by Ada\ninvited by Someone\n");
