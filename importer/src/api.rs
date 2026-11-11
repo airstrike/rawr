@@ -56,7 +56,7 @@ mod phase {
 /// A closed compiler-evidence phase used by [`Graph`].
 pub trait Phase: phase::Sealed {
     #[doc(hidden)]
-    type Evidence;
+    type Evidence: Send + Sync;
 }
 
 impl phase::Sealed for Captured {}

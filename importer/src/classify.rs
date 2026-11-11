@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 164;
+const CLASSIFIER_VERSION: u32 = 165;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -289,20 +289,18 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// may fill (`regional_inputs`), read before its late-bound lifetimes
     /// are chosen.
     regional: std::cell::RefCell<Box<[u32]>>,
-    /// The crate type aliases that are the only name of the type they
-    /// name, by definition index (`instance_aliases`).
-    instance_aliases: std::cell::OnceCell<Box<[usize]>>,
-    /// Each type whose only name is a passing alias, with that alias, by
-    /// definition index (`sole_passing_aliases`).
-    sole_aliases: std::cell::OnceCell<Box<[(usize, usize)]>>,
+    /// What every worker classifying the graph reads alike.
+    shared: std::sync::Arc<Shared<'graph>>,
     /// While a function's output is converted: the type parameters a
     /// script callable or future fills, which an opaque `impl Trait` type
     /// it gives does not take as arguments. `None` elsewhere, where an
     /// opaque type is refused.
     opaque_output: std::cell::RefCell<Option<Box<[u32]>>>,
-    /// The positions of the captures each opaque type a function gives
-    /// leaves out (`opaque_output`), by its definition, so the opaque type
-    /// has the same arguments wherever it is named.
+    /// The positions of the captures each opaque type leaves out
+    /// (`opaque_output`) where the item being classified first converts
+    /// it, by the type's definition, so the type has the same arguments
+    /// wherever the item names it. What its own function leaves out
+    /// (`Shared::left_out`) comes first (`left_out`).
     opaque_excluded: std::cell::RefCell<BTreeMap<api::identity::Definition, Box<[u32]>>>,
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
@@ -320,17 +318,70 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a function's output is converted: the associated types each
     /// opaque `impl Trait` type it gives binds, as arguments of that type.
     opaque_associated: std::cell::RefCell<Vec<representability::signature::Opaque>>,
+}
+
+/// What makes a [`Context`] that classifies items of a graph beside others
+/// (`Context::worker`), on any thread.
+struct Seed<'graph, P: api::Phase> {
+    graph: &'graph api::Graph<P>,
+    authority: Authority,
+    shared: std::sync::Arc<Shared<'graph>>,
+}
+
+impl<'graph, P: api::Phase> Seed<'graph, P> {
+    fn context(&self) -> Context<'graph, P> {
+        Context::worker(
+            self.graph,
+            self.authority,
+            std::sync::Arc::clone(&self.shared),
+        )
+    }
+}
+
+/// The opaque types `definition`, a function, gives in its output, as
+/// [`impl_traits`] finds them, by their definitions.
+fn own_opaques(definition: &model::Definition) -> Vec<&api::identity::Definition> {
+    let model::Kind::Function { signature, .. } = definition.kind() else {
+        return Vec::new();
+    };
+    let mut opaques = Vec::new();
+    impl_traits(signature.output(), &mut opaques);
+    opaques
+        .into_iter()
+        .filter_map(|opaque| match opaque {
+            model::Type::ImplTrait { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What each graph-wide question a classification asks reads, at the first
+/// ask, shared by every worker classifying the graph.
+#[derive(Default)]
+struct Shared<'graph> {
+    /// The crate type aliases that are the only name of the type they
+    /// name, by definition index (`instance_aliases`).
+    instance_aliases: std::sync::OnceLock<Box<[usize]>>,
+    /// Each type whose only name is a passing alias, with that alias, by
+    /// definition index (`sole_passing_aliases`).
+    sole_aliases: std::sync::OnceLock<Box<[(usize, usize)]>>,
     /// The implementations of each `core` trait, by the trait's name, in
     /// graph order (`core_implementations`).
-    core_traits: std::cell::OnceCell<HashMap<&'graph str, Box<[usize]>>>,
+    core_traits: std::sync::OnceLock<HashMap<&'graph str, Box<[usize]>>>,
     /// `callable_traits`, read once.
-    callable_traits: std::cell::OnceCell<Option<CallableTraits>>,
+    callable_traits: std::sync::OnceLock<Option<CallableTraits>>,
     /// What each projection bound reads, by its associated type's
     /// definition index (`projection_cases`).
-    projection_cases: std::cell::OnceCell<Box<[std::cell::OnceCell<Box<ProjectionCases>>]>>,
+    projection_cases: std::sync::OnceLock<Box<[std::sync::OnceLock<Box<ProjectionCases>>]>>,
     /// Each definition's semantic identity, by its index, digested at the
     /// first ask (`surface_definition`).
-    surface_definitions: std::cell::OnceCell<SurfaceDefinitions>,
+    surface_definitions: std::sync::OnceLock<SurfaceDefinitions>,
+    /// The positions of the captures each opaque type a function gives
+    /// leaves out, by the opaque type's definition: those the function's
+    /// own output leaves out where its classification converts it
+    /// (`opaque_output`), so the opaque type has the same arguments
+    /// wherever it is named, whatever is classified first (`left_out`).
+    left_out: std::sync::OnceLock<BTreeMap<api::identity::Definition, Box<[u32]>>>,
 }
 
 /// The concrete types a projection bound `<_ as Trait>::Name` may read,
@@ -702,33 +753,9 @@ impl From<Error> for Failure {
 
 impl<'graph, P: api::Phase> Context<'graph, P> {
     fn new(graph: &'graph api::Graph<P>, authority: Authority) -> Result<Self, Error> {
-        let mut context = Self {
-            graph,
-            support: SupportLedger {
-                groups: Box::default(),
-                edges: Box::default(),
-                rejections: Box::default(),
-            },
-            item_limit: authority.items,
-            byte_limit: authority.bytes,
-            retained_items: Cell::new(graph.allocation().items),
-            retained_bytes: Cell::new(graph.allocation().bytes),
-            scratch_bytes: Cell::new(0),
-            trait_self: Cell::new(None),
-            scope_lifetimes: Cell::new(false),
-            regional: std::cell::RefCell::new(Box::default()),
-            instance_aliases: std::cell::OnceCell::new(),
-            sole_aliases: std::cell::OnceCell::new(),
-            opaque_output: std::cell::RefCell::new(None),
-            opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
-            opaque_self: std::cell::RefCell::new(None),
-            opaque_converting: std::cell::RefCell::new(Vec::new()),
-            opaque_associated: std::cell::RefCell::new(Vec::new()),
-            core_traits: std::cell::OnceCell::new(),
-            callable_traits: std::cell::OnceCell::new(),
-            projection_cases: std::cell::OnceCell::new(),
-            surface_definitions: std::cell::OnceCell::new(),
-        };
+        let mut context = Self::worker(graph, authority, std::sync::Arc::default());
+        context.retained_items.set(graph.allocation().items);
+        context.retained_bytes.set(graph.allocation().bytes);
         let initialized = (|| {
             context.retain(
                 1,
@@ -745,6 +772,186 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         initialized?;
         Ok(context)
+    }
+
+    /// A context that classifies items of `graph` beside others that share
+    /// `shared`, retaining nothing yet: what it retains is added to the
+    /// classification's (`absorb`), and it holds no support ledger.
+    fn worker(
+        graph: &'graph api::Graph<P>,
+        authority: Authority,
+        shared: std::sync::Arc<Shared<'graph>>,
+    ) -> Self {
+        Self {
+            graph,
+            support: SupportLedger {
+                groups: Box::default(),
+                edges: Box::default(),
+                rejections: Box::default(),
+            },
+            item_limit: authority.items,
+            byte_limit: authority.bytes,
+            retained_items: Cell::new(0),
+            retained_bytes: Cell::new(0),
+            scratch_bytes: Cell::new(0),
+            trait_self: Cell::new(None),
+            scope_lifetimes: Cell::new(false),
+            regional: std::cell::RefCell::new(Box::default()),
+            shared,
+            opaque_output: std::cell::RefCell::new(None),
+            opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
+            opaque_self: std::cell::RefCell::new(None),
+            opaque_converting: std::cell::RefCell::new(Vec::new()),
+            opaque_associated: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// What makes a worker beside this context (`worker`).
+    fn seed(&self) -> Seed<'graph, P> {
+        Seed {
+            graph: self.graph,
+            authority: Authority {
+                items: self.item_limit,
+                bytes: self.byte_limit,
+            },
+            shared: std::sync::Arc::clone(&self.shared),
+        }
+    }
+
+    /// Each definition of the graph classified on at most `workers`
+    /// threads, taken up in `order`, a list of definition indices, and
+    /// given in graph order. The functions that give an opaque type go
+    /// first: the captures each of those leaves out of an opaque type of
+    /// its own output (`Shared::left_out`) are then what every other item
+    /// reads, so no item's classification depends on which was classified
+    /// before it.
+    fn classify_definitions(
+        &self,
+        workers: usize,
+        order: &[usize],
+    ) -> Result<Vec<DefinitionPlan>, Error> {
+        let definitions = self.graph.definitions().collect::<Vec<_>>();
+        let (giving, other) = order
+            .iter()
+            .map(|index| {
+                definitions
+                    .get(*index)
+                    .map(|definition| (*index, *definition))
+                    .ok_or(Error::Cardinality)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, definition)| !own_opaques(definition).is_empty());
+        let seed = self.seed();
+        let (given, workers_done) = crate::parallel::try_map_with_on(
+            workers,
+            &giving,
+            || seed.context(),
+            |worker, (index, definition)| {
+                worker.start_item();
+                let plan = worker.classify_definition(*index, definition)?;
+                Ok((
+                    plan,
+                    std::mem::take(&mut *worker.opaque_excluded.borrow_mut()),
+                ))
+            },
+        );
+        for worker in &workers_done {
+            self.absorb(worker)?;
+        }
+        let given = given?;
+        // Taken in graph order: of two functions whose outputs give one
+        // opaque type, the first's positions are the type's. Then those
+        // of each opaque type no function's output gives, but whose
+        // conversion one of them meets, in the same order.
+        let mut by_index = giving
+            .iter()
+            .zip(&given)
+            .map(|((index, definition), (_, found))| (*index, *definition, found))
+            .collect::<Vec<_>>();
+        by_index.sort_unstable_by_key(|(index, ..)| *index);
+        let mut left_out = BTreeMap::new();
+        for (_, definition, found) in &by_index {
+            for opaque in own_opaques(definition) {
+                if let Some(positions) = found.get(opaque) {
+                    left_out
+                        .entry(opaque.clone())
+                        .or_insert_with(|| positions.clone());
+                }
+            }
+        }
+        for (_, _, found) in &by_index {
+            for (opaque, positions) in *found {
+                left_out
+                    .entry(opaque.clone())
+                    .or_insert_with(|| positions.clone());
+            }
+        }
+        if self.shared.left_out.set(left_out).is_err() {
+            return Err(Error::Cardinality);
+        }
+        let (classified, workers_done) = crate::parallel::try_map_with_on(
+            workers,
+            &other,
+            || seed.context(),
+            |worker, (index, definition)| {
+                worker.start_item();
+                worker.classify_definition(*index, definition)
+            },
+        );
+        for worker in &workers_done {
+            self.absorb(worker)?;
+        }
+        let classified = classified?;
+        let mut plans = giving
+            .iter()
+            .zip(given.into_iter().map(|(plan, _)| plan))
+            .chain(other.iter().zip(classified))
+            .map(|((index, definition), representability)| {
+                (
+                    *index,
+                    DefinitionPlan {
+                        definition: crate::surface::identity::Definition::of(definition.id()),
+                        representability,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        plans.sort_unstable_by_key(|(index, _)| *index);
+        Ok(plans.into_iter().map(|(_, plan)| plan).collect())
+    }
+
+    /// Forget what the item classified before left, so what the next one
+    /// gives depends on nothing but that item, whichever worker reads it.
+    fn start_item(&self) {
+        self.trait_self.set(None);
+        self.scope_lifetimes.set(false);
+        *self.regional.borrow_mut() = Box::default();
+        *self.opaque_output.borrow_mut() = None;
+        self.opaque_excluded.borrow_mut().clear();
+        *self.opaque_self.borrow_mut() = None;
+        self.opaque_converting.borrow_mut().clear();
+        self.opaque_associated.borrow_mut().clear();
+    }
+
+    /// Add what `worker` retained, and its scratch peak, to this context's.
+    fn absorb(&self, worker: &Self) -> Result<(), Error> {
+        self.retain(worker.retained_items.get(), worker.retained_bytes.get())?;
+        self.scratch_bytes
+            .set(self.scratch_bytes.get().max(worker.scratch_bytes.get()));
+        Ok(())
+    }
+
+    /// The positions of the captures the opaque type `id` leaves out of its
+    /// arguments: those the function that gives it leaves out, and else
+    /// those the item being classified first left out.
+    fn left_out(&self, id: &api::identity::Definition) -> Option<Box<[u32]>> {
+        self.shared
+            .left_out
+            .get()
+            .and_then(|defined| defined.get(id))
+            .cloned()
+            .or_else(|| self.opaque_excluded.borrow().get(id).cloned())
     }
 
     fn observe_result<T>(&self, _result: &Result<T, Error>) {}
@@ -2924,9 +3131,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .display_path()
             .last()?;
         let read = || ProjectionCases::read(self.graph, trait_id, name, self.instance_aliases());
-        let table = self.projection_cases.get_or_init(|| {
+        let table = self.shared.projection_cases.get_or_init(|| {
             (0..self.graph.definitions().len())
-                .map(|_| std::cell::OnceCell::new())
+                .map(|_| std::sync::OnceLock::new())
                 .collect()
         });
         let cached = table.get(associated)?.get_or_init(|| Box::new(read()));
@@ -2945,7 +3152,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     fn surface_definitions(&self) -> &SurfaceDefinitions {
-        self.surface_definitions
+        self.shared
+            .surface_definitions
             .get_or_init(|| SurfaceDefinitions::new(self.graph))
     }
 
@@ -2962,7 +3170,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         name: &str,
     ) -> impl Iterator<Item = &'graph model::Implementation> + use<'graph, '_, P> {
         let graph = self.graph;
-        let traits = self.core_traits.get_or_init(|| {
+        let traits = self.shared.core_traits.get_or_init(|| {
             let mut traits = HashMap::<&'graph str, Vec<usize>>::new();
             for (index, implementation) in graph.implementations().enumerate() {
                 let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
@@ -3732,35 +3940,46 @@ impl<P: api::Phase> api::Graph<P> {
         policy: &Policy,
         authority: Authority,
     ) -> Result<(ClassifiedParts, usize), Error> {
+        self.classify_parts_on(policy, authority, crate::parallel::workers())
+    }
+
+    /// [`classify_parts`](Self::classify_parts) on at most `workers`
+    /// threads.
+    fn classify_parts_on(
+        &self,
+        policy: &Policy,
+        authority: Authority,
+        workers: usize,
+    ) -> Result<(ClassifiedParts, usize), Error> {
         let semantic_api = *self.semantic_fingerprint().as_bytes();
         crate::progress::classified(self.definitions().len());
         let context = Context::new(self, authority)?;
         let result = (|| {
-            let mut outcomes = Vec::new();
             context.retain_array::<OutcomeRecord>(self.exports().len())?;
-            outcomes
-                .try_reserve_exact(self.exports().len())
-                .map_err(|_| Error::Allocation)?;
             context.retain_array::<DefinitionPlan>(self.definitions().len())?;
-            let mut definitions = Vec::new();
-            definitions
-                .try_reserve_exact(self.definitions().len())
-                .map_err(|_| Error::Allocation)?;
-            for (definition_index, definition) in self.definitions().enumerate() {
-                context.retain_items(1)?;
-                definitions.push(DefinitionPlan {
-                    definition: crate::surface::identity::Definition::of(definition.id()),
-                    representability: context.classify_definition(definition_index, definition)?,
-                });
-            }
+            context.retain_items(self.definitions().len())?;
+            let order = (0..self.definitions().len()).collect::<Vec<_>>();
+            let mut definitions = context.classify_definitions(workers, &order)?;
             if definitions.len() != self.definitions().len() {
                 return Err(Error::Cardinality);
             }
             definitions.sort_unstable();
             drop_unnameable_fields(self, &mut definitions);
-            for path in self.exports() {
-                outcomes.push(context.classify(path, &definitions)?);
+            let exports = self.exports().collect::<Vec<_>>();
+            let seed = context.seed();
+            let (outcomes, workers_done) = crate::parallel::try_map_with_on(
+                workers,
+                &exports,
+                || seed.context(),
+                |worker, path| {
+                    worker.start_item();
+                    worker.classify(path, &definitions)
+                },
+            );
+            for worker in &workers_done {
+                context.absorb(worker)?;
             }
+            let mut outcomes = outcomes?;
             if outcomes.len() != self.exports().len() {
                 return Err(Error::Cardinality);
             }
@@ -5010,7 +5229,7 @@ impl<P: api::Phase> Context<'_, P> {
     /// Each type whose only name is a passing alias, with that alias, by
     /// definition index (`sole_passing_aliases`).
     fn sole_aliases(&self) -> &[(usize, usize)] {
-        self.sole_aliases.get_or_init(|| {
+        self.shared.sole_aliases.get_or_init(|| {
             let mut found = sole_passing_aliases(self.graph)
                 .into_iter()
                 .filter_map(|(_, alias, target)| {
@@ -6421,7 +6640,7 @@ impl<P: api::Phase> Context<'_, P> {
         let model::Type::ImplTrait { id, captures, .. } = opaque else {
             return None;
         };
-        let positions = self.opaque_excluded.borrow().get(id).cloned()?;
+        let positions = self.left_out(id)?;
         let left_out = captures
             .iter()
             .enumerate()
@@ -8681,7 +8900,8 @@ impl<P: api::Phase> Context<'_, P> {
     /// `core`'s `Fn` and `FnOnce` and `FnOnce::Output`, where the graph
     /// holds them.
     fn callable_traits(&self) -> Option<CallableTraits> {
-        self.callable_traits
+        self.shared
+            .callable_traits
             .get_or_init(|| self.read_callable_traits())
             .clone()
     }
@@ -10003,7 +10223,7 @@ impl<P: api::Phase> Context<'_, P> {
         // converts its output, those its excluded parameters are,
         // and the same positions wherever else the type is named,
         // as a member of it names it as its `Self`.
-        let known = self.opaque_excluded.borrow().get(id).cloned();
+        let known = self.left_out(id);
         let left_out = match known {
             Some(positions) => positions,
             None => {
@@ -10149,7 +10369,8 @@ impl<P: api::Phase> Context<'_, P> {
     /// graph whose other root re-exports both backends, as `iced_test`
     /// does, leaves `iced::Renderer` the only name `iced` has.
     fn instance_aliases(&self) -> &[usize] {
-        self.instance_aliases
+        self.shared
+            .instance_aliases
             .get_or_init(|| instance_aliases(self.graph))
     }
 
@@ -16711,6 +16932,95 @@ mod tests {
             graph.definitions().len()
         );
         assert_eq!(digests, graph.definitions().len());
+    }
+
+    #[test]
+    fn classification_on_many_workers_is_byte_for_byte_classification_on_one() {
+        let limits = crate::limits::Limits::standard();
+        let authority = super::Authority::production(&limits);
+        let graphs = [
+            crate::test_fixture::iced_profile(),
+            crate::test_fixture::graph(),
+            crate::test_fixture::native_shapes(),
+            crate::test_fixture::opaque_left_out_functions(),
+        ];
+        let crates = graphs
+            .iter()
+            .flat_map(|graph| graph.definitions())
+            .map(|definition| definition.id().unit().crate_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(crates.len() > 2, "the fixtures span crates: {crates:?}");
+        for graph in &graphs {
+            let (serial, serial_scratch) = graph
+                .classify_parts_on(&Policy::standard(), authority, 1)
+                .expect("the fixture classifies on one worker");
+            let (parallel, parallel_scratch) = graph
+                .classify_parts_on(&Policy::standard(), authority, 8)
+                .expect("the fixture classifies on eight workers");
+            assert_eq!(serial.canonical, parallel.canonical);
+            assert_eq!(serial.fingerprint.0, parallel.fingerprint.0);
+            assert_eq!(
+                (serial.allocation.items, serial.allocation.bytes),
+                (parallel.allocation.items, parallel.allocation.bytes),
+            );
+            assert_eq!(serial_scratch, parallel_scratch);
+        }
+    }
+
+    #[test]
+    fn an_opaque_types_left_out_captures_do_not_depend_on_classification_order() {
+        let graph = crate::test_fixture::opaque_left_out_functions();
+        let limits = crate::limits::Limits::standard();
+        let authority = super::Authority::production(&limits);
+        let index = |name: &str| {
+            graph
+                .definitions()
+                .position(|definition| definition.display_path().last() == Some(name))
+                .unwrap_or_else(|| panic!("the fixture defines {name}"))
+        };
+        let (wait, hold) = (index("wait"), index("hold"));
+        let Some(crate::api::model::Kind::Function { signature, .. }) = graph
+            .definitions()
+            .nth(wait)
+            .map(crate::api::model::Definition::kind)
+        else {
+            panic!("`wait` is a function");
+        };
+        let crate::api::model::Type::ImplTrait { id: opaque, .. } = signature.output() else {
+            panic!("`wait` gives an opaque type");
+        };
+        let classify = |order: &[usize]| {
+            let context =
+                super::Context::new(&graph, authority).expect("the fixture context is bounded");
+            let plans = context
+                .classify_definitions(1, order)
+                .expect("the fixture's definitions classify");
+            let left_out = context
+                .shared
+                .left_out
+                .get()
+                .cloned()
+                .expect("classifying the definitions settles what opaque types leave out");
+            (plans, left_out)
+        };
+        assert!(wait < hold, "`fixture` sorts before `holder`");
+        let forward = (0..graph.definitions().len()).collect::<Vec<_>>();
+        let backward = forward.iter().rev().copied().collect::<Vec<_>>();
+        let (forward_plans, forward_left_out) = classify(&forward);
+        let (backward_plans, backward_left_out) = classify(&backward);
+        assert_eq!(forward_plans, backward_plans);
+        assert_eq!(forward_left_out, backward_left_out);
+        // `hold` alone leaves out the type's capture 1, its future; `wait`,
+        // first in graph order, leaves out capture 0, which is the type's
+        // wherever `hold` is classified.
+        assert_eq!(
+            classify(&[hold]).1.get(opaque).map(AsRef::as_ref),
+            Some(&[1_u32][..])
+        );
+        assert_eq!(
+            forward_left_out.get(opaque).map(AsRef::as_ref),
+            Some(&[0_u32][..])
+        );
     }
 
     fn definition_in(
