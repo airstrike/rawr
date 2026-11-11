@@ -23,7 +23,9 @@
         {"text":"A generic function written `-> impl Trait` takes its type parameters from the bound of the parameter its value is passed to, as iced's editor's `action(new_icon(), ..)` infers `new_icon`'s message.","issues":[1633]},
         {"text":"A conversion's target that only a later renderer fixes, through an impl's `Renderer: image::Renderer<Handle = Handle>`, is that handle, also through a method call such as `image(handle).boxed()`, as in iced's screenshot.","issues":[1632]},
         {"text":"A string literal's `.into()` into a crate type whose `From<&str>` borrows the text runs where only a later use gives the target, as in `Row::with_children([.., \"b\".into()])`.","issues":[1328]},
-        {"text":"Items in a function body are scoped to their block, as rustc scopes them. A body's `const` is visible to the `fn` and `impl` items nested in the same block, even before its declaration. Two functions can each declare their own `const MAX`, `struct Point`, `fn helper` or `use … as name`. A nested item can't be named outside its block (E0425), and `{:?}` of a nested struct prints its bare name.","issues":[1631,1429]}
+        {"text":"Items in a function body are scoped to their block, as rustc scopes them. A body's `const` is visible to the `fn` and `impl` items nested in the same block, even before its declaration. Two functions can each declare their own `const MAX`, `struct Point`, `fn helper` or `use … as name`. A nested item can't be named outside its block (E0425), and `{:?}` of a nested struct prints its bare name.","issues":[1631,1429]},
+        {"text":"A native generic call that takes a program value works in the head of a `for`, `if`, `match` or `while`, so iced's download_progress runs its downloads as cargo does.","issues":[314]},
+        {"text":"serde's `Deserialize` on a unit-variant enum runs. `from_utf8_lossy(&[u8])` gets a scope frame that owns a copy of the bytes, and a match pattern infers the type a call leaves open, as `V` of `EnumAccess::variant::<V>()`. iced's todos now passes `rawr check`.","issues":[1709],"refs":[1017]}
       ]
     },
     "releases": [
@@ -2350,7 +2352,7 @@
     {"issue":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":312,"title":"No-glue: std's `Duration` and `Instant` through `iced::time` are refused as SysrootDefinition…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.12"},
     {"issue":313,"title":"No-glue: the importer emits host items without declaring their type parameter `F`, as in tokio's…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.9"},
-    {"issue":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.6"},
     {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.179"},
@@ -3744,7 +3746,11 @@
     {"issue":1705,"title":"rawr doesn't run Option::as_deref, as iced's editor's self.file.as_deref().and_then(Path::extension)","state":"open","category":"Divergences from rustc"},
     {"issue":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"open","category":"Divergences from rustc"},
     {"issue":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open","category":"Divergences from rustc"},
-    {"issue":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open","category":"Divergences from rustc"}
+    {"issue":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open","category":"Divergences from rustc"},
+    {"issue":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"open","category":"Divergences from rustc"},
+    {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"open","category":"Divergences from rustc"},
+    {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4223,7 +4229,7 @@
           "note": "5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"retired"},
-            {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
+            {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"closed"},
             {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"closed"},
             {"number":334,"title":"No-glue stops after #313","state":"closed"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"retired"},
@@ -4345,7 +4351,10 @@
             {"number":1705,"title":"rawr doesn't run Option::as_deref, as iced's editor's self.file.as_deref().and_then(Path::extension)","state":"open"},
             {"number":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"open"},
             {"number":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open"},
-            {"number":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open"}
+            {"number":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open"},
+            {"number":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"open"},
+            {"number":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"open"},
+            {"number":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -4849,7 +4858,8 @@
             {"number":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open"},
             {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"closed"},
             {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"},
-            {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"}
+            {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"},
+            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open"}
           ]
         }
       ]
