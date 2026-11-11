@@ -13,6 +13,11 @@
 //! kept with it, and the lowering is reused only while each reads the
 //! same.
 //!
+//! A kept lowering also holds each adapter its ops call, a witnessed op's
+//! among them, and is reused only while the runner admitted each one: a
+//! runner whose files another runner wrote may lack one, and the part is
+//! lowered again, which prepares it (#1734).
+//!
 //! Reveal's readings of each body for the templates it calls are kept the
 //! same way, under what each pass over the program reads of it.
 
@@ -119,7 +124,18 @@ pub(super) struct Kept {
     pub(super) lowered: Box<[Lowered]>,
     pub(super) uses: Box<[ImportedUse]>,
     pub(super) dependencies: BTreeSet<host::facade::Dependency>,
+    /// Each adapter its ops call, a witnessed op's among them (#1734).
+    adapters: Box<[host::structural::Definition]>,
     pub(super) outside: Outside,
+}
+
+impl Kept {
+    /// Whether `registry`'s runner admitted each adapter the kept ops call.
+    fn admitted(&self, registry: &host::Registry) -> bool {
+        self.adapters
+            .iter()
+            .all(|adapter| registry.admits_structural(adapter))
+    }
 }
 
 /// What one part's lowering did outside the program as it lowered it.
@@ -525,9 +541,10 @@ impl<'e> Session<'e> {
     }
 
     /// What the earlier compile kept of its part under `key`, when each
-    /// of its reads outside the program reads the same. A compiler's first
-    /// compile finds it in the part's file.
-    pub(super) fn reuse(&mut self, key: Key<'_>, access: &crate::Access) -> Option<&Kept> {
+    /// of its reads outside the program reads the same and the runner
+    /// admitted each adapter it calls (#1734). A compiler's first compile
+    /// finds it in the part's file.
+    pub(super) fn reuse(&mut self, key: Key<'_>, models: &Models) -> Option<&Kept> {
         let place = (key.source, key.part);
         let earlier = match self.earlier.remove(&place) {
             Some(kept) => Some(kept),
@@ -537,7 +554,11 @@ impl<'e> Session<'e> {
                 .and_then(|disk| disk.read::<Kept>(self.engine, key.entry())),
             None => None,
         };
-        let kept = earlier.filter(|kept| kept.key == key.digest && kept.outside.holds(access))?;
+        let kept = earlier.filter(|kept| {
+            kept.key == key.digest
+                && kept.outside.holds(&models.access)
+                && kept.admitted(&models.host)
+        })?;
         Some(self.kept.entry(place).or_insert(kept))
     }
 
@@ -561,6 +582,7 @@ impl<'e> Session<'e> {
             lowered: lowered.to_vec().into_boxed_slice(),
             uses: uses.to_vec().into_boxed_slice(),
             dependencies: dependencies.clone(),
+            adapters: adapters(lowered),
             outside,
         };
         if let Some(disk) = lock(self.engine).disk.as_mut() {
@@ -584,6 +606,15 @@ impl Drop for Session<'_> {
         lowerings.kept = kept;
         lowerings.lowered += self.lowered.len();
     }
+}
+
+/// Each adapter the ops of `lowered` call, once.
+fn adapters(lowered: &[Lowered]) -> Box<[host::structural::Definition]> {
+    let mut adapters = BTreeSet::new();
+    for op in lowered.iter().flat_map(|lowered| &lowered.ops) {
+        op.adapters(&mut adapters);
+    }
+    adapters.into_iter().cloned().collect()
 }
 
 impl Lowered {
@@ -660,16 +691,23 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
 }
 
 impl ExecutableOp {
+    /// Each adapter the op calls into `adapters`: its own, or a witnessed
+    /// op's template's, which each instance calls.
+    fn adapters<'o>(&'o self, adapters: &mut BTreeSet<&'o host::structural::Definition>) {
+        match self {
+            Self::Imported { proof } => {
+                adapters.insert(proof.definition());
+            }
+            Self::Witnessed(op) => op.template.adapters(adapters),
+            _ => {}
+        }
+    }
+
     /// This op for a new generation of the program: a default value made
     /// again in its model, a witnessed op with no instance yet. `None` when
-    /// the default can't be made, or when the runner admitted no adapter
-    /// the op calls, as a runner whose files another runner wrote may not
-    /// have (#1725).
+    /// the default can't be made.
     fn renewed(&self, models: &Models) -> Option<Self> {
         Some(match self {
-            Self::Imported { proof } if !models.host.admits_structural(proof.definition()) => {
-                return None;
-            }
             Self::Default { definition, .. } => Self::Default {
                 value: models
                     .runtime
@@ -686,5 +724,80 @@ impl ExecutableOp {
             ))),
             op => op.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{adapters, Kept, Outside};
+    use crate::host::{self, facade, structural};
+    use crate::resolve::lower_nominal::entry::Lowered;
+    use crate::resolve::lower_nominal::op::{ExecutableOp, WitnessedOp};
+    use std::collections::BTreeSet;
+
+    /// A kept part whose one op is a witnessed op over a template that
+    /// calls `adapter`.
+    fn witnessed(adapter: &structural::Definition) -> Kept {
+        let proof = structural::Proof::transform(
+            adapter.clone(),
+            Box::default(),
+            host::runtime::type_ref::Type::unit(),
+            None,
+            crate::Span::NONE,
+        )
+        .expect("an adapter of no operands takes none");
+        let op = ExecutableOp::Witnessed(Box::new(WitnessedOp::new(
+            ExecutableOp::Imported { proof },
+            1,
+        )));
+        let lowered = [Lowered {
+            source: String::new(),
+            locations: Vec::new(),
+            ops: vec![op],
+            patterns: Vec::new(),
+            closures: Vec::new(),
+        }];
+        Kept {
+            key: [0; 32],
+            adapters: adapters(&lowered),
+            lowered: lowered.into(),
+            uses: Box::default(),
+            dependencies: BTreeSet::new(),
+            outside: Outside::new(Vec::new(), Vec::new()),
+        }
+    }
+
+    #[test]
+    fn a_kept_witnessed_op_is_reused_only_while_the_runner_admits_its_template_s_adapter() {
+        let definition = facade::Builder::new("structure", facade::Abi::new(1).unwrap())
+            .unwrap()
+            .finish()
+            .unwrap();
+        let owner = facade::Dependency::new(
+            &host::path::Path::parse("structure").unwrap(),
+            definition.fingerprint().clone(),
+        );
+        let mut engine = crate::Engine::new();
+        engine.register_host_facade(definition).unwrap();
+        let adapter = structural::Definition::new(
+            owner,
+            "structure::Cell".into(),
+            [12; 32],
+            [13; 32],
+            [14; 32],
+            0,
+            [15; 32],
+            structural::Kind::Field { copy: true },
+        );
+        let kept = witnessed(&adapter);
+        assert!(
+            !kept.admitted(&engine.host_registry),
+            "a runner that lacks the adapter lowers the part again"
+        );
+        engine
+            .host_registry
+            .admit_structural(adapter, &mut host::TestImportAllocation::default())
+            .unwrap();
+        assert!(kept.admitted(&engine.host_registry));
     }
 }

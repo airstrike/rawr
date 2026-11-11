@@ -130,7 +130,7 @@ mod __rawr_profile {
         if super::IMPORTED_BINDINGS.is_empty() {
             return Ok((Box::default(), ApplicationContract));
         }
-        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, native)
+        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, super::PATH_CRATES, native)
             .map(|definitions| (definitions, ApplicationContract))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }

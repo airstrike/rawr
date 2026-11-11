@@ -510,7 +510,8 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         .runner_image()
         .unwrap();
     let mut engine = compiler();
-    let _definitions = runner::install_retained(&mut engine, plan.leak(), &mut native).unwrap();
+    let _definitions =
+        runner::install_retained(&mut engine, plan.leak(), &[], &mut native).unwrap();
     let engine = engine.retain_imported_native(native).unwrap();
     let before = owners(&engine);
     let mut candidates = Vec::new();

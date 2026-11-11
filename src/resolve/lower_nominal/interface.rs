@@ -21,15 +21,25 @@
 //! A name that no declaration declares reaches the one a later save adds.
 //! An impl of a type parameter (`impl<T> Trait for T`) is every source's.
 //!
+//! Each `macro_rules!` definition is one more declaration, reached by its
+//! name, as a call writes it, and digested by its own tokens' places, so a
+//! declaration a save adds above it keeps every other source's key
+//! (#1730). What every lookup reads stays every source's: the recursion
+//! limit, which bounds each expansion, and which module each source is a
+//! child of, which each lookup walks up.
+//!
 //! A source reads the native surface the same way (#1725). Each entry of
-//! the facades of the program's own crate, which a save that changes what
-//! native code sees changes, is one more declaration, reached by its names
-//! (`host::image::Outline`). Every other crate's facade is every source's,
-//! by its proof. Each marked type the runner holds as its mirror
-//! (`Program::mirrors`) is one more declaration too, reached by its name,
-//! so a new pub struct native code sees reaches only the sources that name
-//! it (#1740). So a new runner's start lowers again only the sources that
-//! name what changed, as a save in the running one does.
+//! the facades of the program's own crate and of each path crate, which a
+//! save to the program or to a crate of the project changes, is one more
+//! declaration, reached by its names (`host::image::Outline`), so an edit
+//! to a path crate lowers again only the sources that name what changed
+//! (#1735). A registry crate's facade is every source's, by its proof: it
+//! doesn't change while the project runs. Each marked type the runner
+//! holds as its mirror (`Program::mirrors`) is one more declaration too,
+//! reached by its name, so a new pub struct native code sees reaches only
+//! the sources that name it (#1740). So a new runner's start lowers again
+//! only the sources that name what changed, as a save in the running one
+//! does.
 
 use super::models::Models;
 use crate::host::image;
@@ -117,9 +127,9 @@ fn from(source: source::Id) -> std::ops::RangeFrom<(source::Id, ImmutableString)
 }
 
 /// What a program's lowering reads of the native surface beside what a
-/// name reaches: the roots of the program's own facades its image holds,
-/// whose entries a name reaches (`image::Outline`), and what no name
-/// reaches of them.
+/// name reaches: the roots of the facades its image holds of the
+/// program's own crates and of the project's path crates, whose entries a
+/// name reaches (`image::Outline`), and what no name reaches of them.
 pub(super) struct Native {
     /// The program's own crates, which it was read for (`Program::own`).
     own: Box<[crate::ImmutableString]>,
@@ -133,10 +143,11 @@ impl Native {
         let held = registry
             .held_facades()
             .filter(|held| {
-                program
-                    .own
-                    .iter()
-                    .any(|own| own.as_str() == held.root().to_string())
+                held.is_path_crate()
+                    || program
+                        .own
+                        .iter()
+                        .any(|own| own.as_str() == held.root().to_string())
             })
             .collect::<Vec<_>>();
         Self {
@@ -170,7 +181,7 @@ fn every(
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v8");
+    written.0.update(b"rawr.lowering.interface/v9");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
@@ -181,8 +192,8 @@ fn every(
         models.std_traits,
     )
     .ok()?;
-    // The native surface: each other crate's facade whole, by its proof,
-    // and what no name reaches of the program's own (#1725).
+    // The native surface: each registry crate's facade whole, by its
+    // proof, and what no name reaches of the others (#1725, #1735).
     for facade in models.host.facades() {
         framed(&mut written.0, facade.root());
         if !native
@@ -216,8 +227,8 @@ fn every(
         write!(written, "{:?}|{:?}|", script.source, script.namespace).ok()?;
         written.0.update(outline.tokens);
     }
-    // The program's macros and `IndexMut` bodies, which a body's lowering
-    // reads with their places: at those places.
+    // What every macro lookup reads (#1730), and the `IndexMut` bodies,
+    // which a body's lowering reads with their places: at those places.
     program.macros.write_interface(&mut written).ok()?;
     write!(written, "{:?}", models.index_mut).ok()?;
     // What a call whose body isn't one of the program's resolved.
@@ -358,8 +369,17 @@ impl<'p> Declarations<'p> {
                 declaring[number].push(mirrors + offset);
             }
         }
-        let mut declarations =
-            Vec::with_capacity(items.len() + native.entries().len() + program.mirrors.len());
+        // Each `macro_rules!` definition, after them: by its name, as a
+        // call writes it (#1730).
+        let macros = mirrors + program.mirrors.len();
+        for (offset, definition) in program.macros.definitions().enumerate() {
+            let number = *names.entry(definition.name()).or_insert_with(|| {
+                declaring.push(Vec::new());
+                declaring.len() - 1
+            });
+            declaring[number].push(macros + offset);
+        }
+        let mut declarations = Vec::with_capacity(macros + program.macros.definitions().count());
         for ((index, shell), held) in items.iter().enumerate().zip(&held) {
             let outline = outlines.sources.get(shell.source.index());
             let places =
@@ -406,6 +426,33 @@ impl<'p> Declarations<'p> {
                 digest: digest(None, |written| write!(written, "{mirror:?}"))?,
                 writes: Vec::new(),
             });
+        }
+        for definition in program.macros.definitions() {
+            let span = definition.span();
+            let outline = outlines.sources.get(definition.source().index());
+            let places = outline.map(|outline| outline.places.between(span.start(), span.end()));
+            // Its text alone: `source_span` keeps the lines before it, which
+            // a declaration a save adds above it would change.
+            let text =
+                super::tokens::source_span(program.source.text_at(definition.source()), span);
+            let text = text.trim();
+            let digest = digest(places.as_ref(), |written| {
+                write!(
+                    written,
+                    "{}|",
+                    program.source.identity_at(definition.source())
+                )?;
+                program.macros.write_definition(definition, written)?;
+                write!(written, "{}|{text}", text.len())
+            })?;
+            let mut writes = outline
+                .into_iter()
+                .flat_map(|outline| outline.identifiers(span))
+                .filter_map(|name| names.get(name).copied())
+                .collect::<Vec<_>>();
+            writes.sort_unstable();
+            writes.dedup();
+            declarations.push(Declaration { digest, writes });
         }
         let unheld = digest(None, |written| {
             unheld

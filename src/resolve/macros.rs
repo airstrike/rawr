@@ -218,22 +218,48 @@ impl Table {
         (definition.exported && source == root).then_some((usize::MAX, Position::NONE))
     }
 
-    /// Write what a lookup reads of the table (`lookup`): each definition,
-    /// the limit, and each module's parent with, in place of where the
-    /// parent declares it, which of the frames in the parent it comes
-    /// after. A declaration a save adds before a `mod` item moves the item,
-    /// and changes no lookup, nor what this writes (#1726).
+    /// Write what every lookup reads of the table (`lookup`): the limit,
+    /// and which module each module source is a child of. Each definition
+    /// is written on its own (`write_definition`), as a declaration a
+    /// source reaches by its name, so a declaration a save adds before a
+    /// definition writes nothing new here (#1730).
     #[cfg(feature = "rust-import")]
     pub(crate) fn write_interface(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
-        write!(out, "{:?}|{}|", self.definitions, self.limit)?;
-        for (child, (parent, declared)) in &self.parents {
-            write!(out, "{child:?}<{parent:?}:")?;
-            for (frame, from) in self
-                .definitions
-                .iter()
-                .flat_map(|definition| &definition.frames)
-            {
-                if frame == parent {
+        write!(out, "{}|", self.limit)?;
+        for (child, (parent, _)) in &self.parents {
+            write!(out, "{child:?}<{parent:?}|")?;
+        }
+        Ok(())
+    }
+
+    /// Write what a lookup of `definition`'s name reads of it: its source,
+    /// its name, where it is written, whether it is exported, its crate's
+    /// root, and, for each frame, the frame's source and, in place of
+    /// where the frame starts, which of the modules that source declares
+    /// come after it. A declaration a save adds before a definition or a
+    /// `mod` item moves them, and changes no lookup, nor what this writes
+    /// when the definition's positions are written by its own places
+    /// (#1726, #1730).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn write_definition(
+        &self,
+        definition: &Definition,
+        out: &mut impl std::fmt::Write,
+    ) -> std::fmt::Result {
+        write!(
+            out,
+            "{:?}|{}|{:?}|{:?}|{}|{:?}|",
+            definition.source,
+            definition.name,
+            definition.name_span,
+            definition.span,
+            definition.exported,
+            self.root_of(definition.source),
+        )?;
+        for (frame, from) in &definition.frames {
+            write!(out, "{frame:?}:")?;
+            for (parent, declared) in self.parents.values() {
+                if parent == frame {
                     out.write_char(if declared.start() >= *from { '1' } else { '0' })?;
                 }
             }
@@ -252,6 +278,12 @@ impl Table {
 }
 
 impl Definition {
+    /// The name a call writes.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
     /// The definition, from `macro_rules` to its end.
     pub(crate) const fn span(&self) -> Span {
         self.span
