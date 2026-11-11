@@ -423,7 +423,12 @@ impl Definition {
         instance
     }
 
+    /// The method's generated name: its path, after its owner's place among
+    /// its module's block items of its name when a block declares it.
     pub(crate) fn symbol(&self) -> ImmutableString {
-        format!("\0rawr.method.{}", self.key).into()
+        match self.key.block() {
+            Some(block) => format!("\0rawr.method.{block}\0{}", self.key).into(),
+            None => format!("\0rawr.method.{}", self.key).into(),
+        }
     }
 }

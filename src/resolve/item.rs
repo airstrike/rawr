@@ -23,6 +23,20 @@ pub(crate) struct Shell {
     pub facades: Box<[crate::ImmutableString]>,
 }
 
+impl Shell {
+    /// The block the item is declared in, or `None` for a module's item.
+    pub(crate) const fn scope(&self) -> Option<Span> {
+        match &self.kind {
+            Kind::Use(item) => item.header.scope,
+            Kind::Struct(item) => item.header.scope,
+            Kind::Enum(item) => item.header.scope,
+            Kind::Impl(item) => item.header.scope,
+            Kind::Trait(item) => item.header.scope,
+            Kind::Function(item) => item.header.scope,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Kind {
     Use(Use),

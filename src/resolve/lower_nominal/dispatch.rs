@@ -942,6 +942,32 @@ pub(super) fn inherit_names<V: Clone>(
     }
 }
 
+/// What the blocks of `from` around `derive` bind, as names of `to`, the
+/// derive's expansion: the innermost block's first, and the expansion's
+/// own names over them.
+pub(super) fn inherit_block_names<V: Clone>(
+    blocks: &super::models::Blocks<V>,
+    names: &mut BTreeMap<(crate::program::source::Id, ImmutableString), V>,
+    from: crate::program::source::Id,
+    derive: Span,
+    to: crate::program::source::Id,
+) {
+    for ((source, name), bound) in blocks {
+        if *source != from {
+            continue;
+        }
+        let innermost = bound
+            .iter()
+            .filter(|(block, _)| crate::resolve::block::encloses(*block, derive))
+            .max_by_key(|(block, _)| block.start());
+        if let Some((_, value)) = innermost {
+            names
+                .entry((to, name.clone()))
+                .or_insert_with(|| value.clone());
+        }
+    }
+}
+
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
     definition.parameters.iter().position(|parameter| {
         matches!(

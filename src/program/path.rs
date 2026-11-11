@@ -10,6 +10,12 @@ pub(crate) struct Path {
     package: ImmutableString,
     modules: Box<[ImmutableString]>,
     name: ImmutableString,
+    /// For an item declared in a block, its place among the module's block
+    /// items of its name, from 1: two bodies' `struct Point` are two items.
+    /// A path never prints it, as rustc's `type_name` names both
+    /// `main::Point`.
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    block: Option<u32>,
 }
 
 impl fmt::Display for Path {
@@ -34,7 +40,18 @@ impl Path {
             package,
             modules,
             name,
+            block: None,
         }
+    }
+
+    /// This path for the `block`th block item of its name in its module.
+    pub(crate) fn in_block(self, block: Option<u32>) -> Self {
+        Self { block, ..self }
+    }
+
+    /// The path's place among its module's block items of its name.
+    pub(crate) const fn block(&self) -> Option<u32> {
+        self.block
     }
 
     pub(crate) fn package(&self) -> &str {

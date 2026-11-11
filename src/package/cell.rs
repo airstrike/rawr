@@ -513,7 +513,7 @@ macro_rules! record {
 
 record! {
     item::Name { text, span }
-    item::Header { attributes, visibility, span }
+    item::Header { attributes, visibility, span, scope }
     item::Attribute { path, arguments, span, text }
     item::Module { header, name, span, inline }
     item::MacroRules { header, name, span }

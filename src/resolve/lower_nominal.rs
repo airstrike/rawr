@@ -84,6 +84,8 @@ mod wide;
 
 #[cfg(test)]
 mod argument_count_tests;
+#[cfg(test)]
+mod block_items_tests;
 #[cfg(all(test, feature = "rust-import"))]
 mod collected_tests;
 mod compare;
@@ -151,7 +153,7 @@ use coverage::{
 pub(crate) use disk::Disk;
 pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
-use dispatch::{copied_parameters, inherit_names, method_copied};
+use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
 #[cfg(feature = "rust-import")]
 use entry::body_source;
 pub(super) use entry::lower;

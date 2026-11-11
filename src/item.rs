@@ -60,6 +60,14 @@ impl Key {
         }
     }
 
+    /// This key for the `block`th block item of its name in its module.
+    pub(crate) fn in_block(self, block: Option<u32>) -> Self {
+        Self {
+            path: self.path.in_block(block),
+            ..self
+        }
+    }
+
     pub(crate) fn associated(owner: &type_def::Key, name: ImmutableString, kind: Kind) -> Self {
         Self {
             path: program::Path::new(owner.package().into(), owner.modules().into(), name),
@@ -77,7 +85,8 @@ impl Key {
                 callable.package().into(),
                 callable.modules().into(),
                 format!("{}{{closure#{index}}}", callable.name()).into(),
-            ),
+            )
+            .in_block(callable.path.block()),
             owner: callable.owner.clone(),
             kind: Kind::Function,
         }
@@ -99,6 +108,16 @@ impl Key {
     #[must_use]
     pub fn name(&self) -> &str {
         self.path.name()
+    }
+
+    /// What tells this item's generated names from those of another block
+    /// item of its path: its place among its module's block items of its
+    /// name, or its owner's, as `Point::new` of a body's `struct Point`.
+    pub(crate) fn block(&self) -> Option<u32> {
+        self.path.block().or_else(|| match &self.owner {
+            Some(type_def::Identity::Script(owner)) => owner.block(),
+            Some(type_def::Identity::Host(_)) | None => None,
+        })
     }
 
     /// Return the stable owner identity for an associated item.
@@ -153,7 +172,8 @@ impl Key {
                 self.package().into(),
                 self.modules().to_vec().into_boxed_slice(),
                 name,
-            ),
+            )
+            .in_block(self.path.block()),
             owner: self.owner.clone(),
             kind: self.kind,
         }
@@ -353,6 +373,11 @@ pub struct Header {
     pub visibility: Option<Span>,
     /// Span from the first header token through its terminating delimiter.
     pub span: Span,
+    /// The block the item is declared in, braces included, or `None` for
+    /// a module's item. rustc names a block's item throughout that block
+    /// and nowhere else.
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    pub scope: Option<Span>,
 }
 
 impl Header {
@@ -457,6 +482,46 @@ impl Parsed {
             Self::Function(item) => item.span,
             Self::TypeAlias(item) => item.span,
         }
+    }
+
+    /// The item's header metadata.
+    #[must_use]
+    pub const fn header(&self) -> &Header {
+        match self {
+            Self::Module(item) => &item.header,
+            Self::Use(item) => &item.header,
+            Self::Struct(item) => &item.header,
+            Self::Enum(item) => &item.header,
+            Self::Impl(item) => &item.header,
+            Self::Trait(item) => &item.header,
+            Self::Function(item) => &item.header,
+            Self::TypeAlias(item) => &item.header,
+        }
+    }
+
+    /// The block the item is declared in, or `None` for a module's item.
+    #[must_use]
+    pub const fn scope(&self) -> Option<Span> {
+        self.header().scope
+    }
+
+    /// Declare the item in the block `scope`, unless a block nested in it
+    /// declares it already.
+    pub(crate) fn enclose(&mut self, scope: Span) {
+        let header = match self {
+            Self::Module(item) => &mut item.header,
+            Self::Use(item) => {
+                item.scope.get_or_insert(scope);
+                &mut item.header
+            }
+            Self::Struct(item) => &mut item.header,
+            Self::Enum(item) => &mut item.header,
+            Self::Impl(item) => &mut item.header,
+            Self::Trait(item) => &mut item.header,
+            Self::Function(item) => &mut item.header,
+            Self::TypeAlias(item) => &mut item.header,
+        };
+        header.scope.get_or_insert(scope);
     }
 }
 

@@ -15,6 +15,15 @@ type UnitBindings = (
 /// A name a `use` binds, and the path it names.
 type UsePath = (crate::item::Name, Box<[ImmutableString]>);
 
+/// The items each block of a unit declares, by name, with the spans of
+/// their names: no path names them, and only their block sees them
+/// (`super::block`).
+type BlockItems = BTreeMap<Span, BTreeMap<ImmutableString, (Span, Target)>>;
+
+/// Each name of Rust's namespaces a scope binds, with where, and whether an
+/// import bound it: two imports are rustc's E0252.
+type Bound = BTreeMap<(ImmutableString, item::Namespace), (source::Id, Span, bool)>;
+
 #[derive(Debug)]
 pub(crate) struct Failure {
     pub(crate) primary: source::Id,
@@ -103,6 +112,7 @@ struct Unit {
     context: Context,
     parsed: parse::Unit,
     slots: Vec<Option<Slot>>,
+    blocks: BlockItems,
 }
 
 #[derive(Clone)]
@@ -231,6 +241,7 @@ impl<'a> Resolver<'a> {
                     },
                     parsed: unit.parsed,
                     slots: Vec::new(),
+                    blocks: BlockItems::new(),
                 }
             })
             .collect();
@@ -306,8 +317,10 @@ impl<'a> Resolver<'a> {
             let context = self.units[unit_index].context.clone();
             let items = self.units[unit_index].parsed.items().to_vec();
             let mut slots = Vec::with_capacity(items.len());
+            let mut blocks = BlockItems::new();
+            let ordinals = super::block::ordinals(&items);
 
-            for parsed in &items {
+            for (index, parsed) in items.iter().enumerate() {
                 if let crate::item::Parsed::Module(module) = parsed {
                     let address = context.address(&module.name.text);
                     self.insert_declaration(
@@ -324,15 +337,21 @@ impl<'a> Resolver<'a> {
                 }
 
                 if let crate::item::Parsed::TypeAlias(alias) = parsed {
-                    self.insert_declaration(
-                        context.address(&alias.name.text),
-                        Declaration {
-                            source: context.source,
-                            span: alias.name.span,
-                            public: alias.header.visibility.is_some(),
-                            target: Target::Type(super::unresolved_alias(alias)),
-                        },
-                    )?;
+                    let target = Target::Type(super::unresolved_alias(alias));
+                    match parsed.scope() {
+                        Some(block) => {
+                            declare_in_block(&mut blocks, block, &context, &alias.name, target)?;
+                        }
+                        None => self.insert_declaration(
+                            context.address(&alias.name.text),
+                            Declaration {
+                                source: context.source,
+                                span: alias.name.span,
+                                public: alias.header.visibility.is_some(),
+                                target,
+                            },
+                        )?,
+                    }
                     slots.push(None);
                     continue;
                 }
@@ -353,7 +372,11 @@ impl<'a> Resolver<'a> {
                 let mut slot = Slot { id, key: None };
 
                 if let Some((name, type_kind, item_kind)) = super::named_declaration(parsed) {
-                    let key = context.namespace.item_key(&name.text, item_kind);
+                    let ordinal = ordinals[index];
+                    let key = context
+                        .namespace
+                        .item_key(&name.text, item_kind)
+                        .in_block(ordinal);
                     slot.key = Some(key.clone());
                     let target = match type_kind {
                         Some(kind) => {
@@ -368,7 +391,7 @@ impl<'a> Resolver<'a> {
                                         .collect(),
                                 );
                             }
-                            let type_key = context.namespace.type_key(&name.text);
+                            let type_key = context.namespace.type_key(&name.text).in_block(ordinal);
                             self.type_declarations.push(type_def::Declaration::new(
                                 definition,
                                 id,
@@ -384,16 +407,21 @@ impl<'a> Resolver<'a> {
                         }
                         None => Target::Item(key),
                     };
-                    self.insert_declaration(
-                        context.address(&name.text),
-                        Declaration {
-                            source: context.source,
-                            span: name.span,
-                            public: header(parsed)
-                                .is_some_and(|header| header.visibility.is_some()),
-                            target,
-                        },
-                    )?;
+                    match parsed.scope() {
+                        Some(block) => {
+                            declare_in_block(&mut blocks, block, &context, name, target)?
+                        }
+                        None => self.insert_declaration(
+                            context.address(&name.text),
+                            Declaration {
+                                source: context.source,
+                                span: name.span,
+                                public: header(parsed)
+                                    .is_some_and(|header| header.visibility.is_some()),
+                                target,
+                            },
+                        )?,
+                    }
                 }
                 slots.push(Some(slot));
             }
@@ -402,6 +430,10 @@ impl<'a> Resolver<'a> {
                 let crate::item::Parsed::Use(use_item) = parsed else {
                     continue;
                 };
+                // A block's `use` binds its names in its block only.
+                if use_item.header.scope.is_some() {
+                    continue;
+                }
                 if use_item.header.visibility.is_none() {
                     for (name, path) in use_paths(use_item) {
                         let address = context.address(&name.text);
@@ -456,6 +488,7 @@ impl<'a> Resolver<'a> {
             }
 
             self.units[unit_index].slots = slots;
+            self.units[unit_index].blocks = blocks;
         }
         Ok(())
     }
@@ -746,6 +779,11 @@ impl<'a> Resolver<'a> {
         let mut aliases = BTreeMap::new();
         let mut lexical = BTreeMap::new();
         let units = std::mem::take(&mut self.units);
+        // Where each derive's expansion is, in the source of its item, and
+        // the names the blocks around it bind there, which the expansion
+        // sees as its item does (#1631).
+        let derives = self.derive_sites();
+        let mut around = BTreeMap::<source::Id, BTreeMap<ImmutableString, type_ref::Target>>::new();
         // The crate root's names, which a recorded instance's types are
         // written in (D869).
         #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
@@ -754,6 +792,7 @@ impl<'a> Resolver<'a> {
             context,
             parsed,
             slots,
+            blocks,
         } in units
         {
             lexical.insert(
@@ -783,7 +822,29 @@ impl<'a> Resolver<'a> {
                 });
             }
 
-            let (uses, types, _occupied) = self.resolve_unit_bindings(&context, &parsed_items)?;
+            let (mut uses, mut types, _occupied) =
+                self.resolve_unit_bindings(&context, &parsed_items)?;
+            let block_types =
+                self.resolve_block_bindings(&context, &parsed_items, &blocks, &types, &mut uses)?;
+            for (expansion, (_, derive)) in derives
+                .iter()
+                .filter(|(_, (item, _))| *item == context.source)
+            {
+                let Some(block) = super::block::innermost(&block_types, *derive) else {
+                    continue;
+                };
+                let names = block
+                    .iter()
+                    .filter(|(name, target)| types.get(*name) != Some(*target))
+                    .map(|(name, target)| (name.clone(), target.clone()))
+                    .collect();
+                around.insert(*expansion, names);
+            }
+            for (name, target) in around.remove(&context.source).into_iter().flatten() {
+                if !self.declarations.contains_key(&context.address(&name)) {
+                    types.insert(name, target);
+                }
+            }
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             if context.source == self.entry_source {
                 root_types = Some(types.clone());
@@ -819,6 +880,10 @@ impl<'a> Resolver<'a> {
                 let Some(slot) = &slots[index] else {
                     continue;
                 };
+                let types = parsed
+                    .scope()
+                    .and_then(|block| super::block::innermost(&block_types, block))
+                    .unwrap_or(&types);
                 let parsed = {
                     let mut parsed = parsed;
                     qualify_opaque_bounds(&mut parsed, &modules);
@@ -833,7 +898,7 @@ impl<'a> Resolver<'a> {
                     slot.key.clone(),
                     uses[index].clone(),
                     parsed,
-                    &types,
+                    types,
                     self.host,
                     #[cfg(feature = "rust-import")]
                     self.native.as_deref().map(|capture| {
@@ -1438,13 +1503,67 @@ impl<'a> Resolver<'a> {
         self.resolve_qualified_header_types(context, parsed_items, &mut types)?;
         let mut uses = vec![None; parsed_items.len()];
 
+        let members = (0..parsed_items.len())
+            .filter(|index| parsed_items[*index].scope().is_none())
+            .collect::<Vec<_>>();
+        self.bind_uses(
+            context,
+            parsed_items,
+            &members,
+            None,
+            &mut types,
+            &mut bound,
+            &mut occupied,
+            &mut uses,
+        )?;
+        super::module_header_types(parsed_items, &uses, self.host, &mut types);
+        for (name, declaration) in modules {
+            occupied.entry(name).or_insert(declaration);
+        }
+        Ok((uses, types, occupied))
+    }
+
+    /// Each derive's expansion with the source of its item and the span of
+    /// the derive there.
+    fn derive_sites(&self) -> BTreeMap<source::Id, (source::Id, Span)> {
+        self.evidence
+            .iter()
+            .enumerate()
+            .filter_map(|(index, evidence)| {
+                let origin = evidence.origin()?;
+                let item = self.evidence.iter().position(|candidate| {
+                    candidate.origin().is_none() && candidate.identity() == origin.source.identity()
+                })?;
+                Some((
+                    source::Id::from_index(index),
+                    (source::Id::from_index(item), origin.span),
+                ))
+            })
+            .collect()
+    }
+
+    /// Bind the names the `use`s among `members`, by their indices among
+    /// `parsed_items`, import into the scope `scope` (`None` for the
+    /// module), whose names so far are `types`, `bound` and `occupied`.
+    #[allow(clippy::too_many_arguments)]
+    fn bind_uses(
+        &self,
+        context: &Context,
+        parsed_items: &[crate::item::Parsed],
+        members: &[usize],
+        scope: Option<Span>,
+        types: &mut BTreeMap<ImmutableString, type_ref::Target>,
+        bound: &mut Bound,
+        occupied: &mut BTreeMap<ImmutableString, (source::Id, Span)>,
+        uses: &mut [Option<item::Use>],
+    ) -> Result<(), Failure> {
         // Explicit imports first: a name they or a declaration bind shadows
         // the same name from a glob import, as in Rust.
         let glob = |parsed: &crate::item::Parsed| {
             matches!(parsed, crate::item::Parsed::Use(used)
                 if matches!(used.tree, crate::item::UseTree::Glob { .. }))
         };
-        let mut order = (0..parsed_items.len()).collect::<Vec<_>>();
+        let mut order = members.to_vec();
         order.sort_by_key(|index| glob(&parsed_items[*index]));
         for index in order {
             let crate::item::Parsed::Use(parsed) = &parsed_items[index] else {
@@ -1452,7 +1571,7 @@ impl<'a> Resolver<'a> {
             };
             let mut bindings = Vec::new();
 
-            let globbed = self.glob_paths(context, parsed, &bound)?;
+            let globbed = self.glob_paths(context, parsed, bound)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
                 let module_only = parsed.binds_module_only(&name);
                 // `use ::image::ColorType;` names the crate `image`, never a
@@ -1467,6 +1586,7 @@ impl<'a> Resolver<'a> {
                     Some((first, rest)) if !rest.is_empty() && !parsed.global() => uses
                         .iter()
                         .flatten()
+                        .filter(|used| sees(used.header.scope, scope))
                         .flat_map(|used: &item::Use| used.bindings.iter())
                         .find(|binding| {
                             binding.name.text == *first
@@ -1669,11 +1789,88 @@ impl<'a> Resolver<'a> {
                 span: parsed.span,
             });
         }
-        super::module_header_types(parsed_items, &uses, self.host, &mut types);
-        for (name, declaration) in modules {
-            occupied.entry(name).or_insert(declaration);
+        Ok(())
+    }
+
+    /// The names each block of the unit that binds a type sees: its own
+    /// items and imports over those of the scopes it is nested in, the
+    /// module's `types` outermost. The imports of its `use`s go in `uses`.
+    fn resolve_block_bindings(
+        &self,
+        context: &Context,
+        parsed_items: &[crate::item::Parsed],
+        blocks: &BlockItems,
+        types: &BTreeMap<ImmutableString, type_ref::Target>,
+        uses: &mut [Option<item::Use>],
+    ) -> Result<BTreeMap<Span, BTreeMap<ImmutableString, type_ref::Target>>, Failure> {
+        let mut block_types = BTreeMap::new();
+        for block in super::block::scopes(parsed_items) {
+            let members = (0..parsed_items.len())
+                .filter(|index| parsed_items[*index].scope() == Some(block))
+                .collect::<Vec<_>>();
+            let declared = blocks.get(&block);
+            let binds_type = declared.is_some_and(|items| {
+                items
+                    .values()
+                    .any(|(_, target)| matches!(target, Target::Type(_)))
+            }) || members
+                .iter()
+                .any(|index| matches!(parsed_items[*index], crate::item::Parsed::Use(_)));
+            if !binds_type {
+                continue;
+            }
+            let mut scoped = super::block::innermost(&block_types, block)
+                .unwrap_or(types)
+                .clone();
+            let mut bound = Bound::new();
+            let mut occupied = BTreeMap::new();
+            for (name, (span, target)) in declared.into_iter().flatten() {
+                let namespace = match target {
+                    Target::Module | Target::Trait(_) => item::Namespace::Type,
+                    Target::Item(_) => item::Namespace::Value,
+                    _ => item::Namespace::Both,
+                };
+                for side in namespace.sides() {
+                    bound.insert((name.clone(), *side), (context.source, *span, false));
+                }
+                occupied.insert(name.clone(), (context.source, *span));
+                if let Target::Type(target) = target {
+                    scoped.insert(name.clone(), target.clone());
+                }
+            }
+            self.bind_uses(
+                context,
+                parsed_items,
+                &members,
+                Some(block),
+                &mut scoped,
+                &mut bound,
+                &mut occupied,
+                uses,
+            )?;
+            let members = members
+                .iter()
+                .map(|index| &parsed_items[*index])
+                .collect::<Vec<_>>();
+            let visible = uses
+                .iter()
+                .filter(|used| {
+                    used.as_ref()
+                        .is_some_and(|used| sees(used.header.scope, Some(block)))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            super::module_header_types(&members, &visible, self.host, &mut scoped);
+            if let Some(error) = super::resolve_aliases(&members, &mut scoped, self.host) {
+                return Err(Failure {
+                    primary: context.source,
+                    secondary: None,
+                    error,
+                });
+            }
+            block_types.insert(block, scoped);
         }
-        Ok((uses, types, occupied))
+        Ok(block_types)
     }
 
     fn resolve_qualified_header_types(
@@ -2897,6 +3094,41 @@ impl Context {
             name: name.into(),
         }
     }
+}
+
+/// Whether code in the scope `here` sees a `use` of the scope `used`: the
+/// module's everywhere, a block's in that block and the blocks nested in it.
+fn sees(used: Option<Span>, here: Option<Span>) -> bool {
+    match (used, here) {
+        (None, _) => true,
+        (Some(used), Some(here)) => super::block::encloses(used, here),
+        (Some(_), None) => false,
+    }
+}
+
+/// Declare `name` in `block` of `context`'s unit, as `target`: a second
+/// item of that name in one block is rustc's E0428.
+fn declare_in_block(
+    blocks: &mut BlockItems,
+    block: Span,
+    context: &Context,
+    name: &crate::item::Name,
+    target: Target,
+) -> Result<(), Failure> {
+    let declared = blocks.entry(block).or_default();
+    if let Some((previous, _)) = declared.get(&name.text) {
+        return Err(Failure {
+            primary: context.source,
+            secondary: Some(context.source),
+            error: Error::DuplicateItem {
+                name: name.text.clone(),
+                declaration: name.span,
+                previous_declaration: *previous,
+            },
+        });
+    }
+    declared.insert(name.text.clone(), (name.span, target));
+    Ok(())
 }
 
 fn header(parsed: &crate::item::Parsed) -> Option<&crate::item::Header> {
