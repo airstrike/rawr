@@ -6,16 +6,30 @@
 //! bodies, their inert attributes, or where that source writes its
 //! declarations. It reads a declaration of another source only through a
 //! name: a path, a method, a type a signature or a field names, or an impl
-//! of such a type or trait. So each declaration, an item with what the
-//! program resolved of it, is digested on its own, its places counted in
-//! its own tokens (`Places::between`) and its item and method ids left
-//! unnumbered (`item::unnumbered`): the lowering's generated names never
-//! hold them. A source reads each declaration that declares a name its
-//! text writes, then each declaring a name one of those writes, and so on.
+//! of such a type or trait. An impl is reached by its type's and its
+//! trait's names, not its methods': a source calls a method on a value of
+//! a type it reaches, so it reaches the impl through the type (#1725).
+//!
+//! So each declaration, an item with what the program resolved of it, is
+//! digested on its own, its places counted in its own tokens
+//! (`Places::between`) and its item and method ids left unnumbered
+//! (`item::unnumbered`): the lowering's generated names never hold them.
+//! A facade's proof is written as its root (`Fingerprint::rooted`): what a
+//! source reads of a facade is its entries, below. A source reads each
+//! declaration that declares a name its text writes, then each declaring
+//! a name one of those writes, and so on.
 //! A name that no declaration declares reaches the one a later save adds.
 //! An impl of a type parameter (`impl<T> Trait for T`) is every source's.
+//!
+//! A source reads the native surface the same way (#1725). Each entry of
+//! the facades of the program's own crate, which a save that changes what
+//! native code sees changes, is one more declaration, reached by its names
+//! (`host::image::Outline`). Every other crate's facade is every source's,
+//! by its proof. So a new runner's start lowers again only the sources that
+//! name what changed, as a save in the running one does.
 
 use super::models::Models;
+use crate::host::image;
 use crate::program::source;
 use crate::resolve::{item, type_ref, Program};
 use crate::tokenizer::Token;
@@ -48,11 +62,19 @@ impl Interface {
         program: &Program,
         models: &Models,
         outlined: &mut Outlined,
+        native: &Native,
     ) -> Option<Self> {
         let outlines = outlines(engine, program, outlined);
-        let declarations = Declarations::new(program, &outlines)?;
+        let declarations = Declarations::new(program, &outlines, native)?;
         let own = own(program)?;
-        let every = every(program, models, &outlines, &declarations, own.get(&None))?;
+        let every = every(
+            program,
+            models,
+            &outlines,
+            &declarations,
+            own.get(&None),
+            native,
+        )?;
         let mut sources = BTreeMap::new();
         for (index, outline) in outlines.sources.iter().enumerate() {
             let source = source::Id::from_index(index);
@@ -91,6 +113,49 @@ fn from(source: source::Id) -> std::ops::RangeFrom<(source::Id, ImmutableString)
     (source, ImmutableString::new())..
 }
 
+/// What a program's lowering reads of the native surface beside what a
+/// name reaches: the roots of the program's own facades its image holds,
+/// whose entries a name reaches (`image::Outline`), and what no name
+/// reaches of them.
+pub(super) struct Native {
+    /// The program's own crates, which it was read for (`Program::own`).
+    own: Box<[crate::ImmutableString]>,
+    roots: Box<[Box<str>]>,
+    outline: Option<image::Outline>,
+}
+
+impl Native {
+    /// What `program`'s lowering reads of `registry`'s facades.
+    pub(super) fn new(program: &Program, registry: &crate::host::Registry) -> Self {
+        let held = registry
+            .held_facades()
+            .filter(|held| {
+                program
+                    .own
+                    .iter()
+                    .any(|own| own.as_str() == held.root().to_string())
+            })
+            .collect::<Vec<_>>();
+        Self {
+            own: program.own.clone(),
+            roots: held
+                .iter()
+                .map(|held| held.root().to_string().into())
+                .collect(),
+            outline: (!held.is_empty()).then(|| image::Outline::new(&held)),
+        }
+    }
+
+    /// Whether it was read for a program whose own crates are `own`.
+    pub(super) fn is_of(&self, own: &[crate::ImmutableString]) -> bool {
+        *self.own == *own
+    }
+
+    fn entries(&self) -> &[image::outline::Entry] {
+        self.outline.as_ref().map_or(&[], image::Outline::entries)
+    }
+}
+
 /// What every source's lowering reads: the compiler, what the program holds
 /// for all its sources, and the impls of a type parameter.
 fn every(
@@ -99,9 +164,10 @@ fn every(
     outlines: &Outlines,
     declarations: &Declarations<'_>,
     own: Option<&[u8; 32]>,
+    native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v5");
+    written.0.update(b"rawr.lowering.interface/v6");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
@@ -112,6 +178,21 @@ fn every(
         models.std_traits,
     )
     .ok()?;
+    // The native surface: each other crate's facade whole, by its proof,
+    // and what no name reaches of the program's own (#1725).
+    for facade in models.host.facades() {
+        framed(&mut written.0, facade.root());
+        if !native
+            .roots
+            .iter()
+            .any(|root| root.as_ref() == facade.root())
+        {
+            written.0.update(facade.fingerprint().content());
+        }
+    }
+    if let Some(outline) = &native.outline {
+        written.0.update(outline.everywhere());
+    }
     // Which source each index is.
     for index in 0..outlines.sources.len() {
         framed(
@@ -133,8 +214,6 @@ fn every(
         write!(written, "{:?}|{:?}|", script.source, script.namespace).ok()?;
         written.0.update(outline.tokens);
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    write!(written, "{:?}|", program.instances.natives).ok()?;
     // The program's macros and `IndexMut` bodies, which a body's lowering
     // reads with their places: at those places.
     write!(written, "{:?}|{:?}", program.macros, models.index_mut).ok()?;
@@ -166,8 +245,9 @@ struct Declaration {
 }
 
 impl<'p> Declarations<'p> {
-    /// The program's declarations, whose sources' outlines are `outlines`.
-    fn new(program: &'p Program, outlines: &'p Outlines) -> Option<Self> {
+    /// The program's declarations, whose sources' outlines are `outlines`,
+    /// and the entries of its own facades, `native`'s.
+    fn new(program: &'p Program, outlines: &'p Outlines, native: &'p Native) -> Option<Self> {
         let items = program.items.iter().collect::<Vec<_>>();
         // What the program holds of each item beside its shell: its type,
         // the methods its impl or trait declares, its instances.
@@ -219,6 +299,21 @@ impl<'p> Declarations<'p> {
                 None => unheld.push(Held::Instance(key, types)),
             }
         }
+        // An instance native code calls a template at, the template's, by
+        // the path native code's call names it by (#1725).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let by_path = by_key
+                .iter()
+                .filter_map(|(key, index)| Some((key.island_path()?.1, *index)))
+                .collect::<HashMap<_, _>>();
+            for native in &program.instances.natives {
+                match by_path.get(native.path.as_str()) {
+                    Some(index) => held[*index].push(Held::Native(native)),
+                    None => unheld.push(Held::Native(native)),
+                }
+            }
+        }
 
         let mut names = HashMap::<&str, usize>::new();
         let mut declaring = Vec::<Vec<usize>>::new();
@@ -235,7 +330,18 @@ impl<'p> Declarations<'p> {
             }
             unnamed.push(named.is_empty());
         }
-        let mut declarations = Vec::with_capacity(items.len());
+        // Each entry of the program's own facades, after the items. One no
+        // name reaches is in what every source reads of them.
+        for (offset, entry) in native.entries().iter().enumerate() {
+            for name in entry.names() {
+                let number = *names.entry(name).or_insert_with(|| {
+                    declaring.push(Vec::new());
+                    declaring.len() - 1
+                });
+                declaring[number].push(items.len() + offset);
+            }
+        }
+        let mut declarations = Vec::with_capacity(items.len() + native.entries().len());
         for ((index, shell), held) in items.iter().enumerate().zip(&held) {
             let outline = outlines.sources.get(shell.source.index());
             let places =
@@ -264,6 +370,18 @@ impl<'p> Declarations<'p> {
                 everywhere.0.update(digest);
             }
             declarations.push(Declaration { digest, writes });
+        }
+        for entry in native.entries() {
+            let mut writes = entry
+                .writes()
+                .filter_map(|name| names.get(name).copied())
+                .collect::<Vec<_>>();
+            writes.sort_unstable();
+            writes.dedup();
+            declarations.push(Declaration {
+                digest: *entry.digest(),
+                writes,
+            });
         }
         let unheld = digest(None, |written| {
             unheld
@@ -322,6 +440,8 @@ enum Held<'p> {
         &'p crate::item::Key,
         &'p [(crate::ImmutableString, type_ref::Type)],
     ),
+    #[cfg(not(target_arch = "wasm32"))]
+    Native(&'p crate::resolve::record::Native),
 }
 
 /// The items of each source by where they start, to find the one a place
@@ -385,18 +505,6 @@ fn declared_names(kind: &item::Kind) -> Vec<&str> {
                 }
                 None => {}
             }
-            names.extend(
-                implementation
-                    .functions
-                    .iter()
-                    .map(|function| function.name.text.as_str())
-                    .chain(
-                        implementation
-                            .associated
-                            .iter()
-                            .map(|(name, _)| name.text.as_str()),
-                    ),
-            );
             names
         }
     }
@@ -602,7 +710,8 @@ impl std::fmt::Write for Written {
 pub(super) struct Outline {
     tokens: [u8; 32],
     places: Places,
-    /// Each name its tokens write, with where it starts.
+    /// Each name its tokens write, with where it starts, but the names a
+    /// declaration gives (a function, a field, a parameter).
     identifiers: Box<[(Box<str>, Position)]>,
     /// Each name its whole text writes, its bodies' too, once.
     mentioned: Box<[Box<str>]>,
@@ -652,7 +761,16 @@ impl Outline {
             // A token's `Debug` can't fail to write.
             let _ = write!(written, "{token:?}|");
             starts.push(*position);
-            if let Token::Identifier(name) = token {
+            // A name a declaration gives, a function's, a field's, a
+            // parameter's or a generic parameter's, names nothing it
+            // reads (#1725).
+            let given = index
+                .checked_sub(1)
+                .is_some_and(|before| matches!(tokens[before].0, Token::Fn))
+                || matches!(tokens.get(index + 1), Some((Token::Colon, _)));
+            if let Token::Identifier(name) = token
+                && !given
+            {
                 identifiers.push((Box::<str>::from(name.as_str()), *position));
             }
             index += 1;

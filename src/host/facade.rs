@@ -444,9 +444,9 @@ pub(crate) struct RegistryParts {
     pub(crate) fingerprint: Fingerprint,
 }
 
-/// A deterministic exact proof of a complete static facade contract.
-#[derive(Clone, Debug, Eq)]
-#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+/// A deterministic exact proof of a complete static facade contract. A
+/// stored one is its root (`stored::fingerprint`).
+#[derive(Clone, Eq)]
 pub struct Fingerprint {
     root: ImmutableString,
     abi: Abi,
@@ -460,6 +460,57 @@ pub struct Fingerprint {
     /// facade (`host::image`), whose slices stay empty: the image builds
     /// the contract an entry at a time, and its generator digested it whole.
     carried: bool,
+}
+
+#[cfg(feature = "rust-import")]
+std::thread_local! {
+    /// Whether this thread writes a fingerprint by `Debug` as its root
+    /// alone (`Fingerprint::rooted`).
+    static ROOTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+impl Fingerprint {
+    /// What `write` gives, each fingerprint this thread writes by `Debug`
+    /// meanwhile written as its root alone: a digest of what a lowering
+    /// reads of a facade then holds what it reads of the facade's entries
+    /// apart (#1725).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn rooted<T>(write: impl FnOnce() -> T) -> T {
+        /// Puts back how fingerprints were written before, as `write` ends
+        /// or unwinds.
+        struct Restore(bool);
+
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ROOTED.set(self.0);
+            }
+        }
+
+        let _restore = Restore(ROOTED.replace(true));
+        write()
+    }
+}
+
+impl std::fmt::Debug for Fingerprint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(feature = "rust-import")]
+        if ROOTED.get() {
+            return formatter
+                .debug_tuple("Fingerprint")
+                .field(&self.root)
+                .finish();
+        }
+        formatter
+            .debug_struct("Fingerprint")
+            .field("root", &self.root)
+            .field("abi", &self.abi)
+            .field("modules", &self.modules)
+            .field("types", &self.types)
+            .field("items", &self.items)
+            .field("content", &self.content)
+            .field("carried", &self.carried)
+            .finish()
+    }
 }
 
 struct ContentHasher(Sha256);
@@ -2221,6 +2272,19 @@ impl Fingerprint {
 }
 
 impl Fingerprint {
+    /// The root of the facade it proves.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn root(&self) -> &str {
+        &self.root
+    }
+
+    /// The digest of the contract it proves: two proofs of one root and ABI
+    /// are one contract when it is the same.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn content(&self) -> &[u8; 32] {
+        &self.content
+    }
+
     /// The proof of the facade at `root` a runner image holds, which its
     /// generator digested as `content` (`host::image`).
     #[cfg(feature = "rust-import")]

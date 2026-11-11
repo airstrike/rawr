@@ -5,6 +5,9 @@
 
 mod entry;
 mod lookup;
+pub(crate) mod outline;
+
+pub(crate) use outline::Outline;
 
 use crate::{host, Shared};
 use once_cell::sync::OnceCell;

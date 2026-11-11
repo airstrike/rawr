@@ -321,6 +321,18 @@ impl Registry {
         self.exported.iter().any(|exported| exported == root)
     }
 
+    /// The facades installed, sorted by root.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn facades(&self) -> &[facade::Dependency] {
+        &self.facades
+    }
+
+    /// The facades a runner's image holds, sorted by root.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn held_facades(&self) -> impl Iterator<Item = &image::Held> {
+        self.held.iter().map(|(held, _)| held)
+    }
+
     /// The Rust types its facades link, by their `TypeId`s.
     #[cfg(feature = "rust-import")]
     pub(crate) fn linked(&self) -> impl Iterator<Item = std::any::TypeId> + '_ {
@@ -812,6 +824,12 @@ impl Registry {
                     .filter(selected)
                     .find(|definition| identity(definition.path()).as_ref() == Some(&wanted))
             })
+    }
+
+    /// Whether the runner admitted the adapter `definition`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn admits_structural(&self, definition: &structural::Definition) -> bool {
+        self.structural.contains(definition)
     }
 
     #[cfg(feature = "rust-import")]
