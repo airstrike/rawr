@@ -2,7 +2,7 @@
 //! keeps test files ([`fixture`]), one `RAWR_HOME` for the suite, and
 //! `rawr-import run` with its output read as it comes. The suite runs its
 //! tests in parallel; a test that needs a project or a home no other test
-//! touches makes its own under [`scratch`] by a name no other test uses.
+//! touches makes its own with [`fresh`], by a name no other test uses.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -162,6 +162,56 @@ pub fn scratch() -> PathBuf {
     alone::share();
     std::env::var_os("RAWR_TEST_TMPDIR")
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
+}
+
+/// A directory of one test's own under [`scratch`], by a name no other test
+/// uses: a project or a home. It starts empty, whatever an earlier run left
+/// there, so no test reuses a build of older sources (#1712). It goes when
+/// the test passes and stays when the test fails, to be looked at (#1731).
+pub struct Scratch {
+    path: PathBuf,
+}
+
+/// The empty directory `name` under [`scratch`], removed when the test
+/// passes.
+pub fn fresh(name: impl AsRef<Path>) -> Scratch {
+    let path = scratch().join(name);
+    match fs::remove_dir_all(&path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            panic!("{} did not go: {error}", path.display())
+        }
+        _ => {}
+    }
+    fs::create_dir_all(&path).unwrap();
+    Scratch { path }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for Scratch {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.path.as_os_str()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 /// The suite's one `RAWR_RUNTIME_HOME`, the shared `RAWR_HOME`, with

@@ -8,18 +8,15 @@
 //! the error its value holds (#680). Build the driver first, as for
 //! `plain`.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::support::copy;
+use crate::support::{copy, Scratch};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/std-types");
 
-fn fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_dir_all(root.join("files"));
+fn fixture(name: &str) -> Scratch {
+    let root = crate::support::fresh(name);
     copy(Path::new(FIXTURE), &root);
     root
 }

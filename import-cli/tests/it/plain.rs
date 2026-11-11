@@ -157,7 +157,7 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = crate::support::scratch().join("plain-dependency");
+    let root = crate::support::fresh("plain-dependency");
     copy(Path::new(FIXTURE), &root);
 
     let run = rawr_import(&root, &["run"]);
@@ -209,7 +209,7 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
 
 #[test]
 fn a_concrete_blanket_application_keeps_its_trait_arguments() {
-    let root = crate::support::scratch().join("concrete-trait-arguments");
+    let root = crate::support::fresh("concrete-trait-arguments");
     let home = crate::support::scratch().join("rawr-home");
     for (path, source) in [
         (
@@ -326,10 +326,9 @@ fn main() {
 /// and a changed crate gets a new entry alone.
 #[test]
 fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() {
-    let base = crate::support::scratch().join("lexical-applications");
+    let base = crate::support::fresh("lexical-applications");
     let home = base.join("home");
     let crates = base.join("crates");
-    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -481,11 +480,10 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
 /// proved from the crates' intrinsic facts, read back by the API's inputs.
 #[test]
 fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
-    let base = crate::support::scratch().join("new-member-no-nightly");
+    let base = crate::support::fresh("new-member-no-nightly");
     let home = base.join("home");
     let crates = base.join("crates");
     let root = base.join("app");
-    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -606,10 +604,9 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
 /// nightly's did (#403). Path crates keep theirs per project.
 #[test]
 fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
-    let base = crate::support::scratch().join("shared-inventories");
+    let base = crate::support::fresh("shared-inventories");
     let home = base.join("home");
     let crates = base.join("crates");
-    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -713,14 +710,12 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     // This test owns its binding namespace. Old protocol generations in the
     // suite's general home are valid retained entries, not extra publications
     // by this run. Preserve the runtime while starting with cold bindings.
-    let home = crate::support::scratch().join("semver-sharing-home");
+    let home = crate::support::fresh("semver-sharing-home");
     // Each protocol keeps its own bindings, under `formats/<protocol>`.
     let formats = home.join("formats");
-    let _ = fs::remove_dir_all(&formats);
     let projects = ["first", "second", "other", "other-again"]
-        .map(|name| crate::support::scratch().join(format!("shared-{name}")));
+        .map(|name| crate::support::fresh(format!("shared-{name}")));
     for root in &projects {
-        let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
     }
     let [first, second, other, again] = &projects;
@@ -818,12 +813,9 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
 /// with no nightly build and no probe (D609.4, #661).
 #[test]
 fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() {
-    let home = crate::support::scratch().join("checked-sharing-home");
-    let _ = fs::remove_dir_all(home_format(&home, "bindings"));
-    let projects =
-        ["first", "second"].map(|name| crate::support::scratch().join(format!("checked-{name}")));
+    let home = crate::support::fresh("checked-sharing-home");
+    let projects = ["first", "second"].map(|name| crate::support::fresh(format!("checked-{name}")));
     for root in &projects {
-        let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
     }
     let [first, second] = &projects;
@@ -885,10 +877,8 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
 /// which no resolution named.
 #[test]
 fn another_rawr_build_extracts_and_classifies_nothing_again() {
-    let home = crate::support::scratch().join("moved-host-home");
-    let root = crate::support::scratch().join("moved-host");
-    let _ = fs::remove_dir_all(&home);
-    let _ = fs::remove_dir_all(&root);
+    let home = crate::support::fresh("moved-host-home");
+    let root = crate::support::fresh("moved-host");
     copy(Path::new(FIXTURE), &root);
     let installed = Path::new(env!("CARGO_BIN_EXE_rawr-import"));
     let rawr_with = |importer: &Path, command: &str, host: &Path| {
@@ -906,7 +896,7 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
         output
     };
     let check_with = |importer: &Path, host: &str| {
-        let host = crate::support::scratch().join(format!("moved-host-{host}"));
+        let host = crate::support::fresh(format!("moved-host-{host}"));
         text(&rawr_with(importer, "check", &host).stderr)
     };
     let check = |host: &str| check_with(installed, host);
@@ -928,9 +918,7 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
     }
     // Another install: `rawr-import` and its driver in another directory,
     // so the attestation names another driver.
-    let bin = crate::support::scratch().join("moved-host-install");
-    let _ = fs::remove_dir_all(&bin);
-    fs::create_dir_all(&bin).unwrap();
+    let bin = crate::support::fresh("moved-host-install");
     for name in ["rawr-import", "rawr-import-driver"] {
         let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
         fs::copy(installed.with_file_name(&name), bin.join(&name)).unwrap();
@@ -999,14 +987,9 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
 /// as it is, though the program's own crate is selected beside it (#672).
 #[test]
 fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home() {
-    let home = crate::support::scratch().join("module-sharing-home");
-    // Each protocol's bindings live under `formats/<protocol>`; the first
-    // check makes the current one.
-    let _ = fs::remove_dir_all(home.join("formats"));
-    let projects =
-        ["first", "second"].map(|name| crate::support::scratch().join(format!("module-{name}")));
+    let home = crate::support::fresh("module-sharing-home");
+    let projects = ["first", "second"].map(|name| crate::support::fresh(format!("module-{name}")));
     for root in &projects {
-        let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
         fs::write(
             root.join("src/main.rs"),
@@ -1091,8 +1074,7 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
 /// name the other project's `feet` (#1097).
 #[test]
 fn a_shared_table_names_no_crate_outside_its_closure() {
-    let root = crate::support::scratch().join("shared-closure");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("shared-closure");
     let repository = root.join("repository");
     for (name, manifest, source) in [
         (
@@ -1214,8 +1196,7 @@ fn a_shared_table_names_no_crate_outside_its_closure() {
 /// shares across projects without a nightly build.
 #[test]
 fn shared_git_bindings_validate_declared_file_and_environment_before_replay() {
-    let root = crate::support::scratch().join("shared-script-inputs");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("shared-script-inputs");
     let dependency = root.join("dependency");
     fs::create_dir_all(dependency.join("src")).unwrap();
     fs::write(
@@ -1400,8 +1381,7 @@ fn main() {
 /// differs from the API that the project's stable compiler provides.
 #[test]
 fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
-    let root = crate::support::scratch().join("shared-adapter-drift");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("shared-adapter-drift");
     let dependency = root.join("dependency");
     fs::create_dir_all(dependency.join("src")).unwrap();
     fs::write(
@@ -1521,8 +1501,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
 /// own value, as `cargo run` does (D742). `check` does the same.
 #[test]
 fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_differs() {
-    let root = crate::support::scratch().join("shared-undeclared-env");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("shared-undeclared-env");
     let dependency = root.join("dependency");
     fs::create_dir_all(dependency.join("src")).unwrap();
     fs::write(
@@ -1647,7 +1626,7 @@ fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_diffe
 /// gives the script, and a change to `[env]` runs the script again (#1137).
 #[test]
 fn a_declared_variable_set_by_cargo_env_config_runs_as_under_cargo() {
-    let base = crate::support::scratch().join("plain-env-config");
+    let base = crate::support::fresh("plain-env-config");
     let root = base.join("app");
     project(
         &base,
@@ -1737,7 +1716,7 @@ fn a_declared_variable_set_by_cargo_env_config_runs_as_under_cargo() {
 fn inputs_read_through_symlinks_build_and_a_repointed_link_rebuilds() {
     use std::os::unix::fs::symlink;
 
-    let base = crate::support::scratch().join("plain-symlink-inputs");
+    let base = crate::support::fresh("plain-symlink-inputs");
     let root = base.join("app");
     project(
         &base,
@@ -1839,8 +1818,7 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-arguments"
     );
-    let root = crate::support::scratch().join("plain-arguments");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("plain-arguments");
     copy(Path::new(ARGUMENTS), &root);
     let main = root.join("src/main.rs");
     let mut run = crate::support::start_with(
@@ -1893,8 +1871,7 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
 #[test]
 fn a_dependencys_macro_rules_expand_from_its_source() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
-    let root = crate::support::scratch().join("plain-macros");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("plain-macros");
     copy(Path::new(MACROS), &root);
 
     let run = rawr_import(&root, &["run"]);
@@ -1917,8 +1894,7 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
 /// libtest's status (#1653).
 #[test]
 fn rawr_test_of_a_program_with_a_dependency_reports_what_cargo_test_reports() {
-    let root = crate::support::scratch().join("plain-tests");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("plain-tests");
     copy(Path::new(FIXTURE), &root);
     let main = root.join("src/main.rs");
     let mut text_of_main = fs::read_to_string(&main).unwrap();
@@ -1982,8 +1958,7 @@ fn rawr_test_of_a_program_with_a_dependency_reports_what_cargo_test_reports() {
 /// without it.
 #[test]
 fn rawr_test_links_dev_dependencies_into_the_tests() {
-    let root = crate::support::scratch().join("plain-dev-dependencies");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("plain-dev-dependencies");
     copy(Path::new(FIXTURE), &root);
     let manifest = root.join("Cargo.toml");
     let text_of_manifest = fs::read_to_string(&manifest)
@@ -2025,8 +2000,7 @@ fn rawr_test_links_dev_dependencies_into_the_tests() {
 #[test]
 fn a_crates_derive_runs_from_its_expansion() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
-    let root = crate::support::scratch().join("plain-derives");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("plain-derives");
     copy(Path::new(DERIVES), &root);
 
     // serde's `Serialize` and `Deserialize`, from their expansions, run
@@ -2131,8 +2105,7 @@ fn a_direct_proc_macro_dependency_expands_in_native_code() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-proc-macro"
     );
-    let root = crate::support::scratch().join("plain-proc-macro");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("plain-proc-macro");
     copy(Path::new(PROC_MACRO), &root);
 
     let checked = rawr_import(&root, &["check"]);
@@ -2205,8 +2178,7 @@ fn a_direct_proc_macro_dependency_expands_in_native_code() {
 #[test]
 fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
     const DERIVES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-derives");
-    let root = crate::support::scratch().join("plain-derives-swap");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("plain-derives-swap");
     copy(Path::new(DERIVES), &root);
     let main = root.join("src/main.rs");
     let program = |attribute: &str| {
@@ -2282,8 +2254,7 @@ fn a_rename_in_a_derived_type_swaps_into_the_running_program() {
 #[test]
 fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
     const VISITS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-visits");
-    let root = crate::support::scratch().join("plain-visits");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("plain-visits");
     copy(Path::new(VISITS), &root);
 
     let run = rawr_import(&root, &["run"]);
@@ -2309,8 +2280,7 @@ fn a_crates_generic_method_runs_the_programs_impl_at_each_type() {
 #[test]
 fn a_table_grows_for_a_later_macros_crate_root() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
-    let root = crate::support::scratch().join("whole-macro-roots");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("whole-macro-roots");
     copy(Path::new(MACROS), &root);
     let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
@@ -2343,10 +2313,9 @@ fn a_table_grows_for_a_later_macros_crate_root() {
 #[test]
 fn a_table_answers_the_selected_crates_own_macro() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
-    let base = crate::support::scratch().join("whole-own-macro");
+    let base = crate::support::fresh("whole-own-macro");
     let crates = base.join("crates");
     let root = base.join("app");
-    let _ = fs::remove_dir_all(&base);
     for name in ["outer", "inner"] {
         copy(&Path::new(MACROS).join(name), &crates.join(name));
     }
@@ -2425,8 +2394,7 @@ fn a_table_answers_the_selected_crates_own_macro() {
 /// one name per package, so the runner reaches the project's crate by both.
 #[test]
 fn a_project_dependency_the_runner_also_needs_coexists() {
-    let root = crate::support::scratch().join("runner-shared-dependency");
-    let _ = fs::remove_dir_all(&root);
+    let root = crate::support::fresh("runner-shared-dependency");
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
         root.join("Cargo.toml"),
@@ -2466,10 +2434,9 @@ fn a_project_dependency_the_runner_also_needs_coexists() {
 /// (#398). The tables hold what was demanded, never a crate whole (#1665).
 #[test]
 fn a_save_the_path_dependencys_tables_hold_replays_them() {
-    let base = crate::support::scratch().join("path-tables");
+    let base = crate::support::fresh("path-tables");
     let crates = base.join("crates");
     let root = base.join("app");
-    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -2591,8 +2558,7 @@ fn a_save_the_path_dependencys_tables_hold_replays_them() {
 /// with the same dependency reuses the crate cargo compiled for the first.
 #[test]
 fn a_script_with_a_dependency_runs_from_its_frontmatter() {
-    let directory = crate::support::scratch().join("plain-scripts");
-    let _ = fs::remove_dir_all(&directory);
+    let directory = crate::support::fresh("plain-scripts");
     fs::create_dir_all(&directory).unwrap();
     let script = |name: &str, line: &str| {
         let path = directory.join(name);
@@ -2665,8 +2631,7 @@ fn a_dependency_rawr_takes_with_more_features_keeps_the_locked_runner_build() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-shared-feature"
     );
-    let root = crate::support::scratch().join("plain-shared-feature");
-    let _ = fs::remove_dir_all(root.join("src"));
+    let root = crate::support::fresh("plain-shared-feature");
     copy(Path::new(SHARED), &root);
 
     for _ in 0..2 {
@@ -2742,7 +2707,7 @@ fn assert_runs_and_checks(program: &Path, home: &Path) {
 /// replaces with a path crate resolves to the patch, as under Cargo (#668).
 #[test]
 fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
-    let root = crate::support::scratch().join("patched-dependency");
+    let root = crate::support::fresh("patched-dependency");
     let mut files = PATCHED_GAUGE.to_vec();
     files.extend([
         (
@@ -2764,7 +2729,7 @@ fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
 /// `From<i64>`.
 #[test]
 fn a_crate_types_from_of_itself_gives_the_value_back() {
-    let root = crate::support::scratch().join("reflexive-from");
+    let root = crate::support::fresh("reflexive-from");
     project(
         &root,
         &[
@@ -2801,7 +2766,7 @@ fn a_crate_types_from_of_itself_gives_the_value_back() {
 /// back field by field (#325).
 #[test]
 fn a_literal_of_a_crates_struct_builds_its_value() {
-    let root = crate::support::scratch().join("crate-struct-literal");
+    let root = crate::support::fresh("crate-struct-literal");
     project(
         &root,
         &[
@@ -2846,7 +2811,7 @@ fn a_literal_of_a_crates_struct_builds_its_value() {
 /// Cargo resolves every member (#664).
 #[test]
 fn a_workspace_member_resolves_with_the_roots_patch() {
-    let root = crate::support::scratch().join("patched-workspace");
+    let root = crate::support::fresh("patched-workspace");
     let mut files = PATCHED_GAUGE.to_vec();
     files.extend([
         (
@@ -2873,7 +2838,7 @@ fn a_workspace_member_resolves_with_the_roots_patch() {
 /// runner failed with E0463 (#1421).
 #[test]
 fn each_workspace_members_runner_builds_its_own_units() {
-    let root = crate::support::scratch().join("member-runners");
+    let root = crate::support::fresh("member-runners");
     let mut members = Vec::new();
     for name in ["left", "right"] {
         members.push((
@@ -2976,8 +2941,7 @@ fn run_ok(root: &Path, home: &Path) -> String {
 /// units (D699.2 a and c, D700).
 #[test]
 fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
-    let base = crate::support::scratch().join("nightly-path-crates");
-    let _ = fs::remove_dir_all(&base);
+    let base = crate::support::fresh("nightly-path-crates");
     let home = base.join("home");
     let nightly = nightly_directory(&home);
     let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    println!(\"{} {}\", events::word(), Version::new(1, 2, 3));\n}\n";
@@ -3038,8 +3002,7 @@ fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
 /// beside the first's (D699.2 b, D700).
 #[test]
 fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
-    let base = crate::support::scratch().join("nightly-identical");
-    let _ = fs::remove_dir_all(&base);
+    let base = crate::support::fresh("nightly-identical");
     let home = base.join("home");
     let nightly = nightly_directory(&home);
     let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    let version = Version::parse(\"1.2.3\").unwrap();\n    println!(\"{version} {}\", version.major);\n}\n";
@@ -3107,7 +3070,7 @@ fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
 /// crate's adapters nor the base.
 #[test]
 fn a_new_call_into_one_crate_recompiles_that_crates_adapters_alone() {
-    let root = crate::support::scratch().join("runner-members");
+    let root = crate::support::fresh("runner-members");
     let home = crate::support::scratch().join("rawr-home");
     let main = |sum: &str| format!("// rawr\nfn main() {{\n    println!(\"{{}}\", {sum});\n}}\n");
     project(

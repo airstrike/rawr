@@ -68,7 +68,7 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = crate::support::scratch().join("inspect-dependency");
+    let root = crate::support::fresh("inspect-dependency");
     let stop = root.join("stop");
     let _ = fs::remove_file(&stop);
     let events = root.join("debug-events");
