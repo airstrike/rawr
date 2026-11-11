@@ -282,6 +282,9 @@ pub(super) enum Attempt {
     Swapped,
     /// The save takes the full preparation, for this reason.
     Prepare(Option<rawr_watch::StagedInputs>, Reason),
+    /// The running program can't take the save, for this reason (D553.6):
+    /// it restarts, with no preparation first.
+    Restart(Box<str>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -416,7 +419,12 @@ pub(super) fn attempt(
         resident::Outcome::Unstarted if adapter.gate().request_is_current(watch_request) => {
             Ok(Attempt::Prepare(Some(staged), Reason::Unstarted))
         }
-        resident::Outcome::NeedsPreparation | resident::Outcome::Unstarted => Ok(Attempt::Settled),
+        resident::Outcome::Refused(reason) if adapter.gate().request_is_current(watch_request) => {
+            Ok(Attempt::Restart(reason))
+        }
+        resident::Outcome::NeedsPreparation
+        | resident::Outcome::Unstarted
+        | resident::Outcome::Refused(_) => Ok(Attempt::Settled),
         resident::Outcome::Obsolete => obsolete(adapter, watch_request, diagnostic),
         _ if !adapter.gate().request_is_current(watch_request) => Ok(Attempt::Settled),
         // The error the runner's compile found, in its own file, as the

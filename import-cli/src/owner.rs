@@ -613,6 +613,16 @@ fn session(
                         work.tell(&cells);
                         continue;
                     }
+                    // The running `main` can't take the save, and said
+                    // why: it restarts now, with no native build prepared
+                    // for a swap that couldn't happen (D553.6).
+                    Ok(resident::Attempt::Restart(reason)) => {
+                        rawr_import::process::say(format_args!(
+                            "rawr: {reason}; restarting the program"
+                        ));
+                        rawr_cli::events::restarting(&reason);
+                        return Ok(Ended::Restart(reason.into()));
+                    }
                     Ok(resident::Attempt::Prepare(staged, reason)) => {
                         rawr_import::process::say(format_args!("rawr: preparing again: {reason}"));
                         rawr_cli::events::preparing(&reason.to_string());

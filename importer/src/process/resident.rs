@@ -14,6 +14,9 @@ pub enum Outcome {
     Source(Box<str>),
     Obsolete,
     Resource(Box<str>),
+    /// The running program can't take the generation, for this reason
+    /// (D553.6): it restarts, and no native build is prepared for it.
+    Refused(Box<str>),
 }
 
 /// Actual child compilation plus the exact current Rawr-file witness.

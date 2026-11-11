@@ -8,7 +8,7 @@ pub mod resident;
 pub const FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const DIAGNOSTIC_BYTES: usize = 16 * 1024 * 1024;
 pub const STREAM_TAIL_BYTES: usize = 1024 * 1024;
-pub const VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
 const HEADER_BYTES: usize = 4;
 const PREFIX_BYTES: usize = 5;
 
@@ -73,6 +73,9 @@ pub enum Tag {
     SeedState = 48,
     /// The key, then 1 when the State was seeded or 0 when booted.
     StateSeeded = 49,
+    /// The resident attempt's header, then why the running `main` can't
+    /// take the generation it compiled (D553.6).
+    ResidentRefused = 50,
 }
 
 /// Bounded primitive writer used by profile message codecs.
@@ -375,6 +378,7 @@ impl TryFrom<u8> for Tag {
             47 => Self::StateExported,
             48 => Self::SeedState,
             49 => Self::StateSeeded,
+            50 => Self::ResidentRefused,
             actual => return Err(Error::Tag(actual)),
         })
     }

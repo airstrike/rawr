@@ -87,6 +87,27 @@ impl fmt::Debug for Reachability {
 }
 
 impl Fingerprint {
+    /// Whether `self` and `other` describe one representation of a live
+    /// value: the same fields, their types and their order, or the same
+    /// variants (D553.6). A type's derives aren't part of it: adding or
+    /// removing one leaves its values valid, and its new impls are new
+    /// code that a swap installs.
+    #[must_use]
+    pub fn same_representation(&self, other: &Self) -> bool {
+        crate::Shared::ptr_eq(&self.0, &other.0) || self.representation() == other.representation()
+    }
+
+    /// This schema's parts without its capabilities.
+    fn representation(&self) -> (&[Part], &[Part]) {
+        let parts = &*self.0.authority;
+        match parts.get(3..5) {
+            Some([Part::Marker(Marker::Capabilities), Part::Count(count)]) => {
+                (&parts[..3], parts.get(5 + count..).unwrap_or_default())
+            }
+            _ => (parts, &[]),
+        }
+    }
+
     /// A deterministic private-symbol component for this exact schema.
     ///
     /// This is not a serialized compatibility contract; it only keeps

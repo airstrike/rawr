@@ -412,6 +412,24 @@ mod tests {
         assert_eq!(value.variant().name(), "Move");
     }
 
+    /// A type's derives aren't its representation: a new one keeps it, and
+    /// a new field doesn't (D553.6, #1728).
+    #[test]
+    fn derives_leave_a_schema_s_representation() {
+        let (_, plain, _) = struct_model("struct Corners { radius: f32 }", "Corners");
+        let (_, derived, _) = struct_model(
+            "#[derive(Debug, Clone, Copy, PartialEq)] struct Corners { radius: f32 }",
+            "Corners",
+        );
+        let (_, wider, _) = struct_model(
+            "#[derive(Debug, Clone, Copy, PartialEq)] struct Corners { radius: f32, depth: f32 }",
+            "Corners",
+        );
+        assert_ne!(plain.schema(), derived.schema());
+        assert!(plain.schema().same_representation(derived.schema()));
+        assert!(!derived.schema().same_representation(wider.schema()));
+    }
+
     #[test]
     fn identity_and_schema_mismatches_are_independent_checks() {
         let (counter_model, counter, _) = struct_model("struct Counter { value: i64 }", "Counter");

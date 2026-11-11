@@ -213,6 +213,7 @@ impl<B> Candidate<super::Admitted, B> {
             Tag::ResidentObsolete if reason.is_empty() => Ok(resident::Outcome::Obsolete),
             Tag::ResidentDiagnostic => Ok(resident::Outcome::Source(reason.into())),
             Tag::ResidentResource => Ok(resident::Outcome::Resource(reason.into())),
+            Tag::ResidentRefused => Ok(resident::Outcome::Refused(reason.into())),
             _ => Err(super::terminal_owner_loss(inner, Error::Stale)),
         }
     }

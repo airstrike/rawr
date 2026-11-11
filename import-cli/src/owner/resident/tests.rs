@@ -135,7 +135,7 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
 
     let fallback_inputs = match continuation {
         Attempt::Prepare(staged, _) => staged,
-        Attempt::Settled | Attempt::Swapped => {
+        Attempt::Settled | Attempt::Swapped | Attempt::Restart(_) => {
             panic!("native miss must continue full preparation")
         }
     };

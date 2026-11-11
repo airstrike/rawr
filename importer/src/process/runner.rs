@@ -826,6 +826,7 @@ impl<B> Candidate<Admitted, B> {
             | crate::protocol::Tag::ResidentDiagnostic
             | crate::protocol::Tag::ResidentObsolete
             | crate::protocol::Tag::ResidentResource
+            | crate::protocol::Tag::ResidentRefused
             | crate::protocol::Tag::RefreshPoll
             | crate::protocol::Tag::RefreshStatus
             | crate::protocol::Tag::SurfaceMiss
