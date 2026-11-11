@@ -1989,6 +1989,18 @@ fn a_future_parameters_output_named_in_the_output_future_is_its_own() {
     assert_eq!(rawr, "Some(Waited(4, 15))");
 }
 
+/// A crate's own generic may be named as Rawr's synthetic parameters were:
+/// `SOutput` beside a future parameter `S`, and `impl_1` beside an
+/// argument's `impl Trait` at index 1. Each synthetic is named by what it
+/// is, which no Rust name spells, so neither clashes (E0403). The output is
+/// `cargo run`'s.
+#[test]
+fn a_crates_generic_named_as_a_synthetic_parameter_is_its_own() {
+    let (rawr, cargo) = both_printed("passed_named.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Waited(15, 7))\n7");
+}
+
 /// iced's game_of_life (#1659): `Task::perform(task, Message::Grid.with(version))`
 /// takes the `impl Future + use<>` a program method gives from an async
 /// block beside a crate callable value, and a capturing closure in its

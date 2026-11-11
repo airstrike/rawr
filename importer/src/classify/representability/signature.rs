@@ -26,14 +26,40 @@ pub struct Parameter {
     /// lives for the program, as a literal does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     static_str: bool,
+    /// How rustc spells a parameter Rawr names for it, as `impl Into<Size>`
+    /// or `<S as Future>::Output`: what a message shows, where `name` is
+    /// what a signature declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shown: Option<Box<str>>,
 }
 
 /// The name a signature declares an argument's `impl Trait` by. rustc names
 /// it by its bounds, which two arguments can share and no path can spell.
+/// It is reserved, as Rawr's generated names are, so no crate's own
+/// parameter is named the same.
 #[must_use]
 pub fn argument_impl_name(index: u32) -> Box<str> {
-    format!("impl_{index}").into_boxed_str()
+    format!("{RESERVED}impl_{index}").into_boxed_str()
 }
+
+/// The name a signature declares the synthetic parameter `identity`
+/// ([`projection_output`]) by: its parameter's index and its ordinal. It
+/// is reserved, as [`argument_impl_name`]'s is, so a crate's own `SOutput`
+/// beside its future parameter `S` is no second `S::Output`.
+#[must_use]
+pub fn synthetic_name(identity: u32) -> Box<str> {
+    let parameter = identity & PROJECTED_PARAMETER;
+    let ordinal = (identity & !FUTURE_OUTPUT) >> 20;
+    format!("{RESERVED}projected_{parameter}_{ordinal}").into_boxed_str()
+}
+
+/// What each synthetic parameter's name starts with, as Rawr's generated
+/// names do, which no crate writes.
+const RESERVED: &str = "__rawr_";
+
+/// The bits of a synthetic parameter's identity that are its parameter's
+/// index.
+const PROJECTED_PARAMETER: u32 = (1 << 20) - 1;
 
 /// The std traits a type parameter's bound names that a script type
 /// implements or not, and an imported type reports: what an erased
@@ -517,7 +543,32 @@ impl Parameter {
             bounds: Box::new([]),
             argument_impl: false,
             static_str: false,
+            shown: None,
         }
+    }
+
+    /// The synthetic type parameter `identity` ([`projection_output`]),
+    /// which rustc spells `shown`, as `<S as Future>::Output`: its name is
+    /// [`synthetic_name`]'s, which no crate's own parameter has.
+    #[must_use]
+    pub fn synthetic(identity: u32, shown: Box<str>) -> Self {
+        Self {
+            shown: Some(shown),
+            ..Self::new(identity, synthetic_name(identity), Kind::Type)
+        }
+    }
+
+    /// This parameter, which rustc spells `shown` when Rawr names it.
+    pub(crate) fn with_shown(mut self, shown: Option<Box<str>>) -> Self {
+        self.shown = shown;
+        self
+    }
+
+    /// How rustc spells this parameter when Rawr names it, which a message
+    /// shows in place of its name.
+    #[must_use]
+    pub fn renamed(&self) -> Option<&str> {
+        self.shown.as_deref()
     }
 
     /// This parameter, which a `&str` fills only at `'static` when
@@ -534,9 +585,11 @@ impl Parameter {
     }
 
     /// This parameter as an argument's `impl Trait`, renamed so a
-    /// signature can declare it.
+    /// signature can declare it: rustc's own name, as `impl Into<Size>`,
+    /// is what a message shows.
     pub(crate) fn into_argument_impl(mut self) -> Self {
-        self.name = argument_impl_name(self.index);
+        let written = std::mem::replace(&mut self.name, argument_impl_name(self.index));
+        self.shown.get_or_insert(written);
         self.argument_impl = true;
         self
     }

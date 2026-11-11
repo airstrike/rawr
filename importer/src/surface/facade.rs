@@ -14,7 +14,7 @@ mod reexport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 63;
+const SCHEMA: u32 = 64;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -847,7 +847,15 @@ pub struct Signature {
     /// gives each, never a type (#1330).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     lengths: Box<[Box<str>]>,
+    /// How rustc spells each parameter among `parameters` that Rawr names,
+    /// as `impl Into<Size>` or `<S as Future>::Output`, by its name: what
+    /// a message shows (`representability::signature::Parameter::renamed`).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    shown: Shown,
 }
+
+/// How rustc spells each parameter Rawr names, by its name.
+type Shown = Box<[(Box<str>, Box<str>)]>;
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
 /// an argument that fills `R` with one case's self type gives `A..` that
@@ -2628,6 +2636,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                 instance: None,
                 opaques: Box::default(),
                 lengths: Box::default(),
+                shown: Box::default(),
             },
             values: None,
             member: None,
@@ -4016,6 +4025,11 @@ impl Signature {
     pub fn is_length(&self, name: &str) -> bool {
         self.lengths.iter().any(|length| &**length == name)
     }
+
+    /// How rustc spells each parameter Rawr names, by its name.
+    pub fn shown(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.shown.iter().map(|(name, shown)| (&**name, &**shown))
+    }
 }
 
 /// The derivable std traits each parameter's bounds name, by position.
@@ -4237,6 +4251,7 @@ fn written_item(
                 instance: None,
                 opaques: Box::default(),
                 lengths: Box::default(),
+                shown: Box::default(),
             },
         ),
         Representability::Value(_)
@@ -4410,6 +4425,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),
         lengths: lengths(&kept)?,
+        shown: shown(&kept)?,
     })
 }
 
@@ -4603,6 +4619,7 @@ fn callable_signature(
         instance: fixed_instance(source)?,
         opaques: source.opaques().into(),
         lengths: lengths(&kept)?,
+        shown: shown(&kept)?,
     })
 }
 
@@ -4680,6 +4697,22 @@ fn parameters(
         .map_err(|_| super::Error::Allocation)?;
     for parameter in source {
         output.push(copy(parameter.name())?);
+    }
+    Ok(output.into_boxed_slice())
+}
+
+/// How rustc spells each parameter among `source` that Rawr names, by its
+/// name, in order.
+fn shown(source: &[representability::signature::Parameter]) -> Result<Shown, super::Error> {
+    let mut output = Vec::new();
+    for parameter in source {
+        let Some(shown) = parameter.renamed() else {
+            continue;
+        };
+        output
+            .try_reserve(1)
+            .map_err(|_| super::Error::Allocation)?;
+        output.push((copy(parameter.name())?, copy(shown)?));
     }
     Ok(output.into_boxed_slice())
 }

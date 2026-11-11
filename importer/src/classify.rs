@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 169;
+const CLASSIFIER_VERSION: u32 = 170;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2437,8 +2437,13 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .into_iter()
                 .map(|(trait_id, associated)| {
                     let name = self.definition_name(&associated)?.to_owned();
+                    let trait_name = self
+                        .definition_name(&trait_id)
+                        .unwrap_or_default()
+                        .to_owned();
                     Some(Hop {
                         trait_id,
+                        trait_name,
                         associated,
                         name,
                     })
@@ -2473,7 +2478,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
 
     /// `generics` with each projection of `projected` its bounds name
     /// written as its synthetic parameter, as a callable's `Fn(&P::State)`
-    /// is `Fn(&PState)`. `None` when there is none.
+    /// takes the synthetic for `P::State`. `None` when there is none.
     fn projected_generics(
         generics: &model::Generics,
         projected: &[Projected],
@@ -2490,7 +2495,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .map(|predicate| match predicate {
                 // A projection a bound names as its self type is its
                 // synthetic parameter too, as `I::Item: SampleBorrow<X>` is
-                // `IItem: SampleBorrow<X>` (#1084).
+                // its synthetic, bounded by `SampleBorrow<X>` (#1084).
                 model::Predicate::Bound {
                     ty,
                     bound:
@@ -2525,7 +2530,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// `parameters` with the synthetic type parameter of each projection
-    /// appended, named after its parameter and associated type (`PState`).
+    /// appended, which rustc spells as its projection, `<P as
+    /// Program>::State`.
     fn declare_projected(
         projected: &[Projected],
         parameters: &mut Box<[representability::signature::Parameter]>,
@@ -2539,14 +2545,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 continue;
             };
-            let mut declared = owner.name().to_owned();
-            for hop in &projection.hops {
-                declared.push_str(&hop.name);
-            }
-            extended.push(signature::Parameter::new(
+            let shown = projection
+                .hops
+                .iter()
+                .fold(owner.name().to_owned(), |ty, hop| {
+                    format!("<{ty} as {}>::{}", hop.trait_name, hop.name)
+                });
+            extended.push(signature::Parameter::synthetic(
                 projection.synthetic,
-                declared.into_boxed_str(),
-                signature::Kind::Type,
+                shown.into_boxed_str(),
             ));
         }
         *parameters = extended.into_boxed_slice();
@@ -2899,11 +2906,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 continue;
             };
             parameter.mark_future();
-            let name = format!("{}Output", parameter.name());
-            extended.push(signature::Parameter::new(
+            let shown = format!("<{} as Future>::Output", parameter.name());
+            extended.push(signature::Parameter::synthetic(
                 signature::future_output(*index),
-                name.into_boxed_str(),
-                signature::Kind::Type,
+                shown.into_boxed_str(),
             ));
         }
         *parameters = extended.into_boxed_slice();
@@ -14436,6 +14442,8 @@ struct Projected {
 /// type and that type's name.
 struct Hop {
     trait_id: api::identity::Definition,
+    /// The trait's name, as rustc's `<P as Program>::State` spells it.
+    trait_name: String,
     associated: api::identity::Definition,
     name: String,
 }
@@ -15566,7 +15574,7 @@ mod tests {
                 .clone()
         };
         // `run<F: Future>(f: F) -> F::Output` names `F` only through its
-        // output, which the facade declares as `FOutput`.
+        // output, which the facade declares as its synthetic.
         let Representability::FunctionItem(run) = outcome("run") else {
             panic!("`run` is a function item: {:?}", outcome("run"));
         };

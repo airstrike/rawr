@@ -24,6 +24,10 @@ pub struct Definition {
     /// `with_children<const N: usize>([Slot; N])`: a call's argument gives
     /// each, and an instance has it as a constant, never a type (#1330).
     lengths: Box<[ImmutableString]>,
+    /// How rustc spells each type parameter the importer names, as `impl
+    /// Into<Size>` or `<S as Future>::Output`, by its name: what a message
+    /// shows.
+    shown: Box<[(ImmutableString, ImmutableString)]>,
 }
 
 /// A bound `R: Trait<A..>` on an imported generic item's type parameter
@@ -233,6 +237,7 @@ pub struct Builder {
     crossing: bool,
     instance: Option<host::type_ref::Type>,
     lengths: Vec<ImmutableString>,
+    shown: Vec<(ImmutableString, ImmutableString)>,
 }
 
 impl Builder {
@@ -248,6 +253,7 @@ impl Builder {
             crossing: false,
             instance: None,
             lengths: Vec::new(),
+            shown: Vec::new(),
         }
     }
 
@@ -329,6 +335,20 @@ impl Builder {
         Ok(self)
     }
 
+    /// Show the declared parameter `name` as rustc spells it, `shown`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn shown(
+        &mut self,
+        name: ImmutableString,
+        shown: ImmutableString,
+    ) -> Result<&mut Self, host::Error> {
+        self.shown
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.shown.push((name, shown));
+        Ok(self)
+    }
+
     /// Set the callable output type.
     pub fn output(&mut self, ty: host::type_ref::Type) -> &mut Self {
         self.output = Some(ty);
@@ -363,6 +383,7 @@ impl Builder {
             crossing: self.crossing,
             instance: self.instance.map(Box::new),
             lengths: self.lengths.into_boxed_slice(),
+            shown: self.shown.into_boxed_slice(),
         }
     }
 }
@@ -446,6 +467,7 @@ impl Definition {
                 .map(|ty| ty.try_clone().map(Box::new))
                 .transpose()?,
             lengths: self.lengths.clone(),
+            shown: self.shown.clone(),
         })
     }
 
@@ -454,6 +476,16 @@ impl Definition {
     #[cfg(feature = "rust-import")]
     pub(crate) const fn crossing(&self) -> bool {
         self.crossing
+    }
+
+    /// How rustc spells the type parameter `name`: `name` itself, unless
+    /// the importer names it, as an argument's `impl Trait`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn shown<'a>(&'a self, name: &'a str) -> &'a str {
+        self.shown
+            .iter()
+            .find(|(declared, _)| declared.as_str() == name)
+            .map_or(name, |(_, shown)| shown.as_str())
     }
 
     /// What the item's bounds tie between its type parameters.
@@ -634,6 +666,7 @@ impl Definition {
             crossing: self.crossing,
             instance,
             lengths: self.lengths.clone(),
+            shown: self.shown.clone(),
         })
     }
 

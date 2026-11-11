@@ -1331,6 +1331,9 @@ pub(crate) fn signature(
             builder.length(parameter.into())?;
         }
     }
+    for (parameter, shown) in signature.shown() {
+        builder.shown(parameter.into(), shown.into())?;
+    }
     if signature.crossing() {
         builder.crossing();
     }

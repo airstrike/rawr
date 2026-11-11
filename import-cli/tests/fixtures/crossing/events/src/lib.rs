@@ -345,6 +345,23 @@ pub fn passed<S: std::future::Future>(future: S) -> impl std::future::Future<Out
     future
 }
 
+/// What `future` gives beside `beside`, as `passed` gives it, with a type
+/// parameter the crate names `SOutput` beside the future parameter `S`,
+/// which Rust allows: it is no name of `S::Output`.
+pub fn passed_beside<S: std::future::Future, SOutput>(
+    future: S,
+    beside: SOutput,
+) -> impl std::future::Future<Output = (S::Output, SOutput)> {
+    async move { (future.await, beside) }
+}
+
+/// The sum of two numbers, one a type parameter the crate names `impl_1`
+/// and one an argument's `impl Trait` at index 1, which Rust allows.
+#[allow(non_camel_case_types)]
+pub fn summed<impl_1: Into<u32>>(first: impl_1, second: impl Into<u32>) -> u32 {
+    first.into() + second.into()
+}
+
 /// The future `sleep` gives.
 pub struct Sleep(u32);
 

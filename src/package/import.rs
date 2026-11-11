@@ -4307,7 +4307,11 @@ fn signature_with(
 ) -> Result<host::signature::Definition, Error> {
     let bytes = signature.parameters().iter().try_fold(
         std::mem::size_of::<host::signature::Definition>(),
-        |bytes, parameter| bytes.checked_add(parameter.name().len()),
+        |bytes, parameter| {
+            bytes
+                .checked_add(parameter.name().len())?
+                .checked_add(parameter.renamed().map_or(0, str::len))
+        },
     );
     let items = signature
         .parameters()
@@ -4347,7 +4351,10 @@ fn declare_parameters(
                 builder.length(parameter.name().into())?;
             }
             representability::signature::Kind::Callable
-            | representability::signature::Kind::Future => {}
+            | representability::signature::Kind::Future => continue,
+        }
+        if let Some(shown) = parameter.renamed() {
+            builder.shown(parameter.name().into(), shown.into())?;
         }
     }
     Ok(())
