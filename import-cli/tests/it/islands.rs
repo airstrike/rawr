@@ -1937,6 +1937,23 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
         (3, 3),
         "{seen}"
     );
+    // Nothing native changed: each restart runs the running program's
+    // runner build again, with no Cargo resolution, nightly build, probe
+    // or runner build of its own (#1739).
+    let starts = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a start ran "))
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts,
+        [
+            "Cargo resolutions 0, nightly builds 0, probes 0, runner builds 0, rounds 1",
+            "Cargo resolutions 0, nightly builds 0, probes 0, runner builds 0, rounds 1",
+        ],
+        "{seen}"
+    );
 }
 
 /// A save that adds a function native code sees needs a new native build

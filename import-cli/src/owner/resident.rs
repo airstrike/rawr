@@ -240,6 +240,49 @@ impl Native {
     }
 }
 
+/// What this process had done when a program's start began: Cargo's
+/// resolutions, the nightly's builds, the probes, the runner builds and
+/// the check's rounds. A restart that needs no native build runs none of
+/// the first four (#1739).
+pub(super) struct Start {
+    api: rawr_import::progress::Work,
+    runner_builds: usize,
+    rounds: usize,
+}
+
+impl Start {
+    /// What this process has done so far.
+    pub(super) fn now() -> Self {
+        Self {
+            api: rawr_import::progress::work(),
+            runner_builds: rawr_import::progress::runner_builds(),
+            rounds: rawr_import::progress::rounds().len(),
+        }
+    }
+
+    /// With `RAWR_VERBOSE`, say what the start since `self` did, and each
+    /// of its check's rounds.
+    pub(super) fn tell(self) {
+        if !rawr_cli::cells::verbose() {
+            return;
+        }
+        let api = rawr_import::progress::work();
+        let rounds = rawr_import::progress::rounds();
+        let rounds = rounds.get(self.rounds..).unwrap_or_default();
+        eprintln!(
+            "rawr-import: a start ran Cargo resolutions {}, nightly builds {}, probes {}, runner builds {}, rounds {}",
+            api.resolved() - self.api.resolved(),
+            api.built() - self.api.built(),
+            api.probed() - self.api.probed(),
+            rawr_import::progress::runner_builds() - self.runner_builds,
+            rounds.len(),
+        );
+        for round in rounds {
+            eprintln!("rawr-import: a start's round: {round}");
+        }
+    }
+}
+
 /// What this process had done when a save began: the sources it parsed,
 /// Cargo's resolutions, the API tables it read, the facades it registered
 /// and the watcher roots it derived. A save of a marked file parses that
