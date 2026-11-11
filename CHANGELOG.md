@@ -8,6 +8,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - iced's `Task::sip`/`finish` shape works again: a closure takes `<S as Future>::Output` of an `S: Core`, because a crate trait whose one blanket implementation also needs a crate trait, as sipper's `Core` needs a stream, no longer reads as a plain future. (#1699)
 - A closure over iced_test's lifetime-carrying `Candidate<'_>` fills a selector, as in `ui.click(|candidate: Candidate<'_>| ..)`, as rustc allows. (#1694)
 - A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, "beside"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521. (#1700)
+- A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged. (#1687)
 
 ## 0.3.183 (2026-11-11)
 

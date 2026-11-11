@@ -14,7 +14,8 @@
       "entries": [
         {"text":"iced's `Task::sip`/`finish` shape works again: a closure takes `<S as Future>::Output` of an `S: Core`, because a crate trait whose one blanket implementation also needs a crate trait, as sipper's `Core` needs a stream, no longer reads as a plain future.","issues":[1699]},
         {"text":"A closure over iced_test's lifetime-carrying `Candidate<'_>` fills a selector, as in `ui.click(|candidate: Candidate<'_>| ..)`, as rustc allows.","issues":[1694]},
-        {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]}
+        {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]},
+        {"text":"A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged.","issues":[1687]}
       ]
     },
     "releases": [
@@ -3714,7 +3715,7 @@
     {"issue":1684,"title":"A block before a #[cfg]'d-out tail expression is not taken as the block's tail (E0308)","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
     {"issue":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
     {"issue":1686,"title":"A new rawr build reclassified an extracted project's API: the API named rawr's source digest","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.183"},
-    {"issue":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1688,"title":"A save naming a re-exported crate type prepared again: its build and its compile named the type differently","state":"closed","category":"No glue (D593)","release":"0.3.183"},
     {"issue":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"closed","category":"No glue (D593)","release":"0.3.183"},
     {"issue":1690,"title":"A new rawr install canonicalized an unchanged project's whole API again on one core","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.183"},
@@ -3728,7 +3729,8 @@
     {"issue":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed","category":"Divergences from rustc","release":"0.3.183"},
     {"issue":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed","category":"Divergences from rustc"},
     {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4817,7 +4819,7 @@
             {"number":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open"},
             {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed"},
             {"number":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"closed"},
-            {"number":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"open"},
+            {"number":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"closed"},
             {"number":1686,"title":"A new rawr build reclassified an extracted project's API: the API named rawr's source digest","state":"closed"},
             {"number":1688,"title":"A save naming a re-exported crate type prepared again: its build and its compile named the type differently","state":"closed"},
             {"number":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"closed"},
@@ -4826,7 +4828,8 @@
             {"number":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed"},
             {"number":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open"},
             {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"closed"},
-            {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"}
+            {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"},
+            {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"}
           ]
         }
       ]
