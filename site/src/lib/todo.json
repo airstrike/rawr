@@ -5,14 +5,15 @@
   "examples": {
     "running": 34,
     "total": 56,
-    "note": "0.3.160 sweep plus the_matrix, lazy, progress_bar, pane_grid and loupe: 34 run. Checked headless since, not yet in a window: component builds and runs its view (#1075), pokedex runs its search path as cargo does (#1018), bezier_tool and counter match cargo through iced_test (#990, #1680); gallery passes check, modal runs its crossing shape"
+    "note": "0.3.160 sweep plus the_matrix, lazy, progress_bar, pane_grid and loupe: 34 run. Checked headless since, not yet in a window: modal builds and runs (#955). component builds and runs its view (#1075). pokedex runs its search path as cargo does (#1018). download_progress runs its downloads as cargo does (#314). bezier_tool and counter match cargo through iced_test (#990, #1680). gallery, screenshot and todos pass check (#1706, #1709)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]}
+        {"text":"A save that adds or edits a doc comment or an inert attribute (`#[allow]`, `#[inline]`, `#[must_use]`, `#[deprecated]`, tool attributes), adds blank lines, or writes a signature over more lines lowers only that file under `rawr run`, and no longer prepares a new native build for an item native code sees.","issues":[1716],"refs":[1646]},
+        {"text":"A crate's `impl From<Its> for PathBuf`, or for another std type rawr holds, is seen as rustc sees it: `impl Into<PathBuf>` takes `Its` in a program's function or method and in a crate's, and `PathBuf::from(its)` calls the crate's impl. iced's editor gets past `load_file(picked_file)`.","issues":[1713]}
       ]
     },
     "releases": [
@@ -3765,12 +3766,14 @@
     {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
     {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"closed","category":"Divergences from rustc","release":"0.3.184"},
     {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"closed","category":"Divergences from rustc"},
     {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"},
     {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"},
     {"issue":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open","category":"Divergences from rustc"},
+    {"issue":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -3799,7 +3802,7 @@
       "id": "cache",
       "title": "Shared dependency cache",
       "subtitle": "Projects build with their own cargo",
-      "open": true,
+      "open": false,
       "rows": [
         {
           "id": "runner-on-your-own-cargo",
@@ -3854,7 +3857,7 @@
       "id": "gnar",
       "title": "The gnarly snippet",
       "subtitle": "A ?play snippet that runs as rustc runs it",
-      "open": true,
+      "open": false,
       "rows": [
         {
           "id": "raw-identifiers",
@@ -3960,7 +3963,7 @@
             {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed"},
             {"number":404,"title":"A whole table lacks the selected crate's own $crate root","state":"closed"}
           ],
-          "milestone": "0.4"
+          "milestone": "0.3"
         },
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"done","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {
@@ -3968,8 +3971,8 @@
           "name": "Key and publish",
           "start": 43,
           "size": 3,
-          "state": "now",
-          "note": "Classification and facade reuse remain",
+          "state": "next",
+          "note": "Projects reuse verified extraction tables (#367). A new rawr build doesn't classify an unchanged API again (#1666, #1686). Left: generated bindings once per machine (#271). Three drift and lock cases remain (#1012, #1025, #1026).",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
@@ -3988,8 +3991,8 @@
           "name": "Key holes",
           "start": 45,
           "size": 2,
-          "state": "now",
-          "note": "Facade-plan invalidation remains",
+          "state": "next",
+          "note": "A shared table holds no crates outside its key (#1097). The facade-plan gap was fixed by #630. Left: an entry's meta lists every crate its session loaded (#1128).",
           "issues": [
             {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"retired"},
             {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
@@ -4005,15 +4008,26 @@
           "start": 47,
           "size": 3,
           "state": "done",
-          "note": "Saves read whole crates with no nightly",
+          "note": "A check whose demand the shared tables hold reads them with no nightly build",
           "issues": [
             {"number":398,"title":"A new import path of a bound crate re-extracts the API","state":"closed"},
             {"number":402,"title":"Replay path crates' whole tables with no nightly run","state":"closed"},
             {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed"}
           ],
-          "milestone": "0.4"
+          "milestone": "0.3"
         },
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"next","note":"Classification is about 1% of a warm check","issues":[],"milestone":"0.4"}
+        {
+          "id": "re-key-plan-and-headers",
+          "name": "Re-key plan and headers",
+          "start": 41,
+          "size": 3,
+          "state": "next",
+          "note": "Classify per crate and compose per program, so a demand round costs only its new paths (#1618). A new rawr build no longer classifies an unchanged API again (#1686).",
+          "issues": [
+            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"}
+          ],
+          "milestone": "0.4"
+        }
       ]
     },
     {
@@ -4181,7 +4195,7 @@
           "start": 47,
           "size": 4,
           "state": "done",
-          "note": "The audit and Miri remain",
+          "note": "Native vectors keep script callback changes (#365). The operation audit and Miri coverage are #396 and #574.",
           "issues": [
             {"number":365,"title":"Native mutable vectors lose script callback changes","state":"closed"}
           ],
@@ -4193,12 +4207,12 @@
           "start": 44,
           "size": 2,
           "state": "done",
-          "note": "Crate struct literals work in a plain runner (#325). Live edits to an impl's shape are next (#326)",
+          "note": "Crate struct literals work in a plain runner (#325). A save that changes a script impl's shape rebuilds the runner, and body edits still apply in place (#326).",
           "issues": [
             {"number":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"closed"},
             {"number":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"closed"}
           ],
-          "milestone": "0.4"
+          "milestone": "0.3"
         },
         {
           "id": "projections-function-values",
@@ -4206,22 +4220,22 @@
           "start": 44,
           "size": 3,
           "state": "done",
-          "note": "#317 and #319 remain",
+          "note": "Projections and function values run, #317 in 0.3.179 and #319 in 0.3.140",
           "issues": [
             {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"closed"},
             {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed"},
             {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"closed"},
             {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed"}
           ],
-          "milestone": "0.4"
+          "milestone": "0.3"
         },
         {
           "id": "runner-build-gaps",
           "name": "Runner-build gaps",
           "start": 45,
           "size": 3,
-          "state": "now",
-          "note": "modal builds and runs (#955), and pane_grid runs again after a #1432 regression was fixed. #951 and #957 remain",
+          "state": "next",
+          "note": "modal builds and runs (#955). pane_grid runs again after the #1432 regression was fixed. Left: a crate value a plain runner's call borrows stays borrowed for the runner's life (#1506).",
           "issues": [
             {"number":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed"},
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
@@ -4238,15 +4252,15 @@
             {"number":1505,"title":"pane_grid panics with E0502 in view: a &self method on a value generic over a script type asks for &mut","state":"closed"},
             {"number":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open"}
           ],
-          "milestone": "0.4"
+          "milestone": "0.3"
         },
         {
           "id": "per-example-gaps",
           "name": "Per-example gaps",
           "start": 47,
           "size": 6,
-          "state": "now",
-          "note": "5 crash after a frame, 2 panic at start, 18 fail check (#952 #953 #954 #956 #958)",
+          "state": "next",
+          "note": "pokedex runs its search path (#1018). download_progress runs its downloads (#314). screenshot and todos pass check (#1706, #1709). todos stops at seven runner-build errors (#1017). Two later-fixed targets are still refused (#1707).",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"retired"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"closed"},
@@ -4375,20 +4389,22 @@
             {"number":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"closed"},
             {"number":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"closed"},
             {"number":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"closed"},
-            {"number":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open"},
+            {"number":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"closed"},
             {"number":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open"},
             {"number":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open"},
-            {"number":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open"}
+            {"number":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open"},
+            {"number":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open"},
+            {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open"}
           ],
-          "milestone": "0.4"
+          "milestone": "0.3"
         },
         {
           "id": "opaque-values",
           "name": "A crate's `impl Trait` values",
           "start": 47,
           "size": 3,
-          "state": "now",
-          "note": "A view's values live past the call in a kept region (#1217); a trait impl delegates to a crate's opaque value (#913); swash's two parse_lists import (#1232). Left: #1235 #1236 #1237 and the owner gap #1239",
+          "state": "next",
+          "note": "A view's values live past the call in a kept region (#1217). A trait impl delegates to a crate's opaque value (#913). component's opaque widget made of program values builds and runs (#1075). Left: a slot, member or anchored output of a borrowing opaque type (#965). #1235, #1236 and #1237 remain.",
           "issues": [
             {"number":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"closed"},
             {"number":885,"title":"Run the impl Trait a trait method gives from its default body (iced's Widget::explain)","state":"closed"},
@@ -4559,7 +4575,8 @@
           "issues": [
             {"number":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"closed"},
             {"number":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed"},
-            {"number":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"closed"}
+            {"number":1643,"title":"Nightly 2026-11-10 breaks rawr-import-driver's build","state":"closed"},
+            {"number":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed"}
           ],
           "milestone": "0.3"
         },
@@ -4568,8 +4585,8 @@
           "name": "rustlings: 95/95 solutions, 132/132 tests, 95/95 exercises",
           "start": 74,
           "size": 4,
-          "state": "now",
-          "note": "rustlings at f7b9b3c in its own package (tokio): 95 of 95 solutions run and match, 132 of 132 tests pass, and 95 of 95 exercises fail as rustc fails them (#1653). Left: rustc's exact notes and lints on the open issues of this row.",
+          "state": "next",
+          "note": "rustlings at f7b9b3c in its own package (tokio): 95 of 95 solutions run and match, 132 of 132 tests pass, and 95 of 95 exercises fail as rustc fails them (#1653). Left: rustc's notes and lints (#921, #946, #947). Left beyond rustlings: std members (#949, #950, #1001), constant types (#925) and macro calls in item, type and pattern positions (#961).",
           "issues": [
             {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
             {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
@@ -4634,8 +4651,8 @@
           "name": "Real app shapes: a library and a thin main",
           "start": 78,
           "size": 2,
-          "state": "now",
-          "note": "inboard (about 1,070 crates) with theme.rs, home.rs and sidebar.rs marked, measured 2026-11-11 with the machine quiet. A body edit swaps in place in 0.76 s, re-lowering 1 file (#1688). A warm start reaches the app's first output in about 18 s (#1638). A check right after a rawr install takes 16 s with every count at 0: no harness, resolution, nightly build or copy (#1690, #1695, #1696); it was about 7 min. A cold check takes 205 s. Cleanup by state took target/rawr from 22 GB to 15 GB (#1677). Left: canonicalization is serial when cold (#1687); the runner rebuilds after an install (#1493).",
+          "state": "next",
+          "note": "inboard (about 1,070 crates) checks and runs with theme.rs, home.rs and sidebar.rs marked. Its speed is on the Bind, install, Build, Boot and Save rows. Left: native code can't call a marked fn that takes impl Fn or a named generic (#1539). A native root can't name a marked module's types (#1249).",
           "issues": [
             {"number":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed"},
             {"number":1114,"title":"Marked modules in both the binary's and the library's tree of one package","state":"open"},
@@ -4678,15 +4695,12 @@
             {"number":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open"},
             {"number":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed"},
             {"number":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open"},
-            {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
             {"number":1224,"title":"A marked function can't take a native value nested by value in an argument (Option<Kind>, Vec<Item>)","state":"closed"},
             {"number":1225,"title":"A marked function can't take a native value whose type names a non-'static lifetime by value","state":"closed"},
             {"number":1231,"title":"A hard cap on the semantic API's bytes (1.125 GiB) stops a real app with 1016 packages","state":"closed"},
-            {"number":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open"},
             {"number":1241,"title":"A target-table dependency whose library name differs from its key isn't linked by name","state":"open"},
             {"number":1242,"title":"Profile settings beyond panic: overflow-checks and debug-assertions","state":"open"},
             {"number":1243,"title":"A cargo script's profile and target tables","state":"open"},
-            {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"},
             {"number":1245,"title":"Process capture and Cargo environment caps can still fire on a large project","state":"open"},
             {"number":1249,"title":"A native root can't name a marked module's types: `Program::new(..) -> (Program, Task<Message>)` from native main","state":"open"},
             {"number":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open"},
@@ -4739,14 +4753,8 @@
             {"number":1486,"title":"A marked unit function gives native code () whatever its last statement leaves","state":"closed"},
             {"number":1487,"title":"A native part a marked &mut call moves to another place comes back","state":"open"},
             {"number":1488,"title":"A lent native part replaced in a marked &mut call drops when the call returns","state":"open"},
-            {"number":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"closed"},
-            {"number":1489,"title":"A queued swap asks for a redraw only on macOS; Windows and Linux still wait for the next input","state":"open"},
             {"number":1490,"title":"An edit to code only iced's view calls waits for the next message after a swap","state":"retired"},
             {"number":1473,"title":"A marked `&'a self` view returning a native `Element<'a, M>` with several lent native borrows is…","state":"closed"},
-            {"number":1480,"title":"A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"closed"},
-            {"number":1493,"title":"A project that can't share rawr's runtime rebuilds rawr in-project after every install: its marker names the sources","state":"open"},
-            {"number":1494,"title":"A runner that builds rawr in the project recompiled the rawr crate on a second run with nothing changed","state":"open"},
-            {"number":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open"},
             {"number":1496,"title":"A crate method on a lent receiver and a crate fn's Option<&'a str> parameter work in a marked view","state":"closed"},
             {"number":1413,"title":"A lent `&T` passed to a crate fn whose output keeps the borrow, or inside `Option<&T>`, fails…","state":"closed"},
             {"number":1499,"title":"A crate method whose output borrows its receiver can't also take a `&'a T` at the receiver's lifetime","state":"closed"},
@@ -4831,60 +4839,145 @@
             {"number":1601,"title":"A project's target/rawr cache from an older rawr build can make rawr check give a wrong error","state":"closed"},
             {"number":1602,"title":"A &self method of a static's place whose output borrows the receiver fails to build in the runner (E0521)","state":"closed"},
             {"number":1603,"title":"tracing's level_enabled! fails rawr check with a reversed diagnostic span that hides the real error","state":"closed"},
-            {"number":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open"},
             {"number":1606,"title":"Key the instance record by what it reads without breaking rawr run (follow-up to #1601's reverted fix)","state":"closed"},
             {"number":1609,"title":"A use of an owned self's field after it moved out is accepted where rustc gives E0382","state":"closed"},
             {"number":1613,"title":"A qualified call through a crate's trait, as <u64 as common::cast::NumCast>::from(..), is refused","state":"closed"},
             {"number":1614,"title":"A crate trait's method on a std integer is E0599, as count.to_u32() with NumCast in scope","state":"closed"},
             {"number":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"closed"},
             {"number":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed"},
-            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"},
             {"number":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open"},
             {"number":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"closed"},
             {"number":1623,"title":"An Option literal's payload doesn't coerce to the trait object an expected Option<&dyn Trait> names","state":"closed"},
             {"number":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open"},
             {"number":1635,"title":"rawr's generated build resolves dependencies without the project's Cargo.lock, so it compiles other versions than cargo","state":"closed"},
-            {"number":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"closed"},
             {"number":1639,"title":"The project's Cargo.lock is read with the 1 MiB manifest limit, so a larger lock fails the resolution","state":"closed"},
             {"number":1641,"title":"A sidecar's pre-decode scan still refuses values deeper than 256 JSON levels","state":"open"},
-            {"number":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed"},
-            {"number":1646,"title":"A save resolves and lowers every marked file again","state":"open"},
             {"number":1650,"title":"A Box<dyn Fn> passed to a crate function's impl Fn input is E0308","state":"closed"},
             {"number":1651,"title":"A crate generic's parameter that only an argument's std-trait bound names isn't inferred (E0282)","state":"closed"},
             {"number":1652,"title":"A turbofish on a crate function a use names is refused as an unknown value (E0425)","state":"closed"},
-            {"number":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed"},
             {"number":1657,"title":"A panic in a marked function native code calls names the runner's trampoline and a lowered-text position","state":"closed"},
-            {"number":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed"},
-            {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"},
             {"number":397,"title":"Show the full package report for a resident source error","state":"closed"},
-            {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
-            {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
+            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"},
+            {"number":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"closed"},
+            {"number":1406,"title":"A native `&T` a script fn was lent passes straight back to a native fn taking `&T` (elevato…","state":"closed"},
+            {"number":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"closed"},
+            {"number":1445,"title":"A value a stand-in lent in place (`&self.state`) can't also be shared by a view in the same…","state":"closed"},
+            {"number":1466,"title":"Marking inboard's theme.rs fails: a marked type's From impls with native and crate types, and…","state":"closed"},
+            {"number":1469,"title":"A marked type's native part goes to the interpreter as a clone at every call, even for `&self`…","state":"closed"},
+            {"number":1530,"title":"A given native value inside a by-value parameter was checked against a marked type's mirror, not the marked type","state":"closed"},
+            {"number":1582,"title":"Marked iced builders shaped as inboard's sidebar.rs fail rawr check","state":"closed"},
+            {"number":1612,"title":"The runner's handle identity names u64::from, which a crate trait's own from makes ambiguous (E0034)","state":"closed"},
+            {"number":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"closed"},
+            {"number":1627,"title":"A marked module that names tracing only through another crate's re-export fails with unknown member Level::le","state":"closed"}
+          ]
+        },
+        {
+          "id": "bind-phase",
+          "name": "Bind: only what marked code names",
+          "start": 78,
+          "size": 4,
+          "state": "next",
+          "note": "A cold check of inboard takes 205 s. It extracts only what marked code names (#1663, #1665). It classifies across cores (#1669). It canonicalizes across cores (#1687). Left: a grown table asks the compiler again for units it holds (#1683). Canonicalization's join and finish run on one core (#1702).",
+          "issues": [
+            {"number":446,"title":"A warm check reruns cargo resolution and the probe on each demand round","state":"closed"},
+            {"number":470,"title":"Project-local tables are never replayed without the probe","state":"closed"},
+            {"number":1383,"title":"`rawr check` no longer spins for minutes on a thousand-package workspace while counting facade roots","state":"closed"},
+            {"number":1604,"title":"Profile and cut inboard's warm check, save-to-queue and startup time","state":"open"},
+            {"number":1610,"title":"A check walks the build graph once per loaded crate artifact, so it grows with the square of the crate count","state":"closed"},
+            {"number":1611,"title":"rawr check shows nothing while it works, so a slow phase can't be told from outside","state":"closed"},
+            {"number":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"closed"},
+            {"number":1629,"title":"A program with recorded generated crates never kept its extracted tables for the next demand round","state":"closed"},
+            {"number":1634,"title":"A check parsed every program source again in each demand round","state":"closed"},
+            {"number":1636,"title":"A demand round built and sealed a new bundle even when an earlier round built the same crates","state":"closed"},
+            {"number":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed"},
             {"number":1664,"title":"A program that names no Rust path still extracts every dependency whole","state":"open"},
             {"number":1665,"title":"A cold check walks every demanded shared crate whole for its table","state":"closed"},
-            {"number":1663,"title":"Bind extracted, classified and bound every dependency the marked code never names","state":"closed"},
-            {"number":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed"},
-            {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open"},
-            {"number":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed"},
             {"number":1667,"title":"Shared extraction tables were read and replayed one crate at a time","state":"closed"},
-            {"number":1668,"title":"A driver built for a nightly other than the pinned one missed two of its sources","state":"closed"},
+            {"number":1669,"title":"Classification runs on one thread: the classify Context's opaque_excluded memo depends on order","state":"closed"},
             {"number":1671,"title":"A function that gives an opaque type reads its own left-out positions for another function's opaque type it meets","state":"open"},
-            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"},
-            {"number":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open"},
             {"number":1682,"title":"A demand round with unchanged demand rebuilt its API from carried tables, so the next run recompiled everything","state":"closed"},
-            {"number":1685,"title":"A crate adapter's impl Future<Output = S::Output> declared its future parameter's SOutput twice (E0403)","state":"closed"},
+            {"number":1683,"title":"Growing a crate's table re-asks the compiler for units the table already holds","state":"open"},
             {"number":1687,"title":"The API's canonicalization runs on one core: every fragment is converted in one loop over one shared Allocation","state":"closed"},
+            {"number":1691,"title":"A stored API replayed from shared tables decodes the whole tables document when only the handshakes are needed","state":"open"},
+            {"number":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open"},
+            {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"},
+            {"number":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open"},
+            {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"}
+          ]
+        },
+        {
+          "id": "check-after-install",
+          "name": "Check after an install",
+          "start": 80,
+          "size": 2,
+          "state": "next",
+          "note": "A check right after a rawr install takes 16 s on inboard. It binds no harness, resolves nothing, builds no nightly and copies nothing (#1690, #1695, #1696). It took about 7 min before. Left: an install that changes the driver still binds a harness and copies inboard's own bundle (#1701).",
+          "issues": [
+            {"number":1388,"title":"A rawr command warms the runtime, driver and std table for the active toolchain after cargo…","state":"closed"},
+            {"number":1666,"title":"Each new rawr build read, classified and generated an unchanged project's whole API again","state":"closed"},
             {"number":1686,"title":"A new rawr build reclassified an extracted project's API: the API named rawr's source digest","state":"closed"},
+            {"number":1690,"title":"A new rawr install canonicalized an unchanged project's whole API again on one core","state":"closed"},
+            {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"closed"},
+            {"number":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed"},
+            {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"}
+          ]
+        },
+        {
+          "id": "build-phase",
+          "name": "Build: the runner on every core",
+          "start": 80,
+          "size": 3,
+          "state": "now",
+          "note": "The runner's adapters sit in per-crate modules of one crate, so rustc's front end compiles them on one core. Splitting the runner into crates is under way (#1670). Left: a project that can't share rawr's runtime rebuilds rawr in the project after every install (#1493).",
+          "issues": [
+            {"number":1480,"title":"A project whose native lib (psm) rawr's shared runtime also links rebuilds the runtime…","state":"closed"},
+            {"number":1493,"title":"A project that can't share rawr's runtime rebuilds rawr in-project after every install: its marker names the sources","state":"open"},
+            {"number":1494,"title":"A runner that builds rawr in the project recompiled the rawr crate on a second run with nothing changed","state":"open"},
+            {"number":1495,"title":"Check that a static library shared with rawr's runtime defines the same symbols before sharing it","state":"open"},
+            {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"open"}
+          ]
+        },
+        {
+          "id": "boot-phase",
+          "name": "Boot: a warm start compiles nothing",
+          "start": 80,
+          "size": 2,
+          "state": "next",
+          "note": "A warm start reaches inboard's first output in about 18 s. A start with no edits compiles no marked file (#1638). Left: a warm start still resolves the whole program and compiles the whole generated text (#1662). The kept lowering stores each host type by value (#1661).",
+          "issues": [
+            {"number":1637,"title":"rawr run shows nothing about what preparing a run did","state":"closed"},
+            {"number":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"closed"},
+            {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
+            {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
+            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open"}
+          ]
+        },
+        {
+          "id": "save-in-place",
+          "name": "Save: re-lower only what changed",
+          "start": 80,
+          "size": 3,
+          "state": "now",
+          "note": "A body edit in inboard swaps in place in 0.76 s and lowers 1 file (#1688). #1604 measured 3.1 to 3.6 s from save to queue. A doc comment, an inert attribute, a blank line or a reflowed signature lowers only its file (#1716). A new or changed declaration still lowers every marked file again. Per-item lowering dependencies are under way (#1718).",
+          "issues": [
+            {"number":1479,"title":"A queued swap waits for the next input event to apply; it should wake the app's event loop and…","state":"closed"},
+            {"number":1489,"title":"A queued swap asks for a redraw only on macOS; Windows and Linux still wait for the next input","state":"open"},
+            {"number":1531,"title":"A body edit in a marked screen restarts the program when it shifts a native function passed by name","state":"closed"},
+            {"number":1533,"title":"A save that prepares again doesn't say why","state":"closed"},
+            {"number":1534,"title":"The first save after rawr run starts takes the full preparation instead of the resident route","state":"closed"},
+            {"number":1644,"title":"A save's work grew with the program's dependencies: each native use was matched against every inventory row","state":"closed"},
+            {"number":1645,"title":"A save rebuilds the watch inputs from the whole native watch list","state":"closed"},
+            {"number":1646,"title":"A save resolves and lowers every marked file again","state":"open"},
+            {"number":1649,"title":"A save of one marked file lowered every marked file again","state":"closed"},
+            {"number":1654,"title":"A save lowered every marked file when any of them read a file or a variable at compile time (include_bytes!, env!)","state":"closed"},
+            {"number":1655,"title":"A save that adds or removes a line lowered every marked file again","state":"closed"},
+            {"number":1656,"title":"A save's interface blanked each file's text against every body on every pass","state":"closed"},
             {"number":1688,"title":"A save naming a re-exported crate type prepared again: its build and its compile named the type differently","state":"closed"},
             {"number":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"closed"},
-            {"number":1691,"title":"A stored API replayed from shared tables decodes the whole tables document when only the handshakes are needed","state":"open"},
-            {"number":1690,"title":"A new rawr install canonicalized an unchanged project's whole API again on one core","state":"closed"},
-            {"number":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed"},
-            {"number":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open"},
-            {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"closed"},
-            {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"},
-            {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"},
-            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open"},
-            {"number":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open"}
+            {"number":1716,"title":"A save of a doc comment, an inert attribute or a reflowed signature lowers only its file and builds nothing native","state":"closed"},
+            {"number":1718,"title":"Per-item lowering dependencies: a changed or new declaration re-lowers only the files that use it","state":"open"},
+            {"number":1222,"title":"A native rebuild's own copy of a marked module starts another save","state":"open"},
+            {"number":1418,"title":"A save whose text is unchanged sends no event, so a host showing \"applying\" can't resolve it…","state":"open"}
           ]
         }
       ]
@@ -4936,11 +5029,11 @@
         },
         {
           "id": "example-sweeps",
-          "name": "Example sweeps fit on the machine",
+          "name": "Caches fit on the machine",
           "start": 84,
           "size": 2,
-          "state": "now",
-          "note": "inboard (1016 packages) target/rawr: 35G before protocol 60, 16G after one check on #1354, #1355, #1356, #1358 and #1359 (store 21G to 4.5G); about 0.4 of inboard's 42G cargo debug target. inboard is paused; #1357, #1360, #1361, #1362 and #1407 wait for the wasm epic",
+          "state": "next",
+          "note": "rawr deletes stale caches by state, with no timer (#1677). That took inboard's target/rawr from 22 GB to 15 GB. Left: inboard's store keeps parts beside whole executions (#1407). The facade plan, compression and single facts are #1360, #1361 and #1362.",
           "issues": [
             {"number":959,"title":"rawr run inside a git worktree under another workspace fails with 'malformed filesystem observation transport'","state":"closed"},
             {"number":960,"title":"rawr's store under a shared CARGO_TARGET_DIR grows about 1.5-2 GB per iced example","state":"closed"},
@@ -4969,7 +5062,10 @@
             {"number":1362,"title":"The generic classification and the facade plan store each fact once","state":"open"},
             {"number":1371,"title":"The driver's extraction/ prune can remove an unsettled table a staged record names","state":"open"},
             {"number":1376,"title":"Charge store.parts to the installation ledger so the store's size targets see parts","state":"open"},
-            {"number":1377,"title":"Trim generations that never build a new runner, and keep siblings reused across generations","state":"open"}
+            {"number":1377,"title":"Trim generations that never build a new runner, and keep siblings reused across generations","state":"open"},
+            {"number":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"closed"},
+            {"number":1407,"title":"inboard after one run: store.parts 7.4G beside store/executions 6.8G; parts should replace whole…","state":"open"},
+            {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"}
           ]
         },
         {
@@ -4982,7 +5078,8 @@
           "issues": [
             {"number":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed"},
             {"number":1109,"title":"Error messages that don't read like a program's error messages","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "std-once",
@@ -4996,14 +5093,15 @@
             {"number":939,"title":"mcp inspect test asserts one line of a running loop","state":"closed"},
             {"number":940,"title":"background cargo check test waits on a deadline, not an event","state":"closed"},
             {"number":941,"title":"rawr-cli breakpoint test sets its breakpoint before the program has compiled","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         }
       ]
     },
     {
       "id": "play",
       "title": "Playground",
-      "subtitle": "Without rawr-iced",
+      "subtitle": "The bot and the browser on generated bindings",
       "open": true,
       "rows": [
         {
@@ -5031,15 +5129,16 @@
             {"number":465,"title":"Build the play image's universe stage","state":"closed"},
             {"number":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"closed"},
             {"number":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed"}
-          ]
+          ],
+          "milestone": "0.3"
         },
         {
           "id": "browser-wasm-bindings",
           "name": "rawr on wasm with declared packages",
           "start": 58,
           "size": 6,
-          "state": "now",
-          "note": "The universe's generated bindings, built for wasm32 and loaded by rawr-web, give the playground, the landing page and an embedding site iced, ratatui and any declared crate. elevato.rs is live on rawr's universe (2026-11-09). A runner builds each binding on first lookup (#1518), so Chrome's prepare went from about 0.65 s to 27 ms. Next: the std facade per engine (#1526), then in-place reload (#1455)",
+          "state": "next",
+          "note": "?play's universe builds for wasm32 and runs in the browser (#1448). The playground, the landing page and an embedding site get iced, ratatui and any declared crate. elevato.rs is live on rawr's universe (2026-11-09). A runner builds each binding on first lookup, so Chrome's prepare went from about 0.65 s to 27 ms (#1518). A new engine reads std's declarations once (#1526). Next: in-place reload in the browser (#1455).",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
@@ -5059,7 +5158,19 @@
             {"number":1518,"title":"A runner's prepare still costs about 0.3 s for elevato at every start","state":"closed"},
             {"number":1519,"title":"A runner's registry builds each entry on first lookup from a binary plan, so prepare costs what a program touches","state":"closed"},
             {"number":1520,"title":"elevato's page prepares a spare frame's universe on the main thread, so Play waits behind it","state":"open"},
-            {"number":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed"}
+            {"number":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed"},
+            {"number":1380,"title":"The ?play image builds and deploys on a push that changes the universe or the bot, not only in a release","state":"closed"},
+            {"number":1385,"title":"The landing page warms its snippets after load so Run answers at once","state":"closed"},
+            {"number":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open"},
+            {"number":1392,"title":"The site's Run strips say nothing about where a snippet runs","state":"closed"},
+            {"number":1396,"title":"The universe runner fails E0597: an iced adapter's `pins` drops while `made` (Button<'_, Script…","state":"closed"},
+            {"number":1424,"title":"rawr::universe loads a marked file against a binary's linked generated bindings and reloads it in process","state":"closed"},
+            {"number":1448,"title":"?play's universe builds for wasm32 and runs in the browser","state":"closed"},
+            {"number":1449,"title":"iced in the browser's universe draws at twice its hit-test scale at devicePixelRatio 2 (Retina)…","state":"closed"},
+            {"number":1455,"title":"The browser universe exports only prepare/run, so a good edit can't reload in place; every edit…","state":"open"},
+            {"number":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"closed"},
+            {"number":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"closed"},
+            {"number":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open"}
           ]
         },
         {
@@ -5087,8 +5198,8 @@
           "name": "?play covers what the examples use",
           "start": 86,
           "size": 2,
-          "state": "now",
-          "note": "Canvas, timed(..) and theme(..) for solar_system (#1000)",
+          "state": "next",
+          "note": "solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Left: a builder call that takes a crate function item (#1029). A snippet's locals don't drop at its end (#1247).",
           "issues": [
             {"number":1000,"title":"?play's universe has no canvas, application::timed or Application::theme","state":"closed"},
             {"number":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed"},
@@ -5106,7 +5217,7 @@
     {
       "id": "debug",
       "title": "Debugger",
-      "subtitle": "D557, in 0.4",
+      "subtitle": "D557: a debugger any editor or MCP hooks into",
       "open": true,
       "rows": [
         {
@@ -5114,7 +5225,7 @@
           "name": "Read a running program's values",
           "start": 53,
           "size": 3,
-          "state": "now",
+          "state": "next",
           "note": "rawr mcp inspect works with or without dependencies; frames, types and the editor remain",
           "issues": [
             {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed"},
@@ -5138,7 +5249,7 @@
             {"number":534,"title":"inspect reads a free function's &mut parameter","state":"closed"},
             {"number":535,"title":"Show a paused program in wait and status","state":"closed"}
           ],
-          "milestone": "0.5"
+          "milestone": "0.3"
         },
         {
           "id": "repl",
