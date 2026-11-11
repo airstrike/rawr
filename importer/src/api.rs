@@ -28,7 +28,7 @@ pub use retained::keep_graphs;
 #[cfg(feature = "rustc-driver")]
 pub use retained::Continuation;
 
-const CANONICALIZER_VERSION: u32 = 17;
+const CANONICALIZER_VERSION: u32 = 18;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -1787,7 +1787,9 @@ impl Context {
             host: allocation.owned(toolchain.host())?,
             target: allocation.owned(target)?,
             profile: allocation.owned(profile)?,
-            resolution_universe: universe.map_or([0; 32], |proof| *proof.base().as_bytes()),
+            // The universe as it resolves, so another Rawr build of the
+            // same universe names the same API.
+            resolution_universe: universe.map_or([0; 32], |proof| *proof.semantic().as_bytes()),
             resolution_proof: universe.map_or([0; 32], |proof| *proof.complete().as_bytes()),
             final_lock: universe.map(|proof| *proof.final_lock().as_bytes()),
             selections: selections.into_boxed_slice(),
@@ -1856,17 +1858,16 @@ impl Context {
         (self.resolution_universe != [0; 32]).then_some(self.resolution_universe)
     }
 
-    /// This context, read with no resolution universe, pinned by the bytes
-    /// of the lockfile its resolution settled: the package versions and
-    /// sources the unit graph was resolved from, without the paths Cargo's
-    /// metadata names, which move with each Rawr build's host directory.
+    /// This context, pinned as a complete resolution pins its own: by the
+    /// `universe` it resolved in, as it resolves, and the bytes of the
+    /// lockfile it settled, the package versions and sources the unit graph
+    /// was resolved from, without the paths Cargo's metadata names, which
+    /// move with each Rawr build's host directory. So the API read from
+    /// shared tables names what the extraction that made them named.
     #[cfg(feature = "rustc-driver")]
-    pub(crate) fn locked(mut self, lock: &[u8]) -> Self {
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.api.resolved-lock/v1");
-        digest.update((lock.len() as u64).to_le_bytes());
-        digest.update(lock);
-        self.final_lock = Some(digest.finalize().into());
+    pub(crate) fn locked(mut self, universe: &[u8; 32], lock: &[u8]) -> Self {
+        self.resolution_universe = *universe;
+        self.final_lock = Some(Sha256::digest(lock).into());
         self
     }
 }

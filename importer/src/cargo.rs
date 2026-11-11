@@ -3165,7 +3165,15 @@ fn versioned_request_identity(
     definition: &universe::Definition,
     provisional_manifest: &str,
 ) -> Digest {
-    let mut identity = cargo_view(request, definition, provisional_manifest);
+    Digest(
+        versioned_view(request, definition.identity(), provisional_manifest)
+            .finalize()
+            .into(),
+    )
+}
+
+fn versioned_view(request: &Request, universe: &[u8; 32], provisional_manifest: &str) -> Sha256 {
+    let mut identity = cargo_view(request, universe, provisional_manifest);
     // Demand changes what the probe extracts. An empty demand keeps
     // every existing identity; v2 is demand-seeded extraction.
     if !request.demand.is_empty() {
@@ -3179,7 +3187,7 @@ fn versioned_request_identity(
             }
         }
     }
-    Digest(identity.finalize().into())
+    identity
 }
 
 /// The request as Cargo sees it: every input but the demand, which only
@@ -3191,17 +3199,29 @@ fn cargo_identity(
     provisional_manifest: &str,
 ) -> Digest {
     Digest(
-        cargo_view(request, definition, provisional_manifest)
+        cargo_view(request, definition.identity(), provisional_manifest)
             .finalize()
             .into(),
     )
 }
 
-fn cargo_view(
+/// The request as the API's semantics name it: [`versioned_request_identity`]
+/// with the universe as it resolves, and Rawr's own crate named by its alias
+/// alone. Its path is the host directory of the Rawr build that resolves it,
+/// which moves with every build while no extracted crate's API changes; the
+/// lockfile the API's context names pins its version.
+fn semantic_request_identity(
     request: &Request,
     definition: &universe::Definition,
-    provisional_manifest: &str,
-) -> Sha256 {
+) -> Result<Digest> {
+    let manifest = render(request, None, Rendered::Semantic)?;
+    let mut identity = Sha256::new();
+    identity.update(b"rawr.import.cargo.semantic-request/v1");
+    identity.update(versioned_view(request, definition.semantic_identity(), &manifest).finalize());
+    Ok(Digest(identity.finalize().into()))
+}
+
+fn cargo_view(request: &Request, universe: &[u8; 32], provisional_manifest: &str) -> Sha256 {
     let mut identity = Sha256::new();
     identity.update(b"rawr.import.cargo.resolution-request/v2");
     if request.inventory {
@@ -3211,7 +3231,7 @@ fn cargo_view(
     if request.inputs_only {
         identity.update(b"application-native-inputs/v1");
     }
-    identity.update(definition.identity());
+    identity.update(universe);
     identity.update((provisional_manifest.len() as u64).to_le_bytes());
     identity.update(provisional_manifest.as_bytes());
     identity.update(HARNESS_SOURCE.as_bytes());
@@ -3429,6 +3449,24 @@ fn retire_stale_temporaries(root: &Path) -> Result<()> {
 
 /// Render one harness manifest.
 fn render_manifest(request: &Request, internal: Option<&internal::Recipe>) -> Result<String> {
+    render(request, internal, Rendered::Harness)
+}
+
+/// What a rendered harness manifest is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rendered {
+    /// The manifest Cargo reads.
+    Harness,
+    /// The manifest as the API's semantics name it, with Rawr's own crate
+    /// at no host directory (`semantic_request_identity`).
+    Semantic,
+}
+
+fn render(
+    request: &Request,
+    internal: Option<&internal::Recipe>,
+    rendered: Rendered,
+) -> Result<String> {
     let mut document = DocumentMut::new();
     if let Some(item) = request.authority.retained.get("cargo-features") {
         document["cargo-features"] = item.clone();
@@ -3464,7 +3502,10 @@ fn render_manifest(request: &Request, internal: Option<&internal::Recipe>) -> Re
         {
             continue;
         }
-        let specification = specification(dependency)?;
+        let mut specification = specification(dependency)?;
+        if rendered == Rendered::Semantic && dependency.alias() == config::INTERNAL_ALIAS {
+            specification.insert("path", Value::from(config::INTERNAL_ALIAS));
+        }
         // Rawr's own crate is a build dependency of the harness, which has
         // no build script: Cargo resolves, locks and fetches it but builds
         // no unit of it. Only the runner, which the project's Cargo builds,
@@ -4810,6 +4851,41 @@ mod universe_placement_tests {
         );
         assert_ne!(plain_key, tuned_key);
         assert_eq!(render("").1, plain_key);
+    }
+
+    /// The request the API's semantics name is the same in every Rawr
+    /// build: neither the build's universe identity nor the host directory
+    /// its own crate is resolved from is part of it, while each still keys
+    /// a resolution of its own.
+    #[test]
+    fn the_semantic_request_names_no_rawr_build() {
+        let limits = Limits::standard();
+        let project = Project::new("semantic-request");
+        let current = request(&project, false, &limits);
+        let rebuilt = definition().hosted_by(&[9; 32]);
+        let provisional = render_manifest(&current, None).expect("manifest renders");
+        assert_ne!(
+            versioned_request_identity(&current, &definition(), &provisional),
+            versioned_request_identity(&current, &rebuilt, &provisional)
+        );
+        let semantic = semantic_request_identity(&current, &definition()).expect("identity");
+        assert_eq!(
+            semantic,
+            semantic_request_identity(&current, &rebuilt).expect("identity")
+        );
+        let named = render(&current, None, Rendered::Semantic)
+            .expect("semantic manifest renders")
+            .parse::<DocumentMut>()
+            .expect("semantic manifest parses");
+        assert_eq!(
+            named[BUILD_DEPENDENCIES][config::INTERNAL_ALIAS]["path"].as_str(),
+            Some(config::INTERNAL_ALIAS)
+        );
+        let changed = request(&project, true, &limits);
+        assert_ne!(
+            semantic,
+            semantic_request_identity(&changed, &definition()).expect("identity")
+        );
     }
 
     #[test]

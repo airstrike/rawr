@@ -70,6 +70,11 @@ pub(crate) struct Definition {
     cargo_profile: &'static str,
     rustc_commit: &'static str,
     cargo_commit: &'static str,
+    /// What the universe says: its closure, profile and toolchain, without
+    /// the Rawr build that compiled it in.
+    semantic: Digest,
+    /// `semantic` within the Rawr build that compiled it in, which
+    /// addresses a resolution's cache entries.
     identity: Digest,
 }
 
@@ -101,6 +106,7 @@ pub(crate) struct FinalLock(Arc<Locked>);
 #[derive(Clone, Copy)]
 pub(crate) struct Proof {
     base: Digest,
+    semantic: Digest,
     complete: Digest,
     final_lock: Digest,
 }
@@ -389,18 +395,17 @@ impl Definition {
         identity.update(profile);
         identity.update(seed_digest.as_bytes());
         identity.update(protected.digest.as_bytes());
-        // Rawr's own source identity, baked in at build time. A new Rawr
-        // simply addresses new cache entries; it is never refused.
-        identity.update(crate::host::DIGEST);
+        let semantic = bound(
+            identity.clone(),
+            [target, cargo_profile, rustc_commit, cargo_commit],
+        );
         Ok(Self {
             seed,
             root,
             framework,
             protected,
-            identity: bound(
-                identity.clone(),
-                [target, cargo_profile, rustc_commit, cargo_commit],
-            ),
+            semantic,
+            identity: hosted(semantic, &crate::host::DIGEST),
             unbound: identity,
             target: target.into(),
             cargo_profile,
@@ -413,7 +418,7 @@ impl Definition {
     pub(crate) fn for_target(&self, target: &str) -> Self {
         let mut definition = self.clone();
         if *target != *self.target {
-            definition.identity = bound(
+            definition.semantic = bound(
                 self.unbound.clone(),
                 [
                     target,
@@ -422,15 +427,28 @@ impl Definition {
                     self.cargo_commit,
                 ],
             );
+            definition.identity = hosted(definition.semantic, &crate::host::DIGEST);
             definition.target = target.into();
         }
         definition
+    }
+
+    /// The same universe compiled into a Rawr build of other sources.
+    #[cfg(test)]
+    pub(crate) fn hosted_by(mut self, host: &[u8; 32]) -> Self {
+        self.identity = hosted(self.semantic, host);
+        self
     }
 
     /// Borrow the stable base identity used by the owning profile table.
     #[must_use]
     pub const fn identity(&self) -> &[u8; 32] {
         self.identity.as_bytes()
+    }
+
+    /// The universe as it resolves, whichever Rawr build compiled it in.
+    pub(crate) const fn semantic_identity(&self) -> &[u8; 32] {
+        self.semantic.as_bytes()
     }
 
     pub(crate) fn candidate(&self, bytes: Box<[u8]>) -> Result<Candidate> {
@@ -622,6 +640,17 @@ fn bound(mut identity: Sha256, values: [&str; 4]) -> Digest {
     Digest(identity.finalize().into())
 }
 
+/// A universe's identity in the Rawr build whose sources are `host`, baked
+/// in at build time. A new Rawr simply addresses new cache entries; it is
+/// never refused, and what it resolves means what it did (`semantic`).
+fn hosted(semantic: Digest, host: &[u8; 32]) -> Digest {
+    let mut identity = Sha256::new();
+    identity.update(b"rawr.import.cargo.resolution-universe.hosted/v1");
+    identity.update(semantic.as_bytes());
+    identity.update(host);
+    Digest(identity.finalize().into())
+}
+
 impl Catalog {
     /// The universe of a runner with no host profile: it governs the
     /// closure of the `rawr` runtime crate and fixes no framework.
@@ -764,6 +793,7 @@ impl FinalLock {
         complete.update(build.input.as_bytes());
         Ok(Proof {
             base: self.0.definition.identity,
+            semantic: self.0.definition.semantic,
             complete: Digest(complete.finalize().into()),
             final_lock: self.0.digest,
         })
@@ -1032,6 +1062,12 @@ impl Proof {
 
     pub(crate) const fn base(self) -> Digest {
         self.base
+    }
+
+    /// The base universe as the API's semantics name it: what it resolves,
+    /// not the Rawr build that resolved it.
+    pub(crate) const fn semantic(self) -> Digest {
+        self.semantic
     }
 
     pub(crate) const fn complete(self) -> Digest {
@@ -3484,6 +3520,38 @@ mod tests {
         let second = bind(&second_lock, 0, 1, 2);
         assert_eq!(first.base(), second.base());
         assert_ne!(first.complete(), second.complete());
+    }
+
+    /// Each Rawr build of other sources addresses new cache entries for
+    /// the same universe, whose resolutions mean what they did: the proof
+    /// the API names is the same.
+    #[test]
+    fn another_rawr_build_addresses_new_entries_for_the_universe_the_api_names() {
+        let built = definition();
+        let rebuilt = definition().hosted_by(&[9; 32]);
+        assert_ne!(built.identity(), rebuilt.identity());
+        assert_eq!(built.semantic_identity(), rebuilt.semantic_identity());
+        let first = bind(&admit(built, SEED.as_bytes().into()).unwrap(), 0, 1, 2);
+        let second = bind(&admit(rebuilt, SEED.as_bytes().into()).unwrap(), 0, 1, 2);
+        assert_ne!(first.base(), second.base());
+        assert_ne!(first.complete(), second.complete());
+        assert_eq!(first.semantic(), second.semantic());
+        assert_eq!(first.final_lock(), second.final_lock());
+        let other = Definition::new(
+            super::ROOT_PACKAGE,
+            Some(super::FRAMEWORK_PACKAGE),
+            "fixture",
+            2,
+            1,
+            [7; 32],
+            SEED.as_bytes(),
+            "aarch64-apple-darwin",
+            "dev",
+            "rustc",
+            "cargo",
+        )
+        .expect("another universe seals");
+        assert_ne!(definition().semantic_identity(), other.semantic_identity());
     }
 
     #[test]

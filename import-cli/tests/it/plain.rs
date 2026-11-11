@@ -847,13 +847,16 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
 /// classifier version is, links its own host directory, so the project's
 /// crates resolve again under it. Nothing is extracted again, and the API
 /// read back from the shared tables is the one the last build classified:
-/// it names the Rawr it links by package name and version, and the
-/// resolution by its lockfile, not by the host directory's path. So no
-/// definition is classified and no facade generated again.
+/// it names the Rawr it links by package name and version, the universe it
+/// resolves in as it resolves, and the resolution by its lockfile, not by
+/// the host directory's path or the build's own sources. So no definition
+/// is classified and no facade generated again, after the build that
+/// extracted the crates as after one that read their tables.
 #[test]
 fn another_rawr_build_extracts_and_classifies_nothing_again() {
     let home = crate::support::scratch().join("moved-host-home");
     let root = crate::support::scratch().join("moved-host");
+    let _ = fs::remove_dir_all(&home);
     let _ = fs::remove_dir_all(&root);
     copy(Path::new(FIXTURE), &root);
     let check = |host: &str| {
@@ -874,19 +877,20 @@ fn another_rawr_build_extracts_and_classifies_nothing_again() {
         assert!(checked.status.success(), "{said}");
         said
     };
-    // The first build extracts or reads the home; the second reads the
-    // tables under its own host and classifies what they give.
+    // The first build extracts into an empty home; each later one reads
+    // the tables under its own host.
     check("first");
-    check("second");
-    let said = check("third");
-    assert!(
-        said.contains("nightly builds 0, probes 0"),
-        "another Rawr build extracts nothing again\n{said}"
-    );
-    assert!(
-        said.contains("classified 0, generated 0"),
-        "another Rawr build classifies and generates nothing again\n{said}"
-    );
+    for host in ["second", "third"] {
+        let said = check(host);
+        assert!(
+            said.contains("nightly builds 0, probes 0"),
+            "another Rawr build extracts nothing again\n{said}"
+        );
+        assert!(
+            said.contains("classified 0, generated 0"),
+            "another Rawr build classifies and generates nothing again\n{said}"
+        );
+    }
 }
 
 /// A program with a module of its own selects its own crate, whose table
