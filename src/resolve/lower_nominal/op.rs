@@ -167,6 +167,9 @@ pub(super) enum PreludeOp {
     IntFromBool,
     FloatFromBool,
     StringFromChar,
+    /// `<str as AsRef<[u8]>>::as_ref`: a text's bytes, which rawr holds
+    /// as an array of integers.
+    StrBytes,
     /// `{}`/`{:?}` of an `f64` with an optional precision (`-1` for none),
     /// Rust's text: `format_float(x, precision, debug)`.
     FormatFloat,
@@ -436,6 +439,7 @@ impl PreludeOp {
             Self::IntFromBool => "from.i64-bool",
             Self::FloatFromBool => "from.f64-bool",
             Self::StringFromChar => "from.string-char",
+            Self::StrBytes => "str.bytes",
             Self::FormatFloat => "format.float",
             Self::FormatRadix => "format.radix",
             Self::FormatBits => "format.bits",
@@ -652,6 +656,7 @@ impl PreludeOp {
             Self::CowValue => vec![TypeId::of::<cow::Value>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
             Self::StringFromChar => vec![TypeId::of::<char>()],
+            Self::StrBytes => vec![TypeId::of::<ImmutableString>()],
             Self::FormatFloat => vec![
                 TypeId::of::<crate::FLOAT>(),
                 TypeId::of::<crate::INT>(),
@@ -945,6 +950,14 @@ impl PreludeOp {
             Self::StringFromChar => {
                 let value = args[0].as_char().unwrap_or_default();
                 return Ok(Dynamic::from(ImmutableString::from(value.to_string())));
+            }
+            Self::StrBytes => {
+                let text = args[0].clone_cast::<ImmutableString>();
+                let bytes = text
+                    .bytes()
+                    .map(|byte| Dynamic::from(crate::INT::from(byte)))
+                    .collect();
+                return Ok(Dynamic::from_array(bytes));
             }
             Self::FormatFloat => {
                 let value = args[0].as_float().unwrap_or_default();

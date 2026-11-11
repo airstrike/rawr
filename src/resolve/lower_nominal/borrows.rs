@@ -1828,7 +1828,7 @@ fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
     match ty {
         // Inherent methods are std's own (`std_method::summary`).
         Ty::Array { .. } => match member {
-            "as_ref" => entry(Shared, vec![tap(&[], own(&[]))], Vec::new()),
+            "as_ref" | "borrow" => entry(Shared, vec![tap(&[], own(&[]))], Vec::new()),
             "as_mut" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
             "clone" | "to_owned" => entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new()),
             "concat" => entry(Shared, inner(), Vec::new()),
@@ -1838,7 +1838,7 @@ fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
             _ => None,
         },
         Ty::String | Ty::Str => match member {
-            "as_ref" => entry(Shared, all(), Vec::new()),
+            "as_ref" | "borrow" => entry(Shared, all(), Vec::new()),
             _ => None,
         },
         Ty::Keyed(_, arguments) => {

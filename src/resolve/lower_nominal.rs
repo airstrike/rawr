@@ -41,6 +41,7 @@ mod iterator;
 #[cfg(feature = "rust-import")]
 mod kept;
 mod keyed;
+mod lending;
 mod literal;
 mod local_type;
 mod location;

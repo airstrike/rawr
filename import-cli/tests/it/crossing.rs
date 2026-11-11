@@ -2127,6 +2127,20 @@ fn a_choice_of_script_values_beside_a_string_literal_runs() {
     );
 }
 
+/// iced's pokedex (#1632): `column!` boxes a `String`'s `as_ref()`, whose
+/// `AsRef` target only the crate's `impl Widget for &str` fixes, as rustc
+/// selects the one impl whose self type is a shared reference. The output
+/// is `cargo run`'s.
+#[test]
+fn a_strings_as_ref_takes_its_target_from_the_widget_impl_it_boxes() {
+    let (rawr, cargo) = both_printed("lent.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 message Increment") && rawr.contains("'pressed 1'"),
+        "{rawr}"
+    );
+}
+
 /// iced's solar_system and qr_code (#591): `pick(..)`'s `V: Borrow<T>` is a
 /// reference to a crate enum the state holds, from `Some(&self.backend)`
 /// and `self.chosen.as_ref()`, and a reference to a script enum, and its
