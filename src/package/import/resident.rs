@@ -1,4 +1,4 @@
-//! Native-covered compiler output, still requiring live-owner admission.
+//! Native-covered compiler output, which still requires live-owner admission.
 //!
 //! These types do not grant reuse authority. The generated runner must bind the
 //! output to its admitted artifact, original request, epoch and publication
