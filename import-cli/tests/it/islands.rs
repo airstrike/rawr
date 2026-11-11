@@ -1943,7 +1943,9 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
 /// and a new runner, whose start lowers again only the file the save
 /// changed and the files that name what it added, from what the earlier
 /// runner kept (#1725): its own build of rawr wrote them, and each file's
-/// key holds what it reads of the native surface.
+/// key holds what it reads of the native surface. A new public struct no
+/// other file names, which native code sees and the runner holds as its
+/// mirror, lowers its own file alone (#1740).
 #[test]
 fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -1979,6 +1981,14 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 2
     });
+    // A new public struct with a derive, which no other file names: native
+    // code sees it, and the runner holds it as its mirror.
+    let mut text = fs::read_to_string(&sidebar).unwrap();
+    text.push_str("\n#[derive(Debug)]\npub struct Inset {\n    pub radius: f32,\n}\n");
+    fs::write(&sidebar, text).unwrap();
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 3
+    });
     fs::write(&stop, "").unwrap();
     let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
     run.child.kill().unwrap();
@@ -1994,12 +2004,12 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
                 .iter()
                 .filter(|line| line.starts_with("default Selected("))
                 .count()
-                == 2,
+                == 3,
         "{told}\n{seen}"
     );
     // What each runner's start revealed and lowered: the first every file;
     // the second `sidebar.rs`, which it changed, and `home.rs`, which names
-    // what it added.
+    // what it added; the third `sidebar.rs` alone.
     let started = run
         .seen
         .iter()
@@ -2012,7 +2022,7 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         })
         .collect::<Vec<_>>();
     assert!(
-        started.len() == 2 && started[0][1] > 2 && started[1] == [2, 2],
+        started.len() == 3 && started[0][1] > 2 && started[1] == [2, 2] && started[2] == [1, 1],
         "{started:?}\n{seen}"
     );
 }
