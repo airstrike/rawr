@@ -2139,6 +2139,24 @@ fn a_script_function_wraps_opaque_widgets_in_types_that_declare_a_lifetime() {
     );
 }
 
+/// iced's component (#965, #1075): the view gives `container(opaque(..))
+/// .padding(..)`, a `Container<'_, impl Widget, Theme>` of an opaque
+/// widget a crate function made of script values, so no region holds it.
+/// Rust code can't name its type, so the slot is generic over it, and the
+/// witness of the opaque type, the output of the crate function's item at
+/// its inputs, picks it where `run` takes the slot. The output is `cargo
+/// run`'s.
+#[test]
+fn a_slot_gives_a_container_of_an_opaque_widget_made_of_script_values() {
+    let (rawr, cargo) = both_printed("composed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view container 0 opaque [Increment]")
+            && rawr.ends_with("last view container 3 opaque [Increment]"),
+        "{rawr}"
+    );
+}
+
 /// iced's pane_grid (#1190): `pane(opaque(column![..]))` holds an opaque
 /// widget made of the view's values, `Pane<'_, (), impl Widget>`, held
 /// boxed in the view's region as modal's are, and its `title_bar` takes

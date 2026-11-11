@@ -43,6 +43,10 @@ thread_local! {
     /// as an argument, by the type spelled at `'x` ([`named`]).
     static NAMES: std::cell::RefCell<BTreeMap<String, usize>> =
         const { std::cell::RefCell::new(BTreeMap::new()) };
+    /// The witness of each opaque type a crate function gives outside any
+    /// region, by the type spelled at `'x` ([`witness`]).
+    static WITNESSES: std::cell::RefCell<BTreeMap<String, String>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
 }
 
 /// The name a script type's proxy takes the type spelled `key` at `'x`
@@ -218,6 +222,7 @@ pub(super) fn clear() {
     OPS.with_borrow_mut(BTreeMap::clear);
     BOUNDS.with_borrow_mut(BTreeMap::clear);
     NAMES.with_borrow_mut(BTreeMap::clear);
+    WITNESSES.with_borrow_mut(BTreeMap::clear);
 }
 
 /// Record `bounds` as those of the opaque type spelled `key` at `'x`,
@@ -232,6 +237,23 @@ pub(super) fn bound(key: String, bounds: String) {
 /// gives it has them.
 pub(super) fn bounds(key: &str) -> Option<String> {
     BOUNDS.with_borrow(|known| known.get(key).cloned())
+}
+
+/// Record `witness` as that of the opaque type spelled `key` at `'x`,
+/// unless one is: an expression of `std::marker::PhantomData` of the type
+/// at `'static`, as the arena holds the value a call outside any region
+/// gives. Rust code can't name the type, so where a signature must, as a
+/// slot's output does, it is generic over it and the witness picks it.
+pub(super) fn witness(key: String, witness: String) {
+    WITNESSES.with_borrow_mut(|known| {
+        known.entry(key).or_insert(witness);
+    });
+}
+
+/// The witness of the opaque type spelled `key` at `'x`, when a call that
+/// gives it has one.
+pub(super) fn witnessed(key: &str) -> Option<String> {
+    WITNESSES.with_borrow(|known| known.get(key).cloned())
 }
 
 impl Shape {
