@@ -25,7 +25,10 @@
 //! the facades of the program's own crate, which a save that changes what
 //! native code sees changes, is one more declaration, reached by its names
 //! (`host::image::Outline`). Every other crate's facade is every source's,
-//! by its proof. So a new runner's start lowers again only the sources that
+//! by its proof. Each marked type the runner holds as its mirror
+//! (`Program::mirrors`) is one more declaration too, reached by its name,
+//! so a new pub struct native code sees reaches only the sources that name
+//! it (#1740). So a new runner's start lowers again only the sources that
 //! name what changed, as a save in the running one does.
 
 use super::models::Models;
@@ -167,7 +170,7 @@ fn every(
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v7");
+    written.0.update(b"rawr.lowering.interface/v8");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
@@ -206,7 +209,6 @@ fn every(
         program.package, program.std_traits, program.entry_crate, program.crates,
     )
     .ok()?;
-    write!(written, "{:?}", program.mirrors).ok()?;
     // Each source's statements outside its items, its items blank: by its
     // tokens, as a body's length changes how many blanks it is, and a
     // comment is none.
@@ -342,7 +344,22 @@ impl<'p> Declarations<'p> {
                 declaring[number].push(items.len() + offset);
             }
         }
-        let mut declarations = Vec::with_capacity(items.len() + native.entries().len());
+        // Each marked type the runner holds as its mirror, after them: by
+        // its name, as a source that holds a value of it names the type or
+        // reaches a declaration that does (#1740).
+        let mirrors = items.len() + native.entries().len();
+        for (offset, (path, rust)) in program.mirrors.iter().enumerate() {
+            let named = path.last().into_iter().chain(rust.last());
+            for name in named {
+                let number = *names.entry(name.as_str()).or_insert_with(|| {
+                    declaring.push(Vec::new());
+                    declaring.len() - 1
+                });
+                declaring[number].push(mirrors + offset);
+            }
+        }
+        let mut declarations =
+            Vec::with_capacity(items.len() + native.entries().len() + program.mirrors.len());
         for ((index, shell), held) in items.iter().enumerate().zip(&held) {
             let outline = outlines.sources.get(shell.source.index());
             let places =
@@ -382,6 +399,12 @@ impl<'p> Declarations<'p> {
             declarations.push(Declaration {
                 digest: *entry.digest(),
                 writes,
+            });
+        }
+        for mirror in &program.mirrors {
+            declarations.push(Declaration {
+                digest: digest(None, |written| write!(written, "{mirror:?}"))?,
+                writes: Vec::new(),
             });
         }
         let unheld = digest(None, |written| {

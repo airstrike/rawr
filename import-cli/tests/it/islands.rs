@@ -2029,7 +2029,9 @@ fn a_private_struct_s_new_derives_swap_and_its_new_field_or_removal_restarts_at_
 /// runner kept (#1725): its own build of rawr wrote them, and each file's
 /// key holds what it reads of the native surface. Native code's call is
 /// what needs the build, as a new function no native code calls swaps
-/// (#1741).
+/// (#1741). A new public struct that native code names, which the runner
+/// holds as its mirror, lowers again its own file and native code's, and
+/// no marked file that doesn't name it (#1740).
 #[test]
 fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -2071,6 +2073,20 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 2
     });
+    // A new public struct with a derive, which no other marked file names,
+    // and native code that names it: the runner holds it as its mirror.
+    let mut text = fs::read_to_string(&sidebar).unwrap();
+    text.push_str("\n#[derive(Debug)]\npub struct Inset {\n    pub radius: f32,\n}\n");
+    fs::write(&sidebar, text).unwrap();
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"spare {}\", sidebar::spare_rows());\n",
+        "    println!(\"spare {}\", sidebar::spare_rows());\n    \
+         println!(\"inset {}\", sidebar::Inset { radius: 1.5 }.radius);\n",
+    );
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 3
+    });
     fs::write(&stop, "").unwrap();
     let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
     run.child.kill().unwrap();
@@ -2079,17 +2095,19 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     assert!(
         told.contains("{\"event\":\"ended\",\"status\":0}")
             && run.seen.iter().any(|line| line == "spare 2")
+            && run.seen.iter().any(|line| line == "inset 1.5")
             && run
                 .seen
                 .iter()
                 .filter(|line| line.starts_with("default Selected("))
                 .count()
-                == 2,
+                == 3,
         "{told}\n{seen}"
     );
     // What each runner's start revealed and lowered: the first every file;
     // the second `sidebar.rs` and `main.rs`, which the edit changed, and
-    // `home.rs`, which names what it added.
+    // `home.rs`, which names what it added; the third `sidebar.rs` and
+    // `main.rs` alone, which the struct's edit changed.
     let started = run
         .seen
         .iter()
@@ -2102,7 +2120,7 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         })
         .collect::<Vec<_>>();
     assert!(
-        started.len() == 2 && started[0][1] > 2 && started[1] == [3, 3],
+        started.len() == 3 && started[0][1] > 2 && started[1] == [3, 3] && started[2] == [2, 2],
         "{started:?}\n{seen}"
     );
 }
