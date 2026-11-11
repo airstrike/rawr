@@ -1611,6 +1611,56 @@ fn an_opaque_output_two_crates_reach_is_one_type() {
     );
 }
 
+/// iced_test's `ui.click("Increment")` (#1678): `click` is generic over a
+/// `Selector` the crate implements for `&str` and for closures over a
+/// `Candidate<'_>`, a form rawr doesn't take, and a string literal fills
+/// it as itself. The output is `cargo run`'s.
+#[test]
+fn a_selector_a_closure_also_fills_takes_a_string() {
+    let (rawr, cargo) = both_printed("clicked.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("click Err(NotFound(\"text \\\"Reset\\\"\"))\nmessage Increment")
+            && rawr.ends_with("message Decrement\nvalue 1"),
+        "{rawr}"
+    );
+}
+
+/// iced_test's `ui.simulate(click())` (#1679): the opaque `impl
+/// Iterator<Item = Event>` `click()` gives fills `simulate`'s `impl
+/// IntoIterator<Item = Event>`, from a call and from a local. The output
+/// is `cargo run`'s.
+#[test]
+fn an_opaque_iterator_fills_an_iterable_parameter() {
+    let (rawr, cargo) = both_printed("simulated.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("message Increment\nmessage Decrement\nmessage Decrement\nvalue -1"),
+        "{rawr}"
+    );
+}
+
+/// iced_test's `simulator(counter.view())` beside iced (#1680): `tester`
+/// takes any `parts` widget, and no impl its facade can name fixes the
+/// theme and renderer of the widget `events` makes. The view's `impl
+/// Shown<Message>`, a method's and a function's, fixes them, the trait's
+/// defaults, with no annotation. The output is `cargo run`'s.
+#[test]
+fn a_views_opaque_bound_fixes_what_its_value_fills() {
+    let manifest = CROSSING.read("Cargo.toml").replace(
+        "[dependencies]",
+        "[dependencies]\ntester = { path = \"tester\" }",
+    );
+    let main = CROSSING.read("variants/sighted.rs");
+    let root = CROSSING.lease(&[("Cargo.toml", &manifest), ("src/main.rs", &main)]);
+    let (rawr, cargo) = both_printed_in(&root, "", &[]);
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("sight badge 3\nsight badge Counter"),
+        "{rawr}"
+    );
+}
+
 /// `outlined` gives an opaque type of a type no public path names, on an
 /// `Element<'_, ..>`, held in its region as `explain`'s is (#936). It is a
 /// default method of the trait `explain` is one of, and each method's

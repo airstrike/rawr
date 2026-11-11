@@ -1417,6 +1417,11 @@ impl<'a> Parser<'a> {
                     .map_or(Ty::Unit, Ty::from_resolved),
                 &substitution,
             );
+            #[cfg(feature = "rust-import")]
+            self.note_opaque_value(
+                &output,
+                function.definition.lifetimes.written_output.as_deref(),
+            );
             witnesses = self.witness_arguments(&function.definition.generics, &substitution, call);
             let kept = self.inference.resolve(&output);
             if let Some(summary) = &summary {

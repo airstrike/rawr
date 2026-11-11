@@ -12,3 +12,29 @@ pub fn described<W, F, A>(map: &core::widget::Map<W, F, A>) -> &'static str {
     let _ = map.widget();
     "a map"
 }
+
+/// What `element` shows, at the message, theme and renderer it shows them
+/// at, as iced_test's `Simulator<'a, Message, Theme, Renderer>` holds them.
+pub struct Sight<Message, Theme, Renderer> {
+    shown: String,
+    at: std::marker::PhantomData<(Message, Theme, Renderer)>,
+}
+
+impl<Message, Theme, Renderer> Sight<Message, Theme, Renderer> {
+    /// What it showed.
+    pub fn shown(&self) -> &str {
+        &self.shown
+    }
+}
+
+/// What `element` shows, as iced_test's `simulator(element)` takes any
+/// core widget: no impl this crate can name fixes `Theme` and `Renderer`
+/// of a widget `events` makes, so a view's `impl Shown<Message>` does.
+pub fn sight<Message, Theme, Renderer>(
+    element: impl core::show::Show<Message, Theme, Renderer>,
+) -> Sight<Message, Theme, Renderer> {
+    Sight {
+        shown: element.shown(),
+        at: std::marker::PhantomData,
+    }
+}

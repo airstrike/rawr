@@ -634,6 +634,12 @@ struct Parser<'a> {
     /// (`take_opaque_arguments`).
     #[cfg(feature = "rust-import")]
     path_outputs: BTreeMap<crate::item::Key, type_ref::Type>,
+    /// What each call of a program's function or method whose output is
+    /// written `impl Trait` gives, with that written output: rustc knows
+    /// the value by its bound alone (`take_opaque_arguments`), as iced_test's
+    /// `simulator(counter.view())` takes it.
+    #[cfg(feature = "rust-import")]
+    opaque_values: Vec<(Ty, type_ref::Type)>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
@@ -976,6 +982,8 @@ impl<'a> Parser<'a> {
             path_values: HashSet::new(),
             #[cfg(feature = "rust-import")]
             path_outputs: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            opaque_values: Vec::new(),
             spliced_traits: BTreeMap::new(),
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),

@@ -441,6 +441,18 @@ pub mod widget {
     }
 }
 
+/// What shows itself at a message, theme and renderer, as iced_core's
+/// `Widget`, which names no default for either: `events` implements it
+/// for its widgets, and `tester` takes it, as iced_test's simulator takes
+/// any core widget.
+pub mod show {
+    /// A widget that shows a text.
+    pub trait Show<Message, Theme, Renderer> {
+        /// What it shows.
+        fn shown(&self) -> String;
+    }
+}
+
 /// A point of the soft renderer's own, as tiny_skia's `Point`: a type of
 /// this crate that `events` reaches only through a signature, beside its
 /// own `Point` of the same name.

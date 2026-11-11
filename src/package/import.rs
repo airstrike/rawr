@@ -2619,15 +2619,19 @@ fn build(
             // type's associated functions, as `widget::Text::new`; its
             // methods are reached through the type's values.
             let alias = matches!(entry.outcome.representability(), Representability::Value(_));
-            let item = if !left_out(&path, associated) && names_declared(associated, resolved) {
-                imported_item(&types, &path, associated, allocation)?
-            } else {
-                None
-            };
-            if let Some(item) = item.filter(|item| !alias || item.receiver().is_none()) {
-                builder.imported_item(item)?;
-                if let Some(values) = imported_values(&types, &path, associated, allocation)?
-                    .filter(|item| !alias || item.receiver().is_none())
+            let reached = |item: &host::item::Definition| !alias || item.receiver().is_none();
+            // The values form stands alone where no closure fills the
+            // callable form, as iced_test's `Simulator::click(S)` takes a
+            // `&str` through `Selector`, which it also implements for
+            // closures over a `Candidate<'_>` that Rawr can't write (#1678).
+            if !left_out(&path, associated) && names_declared(associated, resolved) {
+                if let Some(item) =
+                    imported_item(&types, &path, associated, allocation)?.filter(reached)
+                {
+                    builder.imported_item(item)?;
+                }
+                if let Some(values) =
+                    imported_values(&types, &path, associated, allocation)?.filter(reached)
                 {
                     builder.imported_item(values)?;
                 }
@@ -2653,9 +2657,9 @@ fn build(
                 }
                 if let Some(item) = imported_item(&types, &path, member, allocation)? {
                     builder.imported_item(item)?;
-                    if let Some(values) = imported_values(&types, &path, member, allocation)? {
-                        builder.imported_item(values)?;
-                    }
+                }
+                if let Some(values) = imported_values(&types, &path, member, allocation)? {
+                    builder.imported_item(values)?;
                 }
             }
         }
@@ -2668,9 +2672,9 @@ fn build(
         }
         if let Some(item) = imported_item(&types, path, *member, allocation)? {
             builder.imported_item(item)?;
-            if let Some(values) = imported_values(&types, path, *member, allocation)? {
-                builder.imported_item(values)?;
-            }
+        }
+        if let Some(values) = imported_values(&types, path, *member, allocation)? {
+            builder.imported_item(values)?;
         }
     }
     // A trait's member its impl for a number, `bool` or `char` gives it: a
@@ -4457,7 +4461,7 @@ fn converted_pattern(
     parameters: &[representability::signature::Parameter],
 ) -> Option<host::signature::Pattern> {
     use host::signature::Pattern;
-    use representability::convert::Type;
+    use representability::convert::{Builtin, Type};
     use representability::signature::IMPL_PARAMETER;
     Some(match ty {
         Type::Unit => Pattern::Unit,
@@ -4471,6 +4475,11 @@ fn converted_pattern(
                 .name()
                 .into(),
         ),
+        // A `&str` an implementation is for, as the program's string slice
+        // is (#1678).
+        Type::Builtin(Builtin::Str | Builtin::StaticStr) => {
+            Pattern::Type(Types::input_charged(ty, parameters).ok()?)
+        }
         Type::Builtin(builtin) => {
             Pattern::Builtin(host::type_ref::Builtin::primitive(builtin.rust_name()?)?)
         }
