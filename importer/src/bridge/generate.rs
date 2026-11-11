@@ -22366,6 +22366,11 @@ fn render_impl_function(
     // depth of an input, and script code holds it by a handle into the
     // frame (`frame::Frame`).
     let _in_frame = frame.map(|frame| InFrame::enter(frame.slots(), "frame"));
+    let in_arena = |body: &str| {
+        format!(
+            "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
+        )
+    };
     let formatter = function
         .formatter()
         .and_then(|position| usize::try_from(position).ok());
@@ -22489,7 +22494,7 @@ fn render_impl_function(
                 values.push(lend.value());
                 lends.push(lend);
             }
-            convert::Type::Borrowed { ty, .. } => {
+            convert::Type::Borrowed { mutable, ty } => {
                 // A copy of a value Rawr holds by value, as a `&str` or a
                 // `&[T]` is.
                 let mut converted = String::new();
@@ -22497,6 +22502,18 @@ fn render_impl_function(
                 values.push(format!(
                     "(({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position}))))"
                 ));
+                // A `&mut` one goes back into the place native code lent,
+                // with what the script function wrote, as canvas's
+                // `update(&self, state: &mut Self::State, ..)` keeps the
+                // `Option<Pending>` its program set (#990).
+                if *mutable {
+                    let mut back = String::new();
+                    render_from_dynamic(ty, "value", 0, &mut back)?;
+                    restores.push_str(&format!(
+                        "\n        {{ let value = std::mem::take(&mut values[{at}]); *{name} = {}.unwrap_or_else(|error| panic!(\"rawr: a script function gave back a value native code can't take: {{error:?}}\")); }}",
+                        in_arena(&back)
+                    ));
+                }
             }
             // A native value is attested as the type of the script
             // function's parameter, so script code reads it as that type.
@@ -22520,11 +22537,6 @@ fn render_impl_function(
         None => impl_type(returned, generics),
     }
     .ok_or_else(|| drift("a script impl function's output"))?;
-    let in_arena = |body: &str| {
-        format!(
-            "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
-        )
-    };
     // A method that writes into a formatter gives `fmt::Result`: its body
     // gives back the text it wrote, which the formatter takes.
     let written = formatter.map(|position| {

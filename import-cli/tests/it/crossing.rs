@@ -292,6 +292,20 @@ fn an_associated_state_held_as_a_script_value_crosses() {
     );
 }
 
+/// iced's bezier_tool (#990): a script `update` that sets the `&mut
+/// Option<Pending>` state the crate lends it, where `Pending` is the
+/// program's own type. The crate keeps what the update left, as rustc's
+/// does, and `draw` shows it. The output is `cargo run`'s.
+#[test]
+fn a_state_a_script_update_sets_is_kept_by_the_crate() {
+    let (rawr, cargo) = both_printed("pending.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("pressed Increment: canvas[primary pending Some(One { from: 9 })#1]"),
+        "{rawr}"
+    );
+}
+
 /// iced's component: a generic script type implements a crate trait over
 /// the message its boxed callback makes, `view` gives `impl Widget<
 /// Message>` and `fallback` an `Option<Message>`, both of the impl's own
