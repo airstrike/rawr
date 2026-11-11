@@ -23,7 +23,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::extract::engine::home;
 
-pub(crate) mod format;
+pub mod format;
 mod rerun;
 
 pub(crate) use rerun::Stale;
@@ -442,9 +442,9 @@ pub(crate) fn directory(cargo_home: &Path) -> PathBuf {
 }
 
 /// Where the project whose Rawr directory is `rawr` keeps the tables it
-/// extracted before they settle.
+/// extracted before they settle, in this rawr's protocol's format.
 pub(crate) fn staged(rawr: &Path) -> PathBuf {
-    rawr.join("staged")
+    format::project(rawr, format::Kept::Staged)
 }
 
 /// Keep each table this extraction made, with what the nightly's build

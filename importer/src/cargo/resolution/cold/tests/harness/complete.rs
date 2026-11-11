@@ -39,7 +39,8 @@ fn probe(
         layout.extraction().plan().as_os_str().to_owned(),
         layout.extraction().protocol().as_os_str().to_owned(),
         layout.extraction().source().as_os_str().to_owned(),
-        context.rawr().join("extraction").into_os_string(),
+        crate::bindings::format::project(context.rawr(), crate::bindings::format::Kept::Extraction)
+            .into_os_string(),
     ];
     let environment: Box<[_]> = process::driver_library(native.rustc(), &[])
         .into_iter()

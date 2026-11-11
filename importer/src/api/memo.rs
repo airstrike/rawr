@@ -78,9 +78,7 @@ pub(crate) fn shared_key(
 }
 
 fn path(context: &crate::context::Context, key: &[u8; 32]) -> PathBuf {
-    context
-        .rawr()
-        .join("api-memo")
+    crate::bindings::format::project(context.rawr(), crate::bindings::format::Kept::Memo)
         .join(node::Digest::from_bytes(*key).directory())
 }
 

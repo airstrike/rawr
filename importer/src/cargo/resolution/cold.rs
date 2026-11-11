@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::layout;
+use crate::bindings::format;
 use crate::cargo::{self, Limits, Request};
 use crate::process::{ProductionReplay, Program, ToolPaths};
 use crate::{Error, Result};
@@ -486,11 +487,14 @@ impl Request {
             limits,
         )?
         .demand(&self.demand)?
-        .reuse(&cached.context.rawr().join("extraction"))?
+        .reuse(&format::project(
+            cached.context.rawr(),
+            format::Kept::Extraction,
+        ))?
         .share(
             shared,
             crate::bindings::directory(cached.context.cargo_home()),
-            cached.context.rawr().join("bindings"),
+            format::project(cached.context.rawr(), format::Kept::Bindings),
             crate::bindings::staged(cached.context.rawr()),
         );
         let command_target = extraction_plan.command_target()?;
