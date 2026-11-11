@@ -15,7 +15,8 @@
         {"text":"iced's `Task::sip`/`finish` shape works again: a closure takes `<S as Future>::Output` of an `S: Core`, because a crate trait whose one blanket implementation also needs a crate trait, as sipper's `Core` needs a stream, no longer reads as a plain future.","issues":[1699]},
         {"text":"A closure over iced_test's lifetime-carrying `Candidate<'_>` fills a selector, as in `ui.click(|candidate: Candidate<'_>| ..)`, as rustc allows.","issues":[1694]},
         {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]},
-        {"text":"A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged.","issues":[1687]}
+        {"text":"A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged.","issues":[1687]},
+        {"text":"A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements.","issues":[1018]}
       ]
     },
     "releases": [
@@ -3046,7 +3047,7 @@
     {"issue":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open","category":"Health"},
     {"issue":1016,"title":"A rawr-import bindings lease test is flaky: a publish right after dropping the lease gets WouldBlock","state":"closed","category":"Health"},
     {"issue":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open","category":"iced examples"},
-    {"issue":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open","category":"iced examples"},
+    {"issue":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"closed","category":"iced examples"},
     {"issue":1019,"title":"Universe build overflows the stack at \"building API\" since 0.3.150","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1020,"title":"Universe main panics: a value reached an adapter as a type its signature doesn't take","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1021,"title":"rawr-play lib tests fail: endless-loop snippets, D683.4 refusals, a 100 ms budget","state":"closed","category":"Health","release":"0.3.152"},
@@ -4251,7 +4252,7 @@
             {"number":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open"},
             {"number":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"closed"},
             {"number":1017,"title":"serde attributes and types todos needs: default = path, skip, uuid, unit enums, Vec fields, to_string_pretty","state":"open"},
-            {"number":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"open"},
+            {"number":1018,"title":"pokedex: nested Deserialize structs decoded by reqwest's .json().await on tokio's threads","state":"closed"},
             {"number":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"closed"},
             {"number":1023,"title":"A crate unit struct used as a value is refused","state":"retired"},
             {"number":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed"},
