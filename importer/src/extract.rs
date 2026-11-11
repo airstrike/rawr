@@ -5206,7 +5206,11 @@ fn shape(
             )?,
             generics: generics_of(generics, catalog, limits, allocation)?,
         },
-        protocol::Shape::Enum { variants, generics } => model::Kind::Enum {
+        protocol::Shape::Enum {
+            variants,
+            non_exhaustive,
+            generics,
+        } => model::Kind::Enum {
             variants: {
                 let mut converted = Vec::new();
                 allocation.temporary_conversions(variants.len());
@@ -5216,6 +5220,7 @@ fn shape(
                 }
                 converted.into_boxed_slice()
             },
+            non_exhaustive,
             generics: generics_of(generics, catalog, limits, allocation)?,
         },
         protocol::Shape::Const { ty, value } => model::Kind::Const {

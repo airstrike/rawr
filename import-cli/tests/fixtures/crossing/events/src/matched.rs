@@ -121,3 +121,23 @@ pub fn shelved(tag: &Tag, shelf: &Shelf) -> bool {
 pub fn holds(door: &Door, outcome: &Outcome) -> bool {
     matches!(outcome, Outcome::Opened(held) if std::ptr::eq(held, door))
 }
+
+/// An enum of one variant, which a `let` destructures (#1681).
+pub enum Press {
+    Down(Door),
+}
+
+/// An enum of one variant that is `#[non_exhaustive]`, which a `let`
+/// outside this crate can't destructure.
+#[non_exhaustive]
+pub enum Sealed {
+    Down(Door),
+}
+
+pub fn press(name: &str) -> Press {
+    Press::Down(Door::new(name))
+}
+
+pub fn sealed(name: &str) -> Sealed {
+    Sealed::Down(Door::new(name))
+}

@@ -337,7 +337,7 @@ impl Writer {
                             .map(|field| (field.selector.fingerprint(), index)),
                     );
                 }
-                Shape::Enum { variants } => structural.extend(
+                Shape::Enum { variants, .. } => structural.extend(
                     variants
                         .iter()
                         .map(|variant| (variant.selector.fingerprint(), index)),

@@ -118,6 +118,9 @@ pub enum Kind {
     Enum {
         /// Ordered canonical variants.
         variants: Box<[Variant]>,
+        /// Whether the enum is `#[non_exhaustive]`: outside its crate a
+        /// pattern covers it only with a wildcard.
+        non_exhaustive: bool,
         /// Type, lifetime, const, bound, and where-clause evidence.
         generics: Generics,
     },
@@ -789,7 +792,9 @@ impl Kind {
                     fields.retain(retained)?;
                     generics.retain(retained)
                 }
-                Self::Enum { variants, generics } => {
+                Self::Enum {
+                    variants, generics, ..
+                } => {
                     retained.slice(variants)?;
                     for variant in variants {
                         variant.retain(retained)?;
@@ -1424,7 +1429,9 @@ impl Kind {
                     .for_each(|field| field.collect_references(references));
                 generics.collect_references(references);
             }
-            Self::Enum { variants, generics } => {
+            Self::Enum {
+                variants, generics, ..
+            } => {
                 variants
                     .iter()
                     .for_each(|variant| variant.collect_references(references));

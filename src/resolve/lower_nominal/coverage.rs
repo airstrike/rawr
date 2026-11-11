@@ -428,6 +428,37 @@ fn host_type_name(definition: &crate::host::type_def::Definition) -> String {
     path.rsplit("::").next().unwrap_or_default().to_owned()
 }
 
+/// The facade enum's `variant`, written `name`, as rustc writes a witness
+/// of it: `_` in each field, or `missed` in the field at its index, as
+/// `Event::Pressed(_)` or `Event::Moved { x: 0_i32, .. }`.
+fn variant_witness(
+    name: &str,
+    variant: &crate::host::type_def::Variant,
+    missed: Option<(usize, &String)>,
+) -> String {
+    let fields = variant.fields();
+    // A tuple variant's fields are named by their positions.
+    let tuple = fields
+        .first()
+        .is_some_and(|field| field.name().parse::<usize>().is_ok());
+    if fields.is_empty() {
+        return name.to_owned();
+    }
+    if !tuple {
+        return match missed {
+            Some((index, missed)) => format!("{name} {{ {}: {missed}, .. }}", fields[index].name()),
+            None => format!("{name} {{ .. }}"),
+        };
+    }
+    let members = (0..fields.len())
+        .map(|position| match missed {
+            Some((index, missed)) if index == position => missed.as_str(),
+            _ => "_",
+        })
+        .collect::<Vec<_>>();
+    format!("{name}({})", members.join(", "))
+}
+
 /// A pattern literal as Rust spells it.
 pub(super) fn render_literal(literal: &ast::NominalLiteral) -> String {
     match literal {
@@ -617,7 +648,13 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         site: BindingSite,
     ) -> Result<(), Error> {
-        let mut witnesses = self.uncovered(syntax, coverage, ty);
+        // A facade value's own checks name what it misses, below its
+        // variant too, as `Event::Pressed(1_i64..=i64::MAX)`.
+        let mut witnesses = if matches!(self.referenced(ty), Ty::Host { .. }) {
+            Vec::new()
+        } else {
+            self.uncovered(syntax, coverage, ty)
+        };
         let checks = self.host_checks.borrow().clone();
         for (_, check, check_ty, _) in checks {
             if !witnesses.is_empty() {
@@ -697,7 +734,11 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Vec::new())
             }
-            // A facade enum's variant, whose siblings the facade names.
+            pattern::Syntax::Enum(written) if matches!(referenced, Ty::Host { .. }) => {
+                let prefix = self.reference_prefix(ty);
+                self.host_variant_uncovered(written, &referenced, &prefix, syntax.span())
+            }
+            // Any other refutable pattern on a facade value.
             _ if matches!(referenced, Ty::Host { .. }) => {
                 Ok(vec![format!("{}_", self.reference_prefix(ty))])
             }
@@ -708,6 +749,92 @@ impl<'a> Parser<'a> {
                 Ok(self.uncovered(syntax, &resolved?.coverage, ty))
             }
         }
+    }
+
+    /// The values of the facade enum `referenced` that `written`, a pattern
+    /// on one of its variants, misses, as rustc lists them: each other
+    /// variant, then the first field of the written one whose pattern
+    /// misses some, and `_` for a `#[non_exhaustive]` enum's values that a
+    /// program outside its crate can't name. `let Event::Pressed(label) =
+    /// event` on an enum of that one variant misses none (#1681).
+    fn host_variant_uncovered(
+        &mut self,
+        written: &pattern::EnumSyntax,
+        referenced: &Ty,
+        prefix: &str,
+        at: Span,
+    ) -> Result<Vec<String>, Error> {
+        let Ty::Host { proof, arguments } = referenced else {
+            return Ok(vec![format!("{prefix}_")]);
+        };
+        let definition = proof.definition.clone();
+        let crate::host::type_def::Shape::Enum {
+            variants,
+            non_exhaustive,
+        } = definition.shape()
+        else {
+            return Ok(vec![format!("{prefix}_")]);
+        };
+        let owner = host_type_name(&definition);
+        let path: ImmutableString = definition.path().as_str().into();
+        let discard = pattern::Syntax::Discard { span: at };
+        let mut missed = Vec::new();
+        for variant in variants {
+            let name = format!("{prefix}{owner}::{}", variant.name());
+            if variant.name() != written.variant.as_str() {
+                missed.push(variant_witness(&name, variant, None));
+                continue;
+            }
+            let members = match &written.named {
+                Some((names, _)) => {
+                    let mut members = vec![&discard; variant.fields().len()];
+                    for ((field, _), member) in names.iter().zip(written.payload.iter()) {
+                        if let Some(index) = variant
+                            .fields()
+                            .iter()
+                            .position(|declared| declared.name() == field.as_str())
+                        {
+                            members[index] = member;
+                        }
+                    }
+                    members
+                }
+                None if written.payload.is_empty() => vec![&discard; variant.fields().len()],
+                None => tuple_members(&written.payload, variant.fields().len(), &discard)?,
+            };
+            let mut parameters = definition
+                .parameters()
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            for (index, (member, field)) in members.into_iter().zip(variant.fields()).enumerate() {
+                if !member.may_refute() {
+                    continue;
+                }
+                let field_ty = self.instantiate_host_type(
+                    field.ty(),
+                    &mut parameters,
+                    &path,
+                    at,
+                    proof.owner.as_ref(),
+                    Some(&definition),
+                )?;
+                let inner = self.host_uncovered(member, &field_ty)?;
+                if !inner.is_empty() {
+                    missed.extend(
+                        inner
+                            .iter()
+                            .map(|inner| variant_witness(&name, variant, Some((index, inner)))),
+                    );
+                    break;
+                }
+            }
+        }
+        if *non_exhaustive {
+            missed.push(format!("{prefix}_"));
+        }
+        Ok(missed)
     }
 
     /// The patterns of the values of `ty` that `syntax`, whose coverage is
@@ -865,7 +992,8 @@ impl<'a> Parser<'a> {
             // program's pattern are each a binding, `_` or a part tested at
             // run time (`host_coverage`), so their types are not needed.
             Ty::Host { proof, .. } => {
-                let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape() else {
+                let crate::host::type_def::Shape::Enum { variants, .. } = proof.definition.shape()
+                else {
                     return None;
                 };
                 let identity = type_def::Identity::Host(proof.definition.identity().clone());
@@ -973,7 +1101,8 @@ impl<'a> Parser<'a> {
                 let Ty::Host { proof, .. } = &referenced else {
                     return Ok(partial());
                 };
-                let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape() else {
+                let crate::host::type_def::Shape::Enum { variants, .. } = proof.definition.shape()
+                else {
                     return Ok(partial());
                 };
                 let Some(variant) = variants
@@ -1279,7 +1408,7 @@ impl<'a> Parser<'a> {
         let resolved = self.inference.resolve(ty);
         let enumerated = match without_references(&resolved) {
             Ty::Host { proof, arguments } => match proof.definition.shape() {
-                crate::host::type_def::Shape::Enum(variants) => {
+                crate::host::type_def::Shape::Enum { variants, .. } => {
                     Some((proof.clone(), arguments.clone(), variants.to_vec()))
                 }
                 _ => None,

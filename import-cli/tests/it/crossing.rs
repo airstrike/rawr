@@ -2534,6 +2534,19 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
     assert_eq!(rawr, MATCHED);
 }
 
+/// `let Press::Down(door) = ..;` on a crate enum of that one variant
+/// destructures it, as rustc does (#1681), while the same `let` on one
+/// marked `#[non_exhaustive]` is E0005, as the driver reads the marker.
+/// The output is `cargo run`'s.
+#[test]
+fn a_let_on_a_crate_enums_only_variant_runs_unless_non_exhaustive() {
+    let (rawr, cargo) = both_printed("pressed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "down closed gate\nheld vent");
+    let stderr = rejected_as_cargo("pressed_sealed.rs", "E0005");
+    assert!(stderr.contains("pattern `_` not covered"), "{stderr}");
+}
+
 /// What `matched.rs` prints, as `cargo run` does.
 const MATCHED: &str = "ok 4\nclosed vent\nfailed\n\
                        door door door open\nclosed door\nfailed\n3 consumed refused\n\

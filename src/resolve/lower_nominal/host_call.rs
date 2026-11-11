@@ -3187,7 +3187,7 @@ pub(super) fn host_number_accepts(parameter: &crate::host::type_ref::Type, sourc
 pub(super) fn names_variant(definition: &crate::host::type_def::Definition, member: &str) -> bool {
     matches!(
         definition.shape(),
-        crate::host::type_def::Shape::Enum(variants)
+        crate::host::type_def::Shape::Enum { variants, .. }
             if variants.iter().any(|variant| variant.name() == member)
     )
 }

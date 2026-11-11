@@ -710,7 +710,7 @@ fn structural_path<'facade>(
                 }))
                 .next(),
             // A variant's selector names its constructor and its matchers.
-            host::type_def::Shape::Enum(variants) => variants.iter().find_map(|variant| {
+            host::type_def::Shape::Enum { variants, .. } => variants.iter().find_map(|variant| {
                 (variant.imported_identity().fingerprint() == row.selector).then_some(
                     match row.kind {
                         StructuralKind::Match
@@ -1058,7 +1058,7 @@ fn retain_shape(
     };
     match shape {
         host::type_def::Shape::Struct { fields, .. } => retain_fields(fields),
-        host::type_def::Shape::Enum(variants) => {
+        host::type_def::Shape::Enum { variants, .. } => {
             for variant in variants {
                 retain_fields(variant.fields());
             }
@@ -1075,7 +1075,7 @@ fn retain_shape(
                 )
             });
         }
-        host::type_def::Shape::Enum(variants) => {
+        host::type_def::Shape::Enum { variants, .. } => {
             items = items.and_then(|items| items.checked_add(variants.len()));
             for variant in variants {
                 bytes = bytes.and_then(|bytes| {
@@ -1239,8 +1239,8 @@ pub(crate) fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Erro
     let variants = shape
         .variants()
         .expect("a generated type that is not a struct is an enum");
-    Ok(host::type_def::Shape::Enum(
-        variants
+    Ok(host::type_def::Shape::Enum {
+        variants: variants
             .iter()
             .map(|variant| {
                 Ok(host::type_def::Variant::new(
@@ -1263,7 +1263,8 @@ pub(crate) fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Erro
             })
             .collect::<Result<Vec<_>, Error>>()?
             .into_boxed_slice(),
-    ))
+        non_exhaustive: shape.non_exhaustive(),
+    })
 }
 
 fn field(field: &facade::Field) -> Result<host::type_def::Field, Error> {

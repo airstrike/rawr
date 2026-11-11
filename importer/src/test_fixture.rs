@@ -408,6 +408,7 @@ fn iced_profile_graph_with_universe(
             model::Visibility::Public,
             model::Kind::Enum {
                 variants: Box::default(),
+                non_exhaustive: false,
                 generics: generics(),
             },
             span(333, 334),
@@ -474,6 +475,7 @@ fn iced_profile_graph_with_universe(
             model::Visibility::Public,
             model::Kind::Enum {
                 variants: Box::default(),
+                non_exhaustive: false,
                 generics: element_generics(&non_struct),
             },
             span(391, 400),
@@ -775,6 +777,7 @@ fn iced_abi_definitions(
                         6,
                     ),
                 ]),
+                non_exhaustive: false,
                 generics: generics(),
             },
             span(611, 640),
@@ -948,6 +951,7 @@ fn captured_graph_with_support_order(
                         span(36, 41),
                     ),
                 ]),
+                non_exhaustive: false,
                 generics: generics(),
             },
             span(24, 42),

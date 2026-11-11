@@ -2511,7 +2511,10 @@ fn build(
                                 ),
                             );
                         }
-                        host::type_def::Shape::Enum(variants.into_boxed_slice())
+                        host::type_def::Shape::Enum {
+                            variants: variants.into_boxed_slice(),
+                            non_exhaustive: plan.non_exhaustive(),
+                        }
                     }
                     Representability::Value(_)
                     | Representability::Function(_)

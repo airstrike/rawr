@@ -969,7 +969,7 @@ impl<'a> Parser<'a> {
         // bridge (`imported_variant_pattern`).
         #[cfg(feature = "rust-import")]
         if proof.definition.identity().imported().is_some()
-            && let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape()
+            && let crate::host::type_def::Shape::Enum { variants, .. } = proof.definition.shape()
         {
             return Some(
                 variants
@@ -1246,16 +1246,27 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
+        // A `#[non_exhaustive]` crate enum has values outside its crate's
+        // variants, which only an arm matching anything covers.
+        let sealed = matches!(
+            &subject_ty,
+            Ty::Host { proof, .. } if matches!(
+                proof.definition.shape(),
+                crate::host::type_def::Shape::Enum { non_exhaustive: true, .. }
+            )
+        );
         if !exhaustive
-            && !variants.iter().all(|variant| covered.contains(variant))
-            && !self.host_rows_cover(
-                unguarded.iter().map(|syntax| vec![syntax]).collect(),
-                std::slice::from_ref(&subject_ty),
-                match_span,
-            )?
+            && (sealed
+                || !variants.iter().all(|variant| covered.contains(variant))
+                    && !self.host_rows_cover(
+                        unguarded.iter().map(|syntax| vec![syntax]).collect(),
+                        std::slice::from_ref(&subject_ty),
+                        match_span,
+                    )?)
         {
             // rustc's witnesses: each variant no arm covers, by the type's
-            // own name; `_` where arms cover each variant only in part.
+            // own name; `_` where arms cover each variant only in part, and
+            // for a `#[non_exhaustive]` enum's other values.
             let owner = owner_path.as_str().rsplit("::").next().unwrap_or_default();
             let prefix = self.reference_prefix(&written);
             let mut witnesses = variants
@@ -1263,7 +1274,7 @@ impl<'a> Parser<'a> {
                 .filter(|variant| !covered.contains(variant))
                 .map(|variant| format!("{prefix}{owner}::{variant}").into())
                 .collect::<Vec<ImmutableString>>();
-            if witnesses.is_empty() {
+            if witnesses.is_empty() || sealed {
                 witnesses.push(format!("{prefix}_").into());
             }
             return Err(Error::NonExhaustive {

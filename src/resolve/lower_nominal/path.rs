@@ -1669,7 +1669,7 @@ impl<'a> Parser<'a> {
         owner_span: Span,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        let crate::host::type_def::Shape::Enum(variants) = definition.shape() else {
+        let crate::host::type_def::Shape::Enum { variants, .. } = definition.shape() else {
             unreachable!("imported variant parsing is selected only for enum shape")
         };
         let Some(variant) = variants.iter().find(|variant| variant.name() == member) else {

@@ -3244,7 +3244,7 @@ impl<'a> Parser<'a> {
             && proof.definition.identity().imported().is_some()
             && matches!(
                 proof.definition.shape(),
-                crate::host::type_def::Shape::Enum(_)
+                crate::host::type_def::Shape::Enum { .. }
             )
         {
             return self.imported_variant_pattern(pattern, value, ty, out);
@@ -3391,7 +3391,7 @@ impl<'a> Parser<'a> {
         };
         let definition = proof.definition.clone();
         let path: ImmutableString = definition.path().as_str().into();
-        let crate::host::type_def::Shape::Enum(variants) = definition.shape() else {
+        let crate::host::type_def::Shape::Enum { variants, .. } = definition.shape() else {
             unreachable!("imported variant patterns match enums");
         };
         let at = pattern.variant_span;
