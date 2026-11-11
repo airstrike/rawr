@@ -30,7 +30,9 @@
         {"text":"`Option<PathBuf>::as_deref` gives an `Option<&Path>`, as std's `Deref for PathBuf` does, and `Path::extension` works as a function value after it, as in iced's editor.","issues":[1705]},
         {"text":"A crate's thread `JoinHandle` crosses inside an `Option`, a `Result` or a tuple, and a crate can take one, whether the crate's thread or the program's own `std::thread::spawn` made it.","issues":[1274]},
         {"text":"A crate's `JoinHandle<T>` whose `T` holds the crate's values, alone or in an `Option`, gives them to the program when it joins the thread.","issues":[1275]},
-        {"text":"A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`.","issues":[1276]}
+        {"text":"A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`.","issues":[1276]},
+        {"text":"A crate's own derive macro whose expansion names `alloc` through a re-export runs, as cargo runs it.","issues":[1710]},
+        {"text":"`std::mem::take` empties a `Vec` of a type without `Default`, and a hand-written `impl<'de> serde::de::Deserialize<'de>` with a parameter named `D` runs.","issues":[1711]}
       ]
     },
     "releases": [
@@ -3753,11 +3755,12 @@
     {"issue":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open","category":"Divergences from rustc"},
     {"issue":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open","category":"Divergences from rustc"},
     {"issue":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"open","category":"Divergences from rustc"},
-    {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"open","category":"Divergences from rustc"},
-    {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"open","category":"Divergences from rustc"},
+    {"issue":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"closed","category":"Divergences from rustc"},
+    {"issue":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"closed","category":"Divergences from rustc"},
     {"issue":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open","category":"Divergences from rustc"},
-    {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"}
+    {"issue":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open","category":"Divergences from rustc"},
+    {"issue":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4359,11 +4362,12 @@
             {"number":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"closed"},
             {"number":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open"},
             {"number":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open"},
-            {"number":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"open"},
-            {"number":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"open"},
+            {"number":1710,"title":"plain-derives' shapes proc-macro step fails: rawr misread rustc's output (unresolved-re-export-authority): alloc","state":"closed"},
+            {"number":1711,"title":"std::mem::take on a Vec of a program struct, and a hand-written Deserialize with type parameter D, are refused","state":"closed"},
             {"number":1709,"title":"serde's unit-enum Deserialize failed: from_utf8_lossy(&[u8]) had no frame, and a pattern couldn't fix a call's open type","state":"open"},
             {"number":1713,"title":"A crate's impl From<CrateType> for a std type rawr holds isn't seen: impl Into<PathBuf> of an rfd::FileHandle is E0277","state":"open"},
-            {"number":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open"}
+            {"number":1714,"title":"JoinHandle left: tokio's handle named in a program's signatures, and a crate taking a handle whose T holds crate values","state":"open"},
+            {"number":1715,"title":"f64::deserialize(deserializer) inside a hand-written Deserialize impl is E0308","state":"open"}
           ],
           "milestone": "0.4"
         },

@@ -24,6 +24,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate's thread `JoinHandle` crosses inside an `Option`, a `Result` or a tuple, and a crate can take one, whether the crate's thread or the program's own `std::thread::spawn` made it. (#1274)
 - A crate's `JoinHandle<T>` whose `T` holds the crate's values, alone or in an `Option`, gives them to the program when it joins the thread. (#1275)
 - A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`. (#1276)
+- A crate's own derive macro whose expansion names `alloc` through a re-export runs, as cargo runs it. (#1710)
+- `std::mem::take` empties a `Vec` of a type without `Default`, and a hand-written `impl<'de> serde::de::Deserialize<'de>` with a parameter named `D` runs. (#1711)
 
 ## 0.3.183 (2026-11-11)
 

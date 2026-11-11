@@ -23,7 +23,9 @@
       {"text":"`Option<PathBuf>::as_deref` gives an `Option<&Path>`, as std's `Deref for PathBuf` does, and `Path::extension` works as a function value after it, as in iced's editor.","issues":[1705]},
       {"text":"A crate's thread `JoinHandle` crosses inside an `Option`, a `Result` or a tuple, and a crate can take one, whether the crate's thread or the program's own `std::thread::spawn` made it.","issues":[1274]},
       {"text":"A crate's `JoinHandle<T>` whose `T` holds the crate's values, alone or in an `Option`, gives them to the program when it joins the thread.","issues":[1275]},
-      {"text":"A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`.","issues":[1276]}
+      {"text":"A program's thread `JoinHandle` can be a crate generic's type argument, as in `Held::new(std::thread::spawn(..))`.","issues":[1276]},
+      {"text":"A crate's own derive macro whose expansion names `alloc` through a re-export runs, as cargo runs it.","issues":[1710]},
+      {"text":"`std::mem::take` empties a `Vec` of a type without `Default`, and a hand-written `impl<'de> serde::de::Deserialize<'de>` with a parameter named `D` runs.","issues":[1711]}
     ]
   },
   "releases": [
