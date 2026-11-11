@@ -22,7 +22,8 @@
         {"text":"A compound assignment with a number on the left and a crate's type on the right, as `y += turn` with the crate's `impl AddAssign<Turn> for f32`, calls the crate's impl, on a local or a field, as rustc does.","issues":[987]},
         {"text":"A generic function written `-> impl Trait` takes its type parameters from the bound of the parameter its value is passed to, as iced's editor's `action(new_icon(), ..)` infers `new_icon`'s message.","issues":[1633]},
         {"text":"A conversion's target that only a later renderer fixes, through an impl's `Renderer: image::Renderer<Handle = Handle>`, is that handle, also through a method call such as `image(handle).boxed()`, as in iced's screenshot.","issues":[1632]},
-        {"text":"A string literal's `.into()` into a crate type whose `From<&str>` borrows the text runs where only a later use gives the target, as in `Row::with_children([.., \"b\".into()])`.","issues":[1328]}
+        {"text":"A string literal's `.into()` into a crate type whose `From<&str>` borrows the text runs where only a later use gives the target, as in `Row::with_children([.., \"b\".into()])`.","issues":[1328]},
+        {"text":"Items in a function body are scoped to their block, as rustc scopes them. A body's `const` is visible to the `fn` and `impl` items nested in the same block, even before its declaration. Two functions can each declare their own `const MAX`, `struct Point`, `fn helper` or `use … as name`. A nested item can't be named outside its block (E0425), and `{:?}` of a nested struct prints its bare name.","issues":[1631,1429]}
       ]
     },
     "releases": [
@@ -3464,7 +3465,7 @@
     {"issue":1426,"title":"The generator emits a runner as a module of a host crate, and a `rawr_build::bindings()` for…","state":"open","category":"Importer"},
     {"issue":1427,"title":"A non-prelude std trait's method (io::Write, BufRead, Read, Hasher) is callable out of scope…","state":"open","category":"Divergences from rustc"},
     {"issue":1428,"title":"write! into a String with only std::io::Write in scope is accepted; rustc's E0599 says its trait…","state":"open","category":"Divergences from rustc"},
-    {"issue":1429,"title":"Two blocks' uses binding one name to different items collide, and items declared in a block are…","state":"open","category":"Divergences from rustc"},
+    {"issue":1429,"title":"Two blocks' uses binding one name to different items collide, and items declared in a block are…","state":"closed","category":"Divergences from rustc"},
     {"issue":1430,"title":"Err(value) with a bare error in an if/match arm where Result<_, Box<dyn Error>> is expected is…","state":"open","category":"Divergences from rustc"},
     {"issue":1431,"title":"Panics inside std (pow, sum, step_by, drain) name the call site where rustc names core's source file","state":"open","category":"Divergences from rustc"},
     {"issue":1432,"title":"A script fn lent a native `&T` returns a crate value the slot takes after the lend ends: Stale…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
@@ -3666,7 +3667,7 @@
     {"issue":1628,"title":"With tracing's log feature on, MetadataBuilder::target is refused as borrowing at an early-bound lifetime","state":"open","category":"Divergences from rustc"},
     {"issue":1629,"title":"A program with recorded generated crates never kept its extracted tables for the next demand round","state":"closed","category":"No glue (D593)","release":"0.3.177"},
     {"issue":1630,"title":"A crate macro including a file relative to a native module, as wgpu::include_wgsl!, can't find it","state":"closed","category":"No glue (D593)","release":"0.3.177"},
-    {"issue":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open","category":"Divergences from rustc"},
+    {"issue":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"closed","category":"Divergences from rustc"},
     {"issue":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"closed","category":"Divergences from rustc"},
     {"issue":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"closed","category":"Divergences from rustc"},
     {"issue":1634,"title":"A check parsed every program source again in each demand round","state":"closed","category":"No glue (D593)","release":"0.3.178"},
@@ -3742,7 +3743,8 @@
     {"issue":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open","category":"Divergences from rustc"},
     {"issue":1705,"title":"rawr doesn't run Option::as_deref, as iced's editor's self.file.as_deref().and_then(Path::extension)","state":"open","category":"Divergences from rustc"},
     {"issue":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"open","category":"Divergences from rustc"},
-    {"issue":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open","category":"Divergences from rustc"}
+    {"issue":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open","category":"Divergences from rustc"},
+    {"issue":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4316,7 +4318,7 @@
             {"number":1363,"title":"A string literal is `&'static str`: a crate value built from it borrows no frame, so nested row![badge![..]] views lower","state":"closed"},
             {"number":1373,"title":"Call ratatui's Terminal::draw from rawr, and resolve TestBackend's Error","state":"open"},
             {"number":1374,"title":"Generated adapters call a trait method two traits share by method syntax (ratatui List::render, E0034)","state":"open"},
-            {"number":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"open"},
+            {"number":1631,"title":"Items in a body are file items: a block const is unseen by nested items, and two bodies' nested items collide","state":"closed"},
             {"number":1632,"title":"A conversion's target that only a later bound fixes is taken from its argument","state":"closed"},
             {"number":1633,"title":"A generic program function's parameter that only the expected type fixes, as editor's action(new_icon(), ..)","state":"closed"},
             {"number":1659,"title":"game_of_life: Task::perform(future, Message::Grid.with(v)) may lack a runtime binding","state":"closed"},
@@ -4342,7 +4344,8 @@
             {"number":1704,"title":"A crate function taking &mut of a number, bool or char from a script, as nudge(&mut y), is refused","state":"open"},
             {"number":1705,"title":"rawr doesn't run Option::as_deref, as iced's editor's self.file.as_deref().and_then(Path::extension)","state":"open"},
             {"number":1706,"title":"use ::image as img; of a dependency crate is refused with E0432 where rustc resolves it, as in iced's screenshot","state":"open"},
-            {"number":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open"}
+            {"number":1707,"title":"Two later-fixed targets still refused: a method on an unresolved impl Trait value, and non-literal text into","state":"open"},
+            {"number":1708,"title":"Block scoping left: a block's static is unseen by nested items, and its trait and glob use still bind module-wide","state":"open"}
           ],
           "milestone": "0.4"
         },
