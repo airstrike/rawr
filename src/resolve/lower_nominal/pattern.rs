@@ -2279,6 +2279,7 @@ impl<'a> Parser<'a> {
         syntax: &Syntax,
         subject: &Ty,
     ) -> Result<ResolvedRoot, Error> {
+        self.infer_from_pattern(syntax, subject);
         let outer_or_types = self.or_binding_types.take();
         let resolved = self.resolve_root_pattern_parts(syntax, subject);
         let or_types = self.or_binding_types.replace(outer_or_types);
@@ -2300,6 +2301,80 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(resolved)
+    }
+
+    /// Each part of `subject` not inferred yet that `syntax` names the type
+    /// of, as rustc infers a call's type parameter from the pattern its
+    /// value is matched against: `V` of serde's `EnumAccess::variant::<V>()`
+    /// from `Ok((Field::All, variant))`.
+    fn infer_from_pattern(&mut self, syntax: &Syntax, subject: &Ty) {
+        let subject = self.inference.resolve(subject);
+        match (syntax, &subject) {
+            (Syntax::Reference { pattern, .. }, Ty::Reference { target, .. }) => {
+                self.infer_from_pattern(pattern, target);
+            }
+            // A pattern of a value reaches it through the reference.
+            (_, Ty::Reference { target, .. }) => self.infer_from_pattern(syntax, target),
+            (Syntax::Tuple { members, .. }, Ty::Tuple(types))
+                if members.len() == types.len()
+                    && !members
+                        .iter()
+                        .any(|member| matches!(member, Syntax::Rest { .. })) =>
+            {
+                for (member, ty) in members.iter().zip(types.iter()) {
+                    self.infer_from_pattern(member, ty);
+                }
+            }
+            (
+                Syntax::Prelude {
+                    variant,
+                    payload: Some(payload),
+                    ..
+                },
+                Ty::Option(inner),
+            ) if *variant == Prelude::Some => self.infer_from_pattern(payload, inner),
+            (
+                Syntax::Prelude {
+                    variant,
+                    payload: Some(payload),
+                    ..
+                },
+                Ty::Result(ok, error),
+            ) => match variant {
+                Prelude::Ok => self.infer_from_pattern(payload, ok),
+                Prelude::Err => self.infer_from_pattern(payload, error),
+                Prelude::Some | Prelude::None => {}
+            },
+            (Syntax::Or { alternatives, .. }, _) => {
+                for alternative in alternatives.iter() {
+                    self.infer_from_pattern(alternative, &subject);
+                }
+            }
+            (Syntax::At { pattern, .. }, _) => self.infer_from_pattern(pattern, &subject),
+            (Syntax::UnitStruct { ty, .. } | Syntax::TupleStruct { ty, .. }, Ty::Infer(id)) => {
+                self.inference.bind(*id, ty.clone());
+            }
+            (Syntax::Enum(syntax), Ty::Infer(id)) => {
+                let model = if syntax.owner.len() == 1 {
+                    syntax
+                        .owner
+                        .first()
+                        .and_then(|(name, _)| self.named_model(name))
+                } else {
+                    self.models
+                        .qualified_pattern_owner(syntax.owner_span)
+                        .cloned()
+                };
+                // An enum of type parameters takes them from elsewhere.
+                if let Some(Nominal::Enum { definition, item }) = model
+                    && item.generics.is_empty()
+                {
+                    self.inference
+                        .bind(*id, Ty::Script(definition.id(), Box::default()));
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn resolve_root_pattern_parts(
