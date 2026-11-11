@@ -14,9 +14,9 @@
 //! serves: `queued`, `swapped`, `failed` and `restarting` are what a
 //! program with an editor of its own shows (#1166).
 //!
-//! The server also names its own pid in [`PARENT`]. A process it started
-//! directly watches that pid: when the server dies, even by SIGKILL, the
-//! process ends what it owns and then its own process group.
+//! A run watches the process that started it ([`watch_parent`]): when that
+//! process dies, even by SIGKILL, the run ends what it owns and then its
+//! own process group when it leads one, as a server starts it.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -39,9 +39,6 @@ pub const INSPECT: &str = "RAWR_MCP_INSPECT";
 /// when it went on (#535). The process that runs the program has it, which
 /// [`EVENTS`] leaves out so it doesn't report as an owner.
 pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
-
-/// The pid of the `rawr mcp` server that started this process.
-pub const PARENT: &str = "RAWR_MCP_PARENT";
 
 /// How often a watched process looks at its parent.
 const WATCH: Duration = Duration::from_millis(100);
@@ -183,41 +180,31 @@ pub fn exited(status: std::process::ExitStatus) {
     );
 }
 
-/// When the server in [`PARENT`] started this process directly, watch it
-/// from a thread: once it is gone, call `retire` to end what this process
-/// owns in other process groups (a runner and its window), then end this
-/// process's own group when it leads one, as the server started it.
+/// Watch the process that started this one from a thread: once it is
+/// gone, call `retire` to end what this process owns in other process
+/// groups (a runner and its window), then end this process's own group when
+/// it leads one, as a `rawr mcp` server starts it, and exit. A run outlives
+/// no parent: a server, a shell or a test that dies takes its run with it.
 pub fn watch_parent(retire: fn()) {
     static STARTED: Once = Once::new();
-    let Some(expected) = std::env::var(PARENT)
-        .ok()
-        .and_then(|pid| pid.parse::<u32>().ok())
-    else {
-        return;
-    };
     #[cfg(unix)]
-    {
-        // A process further down inherits the variable; only the server's
-        // own child watches it.
-        if std::os::unix::process::parent_id() != expected {
-            return;
-        }
-        STARTED.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("rawr-parent-watch".into())
-                .spawn(move || {
-                    while std::os::unix::process::parent_id() == expected {
-                        std::thread::sleep(WATCH);
-                    }
-                    retire();
-                    end_own_group();
-                    std::process::exit(1);
-                });
-        });
-    }
+    STARTED.call_once(|| {
+        let parent = std::os::unix::process::parent_id();
+        let _ = std::thread::Builder::new()
+            .name("rawr-parent-watch".into())
+            .spawn(move || {
+                // An orphan is the init process's child.
+                while std::os::unix::process::parent_id() == parent {
+                    std::thread::sleep(WATCH);
+                }
+                retire();
+                end_own_group();
+                std::process::exit(1);
+            });
+    });
     #[cfg(not(unix))]
     {
-        let _ = (expected, retire, &STARTED);
+        let _ = (retire, &STARTED);
     }
 }
 

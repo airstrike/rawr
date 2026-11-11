@@ -460,8 +460,9 @@ fn session(
     let _socket = profile
         .socket(&root)
         .map(rawr_import::process::remove_on_exit);
-    // A `rawr mcp` that started this run hears what happens, and its death
-    // ends the run (D537.3–4).
+    // A `rawr mcp` that started this run hears what happens (D537.3–4),
+    // and the death of whatever started it, a server, a shell or a test,
+    // ends the run and its program.
     rawr_cli::events::watch_parent(|| drop(rawr_import::process::retire_owned()));
     if rawr_cli::events::supervised() {
         rawr_import::progress::listen(rawr_cli::events::building);

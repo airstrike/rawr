@@ -19,7 +19,7 @@ pub mod runtime;
 pub use alone::alone;
 pub use fixture::Fixture;
 
-use events::Events;
+use events::{Events, News};
 
 /// How often a wait looks at the run's events and whether it exited. A
 /// look that finds neither looks again: no wait has a deadline.
@@ -54,11 +54,12 @@ pub struct Run {
 
 impl Run {
     /// The next stdout line that `accept` takes. A run that says `failed`
-    /// in its events, exits or ends its output without one fails the test,
-    /// with the failure, what it printed and its events.
+    /// in its events fails the test at once, with the failure, what it
+    /// printed and its events; one that exits, whose program ends, or that
+    /// ends its output, fails it once its output has given what it printed.
     pub fn until(&mut self, accept: impl Fn(&str) -> bool) -> String {
         let mut looked = Instant::now();
-        let mut exited = false;
+        let mut gone = None;
         loop {
             match self.lines.recv_timeout(LOOK) {
                 Ok(Line::Out(line)) => {
@@ -69,24 +70,28 @@ impl Run {
                 }
                 Ok(Line::Err(line)) => self.seen.push(format!("stderr: {line}")),
                 Err(RecvTimeoutError::Disconnected) => self.fail("the run ended without it"),
-                // The run exited and its pipes are quiet: they gave what it
-                // printed, and a process it left may hold them open.
-                Err(RecvTimeoutError::Timeout) if exited => {
-                    self.fail("the run exited without it");
+                // The run or its program is gone and its pipes are quiet:
+                // they gave what it printed, and a process it left may hold
+                // them open.
+                Err(RecvTimeoutError::Timeout) => {
+                    if let Some(why) = &gone {
+                        self.fail(&format!("{why} without it"));
+                    }
                 }
-                Err(RecvTimeoutError::Timeout) => {}
             }
             if looked.elapsed() < LOOK {
                 continue;
             }
             looked = Instant::now();
-            self.look();
-            exited = self.child.try_wait().unwrap().is_some();
+            if gone.is_none() {
+                gone = self.gone();
+            }
         }
     }
 
     /// The text of the `RAWR_MCP_EVENTS` file `events` once `accept` takes
-    /// it. A run that says `failed` first, or exits first, fails the test.
+    /// it. A run that says `failed` first, exits first, or whose program
+    /// ends first fails the test.
     pub fn told(&mut self, events: &Path, accept: impl Fn(&str) -> bool) -> String {
         loop {
             let text = fs::read_to_string(events).unwrap_or_default();
@@ -96,18 +101,24 @@ impl Run {
                 }
                 return text;
             }
-            self.look();
-            if self.child.try_wait().unwrap().is_some() {
-                self.fail("the run exited first");
+            if let Some(why) = self.gone() {
+                self.fail(&format!("{why} first"));
             }
             std::thread::sleep(LOOK);
         }
     }
 
-    /// Fail the test when the run said `failed` since the last look.
-    fn look(&mut self) {
-        if let Some(failure) = self.events.as_mut().and_then(Events::failure) {
-            self.fail(&format!("the run failed:\n{failure}"));
+    /// Why the run can print no more since the last look: it exited, or it
+    /// said its program ended. A run that said `failed` fails the test.
+    fn gone(&mut self) -> Option<String> {
+        let ended = match self.events.as_mut().and_then(Events::news) {
+            Some(News::Failed(failure)) => self.fail(&format!("the run failed:\n{failure}")),
+            Some(News::Ended(ended)) => Some(format!("the program ended ({ended})")),
+            None => None,
+        };
+        match self.child.try_wait().unwrap() {
+            Some(status) => Some(format!("the run exited with {status}")),
+            None => ended,
         }
     }
 
@@ -134,9 +145,23 @@ impl Run {
     }
 }
 
+/// A run ends with its test, which passed or panicked, as a stopped `rawr
+/// run` ends: told SIGTERM, it retires its runner with the program and
+/// the builds it started. A test that dies itself ends the run too, which
+/// watches its parent.
 impl Drop for Run {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        // A reaped run's pid may be another process's by now.
+        if let Ok(None) = self.child.try_wait() {
+            #[cfg(unix)]
+            {
+                use nix::sys::signal::{kill, Signal};
+                let pid = i32::try_from(self.child.id()).expect("a pid is an i32");
+                let _ = kill(nix::unistd::Pid::from_raw(pid), Signal::SIGTERM);
+            }
+            #[cfg(not(unix))]
+            let _ = self.child.kill();
+        }
         let _ = self.child.wait();
     }
 }

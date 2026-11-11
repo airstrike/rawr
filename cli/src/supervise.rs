@@ -138,8 +138,8 @@ pub fn run(
     let mut watcher = Watcher::open(&loaded.graph);
     let mut started_from = contents(&loaded.graph);
     drop(loaded);
-    // The program shares this process's group, which a dead `rawr mcp`'s
-    // watch ends.
+    // The program shares this process's group, which the watch ends when
+    // this process's parent dies.
     crate::events::watch_parent(|| {});
     let mut child = match start(&location, &name, arguments) {
         Ok(child) => Some(child),
@@ -243,7 +243,6 @@ fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Resu
         .args(arguments)
         .env(PROGRAM, location)
         .env_remove(crate::events::EVENTS)
-        .env_remove(crate::events::PARENT)
         .spawn()
 }
 
