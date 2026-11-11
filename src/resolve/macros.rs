@@ -218,6 +218,30 @@ impl Table {
         (definition.exported && source == root).then_some((usize::MAX, Position::NONE))
     }
 
+    /// Write what a lookup reads of the table (`lookup`): each definition,
+    /// the limit, and each module's parent with, in place of where the
+    /// parent declares it, which of the frames in the parent it comes
+    /// after. A declaration a save adds before a `mod` item moves the item,
+    /// and changes no lookup, nor what this writes (#1726).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn write_interface(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        write!(out, "{:?}|{}|", self.definitions, self.limit)?;
+        for (child, (parent, declared)) in &self.parents {
+            write!(out, "{child:?}<{parent:?}:")?;
+            for (frame, from) in self
+                .definitions
+                .iter()
+                .flat_map(|definition| &definition.frames)
+            {
+                if frame == parent {
+                    out.write_char(if declared.start() >= *from { '1' } else { '0' })?;
+                }
+            }
+            out.write_char('|')?;
+        }
+        Ok(())
+    }
+
     /// The root source of the crate `source` is a module of.
     fn root_of(&self, mut source: source::Id) -> source::Id {
         while let Some((parent, _)) = self.parents.get(&source) {

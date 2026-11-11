@@ -66,7 +66,7 @@ pub enum Identity {
     Script(Key),
 }
 
-/// A generation-local resolved type identifier.
+/// A resolved type identifier, by the type's key.
 ///
 /// IDs can only be allocated while resolving a complete compilation unit.
 /// Stable runtime identity uses [`Identity`] instead.
@@ -76,21 +76,38 @@ pub enum Identity {
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
-pub struct Id(usize);
+pub struct Id(u64);
 
 impl Id {
-    pub(crate) const fn from_index(index: usize) -> Self {
-        Self(index)
+    /// The id of the script type `key`, put in `taken`, which holds the
+    /// ids given so far: the first 62 bits of the key's digest. A type
+    /// keeps its id however many types a save adds or removes before it,
+    /// so a lowering that names it writes it the same (#1726). A type
+    /// declared twice takes the next free id.
+    pub(crate) fn keyed(key: &Key, taken: &mut std::collections::BTreeSet<Self>) -> Self {
+        use sha2::Digest as _;
+        let mut digest = sha2::Sha256::new();
+        digest.update(key.to_string().as_bytes());
+        digest.update(key.block().unwrap_or(0).to_le_bytes());
+        let mut first = [0; 8];
+        first.copy_from_slice(&digest.finalize()[..8]);
+        let mut id = Self(u64::from_le_bytes(first) >> 2);
+        while !taken.insert(id) {
+            id = Self((id.0 + 1) & (u64::MAX >> 2));
+        }
+        id
     }
 
-    pub(crate) const fn index(self) -> usize {
+    /// The number a lowering writes for this type. A script type's is
+    /// below `2^62`, so it is a witness no builtin's code is.
+    pub(crate) const fn number(self) -> u64 {
         self.0
     }
 
     /// A builtin type as a trait impl owner (`impl Shape for i64`),
     /// by its witness code (`-2` for `i64`): an id no script type has.
     pub(crate) const fn builtin(code: i64) -> Self {
-        Self(usize::MAX - code.unsigned_abs() as usize)
+        Self(u64::MAX - code.unsigned_abs())
     }
 
     /// A facade type as a trait impl owner (`impl From<Shade> for
@@ -101,12 +118,12 @@ impl Id {
         for byte in path.bytes() {
             hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
         }
-        Self(usize::MAX - 64 - (hash % (1 << 40)) as usize)
+        Self(u64::MAX - 64 - hash % (1 << 40))
     }
 
     /// The witness code of a builtin impl owner's id.
     pub(crate) const fn builtin_code(self) -> Option<i64> {
-        let distance = usize::MAX - self.0;
+        let distance = u64::MAX - self.0;
         if distance < 64 {
             Some(-(distance as i64))
         } else {

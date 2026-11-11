@@ -939,6 +939,7 @@ impl Symbols {
         let mut item_keys = vec![None; items.len()];
         let mut declared = BTreeMap::<Option<Span>, BTreeMap<_, _>>::new();
         let mut type_declarations = Vec::new();
+        let mut type_ids = std::collections::BTreeSet::new();
 
         for parsed in items {
             let Some((name, _, _)) = named_declaration(parsed) else {
@@ -995,8 +996,8 @@ impl Symbols {
                 Some(namespace.item_key(&name.text, item_kind).in_block(ordinal));
 
             if let Some(kind) = type_kind {
-                let id = type_def::Id::from_index(type_declarations.len());
                 let key = namespace.type_key(&name.text).in_block(ordinal);
+                let id = type_def::Id::keyed(&key, &mut type_ids);
                 declared
                     .entry(items[source_index].scope())
                     .or_default()
@@ -6029,7 +6030,8 @@ mod tests {
 
             assert_eq!(source_definition.key(), reverse_definition.key());
             assert_eq!(source_definition.schema(), reverse_definition.schema());
-            assert_ne!(source_definition.id(), reverse_definition.id());
+            // A type's id comes from its key, whatever the order (#1726).
+            assert_eq!(source_definition.id(), reverse_definition.id());
 
             let source_value = nominal_value(&source_order, name);
             let reverse_value = nominal_value(&reverse_order, name);
@@ -6076,7 +6078,7 @@ mod tests {
             panic!("expected resolved path");
         };
 
-        assert_ne!(message.target, reverse_message.target);
+        assert_eq!(message.target, reverse_message.target);
         assert_eq!(
             script_identity(&message.target),
             script_identity(&reverse_message.target)
@@ -6202,7 +6204,7 @@ mod tests {
 
         assert_eq!(stable(&source_order), stable(&reverse_order));
         assert_eq!(source_order.method_count(), 2);
-        assert_ne!(
+        assert_eq!(
             source_order.methods()[0].owner(),
             reverse_order.methods()[0].owner()
         );

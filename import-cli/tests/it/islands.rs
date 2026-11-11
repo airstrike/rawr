@@ -1721,6 +1721,28 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     );
     edit(&sidebar, "\"{label} item\"", "\"{label} entry\"");
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick entry styled 0"));
+    // A private struct before the sidebar's types, which no other file
+    // names: the sidebar alone, though the child names `Aside`, declared
+    // after it (#1726).
+    const CORNERS: &str = "#[derive(Debug)]\nstruct Corners {\n    radius: f32,\n}\n\n";
+    let text = fs::read_to_string(&sidebar)
+        .unwrap()
+        .replace(
+            "/// A sidebar row:",
+            &format!("{CORNERS}/// A sidebar row:"),
+        )
+        .replace("\"{label} entry\"", "\"{label} cell\"");
+    fs::write(&sidebar, text).unwrap();
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick cell styled 0"));
+    // The struct removed: the sidebar alone again. The running program
+    // then refuses the swap, as a type it was given is gone, and restarts.
+    let swapped = run.seen.len();
+    let text = fs::read_to_string(&sidebar)
+        .unwrap()
+        .replace(CORNERS, "")
+        .replace("\"{label} cell\"", "\"{label} line\"");
+    fs::write(&sidebar, text).unwrap();
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick line styled 0"));
     fs::write(&stop, "").unwrap();
     run.told(&events, |text| {
         text.contains("{\"event\":\"ended\",\"status\":0}")
@@ -1728,9 +1750,15 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
-    assert!(!seen.contains("preparing again"), "{seen}");
-    // What each save parsed, revealed and lowered: neither lowers
-    // `home.rs`, `theme.rs` or `sidebar.rs`, which name neither.
+    assert!(
+        run.seen[..swapped]
+            .iter()
+            .all(|line| !line.contains("preparing again")),
+        "{seen}"
+    );
+    // What each save parsed, revealed and lowered: none lowers `home.rs`,
+    // `theme.rs` or `sidebar.rs`, which name nothing they changed, and the
+    // struct's saves lower the widget's sidebar alone.
     let runner = run
         .seen
         .iter()
@@ -1743,7 +1771,11 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
         })
         .filter(|counts| *counts != [0; 3])
         .collect::<Vec<_>>();
-    assert_eq!(runner, [[1, 2, 2], [1, 2, 2]], "{seen}");
+    assert_eq!(
+        runner,
+        [[1, 2, 2], [1, 2, 2], [1, 1, 1], [1, 1, 1]],
+        "{seen}"
+    );
 }
 
 /// A runner keeps each marked source's lowering and readings under the

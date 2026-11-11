@@ -146,6 +146,8 @@ struct Resolver<'a> {
     /// shadow, as in Rust.
     globs: BTreeMap<Address, Export>,
     type_declarations: Vec<type_def::Declaration>,
+    /// The ids `type_declarations` hold (`type_def::Id::keyed`).
+    type_ids: BTreeSet<type_def::Id>,
     /// Each crate trait whose name another module's trait has too, by its
     /// address, with the path it is known by, as rustc names it then:
     /// `home::IntoContent` beside `sidebar::IntoContent`. A trait whose
@@ -296,6 +298,7 @@ impl<'a> Resolver<'a> {
             other_aliases: BTreeMap::new(),
             globs: BTreeMap::new(),
             type_declarations: Vec::new(),
+            type_ids: BTreeSet::new(),
             trait_names: BTreeMap::new(),
             enum_variants: BTreeMap::new(),
             expanded,
@@ -380,7 +383,8 @@ impl<'a> Resolver<'a> {
                     slot.key = Some(key.clone());
                     let target = match type_kind {
                         Some(kind) => {
-                            let definition = type_def::Id::from_index(self.type_declarations.len());
+                            let type_key = context.namespace.type_key(&name.text).in_block(ordinal);
+                            let definition = type_def::Id::keyed(&type_key, &mut self.type_ids);
                             if let crate::item::Parsed::Enum(declared) = parsed {
                                 self.enum_variants.insert(
                                     definition,
@@ -391,7 +395,6 @@ impl<'a> Resolver<'a> {
                                         .collect(),
                                 );
                             }
-                            let type_key = context.namespace.type_key(&name.text).in_block(ordinal);
                             self.type_declarations.push(type_def::Declaration::new(
                                 definition,
                                 id,

@@ -702,7 +702,7 @@ pub(super) fn write_default_dispatcher(
         let _ = writeln!(
             text,
             "if __rawr_witness == {} {{ return {call}; }}",
-            id.index()
+            id.number()
         );
     }
     text.push_str("__rawr_throw \"no `Default` for this type witness\";\n}\n");

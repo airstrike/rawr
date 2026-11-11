@@ -101,7 +101,7 @@ fn every(
     own: Option<&[u8; 32]>,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v5");
+    written.0.update(b"rawr.lowering.interface/v6");
     // The compiler: the facades its host registry holds, and its options.
     write!(
         written,
@@ -137,7 +137,8 @@ fn every(
     write!(written, "{:?}|", program.instances.natives).ok()?;
     // The program's macros and `IndexMut` bodies, which a body's lowering
     // reads with their places: at those places.
-    write!(written, "{:?}|{:?}", program.macros, models.index_mut).ok()?;
+    program.macros.write_interface(&mut written).ok()?;
+    write!(written, "{:?}", models.index_mut).ok()?;
     // What a call whose body isn't one of the program's resolved.
     written.0.update(own.unwrap_or(&[0; 32]));
     written.0.update(declarations.everywhere);

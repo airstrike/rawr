@@ -158,8 +158,8 @@ pub(super) enum PreludeOp {
     /// `a.partial_cmp(&b)` by the runtime values (`compare_value`): an
     /// `Option` of `Ordering`'s discriminant.
     Compare,
-    /// The runtime type key of a value: a script type's dense definition
-    /// index, a builtin's witness code (`builtin_type_key`), else `-1`.
+    /// The runtime type key of a value: a script type's id's number, by
+    /// its key, a builtin's witness code (`builtin_type_key`), else `-1`.
     /// What a trait dispatcher selects the impl by.
     TypeIndex,
     /// `value as i32` of a fieldless script enum: its variant's
@@ -1476,7 +1476,7 @@ impl PreludeOp {
                     .by_identity
                     .get(identity)
                     .and_then(|nominal| {
-                        crate::INT::try_from(nominal.definition().id().index()).ok()
+                        crate::INT::try_from(nominal.definition().id().number()).ok()
                     })
                     .unwrap_or(-1);
                 return Ok(index.into());
@@ -1804,11 +1804,11 @@ pub(super) fn owner_arguments(ty: &Ty) -> &[Ty] {
 }
 
 /// The runtime type key a dispatcher compares for an impl owner: the
-/// definition index, or a builtin's witness code.
+/// number of its id, by its key, or a builtin's witness code.
 pub(super) fn owner_key(owner: type_def::Id) -> String {
     match owner.builtin_code() {
         Some(code) => code.to_string(),
-        None => owner.index().to_string(),
+        None => owner.number().to_string(),
     }
 }
 
@@ -2111,7 +2111,7 @@ impl WitnessedOp {
 }
 
 /// The runtime type a witness code names (`builtin_code`, or a script
-/// type's index).
+/// type's id's number).
 pub(super) fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsic::Type> {
     Some(match code {
         -2 => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
@@ -2121,8 +2121,11 @@ pub(super) fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsi
         -6 => intrinsic::Type::builtin("char", TypeId::of::<char>()),
         -9 => intrinsic::Type::unit(),
         code => {
-            let index = usize::try_from(code).ok()?;
-            let id = models.by_definition.keys().find(|id| id.index() == index)?;
+            let number = u64::try_from(code).ok()?;
+            let id = models
+                .by_definition
+                .keys()
+                .find(|id| id.number() == number)?;
             script_type(models, *id, Box::default())
         }
     })
