@@ -1492,11 +1492,69 @@ fn a_save_parses_only_the_file_it_changed() {
         .replace("\"{label} entry\"", "\"{label} line\"");
     fs::write(&sidebar, text).unwrap();
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick line styled 0"));
+    // What another file reads of this one, and what native code is built
+    // from, is its declarations by what they are, not by where they are: a
+    // doc comment, a lint, a blank line or a signature written over more
+    // lines keeps every other file's lowering and the native build.
+    let saves = [
+        (
+            "/// A sidebar row:",
+            "/// The first of the rows.\n/// A sidebar row:",
+            "doc",
+        ),
+        (
+            "pub fn row_group<",
+            "#[allow(dead_code)]\npub fn row_group<",
+            "lint",
+        ),
+        (
+            "pub struct Sidebar<",
+            "\n/// Its parts.\npub struct Sidebar<",
+            "spaced",
+        ),
+        (
+            "pub fn title(&self) -> &'a str {",
+            "pub fn title(\n        &self\n    ) -> &'a str {",
+            "split",
+        ),
+    ];
+    let mut label = "line";
+    let mut save = |from: &str, to: &str, next: &'static str| {
+        let text = fs::read_to_string(&sidebar).unwrap();
+        assert!(text.contains(from), "{text}");
+        let text = text.replace(from, to).replace(
+            &format!("\"{{label}} {label}\""),
+            &format!("\"{{label}} {next}\""),
+        );
+        fs::write(&sidebar, text).unwrap();
+        label = next;
+    };
+    for (from, to, next) in saves {
+        save(from, to, next);
+        let tick = format!(" tick {next} styled 0");
+        run.until(|line| line.starts_with("tick ") && line.ends_with(&tick));
+    }
+    // A derive and a `cfg` change what native code is built from: a new
+    // native build, whose runner lowers every file, and the program runs
+    // on.
+    edit(
+        &root.join("src/home.rs"),
+        "#[derive(Debug)]\npub struct State {",
+        "#[derive(Debug, Default)]\npub struct State {",
+    );
+    // The new program's start.
+    run.until(|line| line.starts_with("default Selected("));
+    save(
+        "#[allow(dead_code)]\npub fn default<",
+        "#[cfg(test)]\npub fn default<",
+        "configured",
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick configured styled 0"));
     // An error below the moved lines names its own line.
     edit(
         &sidebar,
-        "    ui::label(&format!(\"{label} line\"))",
-        "    let _ = unknown_row;\n    ui::label(&format!(\"{label} line\"))",
+        "    ui::label(&format!(\"{label} configured\"))",
+        "    let _ = unknown_row;\n    ui::label(&format!(\"{label} configured\"))",
     );
     let text = fs::read_to_string(&sidebar).unwrap();
     let line = text
@@ -1533,7 +1591,33 @@ fn a_save_parses_only_the_file_it_changed() {
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
-    assert!(!seen.contains("preparing again"), "{seen}");
+    // Only the derive and the `cfg` build native code again, and the
+    // runner each starts lowers every marked file.
+    let prepared = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr: preparing again: "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prepared,
+        [
+            "`home::State` changed its fields",
+            "native code can no longer see `widget::sidebar::default`",
+        ],
+        "{seen}"
+    );
+    let started = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
+        .collect::<Vec<_>>();
+    assert!(
+        started.len() == 3
+            && started[1..]
+                .iter()
+                .all(|line| line.ends_with(", revealed 5 files, lowered 5 files")),
+        "{seen}"
+    );
     // Each save says what it did; one the watcher heard twice compiles the
     // same text again and parses nothing.
     let parsed = |prefix: &str, rest: &str| {
@@ -1555,13 +1639,14 @@ fn a_save_parses_only_the_file_it_changed() {
             "stderr: rawr-import: a save parsed ",
             ", Cargo resolutions 0, API tables loaded 0, facades registered 0, watch roots staged 0"
         ),
-        4,
+        8,
         "{seen}"
     );
     // The runner reads for its instances and lowers again only the file
     // the save changed: each edit is to a body, which nothing another file
-    // reads, or moves declarations, whose places nothing another file
-    // reads (#1646).
+    // reads, or moves declarations or adds inert attributes, which change
+    // nothing another file reads (#1646). A save the watcher heard twice
+    // does nothing.
     let runner = run
         .seen
         .iter()
@@ -1573,20 +1658,12 @@ fn a_save_parses_only_the_file_it_changed() {
             assert_eq!(rest, ", registered 0 facades", "{seen}");
             [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
         })
+        .filter(|counts| *counts != [0; 3])
         .collect::<Vec<_>>();
-    assert!(
-        runner.iter().all(|[parsed, revealed, lowered]| *parsed <= 1
-            && revealed == parsed
-            && lowered <= parsed),
-        "{runner:?}\n{seen}"
-    );
     // The save with the error fails as it reveals, and lowers nothing.
-    assert_eq!(
-        runner.iter().fold([0; 3], |sum, counts| [0, 1, 2]
-            .map(|count| sum[count] + counts[count])),
-        [5, 5, 4],
-        "{runner:?}\n{seen}"
-    );
+    let mut saved = vec![[1, 1, 1]; 8];
+    saved.push([1, 1, 0]);
+    assert_eq!(runner, saved, "{seen}");
 }
 
 /// A runner keeps each marked source's lowering and readings under the

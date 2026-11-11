@@ -137,10 +137,14 @@ impl fmt::Debug for Position {
     #[cold]
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let line = Lines::written(self.line);
         if self.is_none() {
-            f.write_str("none")
-        } else if self.is_beginning_of_line() {
+            return f.write_str("none");
+        }
+        if let Some(written) = Places::written(*self) {
+            return write!(f, "{written}");
+        }
+        let line = self.line;
+        if self.is_beginning_of_line() {
             write!(f, "{line}")
         } else {
             write!(f, "{line}:{}", self.pos)
@@ -149,30 +153,32 @@ impl fmt::Debug for Position {
 }
 
 thread_local! {
-    /// The lines this thread writes positions by (`Lines::writing`).
-    static WRITING: std::cell::RefCell<Option<Lines>> = const { std::cell::RefCell::new(None) };
+    /// The places this thread writes positions by (`Places::writing`).
+    static WRITING: std::cell::RefCell<Option<Places>> = const { std::cell::RefCell::new(None) };
 }
 
-/// A text's lines, each by the number it is written as: what a digest
-/// writes one source's positions by, so a save that moves them without
-/// changing what they mean writes them the same (#1646).
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Lines(std::sync::Arc<[u16]>);
+/// Where a text's tokens start, in order: what a digest writes one
+/// source's positions by. A position is written as how many of them start
+/// before it, so a save that moves them without changing them (a line
+/// added between them, a signature written over more lines, a token left
+/// out of them) writes them the same (#1646).
+#[derive(Clone, Debug)]
+pub(crate) struct Places(std::sync::Arc<[Position]>);
 
-impl Lines {
-    /// Line `n` written as `numbers[n - 1]`; a line past them as itself.
+impl Places {
+    /// The places of tokens that start at `starts`, in order.
     #[cfg(feature = "rust-import")]
-    pub(crate) fn new(numbers: Vec<u16>) -> Self {
-        Self(numbers.into())
+    pub(crate) fn new(starts: Vec<Position>) -> Self {
+        Self(starts.into())
     }
 
     /// Run `write` with each position this thread writes by `Debug`
-    /// written at its line's number here.
+    /// written as how many of these places come before it.
     #[cfg(feature = "rust-import")]
     pub(crate) fn writing<T>(&self, write: impl FnOnce() -> T) -> T {
-        /// Puts back the lines written by before, as `write` ends or
+        /// Puts back the places written by before, as `write` ends or
         /// unwinds.
-        struct Restore(Option<Lines>);
+        struct Restore(Option<Places>);
 
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -186,18 +192,17 @@ impl Lines {
         write()
     }
 
-    /// The number `line` is written as on this thread.
-    fn written(line: u16) -> u16 {
+    /// What `position` is written as on this thread: `None` when it writes
+    /// positions as they are.
+    fn written(position: Position) -> Option<usize> {
         WRITING.with(|writing| {
-            writing
-                .borrow()
-                .as_ref()
-                .and_then(|lines| lines.0.get(usize::from(line).checked_sub(1)?).copied())
-                .unwrap_or(line)
+            let writing = writing.borrow();
+            let places = writing.as_ref()?;
+            Some(places.0.partition_point(|start| *start < position))
         })
     }
 
-    /// Whether this thread writes positions by some lines.
+    /// Whether this thread writes positions by some places.
     fn active() -> bool {
         WRITING.with(|writing| writing.borrow().is_some())
     }
@@ -325,7 +330,7 @@ impl fmt::Debug for Span {
     #[cold]
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if Lines::active() {
+        if Places::active() {
             return write!(f, "{:?}-{:?}", self.start, self.end);
         }
         fmt::Display::fmt(self, f)
