@@ -9,6 +9,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A new rawr build no longer classifies and generates an unchanged project's API again, also when the project's crates came from a cold extraction or a later run reads them from shared tables. The API names the resolution universe without the digest of the rawr build that compiled it, and a shared-table run names its resolution as a complete one does. After an install, inboard's "building API" had taken 237 s on one core. (#1686)
 - A save to a marked file that names a crate type through one of several re-export routes, as inboard's theme.rs names `iced::theme::Mode`, now swaps into the running program in about a second instead of rebuilding it (18-97 s in inboard). Every use that names a type, its variant, field or constructor names it by the type's one path, in rawr-import's compile and in the runner's own. (#1688)
 - Under `RAWR_VERBOSE=1`, when a save can't swap in place, the runner names the file, line and column of the use its build doesn't cover, and the item. (#1689)
+- A new rawr install, such as one that only bumps the generator version, no longer canonicalizes an unchanged project's crate API again. Before, that took about 235 s on one core in inboard. The API read from shared tables is no longer keyed by the host directory's path or by the driver binary, so an install regenerates bindings and rebuilds the runner, nothing more. `RAWR_VERBOSE`'s round lines now count canonicalized sidecars. (#1690)
 
 ## 0.3.182 (2026-11-10)
 
