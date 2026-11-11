@@ -39,6 +39,13 @@ impl Bounded for Text {
     }
 }
 
+/// A label a closure selector found, which it points at as it is.
+impl Bounded for String {
+    fn visible(&self) -> Option<&str> {
+        Some(self)
+    }
+}
+
 /// A way to find a widget, as iced_test's `Selector`.
 pub trait Selector {
     /// What the selection gives.

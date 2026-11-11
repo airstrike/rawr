@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 170;
+const CLASSIFIER_VERSION: u32 = 171;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2520,6 +2520,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         ty: projected_parameters(ty, projected),
                     }
                 }
+                // So is one an outlives bound names, as iced_test's
+                // `S::Output: 'static` of `click` (#1694).
+                model::Predicate::TypeOutlives { ty, lifetime } => model::Predicate::TypeOutlives {
+                    ty: projected_parameters(ty, projected),
+                    lifetime: lifetime.clone(),
+                },
                 other => other.clone(),
             })
             .collect();
@@ -8056,6 +8062,18 @@ impl<P: api::Phase> Context<'_, P> {
         use crate::surface::identity::Definition;
         if let Ok(input) = self.convert_value(input) {
             return Some(input);
+        }
+        // A value at the bound's own lifetime, as iced_test's selector
+        // takes `Candidate<'a>` of `for<'a> FnMut(Candidate<'a>)`: the
+        // closure takes it at each call, as it takes a `&'a S` (#1694).
+        // `single_callable` holds each late lifetime to the bound's binders.
+        if type_has_late_lifetime(input) {
+            let outer = self.scope_lifetimes.replace(true);
+            let converted = self.convert_value(input);
+            self.scope_lifetimes.set(outer);
+            if let Ok(input) = converted {
+                return Some(input);
+            }
         }
         if let Some(native) = self.native_place_input(input) {
             return Some(native);
