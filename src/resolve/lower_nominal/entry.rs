@@ -337,7 +337,7 @@ fn lower_part(
             .as_ref()
             .and_then(|(session, part)| session.key(*part, unit.source, unit.program, &texts));
         if let (Some((session, _)), Some(key)) = (session.as_mut(), key)
-            && let Some(reused) = session.reuse(key, &unit.models.access)
+            && let Some(reused) = session.reuse(key, unit.models)
             && let Some(renewed) = reused
                 .lowered
                 .iter()

@@ -16,7 +16,7 @@ const MAGIC: &[u8; 4] = b"RKLW";
 
 /// Bumped when what a file holds changes in a way the build stamp doesn't
 /// show.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 
 /// A runner's files of kept lowerings and readings.
 pub(crate) struct Disk {

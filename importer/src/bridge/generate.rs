@@ -5229,7 +5229,7 @@ mod __rawr_profile {
         if super::IMPORTED_BINDINGS.is_empty() {
             return Ok((Box::default(), ApplicationContract));
         }
-        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, native)
+        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, super::PATH_CRATES, native)
             .map(|definitions| (definitions, ApplicationContract))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }
@@ -7954,6 +7954,21 @@ fn render_source(
             b"static IMPORTED_BINDINGS: &[u8] = include_bytes!(\"imported_bindings.bin\");\n",
         )
         .map_err(request::unwritable)?;
+    // The crates of the project's path packages, whose facades a save may
+    // change: each source's lowering reads them entry by entry (#1735).
+    let mut path_crates = paths
+        .iter()
+        .map(|(package, _)| package.replace('-', "_"))
+        .collect::<Vec<_>>();
+    path_crates.sort_unstable();
+    path_crates.dedup();
+    output
+        .write_all(b"static PATH_CRATES: &[&str] = &[")
+        .map_err(request::unwritable)?;
+    for krate in &path_crates {
+        write!(output, "{krate:?}, ").map_err(request::unwritable)?;
+    }
+    output.write_all(b"];\n").map_err(request::unwritable)?;
     let embedded = match &facade {
         Some(plan) => plan.runner_image().map_err(request::unwritable)?,
         None => Vec::new(),
@@ -25338,7 +25353,9 @@ mod tests {
         assert!(neutral
             .contains("native: &mut __rawr_internal::package::import::runner::account::Native,"));
         assert!(
-            neutral.contains("runner::install_retained(engine, super::IMPORTED_BINDINGS, native)")
+            neutral.contains(
+                "runner::install_retained(engine, super::IMPORTED_BINDINGS, super::PATH_CRATES, native)"
+            )
         );
         assert!(!neutral.contains("runner::install("));
         assert!(

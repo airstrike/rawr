@@ -27,6 +27,9 @@ pub(crate) struct Plan {
 /// a slot for each entry its tables hold.
 struct Facade {
     root: host::path::Path,
+    /// Whether it is the facade of one of the project's path packages,
+    /// which a save may change while the project runs (#1735).
+    path_crate: bool,
     fingerprint: host::facade::Fingerprint,
     /// The modules the facade reaches at another path, each with the path
     /// they are held at, qualified and sorted.
@@ -79,8 +82,12 @@ impl std::fmt::Debug for Held {
 impl Plan {
     /// The plan `bytes` hold, a runner image of this schema, with nothing
     /// built yet: each facade's root, digest, re-exports and type alias
-    /// paths, and an empty slot for each entry.
-    pub(crate) fn read(bytes: &'static [u8]) -> Result<Shared<Self>, rawr_import::surface::Error> {
+    /// paths, whether it is one of `path_crates`, and an empty slot for
+    /// each entry.
+    pub(crate) fn read(
+        bytes: &'static [u8],
+        path_crates: &[&str],
+    ) -> Result<Shared<Self>, rawr_import::surface::Error> {
         use rawr_import::surface::Error;
         let image = Image::read(bytes)?;
         let abi = host::facade::Abi::new(1).map_err(|_| Error::Canonical)?;
@@ -104,6 +111,7 @@ impl Plan {
                 .map(|alias| qualify(alias.path()))
                 .collect::<Result<_, _>>()?;
             facades.push(Facade {
+                path_crate: path_crates.contains(&view.root()),
                 fingerprint: host::facade::Fingerprint::carried(&root, abi, view.digest()),
                 root,
                 reexports: reexports.into_boxed_slice(),
@@ -153,6 +161,11 @@ impl Held {
     /// The facade's root.
     pub(crate) fn root(&self) -> &host::path::Path {
         &self.facade().root
+    }
+
+    /// Whether it is the facade of one of the project's path packages.
+    pub(crate) fn is_path_crate(&self) -> bool {
+        self.facade().path_crate
     }
 
     /// The proof of the facade's contract, which its image's generator

@@ -151,7 +151,7 @@ fn retained_install_authenticates_structural_rows() {
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0)]);
     let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
-    let definitions = runner::install_retained(&mut engine, plan(), &mut native).unwrap();
+    let definitions = runner::install_retained(&mut engine, plan(), &[], &mut native).unwrap();
     let row = runner::StructuralRow::new(
         "native",
         "",
@@ -177,7 +177,7 @@ fn runtime_fixture() -> (
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0)]);
     let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
-    let definitions = runner::install_retained(&mut engine, plan(), &mut native).unwrap();
+    let definitions = runner::install_retained(&mut engine, plan(), &[], &mut native).unwrap();
     engine.imported_native = Some(native);
     (
         engine,

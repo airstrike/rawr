@@ -1846,11 +1846,13 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     let _ = fs::remove_file(&stop);
     copy(Path::new(THEME), &root);
     let sidebar = root.join("src/widget/sidebar.rs");
-    // The child alone names the sidebar's `Aside`, and writes `spare`, a
-    // local's name, which no item has yet.
+    // The child alone names the sidebar's `Aside` and calls its
+    // `aside_rows!`, which textual scope lets into the child, and writes
+    // `spare`, a local's name, which no item has yet.
     let mut text = fs::read_to_string(&sidebar).unwrap();
     text.push_str(
-        "\nmod aside;\n\n/// What a sidebar keeps aside, which only its child names.\n\
+        "\nmacro_rules! aside_rows {\n    () => {\n        1\n    };\n}\n\n\
+         mod aside;\n\n/// What a sidebar keeps aside, which only its child names.\n\
          #[derive(Debug)]\nstruct Aside {\n    rows: usize,\n}\n",
     );
     fs::write(&sidebar, text).unwrap();
@@ -1858,7 +1860,8 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     fs::write(
         root.join("src/widget/sidebar/aside.rs"),
         "// rawr\n//! The rows a sidebar keeps aside.\n\n\
-         pub fn rows() -> usize {\n    let spare = super::Aside { rows: 1 };\n    spare.rows\n}\n",
+         pub fn rows() -> usize {\n    let spare = super::Aside { rows: aside_rows!() };\n    \
+         spare.rows\n}\n",
     )
     .unwrap();
     let mut run = start(
@@ -1886,8 +1889,8 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     edit(&sidebar, "\"{label} item\"", "\"{label} entry\"");
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick entry styled 0"));
     // A private struct before the sidebar's types, which no other file
-    // names: the sidebar alone, though the child names `Aside`, declared
-    // after it (#1726).
+    // names: the sidebar alone, though the child names `Aside` and calls
+    // `aside_rows!`, both written after it (#1726, #1730).
     const CORNERS: &str = "#[derive(Debug)]\nstruct Corners {\n    radius: f32,\n}\n\n";
     let text = fs::read_to_string(&sidebar)
         .unwrap()
@@ -1924,7 +1927,7 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
     );
     // What each save parsed, revealed and lowered: none lowers `home.rs`,
     // `theme.rs` or `sidebar.rs`, which name nothing they changed, and the
-    // struct's saves lower the widget's sidebar alone.
+    // struct's saves, above the macro, lower the widget's sidebar alone.
     let runner = run
         .seen
         .iter()
@@ -2171,6 +2174,71 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         .collect::<Vec<_>>();
     assert!(
         started.len() == 3 && started[0][1] > 2 && started[1] == [3, 3] && started[2] == [2, 2],
+        "{started:?}\n{seen}"
+    );
+}
+
+/// An edit to a function of a path crate of the project changes what
+/// native code is built from: a new native build, and a new runner, whose
+/// start lowers again only the files that name the function, as each
+/// entry of a path crate's facade is a declaration of its own (#1735).
+#[test]
+fn an_edit_to_a_path_crate_s_function_lowers_only_the_files_that_name_it() {
+    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    // A fresh project: the edit below changes the path crate's files.
+    let root = crate::support::fresh("islands-theme-path-edit");
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    copy(Path::new(THEME), &root);
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    // `ui::base` gives the length of the theme's name: `home.rs`, which
+    // calls it, and `sidebar.rs`, which writes `base`, read it.
+    edit(
+        &root.join("ui/src/lib.rs"),
+        "pub fn base<B: Base>(base: &B) -> String {\n    format!(\"base {}\", base.name())\n}",
+        "pub fn base<B: Base>(base: &B) -> usize {\n    base.name().len()\n}",
+    );
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 2
+    });
+    fs::write(&stop, "").unwrap();
+    let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
+    run.child.kill().unwrap();
+    run.wait();
+    let seen = run.seen.join("\n");
+    assert!(
+        told.contains("{\"event\":\"ended\",\"status\":0}")
+            && run.seen.iter().any(|line| line.starts_with("base "))
+            && run.seen.iter().any(|line| line.parse::<usize>().is_ok()),
+        "{told}\n{seen}"
+    );
+    // What each runner's start revealed and lowered: the first every file.
+    // The second reads `home.rs` and `sidebar.rs` again, which name `base`,
+    // and lowers them and the widget's sidebar, whose kept lowering calls
+    // the adapters of `ui::Pixels`: an adapter names its crate by its
+    // facade's proof, which the edit changed, so the new runner admitted
+    // other ones (#1734).
+    let started = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
+        .map(|line| {
+            let (_, rest) = line.split_once(" sources, revealed ").unwrap();
+            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
+            let lowered = rest.strip_suffix(" files").unwrap();
+            [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        started.len() == 2 && started[0][1] > 2 && started[1] == [2, 3],
         "{started:?}\n{seen}"
     );
 }

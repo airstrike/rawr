@@ -379,7 +379,7 @@ fn success_source() -> String {
         native: &mut __rawr_internal::package::import::runner::account::Native,
     ) -> std::io::Result<(Box<[__rawr_internal::host::facade::Definition]>, ApplicationContract)> {
         if super::IMPORTED_BINDINGS.is_empty() { return Ok((Box::default(), ApplicationContract)); }
-        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, native)
+        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, super::PATH_CRATES, native)
             .map(|definitions| (definitions, ApplicationContract))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }
@@ -456,7 +456,7 @@ fn exclusive_source(path: &Path) -> String {
         native: &mut __rawr_internal::package::import::runner::account::Native,
     ) -> std::io::Result<(Box<[__rawr_internal::host::facade::Definition]>, ApplicationContract)> {{
         if super::IMPORTED_BINDINGS.is_empty() {{ return Ok((Box::default(), ApplicationContract)); }}
-        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, native)
+        __rawr_internal::package::import::runner::install_retained(engine, super::IMPORTED_BINDINGS, super::PATH_CRATES, native)
             .map(|definitions| (definitions, ApplicationContract))
             .map_err(|error| std::io::Error::other(error.to_string()))
     }}

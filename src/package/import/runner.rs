@@ -226,25 +226,30 @@ pub fn install(
     image: &'static [u8],
 ) -> Result<Box<[host::facade::Definition]>, Error> {
     let mut allocation = account::Attempt::fresh();
-    install_image(engine, image, &mut allocation)
+    install_image(engine, image, &[], &mut allocation)
 }
 
 /// Install generated bindings under their retained native account.
+/// `path_crates` are the crates of the project's path packages, by their
+/// crate names: a save to the project may change their facades, which
+/// each source's lowering then reads entry by entry (#1735).
 #[doc(hidden)]
 pub fn install_retained(
     engine: &mut crate::Engine,
     image: &'static [u8],
+    path_crates: &[&str],
     native: &mut account::Native,
 ) -> Result<Box<[host::facade::Definition]>, Error> {
-    install_image(engine, image, &mut native.allocation())
+    install_image(engine, image, path_crates, &mut native.allocation())
 }
 
 fn install_image(
     engine: &mut crate::Engine,
     image: &'static [u8],
+    path_crates: &[&str],
     allocation: &mut account::Attempt,
 ) -> Result<Box<[host::facade::Definition]>, Error> {
-    let plan = host::image::Plan::read(image)?;
+    let plan = host::image::Plan::read(image, path_crates)?;
     let mut definitions = Vec::new();
     // In build order: a runtime registry installs each facade after those
     // whose types it names, as cargo builds a dependency before its user.
