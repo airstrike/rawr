@@ -16,7 +16,8 @@
         {"text":"A closure over iced_test's lifetime-carrying `Candidate<'_>` fills a selector, as in `ui.click(|candidate: Candidate<'_>| ..)`, as rustc allows.","issues":[1694]},
         {"text":"A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, \"beside\"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521.","issues":[1700]},
         {"text":"A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged.","issues":[1687]},
-        {"text":"A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements.","issues":[1018]}
+        {"text":"A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements.","issues":[1018]},
+        {"text":"A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it.","issues":[1075],"refs":[965]}
       ]
     },
     "releases": [
@@ -3104,7 +3105,7 @@
     {"issue":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open","category":"Divergences from rustc"},
+    {"issue":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"closed","category":"Divergences from rustc"},
     {"issue":1076,"title":"assert!() with no condition is a rustc-like error, not RAWR-RESOLVE-UNSUPPORTED-SYNTAX (rustlings tests1, tests2)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1077,"title":"A Vec<_> whose element type nothing fixes is E0282, as rustc reports (rustlings threads1)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1078,"title":"Assigning through an Arc is E0594, as rustc reports (rustlings threads2)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3731,7 +3732,8 @@
     {"issue":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed","category":"Divergences from rustc"},
     {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed","category":"Divergences from rustc"},
     {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4275,7 +4277,7 @@
             {"number":1072,"title":"url_handler: the runner fails with E0283 at iced::application(..) with an undetermined renderer argument","state":"closed"},
             {"number":1073,"title":"toast: Task::perform with a tokio future and a move closure isn't supported","state":"closed"},
             {"number":1074,"title":"tour: a generic fn's type parameter is inferred only from its arguments, not from a later use (padded_button)","state":"closed"},
-            {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"open"},
+            {"number":1075,"title":"component: the runner names __rawr_opaque_component in iced::widget and a ? between incompatible types","state":"closed"},
             {"number":1083,"title":"progress_bar's runner: transition(..) in a region closure gives 'lifetime may not live long enough'","state":"closed"},
             {"number":1084,"title":"the_matrix's runner: WeightedIndex<_> where X is fixed only through I::Item: SampleBorrow<X>","state":"closed"},
             {"number":1085,"title":"A generic program impl of a crate trait isn't generated for a crate function's bound at a concrete argument","state":"open"},
@@ -4326,7 +4328,8 @@
             {"number":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"closed"},
             {"number":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"closed"},
             {"number":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"closed"},
-            {"number":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed"}
+            {"number":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"closed"},
+            {"number":1703,"title":"rawr-import test doesn't see [dev-dependencies]: a test's use of a dev-dependency fails with E0433","state":"open"}
           ],
           "milestone": "0.4"
         },

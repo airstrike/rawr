@@ -10,6 +10,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate future's output that holds a `&'static str`, given to a script closure as in `Task::perform(passed_beside(async { .. }, "beside"), move |(waited, beside)| ..)`, builds and runs as it does under cargo. Before, the generated runner stopped with E0521. (#1700)
 - A cold extraction reads each crate's API facts across the machine's cores. The reads join in crate order, so the API's bytes and fingerprint are unchanged. (#1687)
 - A crate's async function that returns a `Result` or `Option` of its own types gives values the program can call methods on, so `reqwest::get(&url).await?.json().await` decodes as `cargo run` does, and iced's pokedex runs its whole search path. A crate type the program never names, such as the `Bytes` of `response.bytes().await?`, has the `Debug` and other traits its crate implements. (#1018)
+- A view whose widget holds an opaque widget a crate function made of the program's values, as iced's `center(component(..))` in the component example, now builds and runs: the runner names the widget's type through the function that makes it. (#1075; part of #965)
 
 ## 0.3.183 (2026-11-11)
 
