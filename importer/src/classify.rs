@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 170;
+const CLASSIFIER_VERSION: u32 = 171;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1777,8 +1777,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// every future, with its self type `parameter` and each other
     /// parameter the projection `<parameter as Trait>::Name` of the
     /// associated type the implementation sets to it. `None` for another
-    /// trait, or one whose implementation has a parameter no associated
-    /// type gives.
+    /// trait, one whose implementation has a parameter no associated type
+    /// gives, or one whose implementation also bounds its type by a
+    /// crate's trait.
     fn future_blanket_bounds(
         &self,
         trait_id: &api::identity::Definition,
@@ -1808,10 +1809,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 bound: model::Bound::Trait { trait_id, polarity: model::Polarity::Positive, .. },
             } if index == this && self.is_core_trait(trait_id, "Future"))
         });
+        // A script future implements no crate's trait, so an implementation
+        // that also bounds its type by one, as sipper's `Core` is a future
+        // and a stream, is no future's alone: its parameter keeps its own
+        // bound, so a closure takes its `<S as Future>::Output` (#1699).
+        let crate_bound = implementation.generics().predicates().any(|predicate| {
+            matches!(predicate, model::Predicate::Bound {
+                ty: model::Type::Parameter { index, .. },
+                bound: model::Bound::Trait { trait_id, .. },
+            } if index == this && trait_id.unit().authority().sysroot().is_none())
+        });
         if id != trait_id
             || owner != implementation.id()
             || implementation.polarity() != model::Polarity::Positive
             || !future
+            || crate_bound
         {
             return None;
         }
