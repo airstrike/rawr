@@ -18,7 +18,7 @@ pub mod request;
 pub(crate) mod source_map;
 
 const REQUEST_SCHEMA: u32 = 12;
-const GENERATOR_VERSION: u32 = 294;
+const GENERATOR_VERSION: u32 = 295;
 
 /// Exact pre-build cache lookup identity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
