@@ -14,7 +14,7 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 71;
+pub(crate) const SCHEMA: u32 = 72;
 
 #[cfg(all(test, feature = "rustc-driver"))]
 #[test]
@@ -378,6 +378,7 @@ pub(crate) enum Shape {
     },
     Enum {
         variants: Vec<Variant>,
+        non_exhaustive: bool,
         generics: Generics,
     },
     Const {
@@ -823,7 +824,9 @@ impl Population {
                     self.type_node(&field.ty);
                 }
             }
-            Shape::Enum { variants, generics } => {
+            Shape::Enum {
+                variants, generics, ..
+            } => {
                 self.generics(generics);
                 for variant in variants {
                     for field in &variant.fields {

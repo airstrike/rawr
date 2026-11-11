@@ -1482,7 +1482,7 @@ impl Registry {
         if ty.visibility() != type_def::Visibility::Public {
             return None;
         }
-        let type_def::Shape::Enum(variants) = ty.shape() else {
+        let type_def::Shape::Enum { variants, .. } = ty.shape() else {
             return None;
         };
         variants
@@ -1500,7 +1500,7 @@ impl Registry {
         if ty.visibility() != type_def::Visibility::Public {
             return None;
         }
-        let type_def::Shape::Enum(variants) = ty.shape() else {
+        let type_def::Shape::Enum { variants, .. } = ty.shape() else {
             return None;
         };
         Some(

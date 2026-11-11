@@ -122,7 +122,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // that sets a projected associated type to one of its parameters, with that
 // item (#1674). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 71;
+const PROTOCOL_SCHEMA: u32 = 72;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -500,6 +500,7 @@ enum Shape {
     },
     Enum {
         variants: Vec<Variant>,
+        non_exhaustive: bool,
         generics: Generics,
     },
     Const {
@@ -3487,6 +3488,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 }
                 Shape::Enum {
                     variants,
+                    non_exhaustive: self.tcx.adt_def(def_id).is_variant_list_non_exhaustive(),
                     generics: self.generics(def_id)?,
                 }
             }

@@ -57,6 +57,10 @@ pub struct Plan {
     /// it boxes as a `Box<dyn Error>` (#1451).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     error: bool,
+    /// The enum is `#[non_exhaustive]`: outside its crate a pattern covers
+    /// it only with a wildcard, as rustc's exhaustiveness check has it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    non_exhaustive: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -163,6 +167,7 @@ impl Plan {
             partial_ord: false,
             ord: false,
             error: false,
+            non_exhaustive: false,
         }
     }
 
@@ -227,6 +232,18 @@ impl Plan {
         self.partial_ord = partial_ord;
         self.ord = ord;
         self
+    }
+
+    /// The plan, with whether the enum is `#[non_exhaustive]`.
+    pub(crate) const fn with_non_exhaustive(mut self, non_exhaustive: bool) -> Self {
+        self.non_exhaustive = non_exhaustive;
+        self
+    }
+
+    /// Whether the enum is `#[non_exhaustive]`.
+    #[must_use]
+    pub const fn non_exhaustive(&self) -> bool {
+        self.non_exhaustive
     }
 
     pub(crate) const fn with_error(mut self, error: bool) -> Self {

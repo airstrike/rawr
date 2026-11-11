@@ -18,7 +18,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 167;
+const CLASSIFIER_VERSION: u32 = 168;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4654,7 +4654,9 @@ fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [Defi
                     .find(|declared| declared.index() == field.index())
                     .map(|declared| written(graph, generics, declared.ty())),
                 (
-                    model::Kind::Enum { variants, generics },
+                    model::Kind::Enum {
+                        variants, generics, ..
+                    },
                     crate::surface::identity::Selector::EnumVariant { index, .. },
                 ) => variants
                     .get(*index as usize)?
@@ -7861,9 +7863,13 @@ impl<P: api::Phase> Context<'_, P> {
             model::Kind::Struct { fields, generics } => self
                 .structure(definition_index, fields, generics)
                 .map(Representability::Struct),
-            model::Kind::Enum { variants, generics } => self
+            model::Kind::Enum {
+                variants,
+                non_exhaustive,
+                generics,
+            } => self
                 .enumeration(definition_index, variants, generics)
-                .map(Representability::Enum),
+                .map(|plan| Representability::Enum(plan.with_non_exhaustive(*non_exhaustive))),
             model::Kind::Const { ty, value } => {
                 self.constant(ty, value).map(Representability::Constant)
             }

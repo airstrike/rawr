@@ -2222,7 +2222,10 @@ mod tests {
                     constructible: false,
                     unsupported: None,
                 },
-                ImportedShape::Enum => host::type_def::Shape::Enum(Box::default()),
+                ImportedShape::Enum => host::type_def::Shape::Enum {
+                    variants: Box::default(),
+                    non_exhaustive: false,
+                },
             }
             .into();
             facade.imported_type(

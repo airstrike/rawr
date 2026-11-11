@@ -110,7 +110,13 @@ pub enum Shape {
         unsupported: Option<Box<Unsupported>>,
     },
     /// Exact source-visible enum variants.
-    Enum(Box<[Variant]>),
+    Enum {
+        /// The variants in declaration order.
+        variants: Box<[Variant]>,
+        /// The enum is `#[non_exhaustive]`: a program's pattern covers it
+        /// only with a wildcard, as rustc's does outside the enum's crate.
+        non_exhaustive: bool,
+    },
     /// A trait script types may implement: its Rust declaration.
     Trait(ImmutableString),
 }
@@ -468,7 +474,7 @@ impl Definition {
     pub(crate) fn imported_constructor(&self) -> Option<&ImportedSelector> {
         match self.shape() {
             Shape::Struct { constructor, .. } => constructor.as_ref(),
-            Shape::Opaque | Shape::Enum(_) | Shape::Trait(_) => None,
+            Shape::Opaque | Shape::Enum { .. } | Shape::Trait(_) => None,
         }
     }
 
@@ -1122,8 +1128,12 @@ impl crate::digest::Write for Contract {
                 writer.tag(0x2624);
                 writer.text(declaration);
             }
-            Shape::Enum(variants) => {
+            Shape::Enum {
+                variants,
+                non_exhaustive,
+            } => {
                 writer.tag(0x2623);
+                writer.bool(*non_exhaustive);
                 writer.count(variants.len());
                 for variant in variants {
                     writer.text(variant.name());

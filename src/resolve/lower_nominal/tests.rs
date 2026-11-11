@@ -1344,32 +1344,35 @@ fn imported_facade() -> facade::Definition {
             &[crate::capability::Kind::Clone],
             Box::default(),
             Box::default(),
-            host::type_def::Shape::Enum(Box::from([
-                host::type_def::Variant::new(
-                    "Empty".into(),
-                    Box::default(),
-                    true,
-                    rawr_import::surface::identity::Selector::EnumVariant {
-                        index: 0,
-                        name: "Empty".into(),
-                        form: rawr_import::surface::identity::Form::Unit,
-                    },
-                ),
-                host::type_def::Variant::new(
-                    "Count".into(),
-                    Box::from([host::type_def::Field::new(
-                        "0".into(),
-                        type_ref::Type::builtin(type_ref::Builtin::I64),
-                        rawr_import::surface::identity::Selector::Unavailable,
-                    )]),
-                    true,
-                    rawr_import::surface::identity::Selector::EnumVariant {
-                        index: 1,
-                        name: "Count".into(),
-                        form: rawr_import::surface::identity::Form::Tuple { arity: 1 },
-                    },
-                ),
-            ]))
+            host::type_def::Shape::Enum {
+                variants: Box::from([
+                    host::type_def::Variant::new(
+                        "Empty".into(),
+                        Box::default(),
+                        true,
+                        rawr_import::surface::identity::Selector::EnumVariant {
+                            index: 0,
+                            name: "Empty".into(),
+                            form: rawr_import::surface::identity::Form::Unit,
+                        },
+                    ),
+                    host::type_def::Variant::new(
+                        "Count".into(),
+                        Box::from([host::type_def::Field::new(
+                            "0".into(),
+                            type_ref::Type::builtin(type_ref::Builtin::I64),
+                            rawr_import::surface::identity::Selector::Unavailable,
+                        )]),
+                        true,
+                        rawr_import::surface::identity::Selector::EnumVariant {
+                            index: 1,
+                            name: "Count".into(),
+                            form: rawr_import::surface::identity::Form::Tuple { arity: 1 },
+                        },
+                    ),
+                ]),
+                non_exhaustive: false,
+            }
             .into(),
             &mut allocation,
         )
@@ -1598,6 +1601,169 @@ fn ordering_facade() -> facade::Definition {
         .unwrap();
 
     builder.finish().unwrap()
+}
+
+/// A facade of three crate enums of `Pressed(i64)`: `Event` has that one
+/// variant, `Sealed` too but is `#[non_exhaustive]`, and `Key` has a
+/// `Released` beside it.
+#[cfg(feature = "rust-import")]
+fn variant_facade() -> facade::Definition {
+    let mut builder = facade::Builder::new("keys", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = host::TestImportAllocation::default();
+    let variant = |index: u32, name: &str, fields: Box<[host::type_def::Field]>| {
+        let form = if fields.is_empty() {
+            rawr_import::surface::identity::Form::Unit
+        } else {
+            rawr_import::surface::identity::Form::Tuple { arity: 1 }
+        };
+        host::type_def::Variant::new(
+            name.into(),
+            fields,
+            true,
+            rawr_import::surface::identity::Selector::EnumVariant {
+                index,
+                name: name.into(),
+                form,
+            },
+        )
+    };
+    let pressed = || {
+        variant(
+            0,
+            "Pressed",
+            Box::from([host::type_def::Field::new(
+                "0".into(),
+                type_ref::Type::builtin(type_ref::Builtin::I64),
+                rawr_import::surface::identity::Selector::Unavailable,
+            )]),
+        )
+    };
+    for (name, identity, variants, non_exhaustive) in [
+        ("Event", 0x51, vec![pressed()], false),
+        ("Sealed", 0x52, vec![pressed()], true),
+        (
+            "Key",
+            0x53,
+            vec![pressed(), variant(1, "Released", Box::default())],
+            false,
+        ),
+    ] {
+        builder
+            .imported_type(
+                name,
+                host::type_def::import::Identity::new([identity; 32]),
+                &[crate::capability::Kind::Clone],
+                Box::default(),
+                Box::default(),
+                host::type_def::Shape::Enum {
+                    variants: variants.into_boxed_slice(),
+                    non_exhaustive,
+                }
+                .into(),
+                &mut allocation,
+            )
+            .unwrap();
+    }
+    builder.finish().unwrap()
+}
+
+/// `let Event::Pressed(label) = event;` on a crate enum of that one
+/// variant is irrefutable, as rustc has it (#1681). A pattern that misses
+/// some of its field's values, a `#[non_exhaustive]` enum, and an enum
+/// with another variant are E0005, with rustc's witnesses.
+#[cfg(feature = "rust-import")]
+#[test]
+fn a_let_on_a_crate_enums_only_variant_is_irrefutable() {
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(variant_facade())
+        .expect("variant facade installs");
+    let lowered = |ty: &str, pattern: &str| {
+        let source = format!(
+            "fn take(value: keys::{ty}) -> i64 {{\n    \
+             let keys::{ty}::{pattern} = value;\n    0\n}}\n0\n"
+        );
+        let program = imported_program(&engine, &source);
+        symbolic_imported(&engine, &program).map_err(|failure| failure.into_error())
+    };
+    for pattern in ["Pressed(label)", "Pressed(_)", "Pressed(..)"] {
+        lowered("Event", pattern).unwrap_or_else(|error| panic!("{pattern}: {error}"));
+    }
+    for (ty, pattern, expected) in [
+        (
+            "Event",
+            "Pressed(0)",
+            &[
+                "Event::Pressed(i64::MIN..=-1_i64)",
+                "Event::Pressed(1_i64..=i64::MAX)",
+            ][..],
+        ),
+        ("Sealed", "Pressed(label)", &["_"][..]),
+        ("Key", "Pressed(label)", &["Key::Released"][..]),
+    ] {
+        let error = lowered(ty, pattern).expect_err("the pattern misses some values");
+        let ParseErrorType::Resolution(resolve::Error::Refutable { witnesses, .. }) =
+            error.err_type()
+        else {
+            panic!("{ty}::{pattern}: {error}");
+        };
+        let witnesses = witnesses.iter().map(|w| w.as_str()).collect::<Vec<_>>();
+        assert_eq!(witnesses, expected, "{ty}::{pattern}");
+    }
+}
+
+/// A `match` on a `#[non_exhaustive]` crate enum covers it only with an
+/// arm that matches anything, as rustc has it outside the enum's crate:
+/// E0004 with `_`, or `&_` through a reference.
+#[cfg(feature = "rust-import")]
+#[test]
+fn a_match_on_a_non_exhaustive_crate_enum_needs_a_wildcard() {
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(variant_facade())
+        .expect("variant facade installs");
+    let lowered = |parameter: &str, arms: &str| {
+        let source = format!(
+            "fn take(value: {parameter}) -> i64 {{\n    match value {{\n        \
+             {arms}\n    }}\n}}\n0\n"
+        );
+        let program = imported_program(&engine, &source);
+        symbolic_imported(&engine, &program).map_err(|failure| failure.into_error())
+    };
+    for (parameter, arms) in [
+        (
+            "keys::Sealed",
+            "keys::Sealed::Pressed(label) => label,\n        _ => 0,",
+        ),
+        (
+            "keys::Key",
+            "keys::Key::Pressed(label) => label,\n        keys::Key::Released => 0,",
+        ),
+        ("keys::Event", "keys::Event::Pressed(label) => label,"),
+    ] {
+        lowered(parameter, arms).unwrap_or_else(|error| panic!("{parameter}: {error}"));
+    }
+    for (parameter, arms, expected) in [
+        (
+            "keys::Sealed",
+            "keys::Sealed::Pressed(label) => label,",
+            "_",
+        ),
+        (
+            "&keys::Sealed",
+            "keys::Sealed::Pressed(label) => *label,",
+            "&_",
+        ),
+    ] {
+        let error = lowered(parameter, arms).expect_err("no arm matches anything");
+        let ParseErrorType::Resolution(resolve::Error::NonExhaustive { witnesses, .. }) =
+            error.err_type()
+        else {
+            panic!("{parameter}: {error}");
+        };
+        let witnesses = witnesses.iter().map(|w| w.as_str()).collect::<Vec<_>>();
+        assert_eq!(witnesses, [expected], "{parameter}");
+    }
 }
 
 #[cfg(feature = "rust-import")]

@@ -14,7 +14,7 @@ mod reexport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
 
-const SCHEMA: u32 = 61;
+const SCHEMA: u32 = 62;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -661,7 +661,13 @@ pub enum Shape {
         unsupported: Option<Unsupported>,
     },
     /// Enum variants in declaration order.
-    Enum { variants: Box<[Variant]> },
+    Enum {
+        variants: Box<[Variant]>,
+        /// The enum is `#[non_exhaustive]`: a pattern outside its crate
+        /// covers it only with a wildcard.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        non_exhaustive: bool,
+    },
 }
 
 /// Closed nominal field grammar.
@@ -3739,10 +3745,17 @@ impl Shape {
             Self::Enum { .. } => None,
         }
     }
+    /// Whether the enum is `#[non_exhaustive]`; a struct is not an enum.
+    pub const fn non_exhaustive(&self) -> bool {
+        match self {
+            Self::Enum { non_exhaustive, .. } => *non_exhaustive,
+            Self::Struct { .. } => false,
+        }
+    }
     /// Borrow enum variants.
     pub const fn variants(&self) -> Option<&[Variant]> {
         match self {
-            Self::Enum { variants } => Some(variants),
+            Self::Enum { variants, .. } => Some(variants),
             Self::Struct { .. } => None,
         }
     }
@@ -4132,6 +4145,7 @@ fn written_type_definition(
                     ],
                     Shape::Enum {
                         variants: variants.into_boxed_slice(),
+                        non_exhaustive: plan.non_exhaustive(),
                     },
                 )
             }
