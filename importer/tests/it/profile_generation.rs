@@ -15,7 +15,7 @@ fn demanded_profile_projection_is_rooted_in_generated_runner_source() {
     );
     let source = manifest
         .files()
-        .find(|file| file.path() == "src/main.rs")
+        .find(|file| file.path() == "src/rawr_runner.rs")
         .expect("the generated runner source exists");
     let source = std::str::from_utf8(source.bytes()).expect("generated Rust is UTF-8");
     assert!(source.contains("mod __rawr_profile"));

@@ -22,11 +22,12 @@ use std::path::{Component, Path, PathBuf};
 use toml_edit::{DocumentMut, Item, TableLike};
 
 /// The names the runner's own directory uses.
-const RUNNER: [&str; 7] = [
+const RUNNER: [&str; 8] = [
     "Cargo.toml",
     "Cargo.lock",
     "build.rs",
     "src",
+    crate::bridge::generate::member::DIRECTORY,
     "target",
     "rawr-generated-manifest.carrier",
     "incremental-directories",

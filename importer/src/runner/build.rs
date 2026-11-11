@@ -140,6 +140,15 @@ impl<B> super::Manifest<super::Generated, B> {
     }
 
     fn compile_entry(&self, entry: &Path) -> Result<super::artifact::BuiltArtifactProof, Error> {
+        use crate::bridge::generate;
+        // The runner compiles rawr's crate from the host, not from the
+        // Cargo view its resolution read, and so does each of its members.
+        let runner = self
+            .files
+            .iter()
+            .find(|file| file.path() == "Cargo.toml")
+            .and_then(|file| std::str::from_utf8(file.bytes()).ok())
+            .map(|text| crate::host::relocated(text).unwrap_or_else(|| text.to_owned()));
         for file in &self.files {
             let path = entry.join(file.path());
             if let Some(parent) = path.parent() {
@@ -149,12 +158,15 @@ impl<B> super::Manifest<super::Generated, B> {
                     source,
                 })?;
             }
-            // The runner compiles rawr's crate from the host, not from the
-            // Cargo view its resolution read.
             let relocated = match file.path() {
-                "Cargo.toml" => std::str::from_utf8(file.bytes())
-                    .ok()
-                    .and_then(crate::host::relocated),
+                "Cargo.toml" => runner.clone(),
+                path if generate::is_member_manifest(path) => {
+                    runner.as_deref().and_then(|runner| {
+                        std::str::from_utf8(file.bytes())
+                            .ok()
+                            .and_then(|member| generate::member::manifest(runner, member))
+                    })
+                }
                 _ => None,
             };
             let bytes = relocated.as_deref().map_or(file.bytes(), str::as_bytes);

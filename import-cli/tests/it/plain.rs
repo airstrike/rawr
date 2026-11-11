@@ -3100,6 +3100,125 @@ fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
     );
 }
 
+/// The runner of a program that calls two crates has a crate of adapters
+/// for each, beside the base they share and the runner's own (#1670). When
+/// the program calls one more function of one crate, Cargo compiles that
+/// crate's adapters and the runner's own crate again, and neither the other
+/// crate's adapters nor the base.
+#[test]
+fn a_new_call_into_one_crate_recompiles_that_crates_adapters_alone() {
+    let root = crate::support::scratch().join("runner-members");
+    let home = crate::support::scratch().join("rawr-home");
+    let main = |sum: &str| format!("// rawr\nfn main() {{\n    println!(\"{{}}\", {sum});\n}}\n");
+    project(
+        &root,
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"members\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                 [dependencies]\nalpha = { path = \"alpha\" }\nbeta = { path = \"beta\" }\n\n[workspace]\n",
+            ),
+            (
+                "alpha/Cargo.toml",
+                "[package]\nname = \"alpha\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            ),
+            ("alpha/src/lib.rs", "pub fn one() -> i64 {\n    1\n}\n"),
+            (
+                "beta/Cargo.toml",
+                "[package]\nname = \"beta\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            ),
+            (
+                "beta/src/lib.rs",
+                "pub fn two() -> i64 {\n    2\n}\n\npub fn three() -> i64 {\n    3\n}\n",
+            ),
+            ("src/main.rs", &main("alpha::one() + beta::two()")),
+        ],
+    );
+    assert_eq!(run_ok(&root, &home), "3\n");
+    let runner = root.join("target/rawr/runner");
+    for member in ["base", "adapters-alpha", "adapters-beta"] {
+        assert!(
+            runner
+                .join("rawr-crates")
+                .join(member)
+                .join("Cargo.toml")
+                .is_file(),
+            "the runner has its {member} crate"
+        );
+    }
+
+    // The units the second run compiled, by Cargo's fingerprints.
+    fs::write(
+        root.join("src/main.rs"),
+        main("alpha::one() + beta::two() + beta::three()"),
+    )
+    .unwrap();
+    let started = std::time::SystemTime::now();
+    assert_eq!(run_ok(&root, &home), "6\n");
+    let mut compiled = compiled_since(&root.join("target/debug"), started)
+        .into_iter()
+        .filter(|unit| unit.starts_with("rawr-generated-runner"))
+        .filter_map(|unit| Some(unit.rsplit_once('-')?.0.to_owned()))
+        .collect::<Vec<_>>();
+    compiled.sort();
+    compiled.dedup();
+    assert_eq!(
+        compiled,
+        [
+            "rawr-generated-runner",
+            "rawr-generated-runner-adapters-beta"
+        ]
+    );
+
+    // Cargo's own account, as it builds the runner for rawr: an edit to one
+    // of beta's adapter modules compiles beta's adapters and the runner.
+    let modules = runner.join("rawr-crates/adapters-beta/src");
+    let module = fs::read_dir(&modules)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rawr_adapters_beta_"))
+        })
+        .expect("beta's crate has an adapter module");
+    let mut source = fs::read_to_string(&module).unwrap();
+    source.push_str("\n// An edit to beta's adapters.\n");
+    fs::write(&module, source).unwrap();
+    let cargo = Command::new("cargo")
+        .current_dir(&root)
+        .arg("--config")
+        .arg(format!(
+            "build.build-dir=\"{}\"",
+            root.join("target").display()
+        ))
+        .args(["build", "--locked", "--manifest-path"])
+        .arg(runner.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(runner.join("target"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = text(&cargo.stderr);
+    assert!(cargo.status.success(), "{stderr}");
+    let compiling = stderr
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("Compiling "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        compiling,
+        [
+            "rawr-generated-runner-adapters-beta",
+            "rawr-generated-runner"
+        ],
+        "{stderr}"
+    );
+}
+
 /// Where the project at `root` keeps `kept` for this rawr's protocol.
 fn kept(root: &Path, kept: Kept) -> PathBuf {
     rawr_import::bindings::format::project(&root.join("target/rawr"), kept)

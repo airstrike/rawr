@@ -4,13 +4,17 @@ use crate::p3;
 fn generated_manifest_is_ordered_and_matches_exact_files() {
     let manifest = p3::generated();
     let paths = manifest.files().map(|file| file.path()).collect::<Vec<_>>();
-    // `src/main.rs`, one module per imported crate and identity bucket, and
-    // the files `main.rs` includes (D415.3), in path order.
+    // The runner's crate, its base and one crate of adapters per imported
+    // root, one module per identity bucket (#1670), in path order.
     assert!(paths.is_sorted(), "{paths:?}");
     for path in [
         "Cargo.lock",
         "Cargo.toml",
         "build.rs",
+        "rawr-crates/adapters-facade_a/Cargo.toml",
+        "rawr-crates/base/Cargo.toml",
+        "rawr-crates/base/build.rs",
+        "rawr-crates/base/src/lib.rs",
         "src/main.rs",
         "src/rawr_surface.rs",
     ] {
@@ -18,9 +22,11 @@ fn generated_manifest_is_ordered_and_matches_exact_files() {
     }
     assert!(paths
         .iter()
-        .any(|path| path.starts_with("src/rawr_adapters_facade_a_")));
+        .any(|path| path.starts_with("rawr-crates/adapters-facade_a/src/rawr_adapters_facade_a_")));
     assert!(paths.iter().all(
-        |path| ["Cargo.lock", "Cargo.toml", "build.rs"].contains(path) || path.starts_with("src/")
+        |path| ["Cargo.lock", "Cargo.toml", "build.rs"].contains(path)
+            || path.starts_with("src/")
+            || path.starts_with("rawr-crates/")
     ));
     assert!(manifest.generated_manifest().entries().len() > 8);
     assert!(!manifest.generated_manifest().source_map().is_empty());
