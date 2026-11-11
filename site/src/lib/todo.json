@@ -3796,7 +3796,8 @@
     {"issue":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"open","category":"Divergences from rustc"},
     {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5100,7 +5101,8 @@
             {"number":1407,"title":"inboard after one run: store.parts 7.4G beside store/executions 6.8G; parts should replace whole…","state":"open"},
             {"number":1677,"title":"rawr leaves stale caches behind: another protocol's formats and a project's dead target/rawr entries","state":"closed"},
             {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed"},
-            {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"open"}
+            {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
+            {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"}
           ]
         },
         {
