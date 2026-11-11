@@ -652,6 +652,43 @@ impl Models {
                     .insert(key, (ty.clone(), parameters.clone()));
             }
         }
+        // A std trait's instance a bound names, as `T: AsRef<[u8]>`: a call
+        // on the bounded value runs that instance's dispatcher, which lends
+        // a native value the view the instance names (#1676).
+        for shell in program.items.iter() {
+            let (generics, functions): (&[item::Generic], &[item::Function]) = match &shell.kind {
+                item::Kind::Function(function) => (&function.generics, &[]),
+                item::Kind::Impl(implementation) => {
+                    (&implementation.generics, &implementation.functions)
+                }
+                item::Kind::Trait(declared) => (&[], &declared.functions),
+                _ => continue,
+            };
+            let bounds = generics
+                .iter()
+                .chain(
+                    functions
+                        .iter()
+                        .flat_map(|function| function.generics.iter()),
+                )
+                .flat_map(|generic| generic.trait_arguments.iter());
+            for (trait_name, arguments) in bounds {
+                let std = traits
+                    .get(trait_name)
+                    .is_some_and(|(_, declared)| declared.name.span == Span::NONE);
+                if !std || arguments.is_empty() || arguments.iter().any(mentions_parameter) {
+                    continue;
+                }
+                let instances = trait_instances.entry(trait_name.clone()).or_default();
+                let text = instance_text(arguments);
+                if !instances
+                    .iter()
+                    .any(|instance| instance_text(instance) == text)
+                {
+                    instances.push(arguments.clone());
+                }
+            }
+        }
         // `impl<T: For> For for &T`, forwarding to `T`'s.
         for (_, declared) in traits.values() {
             for forward in declared.reference_forwards.iter() {

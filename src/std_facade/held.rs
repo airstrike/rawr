@@ -55,7 +55,6 @@ pub(crate) struct Value {
 
 impl Value {
     /// The public paths of every type it stands for, its own first.
-    #[cfg(test)]
     pub(crate) fn forms(&self) -> impl Iterator<Item = &'static str> {
         std::iter::once(self.std)
             .chain(self.lent.iter().copied())

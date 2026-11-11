@@ -119,6 +119,7 @@ pub(super) fn write_trait_dispatchers(
                     function,
                     &parameters,
                     &type_index,
+                    ops,
                 );
                 continue;
             }
@@ -241,6 +242,7 @@ pub(super) fn write_instance_dispatchers(
     function: &item::Function,
     parameters: &str,
     type_index: &str,
+    ops: &mut Vec<ExecutableOp>,
 ) {
     let instances = models
         .trait_instances
@@ -260,9 +262,10 @@ pub(super) fn write_instance_dispatchers(
         .collect::<Vec<_>>();
     let instance_texts = instances
         .iter()
-        .map(|instance| Some(instance_text(instance)))
+        .map(|instance| Some((instance, instance_text(instance))))
         .chain(std::iter::once(None));
-    for (index, instance) in instance_texts.enumerate() {
+    for (index, written) in instance_texts.enumerate() {
+        let (arguments, instance) = written.unzip();
         let index = if instance.is_some() {
             index
         } else {
@@ -321,6 +324,18 @@ pub(super) fn write_instance_dispatchers(
             };
         }
         if let Some(borrowed) = native_borrow(declared, function) {
+            // The view the instance names, where a native value's runtime
+            // form isn't it: a text's `[u8]` is its bytes.
+            if let (Some(crate::item::Receiver::Shared(_)), Some([argument])) = (
+                &function.receiver,
+                arguments.map(|arguments| &arguments[..]),
+            ) {
+                for (key, op) in native_views(&Ty::from_resolved(argument)) {
+                    let helper = format!("{SENTINEL}{}", ops.len());
+                    ops.push(ExecutableOp::Prelude(op));
+                    let _ = writeln!(text, "if __rawr_type == {key} {{ return {helper}(self); }}");
+                }
+            }
             let _ = writeln!(text, "{borrowed}");
         }
         let _ = write!(
@@ -330,6 +345,21 @@ pub(super) fn write_instance_dispatchers(
         );
         output.declaration(source, declared.name.span, &text);
     }
+}
+
+/// The runtime type key of each native type whose view `borrowed` a shared
+/// borrow lends through an op rather than as the value is, with the op: a
+/// text's `[u8]` is `str.bytes` (`lending::runs_lending`). Of the native
+/// types a runtime key tells apart, only a text has such a view; a `Vec`'s
+/// and an array's views are the array they are.
+fn native_views(borrowed: &Ty) -> Vec<(crate::INT, PreludeOp)> {
+    [Ty::String]
+        .iter()
+        .filter_map(|source| {
+            let op = super::lending::runs_lending(source, borrowed)??;
+            Some((builtin_code(source)?, op))
+        })
+        .collect()
 }
 
 /// Whether Rust implements the operator trait `trait_name` for the builtin
