@@ -156,22 +156,10 @@ impl Ready {
         let universe = replay.completion.proof();
         let capture = replay.capture;
         let owned_limits = *limits;
-        // What the API is a function of, read before the capture moves.
-        let semantic = capture.semantic_sidecars().and_then(|sidecars| {
-            let mut allocation = crate::extract::Allocation::new(limits);
-            let context = crate::api::Context::from_resolution_parts(
-                &decoded.metadata,
-                &decoded.graph,
-                &decoded.selected,
-                evaluation.cached.attestation.value().proof(),
-                &evaluation.request.target,
-                &evaluation.request.profile,
-                Some(universe),
-                &mut allocation,
-            )
-            .ok()?;
-            Some((context, sidecars))
-        });
+        // What the API is a function of, named before the capture moves and
+        // read only when the API is not current.
+        let sidecars = capture.sidecars();
+        let memo_decoded = Arc::clone(&replay.decoded);
         let store_context = evaluation.cached.context.identity();
         crate::extract::retain_from_owner_parts(
             &evaluation.cached.context,
@@ -181,11 +169,23 @@ impl Ready {
             replay.input,
             &evaluation.request.policy,
             |policy| {
-                let (context, sidecars) = semantic.as_ref()?;
+                let sidecars = sidecars.semantic()?;
+                let mut allocation = crate::extract::Allocation::new(limits);
+                let context = crate::api::Context::from_resolution_parts(
+                    &memo_decoded.metadata,
+                    &memo_decoded.graph,
+                    &memo_decoded.selected,
+                    evaluation.cached.attestation.value().proof(),
+                    &evaluation.request.target,
+                    &evaluation.request.profile,
+                    Some(universe),
+                    &mut allocation,
+                )
+                .ok()?;
                 crate::api::memo::key(
-                    context,
-                    sidecars,
-                    evaluation.identity.as_bytes(),
+                    &context,
+                    &sidecars,
+                    evaluation.semantic.as_bytes(),
                     policy,
                     &store_context,
                     limits,
@@ -367,6 +367,9 @@ struct Evaluation {
     limits: Limits,
     store: store::Store,
     identity: cargo::Digest,
+    /// The request as the API's semantics name it, the same for every Rawr
+    /// build (`cargo::semantic_request_identity`).
+    semantic: cargo::Digest,
     accounts: node::account::Key<Accounts>,
     stage: node::account::Key<Stage>,
     captured: Mutex<Captured>,
@@ -385,6 +388,7 @@ struct Preflight {
     request: Request,
     context: crate::context::Context,
     identity: cargo::Digest,
+    semantic: cargo::Digest,
 }
 
 #[cfg(test)]
@@ -431,18 +435,17 @@ fn capture_context_in(
 }
 
 fn preflight(request: Request, context: crate::context::Context) -> Result<Preflight, node::Error> {
-    let result = (|| {
-        let catalog = request.universe.as_ref().ok_or(node::Error::Codec(
-            "resolution owner requires versioned universe",
-        ))?;
-        let manifest = cargo::render_manifest(&request, None)?;
-        cargo::select_placement(&request, catalog, &manifest).map_err(node::Error::from)
-    })();
-    let placement = result?;
+    let catalog = request.universe.as_ref().ok_or(node::Error::Codec(
+        "resolution owner requires versioned universe",
+    ))?;
+    let manifest = cargo::render_manifest(&request, None)?;
+    let placement = cargo::select_placement(&request, catalog, &manifest)?;
+    let semantic = cargo::semantic_request_identity(&request, catalog.current())?;
     Ok(Preflight {
         request,
         context,
         identity: placement.request,
+        semantic,
     })
 }
 
@@ -516,6 +519,7 @@ fn evaluate(
         request,
         context,
         identity,
+        semantic,
     } = preflight;
     let cached = cargo::CachedToolchain {
         context,
@@ -541,6 +545,7 @@ fn evaluate(
         limits: *limits,
         store: store.clone(),
         identity,
+        semantic,
         accounts,
         stage: node::account::Key::new()?,
         #[cfg(test)]
@@ -1267,6 +1272,12 @@ impl Evaluation {
         }
         let native: [u8; 32] = native.finalize().into();
         let lock = std::fs::read(harness.lock).ok()?;
+        let universe = self
+            .request
+            .universe
+            .as_ref()?
+            .current()
+            .semantic_identity();
         Some(Shared {
             materials: Materials {
                 document: shared.document,
@@ -1281,7 +1292,7 @@ impl Evaluation {
                     &self.limits,
                 )
                 .ok()?
-                .locked(&lock),
+                .locked(universe, &lock),
             },
             identity: shared.identity,
             settled: shared.settled,
@@ -1371,8 +1382,8 @@ impl SharedReady {
                 }
             })?;
         let mut request = Sha256::new();
-        request.update(b"rawr.bindings.api/v2");
-        request.update(evaluation.identity.as_bytes());
+        request.update(b"rawr.bindings.api/v3");
+        request.update(evaluation.semantic.as_bytes());
         request.update(identity);
         request.update(Sha256::digest(&semantic));
         let request: [u8; 32] = request.finalize().into();

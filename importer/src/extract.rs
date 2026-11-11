@@ -203,14 +203,13 @@ pub(crate) fn retain_from_owner_parts(
         + 'static,
 ) -> Result<api::Continuation> {
     let policy_identity = policy.cache_identity()?;
-    let memo = memo(&policy_identity);
     api::cached::retain_owner(
         context,
         request,
         &policy_identity,
         owner,
         retention,
-        memo,
+        || memo(&policy_identity),
         materialize,
         |owner, product, retained, graph| {
             api::retained::Continuation::capture(context, owner, input, product, retained, graph)
@@ -298,7 +297,7 @@ pub(crate) fn retain_shared(
         &policy_identity,
         crate::node::Parent::validated(parent.as_ref()),
         &retention,
-        None,
+        || None,
         materialize,
         |product, retained, graph| {
             api::retained::Continuation::capture_shared(
@@ -1043,7 +1042,10 @@ struct Exclusion {
 struct Catalog {
     units: BTreeMap<CompilerKey, identity::Unit>,
     sysroots: BTreeMap<CompilerKey, identity::Unit>,
-    unavailable: BTreeSet<CompilerKey>,
+    /// The crate names of each loaded crate with no authority, by stable
+    /// crate id: each id an API names is looked up, never compared against
+    /// every such crate, which a large closure has hundreds of.
+    unavailable: BTreeMap<Box<str>, BTreeSet<Box<str>>>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -3006,7 +3008,7 @@ impl Catalog {
         let mut packages = BTreeMap::<&str, (&str, &str, &str)>::new();
         let mut units = BTreeMap::new();
         let mut sysroots = BTreeMap::new();
-        let mut unavailable = BTreeSet::new();
+        let mut unavailable = BTreeMap::<Box<str>, BTreeSet<Box<str>>>::new();
         let mut unit_keys = BTreeSet::<&str>::new();
         let mut captured_ids = BTreeMap::<&str, &str>::new();
         let mut sysroot_ids = BTreeMap::<&str, &str>::new();
@@ -3134,10 +3136,11 @@ impl Catalog {
         for (key, authority) in &invocations.external_units {
             let ExternalAuthority::Available(external) = authority else {
                 allocation.items(1)?;
-                unavailable.insert(CompilerKey {
-                    crate_name: allocation.owned(&key.crate_name)?,
-                    stable_crate_id: allocation.owned(&key.stable_crate_id)?,
-                });
+                let crate_name = allocation.owned(&key.crate_name)?;
+                unavailable
+                    .entry(allocation.owned(&key.stable_crate_id)?)
+                    .or_default()
+                    .insert(crate_name);
                 continue;
             };
             allocation.items(1)?;
@@ -3211,9 +3214,10 @@ impl Catalog {
         nonempty("compiler crate name", crate_name)?;
         exact_hex("StableCrateId", stable_crate_id, 16)?;
         exact_hex("DefPathHash", &raw.def_path_hash, 32)?;
-        let unavailable = self.unavailable.iter().any(|key| {
-            key.crate_name.as_ref() == crate_name && key.stable_crate_id.as_ref() == stable_crate_id
-        });
+        let unavailable = self
+            .unavailable
+            .get(stable_crate_id.as_str())
+            .is_some_and(|names| names.contains(crate_name.as_str()));
         if unavailable {
             Ok(Some(CompilerKey {
                 crate_name: allocation.owned(crate_name)?,

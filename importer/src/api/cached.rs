@@ -74,7 +74,7 @@ pub(crate) fn retain_owner<O>(
     policy: &[u8; 32],
     owner: node::Validated<crate::cargo::resolution::owner::Product>,
     retention: &node::read_set::Retention,
-    memo: Option<[u8; 32]>,
+    memo: impl FnOnce() -> Option<[u8; 32]>,
     materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + Send + 'static,
     finish: impl FnOnce(
         node::Validated<crate::cargo::resolution::owner::Product>,
@@ -106,7 +106,7 @@ pub(crate) fn retain_under<O>(
     policy: &[u8; 32],
     parent: Parent,
     retention: &node::read_set::Retention,
-    memo: Option<[u8; 32]>,
+    memo: impl FnOnce() -> Option<[u8; 32]>,
     materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + Send + 'static,
     finish: impl FnOnce(
         node::staging::Owned<Product>,
@@ -131,36 +131,44 @@ pub(crate) fn retain_under<O>(
             let graph = super::retained::Lazy::Pending(Box::new(materialize));
             finish(Owned::Current(product), retained, graph)
         }
-        outcome => store.with_staged_batch(retention, &metrics::Current, |batch| {
-            // Inputs whose content is remembered stage that content;
-            // its graph is rebuilt only for a consumer that needs it.
-            let remembered = match &outcome {
-                Outcome::Miss(_) => memo.and_then(|key| super::memo::load(context, &key)),
+        outcome => {
+            // Only an API that is not current reads what its memo is keyed by.
+            let memo = match &outcome {
+                Outcome::Miss(_) => memo(),
                 Outcome::Hit(_) => None,
             };
-            let product = match (outcome, remembered) {
-                (Outcome::Hit(value), _) => batch.carry_owned(value)?,
-                (Outcome::Miss(miss), Some(remembered)) => {
-                    let staged = recipe.resume(batch, miss, || Ok(remembered))?;
-                    let materialize = materialize
-                        .take()
-                        .ok_or(node::Error::Codec("API capture was already consumed"))?;
-                    let graph = super::retained::Lazy::Pending(Box::new(materialize));
-                    return finish(Owned::Staged(staged), batch.retention().try_clone()?, graph);
-                }
-                (Outcome::Miss(miss), None) => {
-                    let staged =
-                        recipe.resume(batch, miss, || capture(&mut materialize, &mut current))?;
-                    if let Some(key) = memo {
-                        super::memo::remember(context, &key, staged.content().digest());
+            store.with_staged_batch(retention, &metrics::Current, |batch| {
+                // Inputs whose content is remembered stage that content;
+                // its graph is rebuilt only for a consumer that needs it.
+                let remembered = memo.and_then(|key| super::memo::load(context, &key));
+                let product = match (outcome, remembered) {
+                    (Outcome::Hit(value), _) => batch.carry_owned(value)?,
+                    (Outcome::Miss(miss), Some(remembered)) => {
+                        let staged = recipe.resume(batch, miss, || Ok(remembered))?;
+                        let materialize = materialize
+                            .take()
+                            .ok_or(node::Error::Codec("API capture was already consumed"))?;
+                        let graph = super::retained::Lazy::Pending(Box::new(materialize));
+                        return finish(
+                            Owned::Staged(staged),
+                            batch.retention().try_clone()?,
+                            graph,
+                        );
                     }
-                    Owned::Staged(staged)
-                }
-            };
-            let graph = current_graph(&mut materialize, current, product.value())?;
-            let graph = super::retained::Lazy::Ready(graph);
-            finish(product, batch.retention().try_clone()?, graph)
-        }),
+                    (Outcome::Miss(miss), None) => {
+                        let staged = recipe
+                            .resume(batch, miss, || capture(&mut materialize, &mut current))?;
+                        if let Some(key) = memo {
+                            super::memo::remember(context, &key, staged.content().digest());
+                        }
+                        Owned::Staged(staged)
+                    }
+                };
+                let graph = current_graph(&mut materialize, current, product.value())?;
+                let graph = super::retained::Lazy::Ready(graph);
+                finish(product, batch.retention().try_clone()?, graph)
+            })
+        }
     }
 }
 

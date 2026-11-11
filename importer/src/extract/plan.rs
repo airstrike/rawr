@@ -2028,39 +2028,16 @@ impl Capture {
         Ok((self.document, self.invocations))
     }
 
-    /// Each compiler sidecar, in plan order, as the semantic projection of its
-    /// handshake and the SHA-256 of its body: what the API is a
-    /// function of, without the run's nonce, argument digest, artifact paths,
-    /// bytes or SVH. `None` when a sidecar changed since capture or is not a
-    /// handshake followed by a body.
-    pub(crate) fn semantic_sidecars(&self) -> Option<Vec<(Vec<u8>, [u8; 32])>> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Shell {
-            handshake: protocol::Handshake,
-        }
-        const BODY: &[u8] = b",\"ids\":";
-        let mut sidecars = Vec::new();
-        for (path, expected) in &self.sidecars {
-            if path.file_name() == Some(std::ffi::OsStr::new(ATTEMPTS_FILE)) {
-                continue;
-            }
-            let bytes = fs::read(path).ok()?;
-            if <[u8; 32]>::from(Sha256::digest(&bytes)) != *expected {
-                return None;
-            }
-            // A JSON string cannot hold an unescaped quote, so the first
-            // `,"ids":` closes the handshake the driver writes first.
-            let start = bytes
-                .windows(BODY.len())
-                .position(|window| window == BODY)?;
-            let mut shell = bytes[..start].to_vec();
-            shell.push(b'}');
-            let handshake = serde_json::from_slice::<Shell>(&shell).ok()?.handshake;
-            let projection = serde_json::to_vec(&semantic_handshake(&handshake)).ok()?;
-            sidecars.push((projection, Sha256::digest(&bytes[start..]).into()));
-        }
-        Some(sidecars)
+    /// The compiler sidecars this capture read, in plan order, with the
+    /// digests they were captured with.
+    pub(crate) fn sidecars(&self) -> Sidecars {
+        Sidecars(
+            self.sidecars
+                .iter()
+                .filter(|(path, _)| path.file_name() != Some(std::ffi::OsStr::new(ATTEMPTS_FILE)))
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Re-read the sidecars in plan order, require their captured digests and
@@ -2089,6 +2066,56 @@ impl Capture {
         append(&mut document, b"]}", allocation)?;
         protocol::decode_accounted(&document, limits, allocation)
     }
+}
+
+/// The compiler sidecars of one capture, in plan order, each with the
+/// digest it was captured with: what the API memo reads (`api::memo`).
+pub(crate) struct Sidecars(Box<[(PathBuf, [u8; 32])]>);
+
+impl Sidecars {
+    /// Each sidecar as the semantic projection of its handshake and the
+    /// SHA-256 of its body: what the API is a function of, without the
+    /// run's nonce, argument digest, artifact paths, bytes or SVH. Each is
+    /// read on a core of its own. `None` when a sidecar changed since
+    /// capture or is not a handshake followed by a body.
+    pub(crate) fn semantic(&self) -> Option<Vec<(Vec<u8>, [u8; 32])>> {
+        self.semantic_on(crate::parallel::workers())
+    }
+
+    /// [`semantic`](Self::semantic) on at most `workers` threads.
+    fn semantic_on(&self, workers: usize) -> Option<Vec<(Vec<u8>, [u8; 32])>> {
+        let (sidecars, _) = crate::parallel::try_map_with_on(
+            workers,
+            &self.0,
+            || (),
+            |(), (path, expected)| semantic_sidecar(path, expected).ok_or(()),
+        );
+        sidecars.ok()
+    }
+}
+
+/// One sidecar as [`Sidecars::semantic`] gives it.
+fn semantic_sidecar(path: &Path, expected: &[u8; 32]) -> Option<(Vec<u8>, [u8; 32])> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Shell {
+        handshake: protocol::Handshake,
+    }
+    const BODY: &[u8] = b",\"ids\":";
+    let bytes = fs::read(path).ok()?;
+    if <[u8; 32]>::from(Sha256::digest(&bytes)) != *expected {
+        return None;
+    }
+    // A JSON string cannot hold an unescaped quote, so the first
+    // `,"ids":` closes the handshake the driver writes first.
+    let start = bytes
+        .windows(BODY.len())
+        .position(|window| window == BODY)?;
+    let mut shell = bytes[..start].to_vec();
+    shell.push(b'}');
+    let handshake = serde_json::from_slice::<Shell>(&shell).ok()?.handshake;
+    let projection = serde_json::to_vec(&semantic_handshake(&handshake)).ok()?;
+    Some((projection, Sha256::digest(&bytes[start..]).into()))
 }
 
 fn prepare_entries(
@@ -3241,7 +3268,8 @@ mod tests {
                 reuse: None,
                 expansion: super::Expansion::default(),
             }
-            .semantic_sidecars()
+            .sidecars()
+            .semantic()
         };
         let first = key(&driver(handshake("n1", "h1", "a"), ""), None).expect("a driver sidecar");
         assert_eq!(first.len(), 1);
@@ -3272,6 +3300,52 @@ mod tests {
             key(&bytes, Some([0; 32])).is_none(),
             "a drifted sidecar is not keyed"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Read across cores, the sidecars' semantic keys are the ones a loop
+    /// over them gives, in plan order, and one drifted sidecar fails both.
+    #[test]
+    fn semantic_sidecars_on_many_workers_are_those_of_one() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-scratch")
+            .join(format!("semantic-sidecars-workers-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let sidecar = |index: usize| {
+            let handshake = serde_json::json!({
+                "schema": protocol::SCHEMA,
+                "package": {"cargo_id": format!("c{index} 0.1.0"), "name": format!("c{index}"),
+                    "version": "0.1.0", "source": "path+c"},
+                "root": {"kind": "selected", "aliases": [format!("c{index}")]},
+                "target": "c", "target_kind": "lib", "target_kinds": ["lib"],
+                "crate_types": ["lib"], "crate_name": format!("c{index}"), "edition": "2021",
+                "profile": "dev", "compilation": "target", "host": "h", "selected_target": "h",
+                "features": [], "probe_arguments_digest": "n", "compiler_commit": "c",
+                "invocation_nonce": "n", "unit_correlation": format!("u{index}"),
+                "unit_key": format!("k{index}"), "dependencies": [],
+                "artifact": {"path": "a", "length": 1, "digest": "d", "profile": "dev",
+                    "fresh": true, "crate_hash": "h", "stable_crate_id": "y", "probe_alias": "a"},
+                "sysroot": [], "loaded_crates": [], "external_crates": [],
+            });
+            // Bodies of uneven size, so the workers finish out of order.
+            let body = "1,".repeat(index % 7 * 1000);
+            let bytes = format!(
+                "{{\"handshake\":{handshake},\"ids\":[],\"reachable\":[],\"definitions\":[{body}0],\"implementations\":[],\"scalar_predicate_proofs\":[],\"index\":[]}}"
+            )
+            .into_bytes();
+            let path = root.join(format!("unit-{index}.json"));
+            fs::write(&path, &bytes).unwrap();
+            (path, <[u8; 32]>::from(Sha256::digest(&bytes)))
+        };
+        let sidecars = super::Sidecars((0..64).map(sidecar).collect());
+        let serial = sidecars.semantic_on(1).expect("every sidecar is keyed");
+        assert_eq!(serial.len(), 64);
+        assert_eq!(sidecars.semantic_on(8), Some(serial));
+        let mut drifted = sidecars.0.to_vec();
+        drifted[40].1 = [0; 32];
+        let drifted = super::Sidecars(drifted.into_boxed_slice());
+        assert!(drifted.semantic_on(1).is_none());
+        assert!(drifted.semantic_on(8).is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
