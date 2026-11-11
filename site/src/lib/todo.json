@@ -26,7 +26,8 @@
         {"text":"A crate method on a region-held `&mut self` receiver that takes a `&str`, as iced_test's `typewrite`, builds: the generated adapter pins the string before it reaches the receiver.","issues":[1693]},
         {"text":"rawr cleans up after itself by state, with no timer. Another extraction protocol's directory goes the first time a run opens rawr's home or a project's `target/rawr`, unless an installed rawr uses it or a run is reading it. A development or test build no longer counts as installed, so it no longer keeps old protocols alive. A project's own bindings, staged records, trait facts, extraction tables and API memo now live in `target/rawr/formats/<protocol>`, and the copies an older rawr kept straight under `target/rawr` go at the next run.","issues":[1677]},
         {"text":"A check after installing a new rawr build starts from the native instances the last build recorded, so it no longer builds the project's crates twice in two rounds.","issues":[1695]},
-        {"text":"A crate function whose own generic parameter is named like one rawr invents, such as `SOutput` beside a future parameter `S` or `impl_1` beside an argument's `impl Trait`, is imported and called. Before, Bind stopped with E0403 \"the name `SOutput` is already used for a generic parameter\". rawr now gives its own parameters reserved names derived from their identity, and its messages spell them as rustc does: `impl Into<u32>` or `<S as Future>::Output`.","issues":[1698]}
+        {"text":"A crate function whose own generic parameter is named like one rawr invents, such as `SOutput` beside a future parameter `S` or `impl_1` beside an argument's `impl Trait`, is imported and called. Before, Bind stopped with E0403 \"the name `SOutput` is already used for a generic parameter\". rawr now gives its own parameters reserved names derived from their identity, and its messages spell them as rustc does: `impl Into<u32>` or `<S as Future>::Output`.","issues":[1698]},
+        {"text":"After installing a rawr whose manifests are unchanged, `rawr check` reuses the last resolution: no harness, no Cargo resolution, no nightly build and nothing copied. The resolution names rawr's crate by its manifests in rawr's home, not by the install's host directory.","issues":[1696]}
       ]
     },
     "releases": [
@@ -3713,11 +3714,12 @@
     {"issue":1693,"title":"A region-held &mut self crate method taking a &str failed to build (E0502)","state":"open","category":"Divergences from rustc"},
     {"issue":1694,"title":"A closure over a lifetime-carrying candidate can't fill a selector parameter: ui.click(|candidate| ..)","state":"open","category":"Divergences from rustc"},
     {"issue":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1698,"title":"Rawr's synthetic generic parameters were named so a crate's own generic could clash with them (E0403)","state":"open","category":"Divergences from rustc"},
     {"issue":1699,"title":"Task::finish's closure over <S as Future>::Output with S: Core is refused again (regression of #621)","state":"open","category":"Divergences from rustc"},
-    {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"open","category":"Divergences from rustc"}
+    {"issue":1700,"title":"A script closure over a tuple holding a &'static str from a crate future's output fails the runner (E0521)","state":"open","category":"Divergences from rustc"},
+    {"issue":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4812,9 +4814,10 @@
             {"number":1689,"title":"rawr run gave no reason which native use a save's prepare-again was for","state":"open"},
             {"number":1691,"title":"A stored API replayed from shared tables decodes the whole tables document when only the handshakes are needed","state":"open"},
             {"number":1690,"title":"A new rawr install canonicalized an unchanged project's whole API again on one core","state":"open"},
-            {"number":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"open"},
+            {"number":1696,"title":"Each rawr install binds a new harness and resolves Cargo again: the resolution is keyed by the host directory","state":"closed"},
             {"number":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open"},
-            {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"open"}
+            {"number":1695,"title":"After an install, rawr check ran a second round: the instance record named the old build and read as none","state":"open"},
+            {"number":1701,"title":"An install with a different driver binds a new harness and rebuilds and copies a project's own bundle","state":"open"}
           ]
         }
       ]
