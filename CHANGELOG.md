@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- rawr-import's driver builds again on the newest nightly in its window (nightly-2026-11-02), so projects on that nightly can import. (#1829)
 
 ## 0.3.199 (2026-11-12)
 
