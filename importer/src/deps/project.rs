@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::named::Named;
+use crate::bridge::generate;
 use crate::bridge::generate::member;
 use crate::runner::mirror;
 
@@ -237,7 +238,9 @@ fn present(profiles: &[PathBuf]) -> BTreeMap<String, Present> {
 /// under `rawr`, the directory rawr generates its packages in, or, as Cargo
 /// writes a workspace member's, one relative to the runner's root, which
 /// for any crate but the runner's own lies in its members' or copies'
-/// directories.
+/// directories. The runner's binary of the script crate's name, whose first
+/// source is a `src/main.rs` as the project's own is, names the program's
+/// directory among its sources (#1793).
 fn generated_sources(unit: &Present, rawr: &Path) -> bool {
     let generated = |source: &Path| {
         if source.is_absolute() {
@@ -261,8 +264,11 @@ fn generated_sources(unit: &Present, rawr: &Path) -> bool {
                 text.lines()
                     .next()
                     .and_then(|line| line.split_once(": "))
-                    .and_then(|(_, sources)| sources.split(' ').next())
-                    .is_some_and(|source| generated(Path::new(source)))
+                    .is_some_and(|(_, sources)| {
+                        let mut sources = sources.split(' ').map(Path::new);
+                        sources.next().is_some_and(generated)
+                            || sources.any(|source| source.starts_with(generate::PROGRAM_DIRECTORY))
+                    })
             })
         })
 }
@@ -487,22 +493,28 @@ mod tests {
         }
         let work = shared.join("rawr/runner");
         fs::create_dir_all(&work).unwrap();
-        let generated = work.join("rawr-crates/program/src/lib.rs");
-        let user = project.path().join("src/main.rs");
+        // The runner's binary and the project's own, each a workspace
+        // member's `src/main.rs` as Cargo writes it; the runner's names the
+        // program's directory too.
+        let generated = PathBuf::from(format!(
+            "src/main.rs {}/rawr_proxies.rs",
+            super::generate::PROGRAM_DIRECTORY
+        ));
+        let user = PathBuf::from("src/main.rs src/home.rs");
         let located = project.path().join("located/src/lib.rs");
         let registry = project.path().join("registry/serde/src/lib.rs");
-        let program = "path+file:///runner/rawr-crates/program#rawr-generated-runner-program@0.0.0";
+        let program = "path+file:///runner#rawr-generated-runner@0.0.0";
         let serde_id = "registry+https://x#serde@1.0.0";
         let located_id = "path+file:///p/located#0.1.0";
 
         // Cargo's own: serde, the project's crate and the path package it
-        // depends on. A unit from before any record, of the program
-        // member's crate under rawr's sources, is rawr's.
+        // depends on. A unit from before any record, of the runner's binary
+        // under the project's crate's name, is rawr's.
         let serde = unit(&profile, "serde", 'a', &registry, (10, &[]));
         let cargo_user = unit(&profile, "app", 'b', &user, (11, &[12]));
         let cargo_located = unit(&profile, "located", 'c', &located, (12, &[]));
         let legacy = unit(&profile, "app", '9', &generated, (19, &[]));
-        // The first runner build: the program member, of the project's
+        // The first runner build: the runner's binary, of the project's
         // crate's name, and a serde of its own features.
         let before = super::Before::take(&shared);
         std::thread::sleep(std::time::Duration::from_millis(20));

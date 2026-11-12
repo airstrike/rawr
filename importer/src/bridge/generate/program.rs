@@ -1,13 +1,13 @@
 //! What of the runner names the program's own crate (#1775): rawr's copy of
 //! it, which a save to the program's sources recompiles. Cargo recompiles
 //! every crate that depends on a recompiled one, so the runner's code that
-//! names the program's crate is a member of its own, the program's
-//! (`member::Member::Program`), and the base and the crates of adapters
-//! that don't name it don't depend on it. A save to a held type then
-//! recompiles rawr's copy, the program's member and the runner alone.
+//! names the program's crate is the runner's binary's own, beside the
+//! program's proxies (#1793), and the base and the crates of adapters don't
+//! depend on it. A save to a held type then recompiles rawr's copy and the
+//! runner alone.
 //!
 //! An item names the program when its text names one of the program's
-//! crates, a proxy of a script type (D594), which the program's member
+//! crates, a proxy of a script type (D594), which the runner's crate root
 //! declares, or another item of the program's.
 //!
 //! The program's crate is the script's, which the generator learns from the
@@ -167,7 +167,7 @@ impl Program {
 
 /// The program's crates once the runner's sources are split.
 pub(super) struct Crates {
-    /// Their packages, which only the program's member depends on.
+    /// Their packages, which only the runner's binary depends on.
     pub(super) packages: BTreeSet<String>,
     /// The names the runner's sources reach them by.
     pub(super) names: BTreeSet<String>,

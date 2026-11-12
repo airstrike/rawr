@@ -7178,13 +7178,11 @@ fn render<B: crate::surface::Runner>(
         &members.exclusions(),
     )?;
     let (manifest, aliases) = runner_manifest_aliased(harness.manifest(), &hidden, harness.lock())?;
-    let manifest = member::runner_manifest(&manifest, &members.list)?;
+    let manifest = member::runner_manifest(&manifest, &members.list, members.binary.as_deref())?;
+    let without = members.without();
     for member in &members.list {
         let path = format!("{}/{MANIFEST_PATH}", member.directory());
-        sources.push((
-            path.into(),
-            member.manifest(&manifest, &members.without(member))?,
-        ));
+        sources.push((path.into(), member.manifest(&manifest, &without)?));
     }
     alias_crates(&aliases, &members, &mut sources)?;
     // In path order, as the sources are framed.
@@ -7786,17 +7784,6 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
     output
 }
 
-/// Render the runner's sources into `sources` and return its member crates
-/// (`member`), the base first. The base holds the runtime, the families,
-/// places and proxies every adapter names, the traits the program names and
-/// the script's impls. Each imported root's adapters are a crate of their
-/// own on the base, so Cargo compiles them on several cores, and an edit
-/// that changes one root's adapters recompiles that crate and the runner
-/// alone. When the runner depends on the program's crate, what names it is
-/// the program's member's instead (`program`, #1775), so a save to the
-/// program recompiles that member and the runner alone. The runner holds
-/// the rest: the adapter table, the bindings it installs, the
-/// per-generation stamps and the protocol.
 /// The harness the runner is generated from: its manifest and lock, each
 /// path package's name and directory, and the hidden crates found so far.
 type Harness<'a> = (
@@ -7806,6 +7793,17 @@ type Harness<'a> = (
     &'a mut Vec<HiddenCrate>,
 );
 
+/// Render the runner's sources into `sources` and return its member crates
+/// (`member`), the base first. The base holds the runtime, the families,
+/// places and proxies every adapter names, the traits the program names and
+/// the script's impls. Each imported root's adapters are a crate of their
+/// own on the base, so Cargo compiles them on several cores, and an edit
+/// that changes one root's adapters recompiles that crate and the runner
+/// alone. When the runner depends on the program's crate, what names it is
+/// the runner's own instead (`program`, #1793), so no member depends on the
+/// program and a save to the program recompiles rawr's copy and the runner
+/// alone. The runner holds the rest: the adapter table, the bindings it
+/// installs, the per-generation stamps and the protocol.
 #[allow(clippy::too_many_arguments)]
 fn render_source(
     plans: &[Plan],
@@ -8233,7 +8231,7 @@ fn render_source(
             }
         }
     }
-    // What names the program's crates is the program's member's (#1775).
+    // What names the program's crates is the runner's own (#1793).
     let script = PROXY_CRATE.with_borrow(Clone::clone);
     let mut program = script.as_deref().and_then(|script| {
         let proxies = PROXIES.with_borrow(|proxies| proxies.keys().cloned().collect::<Vec<_>>());
@@ -8245,46 +8243,44 @@ fn render_source(
     let mut table = Vec::new();
     for (root, modules) in &placed.roots {
         let member = member::Member::Adapters { root: root.clone() };
+        let holder = Holder::Member(&member);
         write_adapters(
-            &member, modules, &rendered, plans, false, sources, spans, &mut table,
+            &holder, modules, &rendered, plans, sources, spans, &mut table,
         )?;
+        sources.push((
+            format!("{}/{LIBRARY_PATH}", member.directory()).into(),
+            ADAPTERS_ROOT.to_vec(),
+        ));
         members.push(member);
     }
     let Support {
         base: base_files,
         program: program_files,
     } = support;
-    if program.is_some()
-        && let Some(script) = &script
-    {
-        let member = member::Member::Program {
-            library: script.clone(),
-        };
+    // The runner's binary holds what names the program, under the script
+    // crate's name (D594).
+    let binary = program.as_ref().and(script.clone());
+    if binary.is_some() {
         write_adapters(
-            &member,
+            &Holder::Program,
             &placed.program,
             &rendered,
             plans,
-            true,
             sources,
             spans,
             &mut table,
         )?;
-        write_program(&member, program_files, &proxies, sources)?;
-        members.push(member);
+        write_program(program_files, &proxies, sources)?;
     }
     main.splice(modules_at..modules_at, table);
-    // The runner reaches the program's member as it reaches the base.
-    if program.is_some() {
-        main.splice(0..0, PROGRAM_IMPORTS.iter().copied());
-    }
     let mut root = ROOT_SOURCE.to_vec();
-    if program.is_some() {
+    if binary.is_some() {
+        main.splice(0..0, PROGRAM_IMPORTS.iter().copied());
         let at = ROOT_SOURCE
             .windows(RUNTIME_GLOB.len())
             .position(|window| window == RUNTIME_GLOB)
             .map_or(0, |at| at + RUNTIME_GLOB.len());
-        root.splice(at..at, PROGRAM_GLOB.iter().copied());
+        root.splice(at..at, PROGRAM_ROOT.iter().copied());
     }
     sources.push((SOURCE_PATH.into(), root));
     let base = member::Member::Base {
@@ -8348,14 +8344,17 @@ fn render_source(
     Ok(Members {
         list: members,
         program: program.map(program::Program::into_crates),
+        binary,
     })
 }
 
-/// The runner's members, the base first, and the program's crates, which
-/// only the program's member depends on (#1775).
+/// The runner's members, the base first, the program's crates, which only
+/// the runner's binary depends on (#1793), and the name its crate takes
+/// when it declares the proxies.
 struct Members {
     list: Vec<member::Member>,
     program: Option<program::Crates>,
+    binary: Option<String>,
 }
 
 impl Members {
@@ -8368,29 +8367,24 @@ impl Members {
     }
 
     /// Whether the crate whose root is `path` may name the program's crates:
-    /// the runner's, the program member's, or any when there is no program.
+    /// the runner's, or any when there is no program.
     fn reaches_program(&self, path: &str) -> bool {
-        let program = member::Member::Program {
-            library: String::new(),
-        };
-        self.program.is_none()
-            || path == SOURCE_PATH
-            || path.starts_with(&format!("{}/", program.directory()))
+        self.program.is_none() || path == SOURCE_PATH
     }
 
-    /// The packages `member` leaves out.
-    fn without(&self, member: &member::Member) -> std::collections::BTreeSet<String> {
-        match (member, &self.program) {
-            (member::Member::Program { .. }, _) | (_, None) => std::collections::BTreeSet::new(),
-            (_, Some(program)) => program.packages.clone(),
-        }
+    /// The packages every member leaves out: the program's.
+    fn without(&self) -> std::collections::BTreeSet<String> {
+        self.program
+            .as_ref()
+            .map(|program| program.packages.clone())
+            .unwrap_or_default()
     }
 
     /// The packages each member leaves out, by its package.
     fn exclusions(&self) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
         self.list
             .iter()
-            .map(|member| (member.package(), self.without(member)))
+            .map(|member| (member.package(), self.without()))
             .filter(|(_, without)| !without.is_empty())
             .collect()
     }
@@ -8419,7 +8413,7 @@ impl Rendered {
 }
 
 /// The base's families, impls with its native sequences' registration, and
-/// trait imports, and the program member's.
+/// trait imports, and the program module's.
 struct Support {
     base: Files,
     program: Files,
@@ -8435,7 +8429,7 @@ struct Files {
 
 impl Support {
     /// `families`, `impls` and `traits`, item by item, and each of
-    /// `registrations`, in the program's member when it names the program,
+    /// `registrations`, in the program's module when it names the program,
     /// else in the base. Without a program, all of them are the base's.
     fn split(
         families: &[u8],
@@ -8545,8 +8539,8 @@ fn write_registrations<'a>(
 /// Each root's modules, each module's plans by index.
 type Units = std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<usize>>>;
 
-/// Each crate of adapters' modules and plans: each root's, and the
-/// program's member's.
+/// Each set of adapters' modules and plans: each root's crate's, and the
+/// runner's own that name the program.
 struct Placed {
     roots: Units,
     program: std::collections::BTreeMap<String, Vec<usize>>,
@@ -8606,34 +8600,56 @@ fn place_adapters(
     Ok(placed)
 }
 
-/// The files of `member`, a crate of adapters, holding `modules` (each
+/// What holds a set of adapters' modules.
+enum Holder<'a> {
+    /// A crate of adapters: the member's `__rawr_adapters`.
+    Member(&'a member::Member),
+    /// The runner's binary's `__rawr_adapters`, beside the program's module,
+    /// whose runtime and trait imports its modules see too (#1793).
+    Program,
+}
+
+impl Holder<'_> {
+    /// The directory of its modules' files.
+    fn directory(&self) -> String {
+        match self {
+            Self::Member(member) => format!("{}/src", member.directory()),
+            Self::Program => PROGRAM_DIRECTORY.to_owned(),
+        }
+    }
+
+    /// The crate the runner's adapter table reaches its modules through.
+    fn krate(&self) -> String {
+        match self {
+            Self::Member(member) => format!("::{}", member.key()),
+            Self::Program => "crate".to_owned(),
+        }
+    }
+}
+
+/// The files of `holder`'s `__rawr_adapters`, holding `modules` (each
 /// module's plans, rendered in `rendered`), each module's line of the
-/// runner's adapter table in `table`, and each adapter's span. The
-/// program's member's modules see its runtime and trait imports too.
-#[allow(clippy::too_many_arguments)]
+/// runner's adapter table in `table`, and each adapter's span.
 fn write_adapters(
-    member: &member::Member,
+    holder: &Holder<'_>,
     modules: &std::collections::BTreeMap<String, Vec<usize>>,
     rendered: &[Rendered],
     plans: &[Plan],
-    program: bool,
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
     table: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let directory = member.directory();
+    let directory = holder.directory();
+    let krate = holder.krate();
+    let program = matches!(holder, Holder::Program);
     let mut declared = RUNTIME_IMPORTS.to_vec();
     if program {
         declared.extend_from_slice(PROGRAM_RUNTIME_IMPORTS);
     }
     let mut applications = Vec::new();
     for (module, indices) in modules {
-        writeln!(
-            table,
-            "    ::{}::__rawr_adapters::{module}::ADAPTERS,",
-            member.key()
-        )
-        .map_err(request::unwritable)?;
+        writeln!(table, "    {krate}::__rawr_adapters::{module}::ADAPTERS,")
+            .map_err(request::unwritable)?;
         writeln!(declared, "pub mod {module};").map_err(request::unwritable)?;
         let mut file = Vec::new();
         file.write_all(b"use super::*;\n")
@@ -8649,7 +8665,7 @@ fn write_adapters(
             file.extend_from_slice(&rendered[*index].rows);
         }
         file.write_all(b"];\n\n").map_err(request::unwritable)?;
-        let path: Box<str> = format!("{directory}/src/{module}.rs").into();
+        let path: Box<str> = format!("{directory}/{module}.rs").into();
         for index in indices {
             let start = span_offset(&file)?;
             file.extend_from_slice(&rendered[*index].body);
@@ -8663,41 +8679,41 @@ fn write_adapters(
         .write_all(b"mod rawr_applications;\n")
         .map_err(request::unwritable)?;
     sources.push((
-        format!("{directory}/src/{APPLICATIONS_FILE}").into(),
+        format!("{directory}/{APPLICATIONS_FILE}").into(),
         applications,
     ));
-    sources.push((format!("{directory}/src/{ADAPTERS_FILE}").into(), declared));
-    let root = if program { PROGRAM_ROOT } else { ADAPTERS_ROOT };
-    sources.push((format!("{directory}/{LIBRARY_PATH}").into(), root.to_vec()));
+    sources.push((format!("{directory}/{ADAPTERS_FILE}").into(), declared));
     Ok(())
 }
 
-/// The program's member's own files besides its adapters: its proxies and
-/// the trait they implement, at its root, and its module of families,
-/// impls, trait imports and the runtime over that trait.
+/// The runner's own files of the program's besides its adapters: the
+/// proxies and the trait they implement, which its crate root includes, and
+/// its module of families, impls, trait imports and the runtime over that
+/// trait.
 fn write_program(
-    member: &member::Member,
     files: Files,
     proxies: &[u8],
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
 ) -> Result<(), request::Error> {
-    let directory = member.directory();
     sources.push((
-        format!("{directory}/src/rawr_proxies.rs").into(),
+        format!("{PROGRAM_DIRECTORY}/rawr_proxies.rs").into(),
         proxies.to_vec(),
     ));
     let mut module = PROGRAM_MODULE.to_vec();
     module.extend_from_slice(HELD_RUNTIME);
-    sources.push((format!("{directory}/src/{PROGRAM_FILE}").into(), module));
+    sources.push((format!("{PROGRAM_DIRECTORY}/{PROGRAM_FILE}").into(), module));
     sources.push((
-        format!("{directory}/src/rawr_program_families.rs").into(),
+        format!("{PROGRAM_DIRECTORY}/rawr_program_families.rs").into(),
         files.families,
     ));
     sources.push((
-        format!("{directory}/src/rawr_program_traits.rs").into(),
+        format!("{PROGRAM_DIRECTORY}/rawr_program_traits.rs").into(),
         files.traits,
     ));
-    sources.push((format!("{directory}/src/rawr_impls.rs").into(), files.impls));
+    sources.push((
+        format!("{PROGRAM_DIRECTORY}/rawr_impls.rs").into(),
+        files.impls,
+    ));
     Ok(())
 }
 
@@ -8960,10 +8976,13 @@ fn span_offset(output: &[u8]) -> Result<u32, request::Error> {
     })
 }
 
-/// The runner itself, the crate root's module `__rawr_runner`, which holds
+/// The runner itself, the crate root's module `__rawr_main`, which holds
 /// every item of the runner's own and the modules it declares: a program
 /// names its types and modules as it likes, and none meets a runner item
-/// at the crate root, where the base's proxies are (#1163).
+/// at the crate root, where the proxies are (#1163). It is not named as
+/// the base's runtime is, which the program's adapters and impls in the
+/// binary reach as `crate::__rawr_runner`, as a crate of adapters does
+/// (#1793).
 const RUNNER_PATH: &str = "src/rawr_runner.rs";
 /// The base's module `__rawr_runner`, the runtime every adapter calls.
 const RUNNER_FILE: &str = "rawr_runner.rs";
@@ -8984,9 +9003,9 @@ const ROOT_SOURCE: &[u8] = b"#![forbid(unsafe_code)]\n\
 use ::rawr_generated_runner_base::*;\n\
 #[allow(dead_code)]\n\
 #[path = \"rawr_runner.rs\"]\n\
-mod __rawr_runner;\n\
+mod __rawr_main;\n\
 \n\
-fn main() {\n    __rawr_runner::main()\n}\n";
+fn main() {\n    __rawr_main::main()\n}\n";
 /// What the runner's module and each crate of adapters' module import from
 /// the base: the runtime.
 const RUNTIME_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
@@ -9017,9 +9036,9 @@ use ::rawr_generated_runner_base::*;\n\
 pub mod __rawr_adapters;\n";
 
 /// The runtime's functions over `__RawrHeld` (`HELD_SOURCE`), in the
-/// crate that declares it: the base's runtime, or the program member's
-/// module when its proxies hold mirrors of the program's types, which only
-/// its crate may implement the trait for (#1775).
+/// crate that declares it: the base's runtime, or the runner's module of
+/// the program's when its proxies hold mirrors of the program's types, which
+/// only its crate may implement the trait for (#1775).
 const HELD_RUNTIME: &[u8] = br#"
 /// The script value `value` holds, given back to script code by an
 /// adapter, whose arena is borrowed. A value made where it is first used
@@ -9042,32 +9061,42 @@ pub fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, in
     Ok(lend(arguments.arena, || <T as crate::__RawrHeld>::from_proxy(proxy)))
 }
 "#;
-/// What a families file begins with: the base's and the program member's.
+/// What a families file begins with: the base's and the program's module's.
 const FAMILIES_HEADER: &str = "#![allow(dead_code, unused_imports)]\nuse super::*;\n\n";
 /// The function that registers the base's native sequences, which the
 /// runner calls.
 const REGISTER_BASE: &str = "register_native_sequences";
-/// The function that registers the program member's.
+/// The function that registers the program's module's.
 const REGISTER_PROGRAM: &str = "register_program_sequences";
-/// The base's glob in the runner's crate root, which the program member's
+/// The base's glob in the runner's crate root, which the program's root
 /// follows.
 const RUNTIME_GLOB: &[u8] = b"use ::rawr_generated_runner_base::*;\n";
-/// The program member's root in the runner's crate root: its proxies.
-const PROGRAM_GLOB: &[u8] = b"#[allow(unused_imports)]\nuse ::rawr_generated_runner_program::*;\n\
-#[allow(unused_imports)]\nuse ::rawr_generated_runner_program::__RawrHeld;\n";
-/// What the runner's module imports from the program's member, and its
-/// registration of both crates' native sequences.
+/// The directory of the runner's own files that name the program (#1793),
+/// as its module, whose name no program spells.
+pub(crate) const PROGRAM_DIRECTORY: &str = "src/__rawr_program";
+/// The program's part of the runner's crate root: the proxies of script
+/// types (D594), at the root so each is named as the script names it, the
+/// program's module, and the adapters that name the program.
+const PROGRAM_ROOT: &[u8] = b"include!(\"__rawr_program/rawr_proxies.rs\");\n\
+#[allow(dead_code)]\n\
+#[path = \"__rawr_program/rawr_program.rs\"]\n\
+mod __rawr_program;\n\
+#[allow(dead_code)]\n\
+#[path = \"__rawr_program/rawr_adapters.rs\"]\n\
+mod __rawr_adapters;\n";
+/// What the runner's module imports from the program's module, and its
+/// registration of both its own and the base's native sequences.
 const PROGRAM_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
-use ::rawr_generated_runner_program::__rawr_program::*;\n\
+use crate::__rawr_program::*;\n\
 #[allow(unused_imports)]\n\
-use ::rawr_generated_runner_program::__rawr_program::rawr_program_traits::*;\n\
+use crate::__rawr_program::rawr_program_traits::*;\n\
 #[allow(unused_imports)]\n\
-use ::rawr_generated_runner_program::__rawr_program::{give_held, take_held};\n\
+use crate::__rawr_program::{give_held, take_held};\n\
 fn register_native_sequences() {\n\
     ::rawr_generated_runner_base::__rawr_runner::register_native_sequences();\n\
-    ::rawr_generated_runner_program::__rawr_program::register_program_sequences();\n\
+    crate::__rawr_program::register_program_sequences();\n\
 }\n";
-/// The program member's module of families, impls and traits.
+/// The program's module of families, impls and traits.
 const PROGRAM_FILE: &str = "rawr_program.rs";
 /// That module: the base's runtime and traits in scope, its own beside them.
 const PROGRAM_MODULE: &[u8] = b"#[allow(unused_imports)]\n\
@@ -9081,27 +9110,15 @@ pub mod rawr_program_traits;\n\
 pub use rawr_program_families::*;\n\
 pub mod rawr_program_families;\n\
 include!(\"rawr_impls.rs\");\n";
-/// What the program member's module of adapters imports besides the
-/// runtime: its own module.
+/// What the module of the adapters that name the program imports besides
+/// the runtime: the program's module.
 const PROGRAM_RUNTIME_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
 use crate::__rawr_program::*;\n\
 #[allow(unused_imports)]\n\
 use crate::__rawr_program::{give_held, take_held};\n";
-/// The program member's trait imports, besides the base's.
+/// The program's module's trait imports, besides the base's.
 const PROGRAM_TRAIT_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
 use crate::__rawr_program::rawr_program_traits::*;\n";
-/// The program member's root: the proxies of script types (D594), its
-/// module, and its adapters.
-const PROGRAM_ROOT: &[u8] = b"#![forbid(unsafe_code)]\n\
-#[allow(unused_imports)]\n\
-use ::rawr_generated_runner_base::*;\n\
-include!(\"rawr_proxies.rs\");\n\
-#[allow(dead_code)]\n\
-#[path = \"rawr_program.rs\"]\n\
-pub mod __rawr_program;\n\
-#[allow(dead_code)]\n\
-#[path = \"rawr_adapters.rs\"]\n\
-pub mod __rawr_adapters;\n";
 
 /// Whether `path`, a generated source, is a crate's root: the runner's or a
 /// member's.
@@ -9280,8 +9297,8 @@ pub(crate) fn encode_sources(sources: &[(Box<str>, Vec<u8>)]) -> Result<Vec<u8>,
 /// Make `root` hold exactly `files`, writing a file only when its bytes
 /// changed (an unchanged file keeps its mtime and Cargo sees it unchanged) and
 /// removing generated sources no longer produced: a source of the runner's
-/// or of a member's, and a member no longer produced, whole. Returns the
-/// paths written.
+/// or of a member's, and a member or the program's directory no longer
+/// produced, whole. Returns the paths written.
 pub fn sync_sources<'a>(
     root: &std::path::Path,
     files: impl IntoIterator<Item = (&'a str, &'a [u8])>,
@@ -9303,6 +9320,12 @@ pub fn sync_sources<'a>(
         kept.insert(target);
     }
     let mut sources = vec![root.join("src")];
+    let program = root.join(PROGRAM_DIRECTORY);
+    if kept.iter().any(|path| path.starts_with(&program)) {
+        sources.push(program);
+    } else if program.is_dir() {
+        std::fs::remove_dir_all(&program)?;
+    }
     for entry in std::fs::read_dir(root.join(member::DIRECTORY))
         .into_iter()
         .flatten()
@@ -9345,15 +9368,20 @@ fn plain_segment(name: &str) -> bool {
 }
 
 /// Whether `path` is where a generated source may be: the facade plan, a
-/// `.rs` file in the runner's `src`, or a member's manifest, build script
-/// or `.rs` file in its `src` (`member`).
+/// `.rs` file in the runner's `src` or its program's directory, or a
+/// member's manifest, build script or `.rs` file in its `src` (`member`).
 fn generated_source_path(path: &str) -> bool {
     let source = |path: &str| {
         path.strip_prefix("src/")
             .and_then(|name| name.strip_suffix(".rs"))
             .is_some_and(plain_segment)
     };
-    if path == BINDINGS_PATH || source(path) {
+    let program = path
+        .strip_prefix(PROGRAM_DIRECTORY)
+        .and_then(|path| path.strip_prefix('/'))
+        .and_then(|name| name.strip_suffix(".rs"))
+        .is_some_and(plain_segment);
+    if path == BINDINGS_PATH || source(path) || program {
         return true;
     }
     path.strip_prefix(member::DIRECTORY)

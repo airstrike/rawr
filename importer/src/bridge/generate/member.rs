@@ -1,14 +1,14 @@
 //! The runner's library crates (#1670): the base every adapter builds on and
-//! one crate of adapters per imported root, and the program's member, which
-//! holds what names the program's crates (#1775). Cargo compiles them on
-//! several cores, and an edit that changes one root's adapters recompiles
-//! that crate and the runner alone.
+//! one crate of adapters per imported root. Cargo compiles them on several
+//! cores, and an edit that changes one root's adapters recompiles that crate
+//! and the runner alone. What names the program's crates is the runner's own
+//! (#1793), so no member depends on the program.
 //!
 //! Each is a member of the runner's workspace with the runner's own
-//! dependencies, but the program's crates for all but the program's member:
-//! its manifest and its lock entry take them from the runner's, so every
-//! step that rewrites the runner's manifest or lock (the mirror, the shared
-//! runtime, a member's version) reaches them too.
+//! dependencies but the program's crates: its manifest and its lock entry
+//! take them from the runner's, so every step that rewrites the runner's
+//! manifest or lock (the mirror, the shared runtime, a member's version)
+//! reaches them too.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,9 +26,6 @@ pub(crate) const RUNNER: &str = "rawr-generated-runner";
 /// The base's package.
 const BASE_PACKAGE: &str = "rawr-generated-runner-base";
 
-/// The program's member's package.
-const PROGRAM_PACKAGE: &str = "rawr-generated-runner-program";
-
 /// The name the runner's code gives the base, as the crate roots and the
 /// adapters' modules spell it.
 pub(super) const BASE_KEY: &str = "rawr_generated_runner_base";
@@ -44,11 +41,6 @@ pub(super) enum Member {
     Base { library: String },
     /// The adapters of one imported root, by its name as a module segment.
     Adapters { root: String },
-    /// What names the program's crates (`program`): the proxies, which make
-    /// its library take the script crate's name, the families, places,
-    /// traits and impls that name them, and every adapter that does. Only
-    /// it, of the members, depends on the program's crates (#1775).
-    Program { library: String },
 }
 
 impl Member {
@@ -56,7 +48,6 @@ impl Member {
         match self {
             Self::Base { .. } => BASE_PACKAGE.to_owned(),
             Self::Adapters { root } => format!("{RUNNER}-adapters-{root}"),
-            Self::Program { .. } => PROGRAM_PACKAGE.to_owned(),
         }
     }
 
@@ -70,7 +61,6 @@ impl Member {
         match self {
             Self::Base { .. } => format!("{DIRECTORY}/base"),
             Self::Adapters { root } => format!("{DIRECTORY}/adapters-{root}"),
-            Self::Program { .. } => format!("{DIRECTORY}/program"),
         }
     }
 
@@ -100,13 +90,6 @@ impl Member {
                     Item::Value(path_dependency(BASE_PACKAGE, "../base")),
                 );
                 self.key()
-            }
-            Self::Program { library } => {
-                dependencies.insert(
-                    BASE_KEY,
-                    Item::Value(path_dependency(BASE_PACKAGE, "../base")),
-                );
-                library.clone()
             }
         };
         // The packages it leaves out, which `manifest` reads again after
@@ -143,14 +126,33 @@ fn path_dependency(package: &str, path: &str) -> toml_edit::Value {
     toml_edit::Value::InlineTable(table)
 }
 
-/// The runner's `manifest` with a dependency on each of `members`, and the
-/// runner and its members compiled without debug info (#1789).
+/// The runner's `manifest` with a dependency on each of `members`, its
+/// binary named `binary` when it takes a name of its own, and the runner and
+/// its members compiled without debug info (#1789).
+///
+/// The binary takes the script crate's name when it declares the proxies of
+/// script types (D594), so their `type_name` is the script's: Cargo names a
+/// binary's crate by its target.
 pub(super) fn runner_manifest(
     manifest: &[u8],
     members: &[Member],
+    binary: Option<&str>,
 ) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(manifest).map_err(request::misread)?;
     let mut document = text.parse::<DocumentMut>().map_err(request::misread)?;
+    if let Some(binary) = binary {
+        let package = document
+            .get_mut("package")
+            .and_then(Item::as_table_like_mut)
+            .ok_or_else(|| request::misread("the runner's manifest has no package"))?;
+        package.insert("autobins", toml_edit::value(false));
+        let mut target = Table::new();
+        target.insert("name", toml_edit::value(binary));
+        target.insert("path", toml_edit::value(super::SOURCE_PATH));
+        let mut targets = toml_edit::ArrayOfTables::new();
+        targets.push(target);
+        document.insert("bin", Item::ArrayOfTables(targets));
+    }
     let dependencies = document
         .entry("dependencies")
         .or_insert(Item::Table(Table::new()))
@@ -224,7 +226,7 @@ pub(super) fn runner_lock(
         entry.insert("name", toml_edit::value(member.package()));
         entry.insert("version", toml_edit::value("0.0.0"));
         let mut needs = toml_edit::Array::new();
-        if let Member::Adapters { .. } | Member::Program { .. } = member {
+        if let Member::Adapters { .. } = member {
             needs.push(BASE_PACKAGE);
         }
         entry.insert("dependencies", toml_edit::value(needs));
@@ -259,6 +261,17 @@ fn is_member(package: &Table) -> bool {
         .and_then(Item::as_str)
         .is_some_and(|name| name.starts_with(RUNNER) && name != RUNNER)
         && !package.contains_key("source")
+}
+
+/// The file name of the runner's executable in the runner's `manifest`:
+/// its binary's own name (`runner_manifest`), else its package's.
+pub(crate) fn executable(manifest: &str) -> String {
+    let named = manifest.parse::<DocumentMut>().ok().and_then(|document| {
+        let target = document.get("bin")?.as_array_of_tables()?.iter().next()?;
+        target.get("name")?.as_str().map(str::to_owned)
+    });
+    let name = named.unwrap_or_else(|| RUNNER.to_owned());
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
 /// Whether `name` is the name of the runner's package or a member's,
@@ -539,7 +552,7 @@ mod tests {
             Some("0.2")
         );
         // The runner's dependencies on its members never reach a member.
-        let runner = runner_manifest(RUNNER_MANIFEST.as_bytes(), &[member])
+        let runner = runner_manifest(RUNNER_MANIFEST.as_bytes(), &[member], None)
             .expect("the runner's manifest renders");
         let runner = std::str::from_utf8(&runner).expect("the manifest is UTF-8");
         assert!(runner.contains(
@@ -558,17 +571,18 @@ mod tests {
             Member::Base {
                 library: "app".to_owned(),
             },
-            Member::Program {
-                library: "app".to_owned(),
+            Member::Adapters {
+                root: "iced".to_owned(),
             },
         ];
         for manifest in [RUNNER_MANIFEST, project.as_str()] {
-            let runner = runner_manifest(manifest.as_bytes(), &members)
+            let runner = runner_manifest(manifest.as_bytes(), &members, None)
                 .expect("the runner's manifest renders");
             let runner = std::str::from_utf8(&runner).expect("the manifest is UTF-8");
             let document = runner.parse::<DocumentMut>().expect("the manifest parses");
             let packages = &document["profile"]["dev"]["package"];
-            for package in [RUNNER, BASE_PACKAGE, PROGRAM_PACKAGE] {
+            let adapters = members[1].package();
+            for package in [RUNNER, BASE_PACKAGE, adapters.as_str()] {
                 assert_eq!(packages[package]["debug"].as_integer(), Some(0), "{runner}");
                 assert_eq!(
                     packages[package]["strip"].as_bool(),
@@ -583,6 +597,32 @@ mod tests {
             );
             assert!(document["profile"]["dev"].get("debug").is_none());
         }
+    }
+
+    /// A runner whose binary declares the proxies names its crate as the
+    /// script's (D594), and its executable takes that name; one without
+    /// keeps the package's (#1793).
+    #[test]
+    fn a_runner_binary_of_its_own_name_names_its_executable() {
+        let named = runner_manifest(RUNNER_MANIFEST.as_bytes(), &[], Some("app"))
+            .expect("the runner's manifest renders");
+        let named = std::str::from_utf8(&named).expect("the manifest is UTF-8");
+        let document = named.parse::<DocumentMut>().expect("the manifest parses");
+        let targets = document["bin"]
+            .as_array_of_tables()
+            .expect("the binary is a target of its own");
+        assert_eq!(targets.len(), 1, "{named}");
+        let target = targets.iter().next().expect("one target");
+        assert_eq!(target["name"].as_str(), Some("app"));
+        assert_eq!(target["path"].as_str(), Some("src/main.rs"));
+        assert_eq!(document["package"]["autobins"].as_bool(), Some(false));
+        let suffix = std::env::consts::EXE_SUFFIX;
+        assert_eq!(executable(named), format!("app{suffix}"));
+        let plain = runner_manifest(RUNNER_MANIFEST.as_bytes(), &[], None)
+            .expect("the runner's manifest renders");
+        let plain = std::str::from_utf8(&plain).expect("the manifest is UTF-8");
+        assert!(!plain.contains("[[bin]]"), "{plain}");
+        assert_eq!(executable(plain), format!("{RUNNER}{suffix}"));
     }
 
     /// Each member's lock entry depends on what the runner's does, as Cargo
