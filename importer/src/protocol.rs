@@ -8,7 +8,7 @@ pub mod resident;
 pub const FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const DIAGNOSTIC_BYTES: usize = 16 * 1024 * 1024;
 pub const STREAM_TAIL_BYTES: usize = 1024 * 1024;
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 const HEADER_BYTES: usize = 4;
 const PREFIX_BYTES: usize = 5;
 
@@ -65,14 +65,6 @@ pub enum Tag {
     ResidentResource = 42,
     RefreshPoll = 43,
     RefreshStatus = 44,
-    /// The live runner's key; it answers `StateExported`.
-    ExportState = 46,
-    /// The key, then 1 and the carried State bytes, or 0 when none.
-    StateExported = 47,
-    /// An admitted runner's key, then carried State bytes to start from.
-    SeedState = 48,
-    /// The key, then 1 when the State was seeded or 0 when booted.
-    StateSeeded = 49,
     /// The resident attempt's header, then why the running `main` can't
     /// take the generation it compiled (D553.6).
     ResidentRefused = 50,
@@ -374,10 +366,6 @@ impl TryFrom<u8> for Tag {
             42 => Self::ResidentResource,
             43 => Self::RefreshPoll,
             44 => Self::RefreshStatus,
-            46 => Self::ExportState,
-            47 => Self::StateExported,
-            48 => Self::SeedState,
-            49 => Self::StateSeeded,
             50 => Self::ResidentRefused,
             actual => return Err(Error::Tag(actual)),
         })

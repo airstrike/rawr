@@ -2,7 +2,8 @@
 //! a save (D553): the loop's next call into script code runs the new body,
 //! in the same process, a new field of a script type no live value holds
 //! swaps in too, and an edit to `main` restarts the program with a one-line
-//! reason. Build the driver first, as for `islands`.
+//! reason. An edit to the native loop builds a new runner while the old
+//! program runs. Build the driver first, as for `islands`.
 
 use std::fs;
 use std::path::Path;
@@ -88,6 +89,101 @@ fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
             .any(|line| line == "stderr: rawr: `main` changed; restarting the program"),
         "{}",
         run.seen.join("\n")
+    );
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
+/// An edit to the native loop a marked `main` calls needs a new runner:
+/// the old program keeps ticking while it builds, ends before the new
+/// `main` runs, so the lock it held is free, and the new one starts in the
+/// same run. A new runner that fails to build leaves the program running
+/// and says why (#1810).
+#[test]
+fn a_marked_main_keeps_running_while_its_new_runner_builds() {
+    let root = crate::support::fresh("marked-ticker-rebuild");
+    copy(Path::new(FIXTURE), &root);
+    let ticker = root.join("ticker/src/lib.rs");
+    let mut run = start(
+        &root,
+        &[
+            ("TICKER_STOP", root.join("stop")),
+            ("TICKER_LOCK", root.join("lock")),
+        ],
+    );
+    run.until(|line| line == "lock held");
+    let pid = run.until(|line| line.starts_with("pid "));
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 2));
+
+    // The new loop says each tick was rebuilt.
+    edit(
+        &ticker,
+        "println!(\"{}\", step(tick));",
+        "println!(\"{} rebuilt\", step(tick));",
+    );
+    let next = run.until(|line| line.starts_with("pid ") && *line != pid);
+    let rebuilt = |line: &str| {
+        line.strip_suffix(" rebuilt")
+            .and_then(parse)
+            .map(|(tick, _)| tick)
+    };
+    run.until(|line| rebuilt(line).is_some());
+    let seen = run.seen.clone();
+    let text = seen.join("\n");
+    let at = |wanted: &dyn Fn(&str) -> bool| seen.iter().position(|line| wanted(line));
+    let restarting = at(&|line| line == "stderr: rawr: the source changed; restarting the program")
+        .unwrap_or_else(|| panic!("no restart line:\n{text}"));
+    let started = at(&|line| line == next).unwrap();
+    // The old program ticked on, unbroken, as the new runner built.
+    let old: Vec<i64> = seen[..started]
+        .iter()
+        .filter_map(|line| parse(line).map(|(tick, _)| tick))
+        .collect();
+    assert!(old.windows(2).all(|pair| pair[1] == pair[0] + 1), "{text}");
+    assert!(
+        seen[restarting..started]
+            .iter()
+            .any(|line| parse(line).is_some()),
+        "the old program stopped before its runner built:\n{text}"
+    );
+    // It ended before the new `main` ran: the new one got its lock, and no
+    // old tick follows.
+    let locked: Vec<usize> = (0..seen.len())
+        .filter(|&index| seen[index] == "lock held")
+        .collect();
+    assert_eq!(locked.len(), 2, "{text}");
+    assert!(locked[1] < started, "{text}");
+    assert!(
+        seen[locked[1]..].iter().all(|line| parse(line).is_none()),
+        "{text}"
+    );
+    assert!(!text.contains("lock busy"), "{text}");
+
+    // A symbol no library defines checks and fails to link: the program
+    // keeps running the last build, and says why.
+    edit(
+        &ticker,
+        "    println!(\"pid {}\", std::process::id());",
+        "    unsafe extern \"C\" {\n        fn rawr_ticker_missing();\n    }\n    \
+         unsafe { rawr_ticker_missing() };\n    println!(\"pid {}\", std::process::id());",
+    );
+    let failed = "the save failed; the last good program keeps running";
+    let mut last = 0;
+    while !run.seen.iter().any(|line| line.contains(failed)) {
+        last = rebuilt(&run.until(|line| rebuilt(line).is_some())).unwrap();
+    }
+    let after = rebuilt(&run.until(|line| rebuilt(line).is_some())).unwrap();
+    let text = run.seen.join("\n");
+    assert!(after > last, "{text}");
+    assert_eq!(
+        run.seen
+            .iter()
+            .filter(|line| line.starts_with("pid "))
+            .count(),
+        2,
+        "{text}"
     );
 
     fs::write(root.join("stop"), "").unwrap();

@@ -157,9 +157,6 @@ mod __rawr_profile {
         pub fn take_refresh(&self) -> bool {
             self.refresh.swap(false, Ordering::SeqCst)
         }
-        pub fn export_state(&self) -> Option<Vec<u8>> {
-            None
-        }
         pub fn begin_install(&self) -> Result<PendingInstall, InstallError> {
             Ok(PendingInstall(
                 self.revision.fetch_add(1, Ordering::SeqCst) + 1,

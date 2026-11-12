@@ -583,14 +583,8 @@ fn session(
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
     rawr_cli::events::running();
 
-    // A marked `main` keeps running across a save: the runner compiles the
-    // new generation beside it and admits it at its next call from native
-    // code into script code (D553). An async `main` still restarts.
-    let marked = program.is_some() && !manifests.has_islands() && !manifests.restarts_on_save();
-    // A native `main` (D501) runs on the thread that owns the program too
-    // (#1119): its runner admits a save at its next call into marked code,
-    // and refuses one it can't take, as a marked `main`'s does.
-    let admits = marked || (program.is_some() && manifests.has_islands());
+    let mut marked = marked(program.is_some(), &manifests);
+    let mut admits = admits(program.is_some(), &manifests);
     // Whether a save swapped into the running `main`.
     let mut swapped_marked = false;
     let mut refresh_at = Instant::now();
@@ -751,23 +745,25 @@ fn session(
                         ));
                         rawr_cli::events::restarting(&reason);
                         // A native input that changed since the compile
-                        // takes the full start.
-                        if !adapter.resident_eligible(&native_baseline)
-                            || !respawned(&mut lane, save, &reason, reload)
-                        {
+                        // takes a new native build, which prepares and
+                        // builds below while the program keeps running.
+                        if !adapter.resident_eligible(&native_baseline) {
+                            Some(staged)
+                        } else if !respawned(&mut lane, save, &reason, reload) {
                             return Ok(Ended::Restart(reason.into(), None));
+                        } else {
+                            swapped_marked = false;
+                            swap = None;
+                            for error in adapter
+                                .commit_inputs(staged)
+                                .map_err(|error| framework(error, source.clone()))?
+                            {
+                                rawr_import::process::say(format_args!(
+                                    "warning: file watcher: {error}"
+                                ));
+                            }
+                            continue;
                         }
-                        swapped_marked = false;
-                        swap = None;
-                        for error in adapter
-                            .commit_inputs(staged)
-                            .map_err(|error| framework(error, source.clone()))?
-                        {
-                            rawr_import::process::say(format_args!(
-                                "warning: file watcher: {error}"
-                            ));
-                        }
-                        continue;
                     }
                     Ok(resident::Attempt::Prepare(staged, reason)) => {
                         rawr_import::process::say(format_args!("rawr: preparing again: {reason}"));
@@ -793,15 +789,7 @@ fn session(
                 };
                 let next_manifests = prepared.manifests.clone();
                 let demand = prepared.demand().to_vec();
-                let (request, snapshot, rest) = prepared.split();
-                let project = rest.project().to_path_buf();
-                // A marked `main` that needs a new native build restarts
-                // from this preparation, with no second one (#1761).
-                let (inputs, restart_from) = if marked {
-                    (rest.inputs().clone(), Some(rest))
-                } else {
-                    (rest.into_inputs(), None)
-                };
+                let (request, snapshot, project, inputs) = prepared.into_parts();
                 // What a new process of the running runner starts from when
                 // the running `main` refuses this save, as it compiles it or
                 // as it admits it (#1761).
@@ -925,32 +913,26 @@ fn session(
                                 Err(framework(error, source.clone()))
                             }
                         }),
-                    // A new native build restarts a marked `main` as a
-                    // new session, which builds it from this preparation.
-                    rawr_import::process::hot::Preparation::Miss(miss) if marked => {
-                        drop(staged);
-                        let reason = manifests.restart_line(&next_manifests);
-                        rawr_import::process::say(format_args!(
-                            "rawr: {reason}; restarting the program"
-                        ));
-                        rawr_cli::events::restarting(&reason);
-                        let (request, snapshot) = miss.into_parts();
-                        let prepared =
-                            restart_from.map(|rest| Box::new(rest.join(request, snapshot)));
-                        return Ok(Ended::Restart(reason, prepared));
-                    }
+                    // D500.4: a new native build restarts the program, and
+                    // says why in one line, once for each new build. It
+                    // builds from this preparation while the program keeps
+                    // running (#1761, #1810); a build that fails leaves it
+                    // running.
                     rawr_import::process::hot::Preparation::Miss(miss) => {
-                        // D500.4: a new native build restarts the program, and
-                        // says why in one line, once for each new build.
-                        if (announced.as_ref() != Some(&next_manifests)
-                            || manifests.restarts_on_save())
-                            && let Some(reason) = manifests
-                                .restart_reason(&next_manifests, || lane.native_change(&miss))
+                        let reason = if marked {
+                            Some(manifests.restart_line(&next_manifests))
+                        } else if announced.as_ref() != Some(&next_manifests)
+                            || manifests.restarts_on_save()
                         {
+                            manifests.restart_reason(&next_manifests, || lane.native_change(&miss))
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = &reason {
                             rawr_import::process::say(format_args!(
                                 "rawr: {reason}; restarting the program"
                             ));
-                            rawr_cli::events::restarting(&reason);
+                            rawr_cli::events::restarting(reason);
                             announced = Some(next_manifests.clone());
                         }
                         let (request, snapshot) = miss.into_parts();
@@ -960,7 +942,7 @@ fn session(
                             framework(error, source.clone())
                         };
                         let walks = rawr_import::progress::read_set_walks();
-                        request
+                        let built = request
                             .generate()
                             .map_err(|error| report(&error, restarts.again(&error)))
                             .and_then(|generated| {
@@ -976,6 +958,26 @@ fn session(
                                 built
                                     .retain_startup(&snapshot)
                                     .map_err(|error| report(&error, restarts.again(&error)))?;
+                                Ok(built)
+                            });
+                        // A program that exited with status 0 as its next
+                        // runner built ended the run (D951). One that failed
+                        // runs again from the save.
+                        if built.is_ok() && matches!(lane.reap_if_exited(), Ok(true)) {
+                            return Ok(Ended::Exit(0));
+                        }
+                        // A marked `main` ends before the new one runs, as a
+                        // new session's start would end it (D943).
+                        let handover = if marked {
+                            if let (Some(reload), Some(reason)) = (reload, &reason) {
+                                reload.starting(Some(reason.as_str()));
+                            }
+                            crate::native::Handover::Retire
+                        } else {
+                            crate::native::Handover::Overlap
+                        };
+                        built
+                            .and_then(|built| {
                                 // Its start walks its read set once, as the
                                 // new runner observes its inputs (#1760).
                                 lane.replace_built_started_request(
@@ -984,6 +986,7 @@ fn session(
                                     &adapter,
                                     &observation,
                                     watch_request,
+                                    handover,
                                 )
                                 .map_err(|error| report(&error, restarts.again(&error)))
                             })
@@ -1008,6 +1011,11 @@ fn session(
                         } else if swapped {
                             rawr_cli::events::swapped();
                         } else {
+                            // A new runner: its program has taken no swap,
+                            // and its kind is its new manifests'.
+                            swapped_marked = false;
+                            marked = self::marked(program.is_some(), &next_manifests);
+                            admits = self::admits(program.is_some(), &next_manifests);
                             rawr_cli::events::running();
                         }
                         manifests = next_manifests;
@@ -1031,6 +1039,16 @@ fn session(
                         }
                     }
                     Ok(crate::native::Watched::Obsolete) => drop(staged),
+                    // The old program ended for the new one, which didn't
+                    // start: no program runs, and it takes the full start.
+                    Err(report) if lane.current_key().is_none() => {
+                        drop(staged);
+                        rawr_import::process::say(diagnostic::render(&report));
+                        return Ok(Ended::Restart(
+                            manifests.restart_line(&next_manifests),
+                            None,
+                        ));
+                    }
                     // The save is attempted again, and its preparation rebuilds
                     // the entry that went stale.
                     Err(_) if stale => {
@@ -1097,6 +1115,22 @@ fn session(
         }
         ran => Ok(ran?),
     }
+}
+
+/// Whether the program is a marked `main`, which keeps running across a
+/// save: the runner compiles the new generation beside it and admits it at
+/// its next call from native code into script code (D553). An async `main`
+/// restarts.
+fn marked(program: bool, manifests: &resident::Manifests) -> bool {
+    program && !manifests.has_islands() && !manifests.restarts_on_save()
+}
+
+/// Whether the running `main` admits a save: a marked one, or a native one
+/// (D501), which runs on the thread that owns the program too (#1119) and
+/// admits a save at its next call into marked code, and refuses one it
+/// can't take, as a marked `main`'s does.
+fn admits(program: bool, manifests: &resident::Manifests) -> bool {
+    marked(program, manifests) || (program && manifests.has_islands())
 }
 
 /// Restart the program for `reason` in a new process of its runner, from

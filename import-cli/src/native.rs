@@ -18,6 +18,17 @@ pub(crate) enum Watched {
     Obsolete,
 }
 
+/// When the running program ends as a new runner replaces it.
+#[derive(Clone, Copy)]
+pub(crate) enum Handover {
+    /// It runs until the new one has started, unless it has the terminal,
+    /// so a new one that fails to start leaves it running.
+    Overlap,
+    /// It ends before the new `main` runs, so the terminal, a port or a
+    /// lock it held is free (D943).
+    Retire,
+}
+
 impl<B> Lane<B> {
     pub(crate) fn take_refresh(&mut self) -> Result<bool, Error> {
         let current = self.slot.take_refresh().map_err(Error::Process)?;
@@ -203,14 +214,12 @@ impl<B> Lane<B> {
         observation: &[u8],
         checkpoint: rawr::reload::scheduler::Checkpoint,
     ) -> Result<Watched, Error> {
-        let mut admitted = self.admit_built_observed(built, snapshot, observation)?;
-        // A `.rs` edit's new runner continues from the old one's State.
-        self.slot.carry_state(&mut admitted);
+        let admitted = self.admit_built_observed(built, snapshot, observation)?;
         match adapter.admit_checkpoint(checkpoint, admitted, |candidate| {
             self.slot.install_latest(candidate)
         }) {
             rawr::reload::scheduler::Admission::Current(installation) => self
-                .finish_watched_installation(installation)
+                .finish_watched_installation(installation, Handover::Overlap)
                 .map(|_| Watched::Installed),
             rawr::reload::scheduler::Admission::Obsolete(candidate) => {
                 candidate.shutdown()?;
@@ -226,15 +235,14 @@ impl<B> Lane<B> {
         adapter: &rawr_watch::Adapter,
         observation: &[u8],
         request: rawr::reload::scheduler::Request,
+        handover: Handover,
     ) -> Result<Watched, Error> {
-        let mut admitted = self.admit_built_observed(built, snapshot, observation)?;
-        // A `.rs` edit's new runner continues from the old one's State.
-        self.slot.carry_state(&mut admitted);
+        let admitted = self.admit_built_observed(built, snapshot, observation)?;
         match adapter.admit_current(request.complete(admitted), |candidate| {
             self.slot.install_latest(candidate)
         }) {
             rawr::reload::scheduler::Admission::Current(installation) => self
-                .finish_watched_installation(installation)
+                .finish_watched_installation(installation, handover)
                 .map(|_| Watched::Installed),
             rawr::reload::scheduler::Admission::Obsolete(candidate) => {
                 candidate.shutdown()?;
@@ -293,6 +301,7 @@ impl<B> Lane<B> {
     fn finish_watched_installation(
         &mut self,
         installation: rawr_import::supervisor::slot::Installation<B>,
+        handover: Handover,
     ) -> Result<rawr_import::supervisor::GenerationKey, Error> {
         let mut retired = match installation {
             rawr_import::supervisor::slot::Installation::Installed(retired) => retired,
@@ -303,8 +312,10 @@ impl<B> Lane<B> {
         };
         // Two programs can't share a terminal: one that has it ends before
         // the next starts, which then gets it, and a failed start has no
-        // program to go back to.
-        if let Some(previous) = retired.take_if(|previous| previous.has_terminal()) {
+        // program to go back to. A retiring handover ends it first too.
+        if let Some(previous) = retired
+            .take_if(|previous| matches!(handover, Handover::Retire) || previous.has_terminal())
+        {
             previous.retire(&mut self.refresh)?;
         }
         if let Err(failure) = self.slot.start() {

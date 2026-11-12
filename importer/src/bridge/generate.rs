@@ -5240,7 +5240,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&13_u32.to_be_bytes())?;
+    stream.write_all(&14_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -5269,7 +5269,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 13_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 14_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -5492,9 +5492,9 @@ fn serve_hot(
 
 
 /// The protocol while the program's own code runs on the owner thread: an
-/// async `main`'s runtime entry, which asks for no refresh, carries no
-/// State and takes no hot generation, since a save restarts it (D527), or a
-/// marked `main` (`live`). A marked `main`'s next generation compiles here
+/// async `main`'s runtime entry, which asks for no refresh and takes no
+/// hot generation, since a save restarts it (D527), or a marked `main`
+/// (`live`). A marked `main`'s next generation compiles here
 /// and is offered to the owner thread, which admits it at its next call
 /// from native code into script code (D553.3). A generation that can't
 /// replace the running one is refused with its reason, and the owner
@@ -5520,10 +5520,10 @@ fn serve_entry(
                 continue;
             }
             match tag {
-                43 | 46 | 48 if payload.len() >= 32 && payload[..32] == key => {
+                43 if payload.len() >= 32 && payload[..32] == key => {
                     let mut response = [0_u8; 33];
                     response[..32].copy_from_slice(&key);
-                    send_frame(&mut stream, tag + 1, &response)?;
+                    send_frame(&mut stream, 44, &response)?;
                 }
                 35 | 11 if payload.len() >= 32 && payload[..32] == key => {
                     send_frame(&mut stream, if tag == 35 { 36 } else { 11 }, &key)?;
@@ -5772,8 +5772,7 @@ fn run_protocol(
             }
             // A program that keeps running (a native `main`, D501) hears from
             // its owner: it asks for no refresh, prints no diagnostic of its
-            // own (the owner printed it), and carries no State to the runner
-            // a restart starts.
+            // own (the owner printed it).
             43 if admitted && payload.as_slice() == key => {
                 let mut response = [0_u8; 33];
                 response[..32].copy_from_slice(&key);
@@ -5781,16 +5780,6 @@ fn run_protocol(
             }
             11 if admitted && payload.len() >= 32 && payload[..32] == key => {
                 send_frame(&mut stream, 11, &key)?;
-            }
-            46 if admitted && pending.is_none() && payload.as_slice() == key => {
-                let mut response = [0_u8; 33];
-                response[..32].copy_from_slice(&key);
-                send_frame(&mut stream, 47, &response)?;
-            }
-            48 if admitted && payload.len() >= 32 && payload[..32] == key => {
-                let mut response = [0_u8; 33];
-                response[..32].copy_from_slice(&key);
-                send_frame(&mut stream, 49, &response)?;
             }
             20 if admitted && payload.as_slice() == key => {
                 send_frame(&mut stream, 21, &key)?;
@@ -6034,7 +6023,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&13_u32.to_be_bytes())?;
+    stream.write_all(&14_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -6063,7 +6052,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 13_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 14_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -6297,7 +6286,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&13_u32.to_be_bytes())?;
+    stream.write_all(&14_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -6326,7 +6315,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 13_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 14_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -6495,22 +6484,6 @@ fn live_protocol(
                 send_frame(&mut stream, 44, &response)?;
             }
             43 => return Err(std::io::Error::other("invalid refresh poll transition")),
-            46 if begun.is_none() && pending.is_none() && payload.as_slice() == key => {
-                // The State, for the runner a `.rs` edit starts.
-                let state = transport.export_state()
-                    .filter(|state| !state.is_empty() && state.len() <= 8 * 1024 * 1024 - 64);
-                let mut response = Vec::with_capacity(33 + state.as_ref().map_or(0, Vec::len));
-                response.extend_from_slice(&key);
-                match state {
-                    Some(state) => {
-                        response.push(1);
-                        response.extend_from_slice(&state);
-                    }
-                    None => response.push(0),
-                }
-                send_frame(&mut stream, 47, &response)?;
-            }
-            46 => return Err(std::io::Error::other("invalid state export transition")),
             29 if pending.is_none() && begun.is_none() && payload.len() == 56
                 && payload[..32] == key => {
                 let next_sequence = u64::from_le_bytes(payload[48..56].try_into()
@@ -6862,14 +6835,6 @@ fn run_protocol() -> std::io::Result<()> {
                         reject(&mut stream, &reason)?;
                     }
                 }
-            }
-            48 if admitted && payload.len() >= 32 && payload[..32] == key => {
-                // Start from the State the previous runner exported. No State
-                // means it could not carry over, and the window says why.
-                let mut response = [0_u8; 33];
-                response[..32].copy_from_slice(&key);
-                response[32] = <u8 as From<bool>>::from(profile.seed_state(&payload[32..]));
-                send_frame(&mut stream, 49, &response)?;
             }
             35 if admitted && !observed && payload.len() > 32 && payload[..32] == key => {
                 profile.observe(&payload[32..])
@@ -26573,7 +26538,7 @@ mod tests {
             (LIFECYCLE_PROFILE_RUNNER_MAIN, "9 if pending.is_none()"),
         ] {
             let source = std::str::from_utf8(runner).expect("runner source is UTF-8");
-            assert!(source.contains("&13_u32.to_be_bytes()"));
+            assert!(source.contains("&14_u32.to_be_bytes()"));
             assert!(source.contains(prepare_marker));
             assert!(source.contains("25 if payload.len() == 48"));
             assert!(source.contains("26 if payload.len() == 48"));

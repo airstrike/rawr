@@ -845,11 +845,7 @@ impl<B> Candidate<Admitted, B> {
             | crate::protocol::Tag::Started
             | crate::protocol::Tag::Snapshot
             | crate::protocol::Tag::SnapshotOutcome
-            | crate::protocol::Tag::WorkProgress
-            | crate::protocol::Tag::ExportState
-            | crate::protocol::Tag::StateExported
-            | crate::protocol::Tag::SeedState
-            | crate::protocol::Tag::StateSeeded => Err(Error::Stale),
+            | crate::protocol::Tag::WorkProgress => Err(Error::Stale),
         }
     }
 
