@@ -143,7 +143,8 @@ fn path_dependency(package: &str, path: &str) -> toml_edit::Value {
     toml_edit::Value::InlineTable(table)
 }
 
-/// The runner's `manifest` with a dependency on each of `members`.
+/// The runner's `manifest` with a dependency on each of `members`, and the
+/// runner and its members compiled without debug info (#1789).
 pub(super) fn runner_manifest(
     manifest: &[u8],
     members: &[Member],
@@ -161,7 +162,47 @@ pub(super) fn runner_manifest(
             Item::Value(path_dependency(&member.package(), &member.directory())),
         );
     }
+    without_debug_info(
+        &mut document,
+        std::iter::once(RUNNER.to_owned()).chain(members.iter().map(Member::package)),
+    )?;
     Ok(super::normalize(document.to_string().as_bytes()))
+}
+
+/// `[profile.dev.package.<package>]` with `debug = 0` for each of `packages`,
+/// the runner's own, which `cargo build` builds at `dev`.
+///
+/// Their debug info names the line of each item of the program's crate
+/// they use, so a save that moves the lines of one file recompiles every
+/// codegen unit that names an item below the change: 47 of the program
+/// member's 219 and 37 of the runner's 240 for one field on islands-theme
+/// with twelve more screens, and 5 and 3 without it. Nobody steps through
+/// generated code. The units the project's `cargo build` shares keep the
+/// project's profile. Without debug info, Cargo strips it with
+/// `rust-objcopy`, which some toolchains ship broken, so nothing is
+/// stripped (`cargo::internal`).
+fn without_debug_info(
+    document: &mut DocumentMut,
+    packages: impl Iterator<Item = String>,
+) -> Result<(), request::Error> {
+    let mut table = document.as_table_mut();
+    for key in ["profile", "dev", "package"] {
+        let entry = table.entry(key).or_insert_with(|| {
+            let mut implicit = Table::new();
+            implicit.set_implicit(true);
+            Item::Table(implicit)
+        });
+        table = entry
+            .as_table_mut()
+            .ok_or_else(|| request::misread("the runner's profile is not a table"))?;
+    }
+    for package in packages {
+        let mut profile = Table::new();
+        profile.insert("debug", toml_edit::value(0));
+        profile.insert("strip", toml_edit::value(false));
+        table.insert(&package, Item::Table(profile));
+    }
+    Ok(())
 }
 
 /// The runner's `lock` with an entry for each of `members`, whose
@@ -506,6 +547,42 @@ mod tests {
         ));
         let again = super::manifest(runner, text).expect("both manifests parse");
         assert_eq!(again.matches("adapters-iced").count(), 1, "{again}");
+    }
+
+    /// The runner and each member compile without debug info, and nothing
+    /// is stripped; the project's own settings stay as written (#1789).
+    #[test]
+    fn the_runner_and_its_members_compile_without_debug_info() {
+        let project = format!("{RUNNER_MANIFEST}\n[profile.dev.package.\"*\"]\ndebug = 2\n");
+        let members = [
+            Member::Base {
+                library: "app".to_owned(),
+            },
+            Member::Program {
+                library: "app".to_owned(),
+            },
+        ];
+        for manifest in [RUNNER_MANIFEST, project.as_str()] {
+            let runner = runner_manifest(manifest.as_bytes(), &members)
+                .expect("the runner's manifest renders");
+            let runner = std::str::from_utf8(&runner).expect("the manifest is UTF-8");
+            let document = runner.parse::<DocumentMut>().expect("the manifest parses");
+            let packages = &document["profile"]["dev"]["package"];
+            for package in [RUNNER, BASE_PACKAGE, PROGRAM_PACKAGE] {
+                assert_eq!(packages[package]["debug"].as_integer(), Some(0), "{runner}");
+                assert_eq!(
+                    packages[package]["strip"].as_bool(),
+                    Some(false),
+                    "{runner}"
+                );
+            }
+            assert_eq!(
+                packages.get("*").map(|all| all["debug"].as_integer()),
+                (manifest == project).then_some(Some(2)),
+                "{runner}"
+            );
+            assert!(document["profile"]["dev"].get("debug").is_none());
+        }
     }
 
     /// Each member's lock entry depends on what the runner's does, as Cargo
