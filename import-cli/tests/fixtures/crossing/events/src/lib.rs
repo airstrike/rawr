@@ -13,6 +13,7 @@ pub mod controls;
 pub mod conversions;
 pub mod custom;
 pub mod diverging;
+pub mod elevated;
 pub mod fonts;
 pub mod grid;
 pub mod image;

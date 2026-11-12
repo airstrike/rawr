@@ -227,18 +227,33 @@ impl<'g, P: api::Phase> Headers<'g, P> {
             .filter(|parameter| parameter.name() != "Self")
             .collect::<Vec<_>>();
         let offset = arguments.len().checked_sub(parameters.len())?;
-        parameters
+        let pairs = parameters
             .iter()
             .zip(&arguments[offset..])
-            .filter(|(parameter, _)| {
-                matches!(parameter.kind(), model::ParameterKind::Type { .. })
-                    && parameter.name() != "Self"
-            })
-            .map(|(_, argument)| match argument {
-                model::Argument::Type(ty) => self.ty(ty),
-                _ => None,
-            })
-            .collect()
+            .filter(|(parameter, _)| matches!(parameter.kind(), model::ParameterKind::Type { .. }))
+            .collect::<Vec<_>>();
+        let mut written = Vec::with_capacity(pairs.len());
+        for (position, (_, argument)) in pairs.iter().enumerate() {
+            let model::Argument::Type(ty) = argument else {
+                return None;
+            };
+            match self.ty(ty) {
+                Some(ty) => written.push(ty),
+                // A type the facade can't write ends the arguments when it
+                // and each one after it is the trait's default at the
+                // arguments before it, as a bound written `impl
+                // Widget<Message>` leaves them: rawr fills them in from
+                // the trait's header, as rustc does (#1804).
+                None if pairs[position..]
+                    .iter()
+                    .all(|(parameter, argument)| defaulted(parameter, argument, &pairs)) =>
+                {
+                    break;
+                }
+                None => return None,
+            }
+        }
+        Some(written.into_boxed_slice())
     }
 
     fn parameters(generics: &model::Generics) -> Box<[signature::Parameter]> {
@@ -596,6 +611,34 @@ impl<'g, P: api::Phase> Headers<'g, P> {
             cases: cases.into_boxed_slice(),
         })
     }
+}
+
+/// Whether `argument` is `parameter`'s default, the trait's parameters in
+/// it at the arguments `pairs` gives them, as `Renderer` is in a bound
+/// written `impl Widget<Message>`.
+fn defaulted(
+    parameter: &model::Parameter,
+    argument: &model::Argument,
+    pairs: &[(&&model::Parameter, &model::Argument)],
+) -> bool {
+    let (
+        model::ParameterKind::Type {
+            default: model::Default::Present(default),
+            ..
+        },
+        model::Argument::Type(argument),
+    ) = (parameter.kind(), argument)
+    else {
+        return false;
+    };
+    let bindings = pairs
+        .iter()
+        .filter_map(|(parameter, argument)| match argument {
+            model::Argument::Type(ty) => Some((parameter.index(), ty.clone())),
+            _ => None,
+        })
+        .collect();
+    crate::classify::substitute_bindings(default, &bindings) == *argument
 }
 
 /// The indices of the type parameters `ty` names.

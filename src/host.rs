@@ -176,6 +176,10 @@ pub struct Registry {
     /// impls (D604).
     trait_headers: Vec<facade::TraitHeader>,
     impl_headers: Vec<facade::ImplHeader>,
+    /// Where each facade's impl headers end in `impl_headers`, and its
+    /// root, in the order they were registered: a header names its types
+    /// as its own facade has them.
+    impl_roots: Vec<(usize, ImmutableString)>,
     /// The crates' derive macros, sorted by path (`serde::Serialize`).
     derives: Vec<path::Path>,
     /// Roots an app exported with `#[rawr::export]`. Their types keep
@@ -302,6 +306,7 @@ impl Registry {
             type_aliases: Vec::new(),
             trait_headers: Vec::new(),
             impl_headers: Vec::new(),
+            impl_roots: Vec::new(),
             derives: Vec::new(),
             exported: Vec::new(),
             #[cfg(feature = "rust-import")]
@@ -518,6 +523,7 @@ impl Registry {
         for header in &self.impl_headers {
             clone.impl_headers.push(header.try_clone()?);
         }
+        clone.impl_roots.clone_from(&self.impl_roots);
         clone
             .derives
             .try_reserve_exact(self.derives.len())
@@ -674,6 +680,11 @@ impl Registry {
             .try_reserve(parts.impl_headers.len())
             .map_err(|_| Error::Allocation)?;
         self.impl_headers.extend(parts.impl_headers);
+        self.impl_roots
+            .try_reserve(1)
+            .map_err(|_| Error::Allocation)?;
+        self.impl_roots
+            .push((self.impl_headers.len(), dependency.root().into()));
         self.derives
             .try_reserve(parts.derives.len())
             .map_err(|_| Error::Allocation)?;
@@ -1618,24 +1629,66 @@ impl Registry {
         &self,
         identity: [u8; 32],
     ) -> impl Iterator<Item = &facade::ImplHeader> {
+        self.owned_impl_headers(identity).map(|(header, _)| header)
+    }
+
+    /// The crates' impls of the trait whose identity is `identity`, each
+    /// with the facade that declares it, whose types its header names: a
+    /// game's `impl Framed<Message> for` its own opaque type names that
+    /// type as only the game's facade has it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn owned_impl_headers(
+        &self,
+        identity: [u8; 32],
+    ) -> impl Iterator<Item = (&facade::ImplHeader, Option<&facade::Dependency>)> {
         // Each held facade's impls go where its install put them.
         let mut headers = Vec::new();
         let mut start = 0;
         for (held, position) in self.held_by_install() {
+            self.registered_impls(identity, start..position, &mut headers);
+            let owner = self.facade(&held.root().to_string());
             headers.extend(
-                self.impl_headers[start..position]
-                    .iter()
-                    .filter(|header| header.trait_identity == identity),
+                held.impl_headers(&identity)
+                    .into_iter()
+                    .map(|header| (header, owner)),
             );
-            headers.extend(held.impl_headers(&identity));
             start = position;
         }
-        headers.extend(
-            self.impl_headers[start..]
-                .iter()
-                .filter(|header| header.trait_identity == identity),
-        );
+        self.registered_impls(identity, start..self.impl_headers.len(), &mut headers);
         headers.into_iter()
+    }
+
+    /// The registered impls of the trait `identity` within `range` of
+    /// `impl_headers`, each with the facade that declares it, onto
+    /// `headers`.
+    #[cfg(feature = "rust-import")]
+    fn registered_impls<'s>(
+        &'s self,
+        identity: [u8; 32],
+        range: std::ops::Range<usize>,
+        headers: &mut Vec<(&'s facade::ImplHeader, Option<&'s facade::Dependency>)>,
+    ) {
+        for (index, header) in self.impl_headers[range.clone()].iter().enumerate() {
+            if header.trait_identity != identity {
+                continue;
+            }
+            let index = range.start + index;
+            let roots = self.impl_roots.partition_point(|(end, _)| *end <= index);
+            let owner = self
+                .impl_roots
+                .get(roots)
+                .and_then(|(_, root)| self.facade(root));
+            headers.push((header, owner));
+        }
+    }
+
+    /// The registered facade whose root is `root`.
+    #[cfg(feature = "rust-import")]
+    fn facade(&self, root: &str) -> Option<&facade::Dependency> {
+        self.facades
+            .binary_search_by(|facade| facade.root().cmp(root))
+            .ok()
+            .map(|index| &self.facades[index])
     }
 
     /// The held facades, each with where its impl headers go, in the order

@@ -94,18 +94,21 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         // One impl reached through several of a crate's paths is one impl,
-        // as iced's blanket `impl<T: core::Widget> Widget for T` is.
-        let mut headers = Vec::<crate::host::facade::ImplHeader>::new();
-        for header in self.models.host.impl_headers(identity) {
-            if !headers.contains(header) {
-                headers.push(header.clone());
+        // as iced's blanket `impl<T: core::Widget> Widget for T` is. Each
+        // names its types as the facade that declares it has them, as a
+        // game's impl of iced's `Widget` for its own opaque type (#1804).
+        let host = self.models.host.clone();
+        let mut headers = Vec::new();
+        for (header, declaring) in host.owned_impl_headers(identity) {
+            if !headers.iter().any(|(kept, _)| *kept == header) {
+                headers.push((header, declaring.or(owner)));
             }
         }
         let mut named = Vec::new();
         let mut blanket = Vec::new();
-        for (index, header) in headers.iter().enumerate() {
+        for (index, &(header, declaring)) in headers.iter().enumerate() {
             let checkpoint = self.inference.checkpoint();
-            let fits = self.apply_impl(header, &ty, arguments, owner).is_some();
+            let fits = self.apply_impl(header, &ty, arguments, declaring).is_some();
             self.inference.rollback(checkpoint);
             if fits {
                 if matches!(
@@ -126,7 +129,8 @@ impl<'a> Parser<'a> {
             _ => return Err(Selection::Many(ty.name(&self.models).to_string())),
         };
         let checkpoint = self.inference.checkpoint();
-        let Some(mut bounds) = self.apply_impl(&headers[chosen], &ty, arguments, owner) else {
+        let (header, declaring) = headers[chosen];
+        let Some(mut bounds) = self.apply_impl(header, &ty, arguments, declaring) else {
             self.inference.rollback(checkpoint);
             return Err(Selection::None(ty.name(&self.models).to_string()));
         };
@@ -272,6 +276,48 @@ impl<'a> Parser<'a> {
         Some((types, full))
     }
 
+    /// `arguments` from `start` on unified with the defaults of the crate
+    /// trait `identity`, its parameters in them at `arguments`, as rustc
+    /// reads a bound written `impl Widget<Message>`. `None` when one has
+    /// no default, or its default doesn't fit.
+    #[cfg(feature = "rust-import")]
+    fn unify_trait_defaults(
+        &mut self,
+        identity: [u8; 32],
+        start: usize,
+        arguments: &[Ty],
+    ) -> Option<()> {
+        let host = self.models.host.clone();
+        let name = host.trait_name(&identity)?;
+        let header = host.trait_header(&crate::host::path::Path::parse(name.as_str()).ok()?)?;
+        if header.parameters.len() != arguments.len() {
+            return None;
+        }
+        let owner = host.type_owner(&name);
+        let mut parameters = header
+            .parameters
+            .iter()
+            .cloned()
+            .zip(arguments.iter().cloned())
+            .collect::<BTreeMap<_, _>>();
+        for (default, argument) in header.defaults.iter().zip(arguments).skip(start) {
+            let default = self
+                .instantiate_host_type(
+                    default.as_ref()?,
+                    &mut parameters,
+                    &name,
+                    Span::NONE,
+                    owner,
+                    None,
+                )
+                .ok()?;
+            if !self.unify_type(&default, argument) {
+                return None;
+            }
+        }
+        Some(())
+    }
+
     /// `header` at fresh variables, unified with `ty` and `arguments`: its
     /// where-clause bounds at those variables, or `None` when it doesn't fit.
     #[cfg(feature = "rust-import")]
@@ -282,7 +328,9 @@ impl<'a> Parser<'a> {
         arguments: &[Ty],
         owner: Option<&crate::host::facade::Dependency>,
     ) -> Option<ImplBounds> {
-        if header.arguments.len() != arguments.len() {
+        // A header may leave out the trait's defaulted arguments its
+        // facade can't write; they are the trait's defaults (#1804).
+        if header.arguments.len() > arguments.len() {
             return None;
         }
         let mut parameters = BTreeMap::new();
@@ -306,6 +354,9 @@ impl<'a> Parser<'a> {
             if !self.unify_type(&written, argument) {
                 return None;
             }
+        }
+        if header.arguments.len() < arguments.len() {
+            self.unify_trait_defaults(header.trait_identity, header.arguments.len(), arguments)?;
         }
         let traits = header
             .bounds
