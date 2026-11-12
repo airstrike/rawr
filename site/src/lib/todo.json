@@ -3854,7 +3854,12 @@
     {"issue":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open","category":"Divergences from rustc"},
-    {"issue":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1759,"title":"The resolution owner's Cargo view replay is redone for every check in a running owner","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1760,"title":"A start walks its runner's read-set closure six times","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1761,"title":"A restart after a full preparation prepares again","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1762,"title":"Each owner session parses the program twice without its cells and runs rustc --version again","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5037,7 +5042,12 @@
             {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
             {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
             {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"closed"},
-            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open"}
+            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open"},
+            {"number":1759,"title":"The resolution owner's Cargo view replay is redone for every check in a running owner","state":"open"},
+            {"number":1760,"title":"A start walks its runner's read-set closure six times","state":"open"},
+            {"number":1761,"title":"A restart after a full preparation prepares again","state":"open"},
+            {"number":1762,"title":"Each owner session parses the program twice without its cells and runs rustc --version again","state":"open"},
+            {"number":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"open"}
           ]
         },
         {
