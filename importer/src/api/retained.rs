@@ -154,7 +154,9 @@ impl Continuation {
         let proof = publication.proof(api)?;
         if KEEP.load(Ordering::Relaxed) && matches!(graph, Lazy::Pending(_)) {
             std::thread::spawn(move || {
+                let began = std::time::Instant::now();
                 crate::progress::uncounted(|| drop(build(&product, graph)));
+                crate::progress::deferred_graph(began.elapsed());
             });
         }
         Ok(proof)
@@ -197,15 +199,28 @@ fn build(
 ) -> Result<super::Graph<super::Captured>, node::Error> {
     let key = product.identity();
     let keep = KEEP.load(Ordering::Relaxed);
-    let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut kept = match KEPT.try_lock() {
+        Ok(kept) => kept,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        // A background build holds it: say how long this waited (#1815).
+        Err(std::sync::TryLockError::WouldBlock) => {
+            let began = std::time::Instant::now();
+            let kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+            crate::progress::waited_for_graph(began.elapsed());
+            kept
+        }
+    };
     let graph = match graph {
         Lazy::Ready(graph) => graph,
         Lazy::Pending(materialize) => match kept.as_ref() {
             Some((held, graph)) if *held == key => return Ok(graph.duplicate()),
             _ => {
+                let began = std::time::Instant::now();
                 let product = product.value();
                 let resolved = product.resolve()?;
-                materialize(Some(resolved.as_ref().unwrap_or(product)))?
+                let graph = materialize(Some(resolved.as_ref().unwrap_or(product)))?;
+                crate::progress::rebuilt_graph(began.elapsed());
+                graph
             }
         },
     };

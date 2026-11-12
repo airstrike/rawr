@@ -184,6 +184,7 @@ pub fn begin_phases() {
 /// its stage the line names; outside a check or a launch, nothing is
 /// shown.
 pub fn phase(phase: &'static str) {
+    mark(phase);
     let mut state = lock();
     if state.launch.is_some() {
         if state.step != Some(phase) {
@@ -258,34 +259,138 @@ static RUNNER_BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// `took` (#1795).
 pub(crate) fn runner_built(messages: &[u8], took: Duration) {
     RUNNER_BUILDS.fetch_add(1, Ordering::Relaxed);
-    let compiled = messages
+    let compiled = compiled_units(messages);
+    RUNNER_UNITS.fetch_add(compiled.len(), Ordering::Relaxed);
+    if !verbose() {
+        return;
+    }
+    say(&format!(
+        "rawr-import: the runner build compiled {} units in {:.1} s: {}",
+        compiled.len(),
+        took.as_secs_f64(),
+        compiled.join(", "),
+    ));
+}
+
+/// Count the units one nightly check compiled, from its JSON `messages`,
+/// toward the current round. With `RAWR_VERBOSE`, say which, in Cargo's
+/// order, and the time from its start to its end, `took` (#1815).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn nightly_checked(messages: &[u8], took: Duration) {
+    let compiled = compiled_units(messages);
+    count_round(|round| &mut round.compiled, compiled.len());
+    if verbose() {
+        say(&format!(
+            "rawr-import: the nightly check compiled {} units in {:.1} s: {}",
+            compiled.len(),
+            took.as_secs_f64(),
+            compiled.join(", "),
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long one run of the probe took, `took`.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn probe_ran(took: Duration) {
+    if verbose() {
+        say(&format!(
+            "rawr-import: the probe ran in {:.1} s",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long generating a runner's sources took,
+/// `took` (#1816).
+pub(crate) fn runner_generated(took: Duration) {
+    if verbose() {
+        say(&format!(
+            "rawr-import: the runner's sources were generated in {:.1} s",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long staging a runner's sources for its
+/// build took, `took`, and how many of its `files` it wrote, `written`:
+/// the others were there as they are (#1816).
+pub(crate) fn runner_staged(took: Duration, written: usize, files: usize) {
+    if verbose() {
+        say(&format!(
+            "rawr-import: the runner's sources were staged in {:.1} s: wrote {written} of {files} files",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long the API graph a warm start deferred
+/// took to build off the start's path, `took` (#1815).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn deferred_graph(took: Duration) {
+    if verbose() {
+        say(&format!(
+            "rawr-import: the API graph a start deferred built in the background in {:.1} s",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long reading and settling a replayed API's
+/// fragments took off the replay's path, `took` (#1815).
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn kept_reads(took: Duration) {
+    if verbose() {
+        say(&format!(
+            "rawr-import: the API's fragments were read and settled in the background in {:.1} s",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long a round waited, `took`, for the API
+/// graph a background build held (#1815).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn waited_for_graph(took: Duration) {
+    if verbose() && !UNCOUNTED.get() {
+        say(&format!(
+            "rawr-import: the round waited {:.1} s for the API graph a background build held",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// With `RAWR_VERBOSE`, say how long a round took, `took`, to build the API
+/// graph again from its stored product (#1815).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn rebuilt_graph(took: Duration) {
+    if verbose() && !UNCOUNTED.get() {
+        say(&format!(
+            "rawr-import: the round built the API graph from the store in {:.1} s",
+            took.as_secs_f64()
+        ));
+    }
+}
+
+/// The names of the units Cargo's JSON `messages` say it compiled: each
+/// artifact it did not find fresh.
+fn compiled_units(messages: &[u8]) -> Vec<String> {
+    messages
         .split(|byte| *byte == b'\n')
         .filter(|line| {
             count(line, b"\"reason\":\"compiler-artifact\"") > 0
                 && count(line, b"\"fresh\":false") > 0
         })
-        .collect::<Vec<_>>();
-    RUNNER_UNITS.fetch_add(compiled.len(), Ordering::Relaxed);
-    if !verbose() {
-        return;
-    }
-    let names = compiled
-        .iter()
-        .filter_map(|line| {
-            let message = serde_json::from_slice::<serde_json::Value>(line).ok()?;
-            message["target"]["name"].as_str().map(str::to_owned)
+        .map(|line| {
+            serde_json::from_slice::<serde_json::Value>(line)
+                .ok()
+                .and_then(|message| message["target"]["name"].as_str().map(str::to_owned))
+                .unwrap_or_default()
         })
-        .collect::<Vec<_>>();
-    say(&format!(
-        "rawr-import: the runner build compiled {} units in {:.1} s: {}",
-        compiled.len(),
-        took.as_secs_f64(),
-        names.join(", "),
-    ));
+        .collect()
 }
 
 /// Whether `RAWR_VERBOSE` asks the process to say what it did.
-fn verbose() -> bool {
+pub(crate) fn verbose() -> bool {
     std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0")
 }
 
@@ -444,6 +549,70 @@ static ROUNDS: Mutex<Vec<Round>> = Mutex::new(Vec::new());
 /// Begin one round of a check: the stages that follow count toward it.
 pub fn begin_round() {
     rounds_lock().push(Round::default());
+}
+
+/// When each phase of a round began ([`phase`]): the round's index, the
+/// phase and the time.
+static MARKS: Mutex<Vec<(usize, &'static str, Instant)>> = Mutex::new(Vec::new());
+
+/// Mark `phase` as begun in the current round, unless it is the phase the
+/// round is in; outside a round, or [`uncounted`], nothing is marked.
+fn mark(phase: &'static str) {
+    if UNCOUNTED.get() {
+        return;
+    }
+    let Some(round) = rounds_lock().len().checked_sub(1) else {
+        return;
+    };
+    let mut marks = MARKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let current = marks
+        .last()
+        .filter(|(index, _, _)| *index == round)
+        .map(|(_, current, _)| *current);
+    if current != Some(phase) {
+        marks.push((round, phase, Instant::now()));
+    }
+}
+
+/// How long each phase of the round at `index` took, in order: the last
+/// one until now (#1815).
+#[must_use]
+pub fn phases(index: usize) -> Phases {
+    let marks = MARKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let marks = marks
+        .iter()
+        .filter(|(round, _, _)| *round == index)
+        .collect::<Vec<_>>();
+    let now = Instant::now();
+    Phases(
+        marks
+            .iter()
+            .enumerate()
+            .map(|(at, (_, phase, began))| {
+                let ended = marks.get(at + 1).map_or(now, |(_, _, next)| *next);
+                (*phase, ended.duration_since(*began))
+            })
+            .collect(),
+    )
+}
+
+/// The phases of one round and how long each took ([`phases`]).
+pub struct Phases(Vec<(&'static str, Duration)>);
+
+impl std::fmt::Display for Phases {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (at, (phase, took)) in self.0.iter().enumerate() {
+            if at > 0 {
+                formatter.write_str(", ")?;
+            }
+            write!(formatter, "{phase} {:.1} s", took.as_secs_f64())?;
+        }
+        Ok(())
+    }
 }
 
 /// The rounds this process began, each with what its stages did.
@@ -605,11 +774,7 @@ pub(crate) fn observe(stdout: bool, chunk: &[u8]) {
             draw(&mut state);
         }
     } else {
-        let compiling = count(chunk, b"Compiling ");
-        state.compiling += compiling;
-        if state.phase == Some(EXTRACTING) {
-            count_round(|round| &mut round.compiled, compiling);
-        }
+        state.compiling += count(chunk, b"Compiling ");
     }
 }
 

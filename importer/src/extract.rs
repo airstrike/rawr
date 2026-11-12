@@ -2653,7 +2653,9 @@ fn materialize_document(
     let limits = *limits;
     let policy = policy.clone();
     std::thread::spawn(move || {
+        let began = std::time::Instant::now();
         crate::progress::uncounted(|| keep_reads(document.fragments, &authority, &policy, &limits));
+        crate::progress::kept_reads(began.elapsed());
     });
     Ok(graph)
 }

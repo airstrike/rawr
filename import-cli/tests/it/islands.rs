@@ -2596,7 +2596,9 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// first (#1794), and each restart says what its runner build compiled
 /// (#1795). A save that puts back sources an earlier save sealed a harness
 /// for finds that harness: it binds, copies and seals none, and probes
-/// nothing (#1794).
+/// nothing (#1794). Each save's nightly check compiles only the project's
+/// copy and its harness, the first after the start too (#1815), and each
+/// restart writes only the runner sources the edit changed (#1816).
 #[test]
 fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let root = THEME.project();
@@ -2704,6 +2706,51 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         "{rounds:?}\n{seen}"
     );
     eprintln!("the saves' rounds:\n{}", rounds.join("\n"));
+    // Each of the four saves' nightly checks, the undo's too, goes on from
+    // the last one: it compiles the project's copy and the harness, the
+    // first after the start too (#1815).
+    let checked = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the nightly check compiled "))
+        .collect::<Vec<_>>();
+    assert!(
+        checked.len() == 4
+            && checked.iter().all(|line| line.starts_with("2 units in ")
+                && line.ends_with(": islands_theme, rawr_resolution_harness")),
+        "{checked:?}\n{seen}"
+    );
+    eprintln!("the nightly checks:\n{}", checked.join("\n"));
+    // Each restart generates the runner's sources and stages them, writing
+    // only the files the edit changed (#1816).
+    let staged = run
+        .seen
+        .iter()
+        .filter_map(|line| {
+            line.strip_prefix("stderr: rawr-import: the runner's sources were staged in ")
+        })
+        .collect::<Vec<_>>();
+    let generated = run
+        .seen
+        .iter()
+        .filter(|line| {
+            line.starts_with("stderr: rawr-import: the runner's sources were generated in ")
+        })
+        .count();
+    assert!(
+        staged.len() == 4
+            && generated >= 4
+            && staged.iter().all(|line| {
+                let (written, files) = line
+                    .split_once(": wrote ")
+                    .and_then(|(_, counts)| counts.strip_suffix(" files"))
+                    .and_then(|counts| counts.split_once(" of "))
+                    .unwrap();
+                written.parse::<usize>().unwrap() <= 2 && files.parse::<usize>().unwrap() > 2
+            }),
+        "{staged:?}\n{seen}"
+    );
+    eprintln!("the runner's staging:\n{}", staged.join("\n"));
     // Each restart's runner build says what it compiled.
     let built = run
         .seen
