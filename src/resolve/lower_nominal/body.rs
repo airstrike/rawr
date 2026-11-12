@@ -101,7 +101,10 @@ impl<'a> Parser<'a> {
                 let helper = self.push_op(Op::Validate {
                     definition: model.definition().clone(),
                 });
-                self.write_output(format!("{helper}(self);"), definition.body());
+                self.write_output(
+                    format!("{helper}({}(self));", crate::engine::KEYWORD_LEND),
+                    definition.body(),
+                );
             }
             let receiver = self
                 .bindings
@@ -145,7 +148,10 @@ impl<'a> Parser<'a> {
             let helper = self.push_op(Op::Validate {
                 definition: model.definition().clone(),
             });
-            self.write_output(format!("{helper}(self);"), definition.body());
+            self.write_output(
+                format!("{helper}({}(self));", crate::engine::KEYWORD_LEND),
+                definition.body(),
+            );
         }
         let receiver = definition
             .receiver_span()
@@ -621,7 +627,10 @@ impl<'a> Parser<'a> {
             } else {
                 parameter.name.text.as_str()
             };
-            self.write_output(format!("{helper}({name});"), definition.body.span);
+            self.write_output(
+                format!("{helper}({}({name}));", crate::engine::KEYWORD_LEND),
+                definition.body.span,
+            );
         }
     }
 
