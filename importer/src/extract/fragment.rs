@@ -1,8 +1,16 @@
 //! One fragment read against the catalog on its own. Reading a fragment
 //! touches nothing another fragment's reading does, so fragments read across
 //! cores and join the candidate in their own order.
+//!
+//! A read is a function of the fragment's body, its handshake's semantic
+//! fields, the catalog and the limits, so a process that canonicalizes
+//! again keeps each body's read ([`Kept`]): after an edit to one crate,
+//! only that crate's fragment is read again (#1776).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Mutex, PoisonError};
+
+use sha2::{Digest as _, Sha256};
 
 use crate::api::{self, identity, ledger, model};
 use crate::cargo;
@@ -33,7 +41,104 @@ pub(super) struct Invocation {
     pub(super) source: conflict::Source,
 }
 
+/// What reading a fragment's body gave: all of its read but the invocation,
+/// which names the run's own artifact and nonce.
+#[derive(Clone)]
+pub(super) struct Body {
+    index: Vec<ledger::Index>,
+    definitions: Vec<Definition>,
+    reached: Vec<Reached>,
+    implementations: Vec<Implementation>,
+    proofs: Vec<model::ScalarPredicateProof>,
+    edges: usize,
+}
+
+/// The bodies the last canonicalization in this process read, by their
+/// fragments' read keys, under the catalog and limits it read them against.
+pub(super) struct Kept {
+    catalog: Catalog,
+    limits: cargo::Limits,
+    bodies: BTreeMap<[u8; 32], Body>,
+}
+
+static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
+
+/// What a read of `fragment` is kept under: its body, its root's aliases
+/// and its own crate, which are all reading it depends on beside the
+/// catalog and the limits. The run's nonce and artifact are no part of it:
+/// the invocation that names them is read anew with each read ([`Read::kept`]).
+/// `None` for an inventory fragment, which is never kept.
+pub(super) fn key(fragment: &protocol::Fragment) -> Option<[u8; 32]> {
+    use std::hash::Hash as _;
+    #[cfg(feature = "rustc-driver")]
+    if fragment.inventory.is_some() {
+        return None;
+    }
+    let mut digest = Digest(Sha256::new());
+    b"rawr.extract.fragment-read/v1".hash(&mut digest);
+    fragment.handshake.root.hash(&mut digest);
+    fragment.handshake.crate_name.hash(&mut digest);
+    fragment
+        .handshake
+        .artifact
+        .stable_crate_id
+        .hash(&mut digest);
+    fragment.reachable.hash(&mut digest);
+    fragment.definitions.hash(&mut digest);
+    fragment.implementations.hash(&mut digest);
+    fragment.scalar_predicate_proofs.hash(&mut digest);
+    fragment.index.hash(&mut digest);
+    Some(digest.0.finalize().into())
+}
+
+/// A hasher that feeds SHA-256, so a key is a digest of what is hashed.
+struct Digest(Sha256);
+
+impl std::hash::Hasher for Digest {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        let digest = self.0.clone().finalize();
+        u64::from_le_bytes(std::array::from_fn(|index| digest[index]))
+    }
+}
+
+impl Kept {
+    /// The bodies the last canonicalization kept, by read key, when it read
+    /// against `catalog` and `limits`; none otherwise. Taken: the next
+    /// keeps its own.
+    pub(super) fn take(catalog: &Catalog, limits: &cargo::Limits) -> BTreeMap<[u8; 32], Body> {
+        let kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner).take();
+        kept.filter(|kept| kept.catalog == *catalog && kept.limits == *limits)
+            .map(|kept| kept.bodies)
+            .unwrap_or_default()
+    }
+
+    /// Keep `body` under `key`.
+    pub(super) fn insert(&mut self, key: [u8; 32], body: Body) {
+        self.bodies.insert(key, body);
+    }
+
+    /// Keep these bodies for the next canonicalization, in place of
+    /// whatever another kept since.
+    pub(super) fn publish(self) {
+        *KEPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(self);
+    }
+
+    /// An empty set of bodies read against `catalog` and `limits`.
+    pub(super) fn empty(catalog: &Catalog, limits: &cargo::Limits) -> Self {
+        Self {
+            catalog: catalog.clone(),
+            limits: *limits,
+            bodies: BTreeMap::new(),
+        }
+    }
+}
+
 /// A definition whose crate has authority.
+#[derive(Clone)]
 #[expect(
     clippy::large_enum_variant,
     reason = "nearly every definition is modeled; boxing it would allocate once more per definition"
@@ -52,12 +157,14 @@ pub(super) enum Definition {
 }
 
 /// A reachable path and how it binds.
+#[derive(Clone)]
 pub(super) enum Reached {
     Nameable(Export),
     AnonymousImport(Export),
 }
 
 /// An implementation whose crate has authority.
+#[derive(Clone)]
 #[expect(
     clippy::large_enum_variant,
     reason = "nearly every implementation is modeled; boxing it would allocate once more per implementation"
@@ -92,6 +199,58 @@ impl Read {
             read.failure = Some(error);
         }
         read
+    }
+
+    /// The read of `fragment` whose `body` an earlier read of the same
+    /// body gave ([`Kept`]): only its invocation is read.
+    pub(super) fn kept(
+        fragment: &protocol::Fragment,
+        body: Body,
+        allocation: &mut Allocation,
+    ) -> Self {
+        let Body {
+            index,
+            definitions,
+            reached,
+            implementations,
+            proofs,
+            edges,
+        } = body;
+        let (invocation, failure) = match super::invocation(fragment, allocation) {
+            Ok(invocation) => (
+                Some(Invocation {
+                    invocation,
+                    source: conflict::Source::new(&fragment.handshake),
+                }),
+                None,
+            ),
+            Err(error) => (None, Some(error)),
+        };
+        Self {
+            index,
+            invocation,
+            definitions,
+            reached,
+            implementations,
+            proofs,
+            edges,
+            failure,
+        }
+    }
+
+    /// What reading the body gave, when it was read whole.
+    pub(super) fn body(&self) -> Option<Body> {
+        if self.failure.is_some() || self.invocation.is_none() {
+            return None;
+        }
+        Some(Body {
+            index: self.index.clone(),
+            definitions: self.definitions.clone(),
+            reached: self.reached.clone(),
+            implementations: self.implementations.clone(),
+            proofs: self.proofs.clone(),
+            edges: self.edges,
+        })
     }
 
     fn fill(

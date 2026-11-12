@@ -96,7 +96,7 @@ impl From<Written> for Fragment {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ScalarPredicateProof {
     pub(crate) owner: Id,
@@ -106,7 +106,7 @@ pub(crate) struct ScalarPredicateProof {
     pub(crate) outcome: ScalarPredicateOutcome,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Scalar {
     Unit,
@@ -116,7 +116,7 @@ pub(crate) enum Scalar {
     I64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ScalarPredicateOutcome {
     Absent,
@@ -124,7 +124,7 @@ pub(crate) enum ScalarPredicateOutcome {
     Unresolved,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Handshake {
     pub(crate) schema: u32,
@@ -153,7 +153,7 @@ pub(crate) struct Handshake {
     pub(crate) external_crates: Vec<ExternalCrate>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Artifact {
     pub(crate) path: String,
@@ -166,7 +166,7 @@ pub(crate) struct Artifact {
     pub(crate) probe_alias: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Package {
     pub(crate) cargo_id: String,
@@ -175,7 +175,7 @@ pub(crate) struct Package {
     pub(crate) source: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Sysroot {
     pub(crate) compiler_commit: String,
@@ -184,7 +184,7 @@ pub(crate) struct Sysroot {
     pub(crate) stable_crate_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExternalCrate {
     pub(crate) crate_name: String,
@@ -192,20 +192,20 @@ pub(crate) struct ExternalCrate {
     pub(crate) artifacts: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Root {
     Selected { aliases: Vec<String> },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Compilation {
     Target,
 }
 
 /// A definition's id, written in full or by its index in its fragment's ids.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Id {
     pub(crate) authority: Authority,
     pub(crate) def_path_hash: String,
@@ -238,7 +238,7 @@ impl<'de> Deserialize<'de> for Id {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Authority {
     Compiler {
@@ -247,7 +247,7 @@ pub(crate) enum Authority {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Namespace {
     Type,
@@ -255,7 +255,7 @@ pub(crate) enum Namespace {
     Macro,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Export {
     pub(crate) binding: Binding,
@@ -271,35 +271,35 @@ pub(crate) struct Export {
     pub(crate) variant: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Binding {
     Nameable,
     AnonymousImport,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ExportTarget {
     Definition { id: Id },
     Unsupported { compiler_kind: String },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Reexport {
     pub(crate) kind: ReexportKind,
     pub(crate) evidence: ReexportEvidence,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ReexportEvidence {
     Identified { item: ReexportId, span: Span },
     IdentitylessMacro,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ReexportKind {
     Single,
@@ -309,7 +309,7 @@ pub(crate) enum ReexportKind {
     MacroExport,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReexportId {
     pub(crate) crate_name: String,
@@ -317,7 +317,7 @@ pub(crate) struct ReexportId {
     pub(crate) def_path_hash: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Alias {
     pub(crate) from: Vec<String>,
@@ -325,7 +325,7 @@ pub(crate) struct Alias {
     pub(crate) span: Span,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Definition {
     pub(crate) id: Id,
@@ -337,7 +337,7 @@ pub(crate) struct Definition {
     pub(crate) origin: Origin,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Owner {
     Free,
@@ -345,14 +345,14 @@ pub(crate) enum Owner {
     Implementation { id: Id },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Visibility {
     Public,
     Restricted { scope: Id },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(
     clippy::large_enum_variant,
@@ -426,14 +426,14 @@ pub(crate) enum Shape {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Default<T> {
     Absent,
     Present { value: T },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Field {
     pub(crate) name: String,
@@ -447,7 +447,7 @@ pub(crate) struct Field {
 /// needs (D865): the offsets of its pointers' address words that may hold
 /// a static's address, outside any enum variant or union, and whether
 /// another is inside one.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Layout {
     pub(crate) size: u64,
@@ -455,7 +455,7 @@ pub(crate) struct Layout {
     pub(crate) varied: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FieldForm {
     Record,
@@ -463,7 +463,7 @@ pub(crate) enum FieldForm {
     Unit,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Variant {
     pub(crate) name: String,
@@ -475,7 +475,7 @@ pub(crate) struct Variant {
     pub(crate) span: Span,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Signature {
     pub(crate) safety: Safety,
@@ -493,21 +493,21 @@ pub(crate) struct Signature {
 
 /// A borrowing method's guard output: its `Deref::Target`, and whether it
 /// is `DerefMut`.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Guard {
     pub(crate) target: Type,
     pub(crate) mutable: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Safety {
     Safe,
     Unsafe,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Receiver {
     None,
@@ -524,21 +524,21 @@ pub(crate) enum Receiver {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Mutability {
     Shared,
     Mutable,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Generics {
     pub(crate) parameters: Vec<Parameter>,
     pub(crate) predicates: Vec<Predicate>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Parameter {
     pub(crate) owner: Id,
@@ -547,7 +547,7 @@ pub(crate) struct Parameter {
     pub(crate) parameter_kind: ParameterKind,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ParameterKind {
     Lifetime {
@@ -567,7 +567,7 @@ pub(crate) enum ParameterKind {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Predicate {
     Bound { ty: Type, bound: Bound },
@@ -578,7 +578,7 @@ pub(crate) enum Predicate {
     Unknown { compiler_kind: String },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Bound {
     Trait {
@@ -590,14 +590,14 @@ pub(crate) enum Bound {
     MaybeSized,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Polarity {
     Positive,
     Negative,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Binder {
     pub(crate) owner: Id,
@@ -606,7 +606,7 @@ pub(crate) struct Binder {
     pub(crate) name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Lifetime {
     Static,
@@ -615,7 +615,7 @@ pub(crate) enum Lifetime {
     Erased,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(
     clippy::enum_variant_names,
@@ -678,7 +678,7 @@ pub(crate) enum Type {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ObjectBound {
     Trait {
@@ -691,7 +691,7 @@ pub(crate) enum ObjectBound {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Argument {
     Lifetime { lifetime: Lifetime },
@@ -699,7 +699,7 @@ pub(crate) enum Argument {
     Const { value: Const },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Const {
     Literal {
@@ -719,7 +719,7 @@ pub(crate) enum Const {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Implementation {
     pub(crate) key: String,
@@ -737,14 +737,14 @@ pub(crate) struct Implementation {
     pub(crate) origin: Origin,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Trait {
     Inherent,
     Trait { id: Id, arguments: Vec<Argument> },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Span {
     pub(crate) file: String,
@@ -756,7 +756,7 @@ pub(crate) struct Span {
     pub(crate) column_end: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Origin {
     Source,
