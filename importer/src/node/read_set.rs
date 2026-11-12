@@ -327,6 +327,7 @@ impl Retention {
             return Err(Error::State("retention belongs to another graph"));
         }
         self.require_bindings()?;
+        walked();
         for entry in &self.entries {
             store.revalidate_read_set_entry(*entry, &self.graph)?;
         }
@@ -745,14 +746,20 @@ impl Fragment {
         store: &crate::store::Store,
         fragments: impl IntoIterator<Item = Fragment>,
     ) -> Result<ReadSetProof, Error> {
-        Self::seal_scoped(store, fragments, Scope::Consumer)
+        let fragment = Self::union(store, fragments)?;
+        fragment.revalidate_scoped(store, Scope::Consumer)?;
+        Ok(ReadSetProof {
+            fragment,
+            snapshot: None,
+        })
     }
 
-    fn seal_scoped(
+    /// The exact deduplicated union of `fragments`, checked for one
+    /// lineage and its bounds, with no walk of its entries.
+    fn union(
         store: &crate::store::Store,
         fragments: impl IntoIterator<Item = Fragment>,
-        scope: Scope,
-    ) -> Result<ReadSetProof, Error> {
+    ) -> Result<Self, Error> {
         let mut pairs = Vec::new();
         let mut context = None;
         let mut admitted = 0;
@@ -778,12 +785,7 @@ impl Fragment {
                     .zip(fragment.witnesses.into_vec()),
             );
         }
-        let fragment = Self::from_pairs(pairs, context, store.graph_budget())?;
-        fragment.revalidate_scoped(store, scope)?;
-        Ok(ReadSetProof {
-            fragment,
-            snapshot: None,
-        })
+        Self::from_pairs(pairs, context, store.graph_budget())
     }
 
     fn require_lineage(
@@ -812,6 +814,7 @@ impl Fragment {
         if self.entries.len() != self.witnesses.len() || digest(&self.entries) != self.digest {
             return Err(Error::State("node read-set proof shape changed"));
         }
+        walked();
         let budget = store.graph_budget();
         for (entry, witness) in self.entries.iter().zip(self.witnesses.iter()) {
             if witness.revalidate(budget, scope)? != *entry {
@@ -945,7 +948,13 @@ impl Prepared {
         fragments: impl IntoIterator<Item = Fragment>,
     ) -> Result<Self, Error> {
         let store = context.open_store()?;
-        let proof = Fragment::seal_scoped(&store, fragments, Scope::Complete)?;
+        // No walk: nothing admits the closure before its admission walks
+        // it, once its Prepared pin is held and its consumer observes its
+        // inputs (#1760).
+        let proof = ReadSetProof {
+            fragment: Fragment::union(&store, fragments)?,
+            snapshot: None,
+        };
         Ok(Self {
             context,
             proof,
@@ -995,15 +1004,6 @@ impl Prepared {
         Ok(())
     }
 
-    pub(crate) fn with_pin<T, E>(
-        &self,
-        operation: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Error> {
-        self.pin_prepared()?;
-        self.revalidate()?;
-        Ok(operation())
-    }
-
     pub(crate) fn retain_startup(
         &mut self,
         snapshot: &crate::supervisor::snapshot::Bytes,
@@ -1012,6 +1012,7 @@ impl Prepared {
         let Some(retention) = &self.retention else {
             return self.pin_prepared();
         };
+        let _counted = Counted::begin();
         let pins = self
             .pins
             .get_mut()
@@ -1063,26 +1064,65 @@ impl Prepared {
                 .require_proof(&self.proof)?;
             return Ok(());
         }
-        self.bind_snapshot(snapshot)
+        match &self.proof.snapshot {
+            // Bound already: the admission that follows walks the closure
+            // with it (#1760).
+            Some(current) if current.matches(snapshot) => Ok(()),
+            _ => self.bind_snapshot(snapshot),
+        }
     }
 
+    /// Bind `snapshot` in place of the one this closure was admitted with,
+    /// keeping every pin it holds, Live and LastGood among them: a new
+    /// process of the same runner starts from it and holds the same
+    /// closure, so it needs no new pin transaction (D553.6, #1760). Its
+    /// admission walks the closure once, with the new snapshot.
+    pub(crate) fn rebind_snapshot(
+        &mut self,
+        snapshot: &crate::supervisor::snapshot::Bytes,
+    ) -> Result<(), Error> {
+        let pins = self
+            .pins
+            .get_mut()
+            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        if pins.prepared.is_none() || pins.startup.is_some() {
+            return Err(Error::State(
+                "only an admitted closure that holds its Prepared pin starts again",
+            ));
+        }
+        let freshness = snapshot.freshness()?;
+        freshness.revalidate()?;
+        self.proof.snapshot = Some(freshness);
+        Ok(())
+    }
+
+    /// Run `operation`, an admission, while this closure's Prepared pin is
+    /// held: the startup handoff's, the one it already holds, or one
+    /// acquired now. The admission walks the closure itself, once, after
+    /// the pin is held: no walk here proves more than that one (#1760).
     pub(crate) fn with_startup_pin<T, E>(
         &self,
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
+        if self.proof.snapshot.is_none() {
+            return Err(Error::State("an admitted closure binds its snapshot first"));
+        }
         let mut pins = self
             .pins
             .lock()
             .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
         let Some(startup) = pins.startup.take() else {
+            let held = pins.prepared.is_some();
             drop(pins);
-            return self.with_pin(operation);
+            if !held {
+                self.pin_prepared()?;
+            }
+            return Ok(operation());
         };
         if startup.closure != self.proof.digest()
             || pins.prepared.is_none()
             || pins.live.is_some()
             || pins.last_good.is_some()
-            || self.proof.snapshot.is_none()
         {
             return Err(Error::State("startup handoff lost its Prepared ownership"));
         }
@@ -1091,11 +1131,11 @@ impl Prepared {
             .ok_or(Error::State("startup retention absent"))?
             .require_proof(&self.proof)?;
         drop(pins);
-        self.revalidate()?;
         Ok(operation())
     }
 
     pub(crate) fn pin_prepared(&self) -> Result<(), Error> {
+        let _counted = Counted::begin();
         let mut pins = self
             .pins
             .lock()
@@ -1113,16 +1153,48 @@ impl Prepared {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), Error> {
+        let _counted = Counted::begin();
         let store = self.context.open_store()?;
         self.proof.revalidate(&store)
     }
 
     pub(crate) fn revalidate_complete(&self) -> Result<(), Error> {
+        let _counted = Counted::begin();
         let store = self.context.open_store()?;
         self.proof.revalidate_complete(&store)
     }
 
+    /// Pin this admitted closure as Live and LastGood. Its admission walked
+    /// it after its Prepared pin was held, and that pin has kept every
+    /// entry since, so they bind with no walk; changes to its inputs since
+    /// are its consumer's watchers' to see. A pair it holds already, as a
+    /// new process of the same runner's does, stands with no transaction
+    /// (#1760). A closure with no Prepared pin is walked as it binds.
     pub(crate) fn pin_live_last_good(&self) -> Result<(), Error> {
+        let mut pins = self
+            .pins
+            .lock()
+            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        match (pins.live.is_some(), pins.last_good.is_some()) {
+            (true, true) => return Ok(()),
+            (false, false) => {}
+            _ => {
+                return Err(Error::State(
+                    "prepared read-set retained a partial live/last-good pin pair",
+                ));
+            }
+        }
+        if pins.prepared.is_some() {
+            if let Some(retention) = &self.retention {
+                retention.require_proof(&self.proof)?;
+            }
+            let store = self.context.open_store()?;
+            let [live, last_good] = store.bind_live_last_good_held(&self.proof)?;
+            pins.live = Some(live);
+            pins.last_good = Some(last_good);
+            return Ok(());
+        }
+        drop(pins);
         match self.with_live_last_good(|| Ok::<(), std::convert::Infallible>(()))? {
             Ok(()) => Ok(()),
             Err(
@@ -1138,6 +1210,7 @@ impl Prepared {
         &self,
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<Result<T, crate::store::transaction::Rejected<E>>, Error> {
+        let _counted = Counted::begin();
         let mut pins = self
             .pins
             .lock()
@@ -1181,6 +1254,38 @@ fn entry<K: Value>(recipe: &Direct<K>, content: ContentRef<K>, bundled: bool) ->
         recipe: recipe.recipe,
         content: content.digest(),
         bundled,
+    }
+}
+
+thread_local! {
+    /// Whether this thread is walking a runner's prepared closure, whose
+    /// walks [`crate::progress::read_set_walks`] counts (#1760).
+    static RUNNER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Work on a runner's prepared closure, whose walks count while this lives.
+struct Counted {
+    outer: bool,
+}
+
+impl Counted {
+    fn begin() -> Self {
+        Self {
+            outer: RUNNER.replace(true),
+        }
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        RUNNER.set(self.outer);
+    }
+}
+
+/// Count one walk of a closure's entries, when it is a runner's.
+fn walked() {
+    if RUNNER.get() {
+        crate::progress::walked_read_set();
     }
 }
 

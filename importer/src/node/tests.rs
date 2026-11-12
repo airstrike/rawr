@@ -3059,9 +3059,10 @@ fn prepared_chain_pins_its_final_transitive_closure_across_admission_failure() {
     assert_eq!(prepared.proof().len(), 1);
     assert!(prepared.proof().contains(final_action));
 
-    let admission: Result<(), &'static str> = prepared
-        .with_pin(|| Err("injected admission failure"))
+    prepared
+        .pin_prepared()
         .expect("the current closure pins before admission");
+    let admission: Result<(), &'static str> = Err("injected admission failure");
     assert_eq!(admission, Err("injected admission failure"));
     let usage = store
         .fixture_project_usage()

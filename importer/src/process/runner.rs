@@ -638,8 +638,9 @@ impl<B> Candidate<Admitted, B> {
         )?;
         inner.observed = true;
         // The child request is already captured and its observer can revoke it
-        // throughout this full validation and the remaining startup/pin work.
-        inner.manifest().revalidate_prepared()?;
+        // throughout this full validation and the remaining startup/pin work:
+        // this is the start's one walk of its closure (#1760).
+        inner.manifest().revalidate_complete()?;
         Ok(())
     }
 

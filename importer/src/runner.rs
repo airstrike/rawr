@@ -116,24 +116,20 @@ impl<B> Manifest<Built, B> {
 
     /// Bind `snapshot` as the source a new process of this same executable
     /// starts from: a restart that needs no native build (D553.6). The
-    /// read set is sealed again from the runner's chain and bound to
-    /// `snapshot`, and holds its closure before the last process's read
-    /// set lets go of it. The demand stays the one the runner was built
-    /// for. A new process's generation key seals `snapshot` and its own
-    /// epoch beside it, so no two starts share a key.
+    /// read set is the last process's, the closure of this same build,
+    /// bound to `snapshot` and keeping every pin it holds, its Live and
+    /// LastGood among them, so no pin transaction runs (#1760). The demand
+    /// stays the one the runner was built for. A new process's generation
+    /// key seals `snapshot` and its own epoch beside it, so no two starts
+    /// share a key.
     pub fn rebind_startup(
         &mut self,
         snapshot: &crate::supervisor::snapshot::Bytes,
     ) -> Result<(), crate::node::Error> {
-        let read_set = self
-            .chain
-            .as_ref()
-            .map(|chain| overlay::prepare_union(chain, self.overlay.as_ref()))
-            .transpose()?;
+        if let Some(read_set) = &mut self.phase.read_set {
+            read_set.rebind_snapshot(snapshot)?;
+        }
         self.request.snapshot = snapshot.snapshot();
-        let previous = std::mem::replace(&mut self.phase.read_set, read_set);
-        self.retain_startup(snapshot)?;
-        drop(previous);
         Ok(())
     }
 
@@ -231,6 +227,15 @@ impl<B> Manifest<Built, B> {
     pub fn revalidate_prepared(&self) -> Result<(), crate::node::Error> {
         match self.phase.read_set.as_ref() {
             Some(read_set) => read_set.revalidate(),
+            None => Ok(()),
+        }
+    }
+
+    /// Walk the complete runner closure once, at the scope admission
+    /// checks, after its consumer observes its inputs (#1760).
+    pub(crate) fn revalidate_complete(&self) -> Result<(), crate::node::Error> {
+        match self.phase.read_set.as_ref() {
+            Some(read_set) => read_set.revalidate_complete(),
             None => Ok(()),
         }
     }

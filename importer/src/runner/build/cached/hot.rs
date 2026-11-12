@@ -415,15 +415,18 @@ fn cold_and_hot_runner_keep_exact_bundle_retention() {
     assert!(built.revalidate_native().is_err());
 }
 
+/// An observed start walks its runner's closure once, after its Prepared
+/// pin is held and its runner observes its inputs: the union seals, the
+/// startup handoff passes, the admission runs and Live and LastGood bind
+/// with no walk of its inputs (#1760). A start with no handoff walks it as
+/// its Prepared pin binds, too.
 #[test]
-fn startup_handoff_removes_only_the_three_attachment_refreshes() {
+fn an_observed_start_walks_its_closure_once_after_its_prepared_pin() {
     for startup in [false, true] {
         let mut fixture = Fixture::new();
         fixture.retain = true;
         let (cold, snapshot) = fixture.generation(b"before");
         let mut built = fixture.build(cold);
-        // Evaluation's final union has already completed. Count subsequent
-        // startup consumers, using the same retained fixture for both routes.
         fixture.validations.store(0, Ordering::Relaxed);
         if startup {
             built.retain_startup(&snapshot).unwrap();
@@ -431,35 +434,28 @@ fn startup_handoff_removes_only_the_three_attachment_refreshes() {
             built.bind_snapshot(&snapshot).unwrap();
             built.pin_prepared().unwrap();
         }
-        assert_eq!(
-            fixture.validations.load(Ordering::Relaxed),
-            if startup { 0 } else { 1 }
-        );
-        built.revalidate_prepared().unwrap(); // watcher checkpoint
+        let pinned = if startup { 0 } else { 1 };
+        assert_eq!(fixture.validations.load(Ordering::Relaxed), pinned);
         built.bind_startup_snapshot(&snapshot).unwrap();
         let read_set = built.take_prepared_read_set().unwrap();
         read_set
             .with_startup_pin(|| {
-                assert_eq!(
-                    fixture.validations.load(Ordering::Relaxed),
-                    if startup { 2 } else { 5 }
-                );
-                crate::supervisor::bootstrap::admit_current(Some(&read_set), || Ok(()))
+                assert_eq!(fixture.validations.load(Ordering::Relaxed), pinned);
+                Ok::<(), ()>(())
             })
             .unwrap()
             .unwrap();
-        read_set.revalidate().unwrap(); // observer established
+        read_set.revalidate_complete().unwrap(); // observer established
         read_set.pin_live_last_good().unwrap();
-        assert_eq!(
-            fixture.validations.load(Ordering::Relaxed),
-            if startup { 5 } else { 8 }
-        );
-        // Including evaluation, these downstream schedules are six and nine.
+        assert_eq!(fixture.validations.load(Ordering::Relaxed), pinned + 1);
     }
 }
 
+/// The startup handoff is consumed once, and the admission's one walk
+/// rejects drift: a second admission holds the pin the first took, with
+/// no walk of its own (#1760).
 #[test]
-fn startup_handoff_rejects_drift_and_consumes_its_marker_once() {
+fn startup_handoff_consumes_its_marker_once_and_the_admission_walk_rejects_drift() {
     let mut fixture = Fixture::new();
     fixture.retain = true;
     let (cold, snapshot) = fixture.generation(b"before");
@@ -471,13 +467,16 @@ fn startup_handoff_rejects_drift_and_consumes_its_marker_once() {
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
     let read_set = built.take_prepared_read_set().unwrap();
     let calls = AtomicUsize::new(0);
-    assert!(read_set
+    read_set
         .with_startup_pin(|| {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok::<(), ()>(())
         })
-        .is_err());
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
+    assert!(read_set.revalidate_complete().is_err());
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 1);
     fixture.reject_at.store(usize::MAX, Ordering::Relaxed);
     fixture.validations.store(0, Ordering::Relaxed);
@@ -487,9 +486,10 @@ fn startup_handoff_rejects_drift_and_consumes_its_marker_once() {
         .unwrap();
     assert_eq!(
         fixture.validations.load(Ordering::Relaxed),
-        2,
-        "a consumed marker falls back to ordinary pin/current validation"
+        0,
+        "a consumed marker leaves the Prepared pin it handed over held"
     );
+    read_set.revalidate_complete().unwrap();
 }
 
 #[test]
@@ -521,9 +521,15 @@ fn startup_post_bind_failure_restores_predecessors_without_minting_a_marker() {
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
     assert_eq!(pins(&store), before);
     assert_eq!(store.fixture_pin_counts().unwrap(), guards);
-    // No startup marker escaped: matching rebinding takes the ordinary current
-    // check instead of the bookkeeping-only handoff path.
+    // No startup marker or pin escaped: the admission acquires its Prepared
+    // pin, whose transaction walks the closure.
     built.bind_startup_snapshot(&snapshot).unwrap();
+    assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
+    let read_set = built.take_prepared_read_set().unwrap();
+    read_set
+        .with_startup_pin(|| Ok::<(), ()>(()))
+        .unwrap()
+        .unwrap();
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 1);
 }
 
@@ -560,8 +566,10 @@ fn retained_pin_transactions_validate_once_and_preserve_rollback() {
     live.pin_prepared().unwrap();
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 1);
     fixture.validations.store(0, Ordering::Relaxed);
+    // The Prepared pin held its entries since: Live and LastGood bind them
+    // with no walk (#1760).
     live.pin_live_last_good().unwrap();
-    assert_eq!(fixture.validations.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
 
     fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let prepared = fixture.prepare(&live, b"after!");

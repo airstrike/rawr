@@ -183,18 +183,16 @@ impl<B> Lane<B> {
         snapshot: rawr_import::supervisor::snapshot::Bytes,
         observation: &[u8],
     ) -> Result<rawr_import::process::Candidate<rawr_import::process::Admitted, B>, Error> {
-        let mut candidate = self.admit_built(built, snapshot)?;
-        if let Err(failure) = candidate.observe_initial(observation) {
-            let failure = Error::Process(failure);
-            return match candidate.shutdown() {
-                Ok(()) => Err(failure),
-                Err(cleanup) => Err(Error::InstallCleanup {
-                    failure: Box::new(failure),
-                    cleanup,
-                }),
-            };
-        }
-        Ok(candidate)
+        self.supervisor
+            .bootstrap_observed(built, snapshot, &self.process, observation)
+            .map_err(|error| match error {
+                // The runner's own failures, the walk of its read set as it
+                // observes among them, are a running runner's.
+                rawr_import::supervisor::bootstrap::Error::Process(failure) => {
+                    Error::Process(failure)
+                }
+                error => Error::Bootstrap(error),
+            })
     }
 
     pub(crate) fn replace_built_started_watched(
@@ -556,6 +554,18 @@ impl Error {
                     failure: rawr_import::node::Error::SourceChanged(_),
                     ..
                 }
+        )
+    }
+
+    /// An input of the runner's build changed since its read set was
+    /// sealed, as its start's one walk of it found (#1760).
+    pub(crate) const fn read_set_stale(&self) -> bool {
+        matches!(
+            self,
+            Self::Node(rawr_import::node::Error::StaleReadSet { .. })
+                | Self::Process(rawr_import::process::RunnerError::Node(
+                    rawr_import::node::Error::StaleReadSet { .. }
+                ))
         )
     }
 }

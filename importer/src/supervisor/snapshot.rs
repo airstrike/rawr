@@ -17,6 +17,7 @@ const ENTRY_DOMAIN: &[u8] = b"rawr.snapshot.entry/v2";
 const KEY_BYTES: usize = 64;
 
 /// Owned exact snapshot frames whose digest equals one sealed snapshot.
+#[derive(Clone)]
 pub struct Bytes {
     framed: Box<[u8]>,
     digest: [u8; 32],

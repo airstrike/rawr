@@ -279,6 +279,23 @@ pub fn runner_builds() -> usize {
     RUNNER_BUILDS.load(Ordering::Relaxed)
 }
 
+/// How many times this process walked a runner's read-set closure, each
+/// walk visiting every entry of it: a check of the entries' current
+/// inputs, or of their storage alone (#1760).
+static READ_SET_WALKS: AtomicUsize = AtomicUsize::new(0);
+
+/// Count one walk of a runner's read-set closure.
+pub(crate) fn walked_read_set() {
+    READ_SET_WALKS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// How many times this process walked a runner's read-set closure: a
+/// start that needs no native build walks it once (#1760).
+#[must_use]
+pub fn read_set_walks() -> usize {
+    READ_SET_WALKS.load(Ordering::Relaxed)
+}
+
 /// Count one API table read from the store.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn loaded() {

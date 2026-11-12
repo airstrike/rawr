@@ -86,6 +86,75 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// A private field on a type native code holds builds natively once, with
+/// the preparation that found it (#1761): the save prepares again, says
+/// why, builds the new runner from that preparation and starts the
+/// program from it, with no second preparation, check or start. The old
+/// program ticks on while the new runner builds.
+#[test]
+fn a_held_type_s_private_field_builds_its_runner_once_from_the_save_s_preparation() {
+    let root = ISLANDS.project();
+    let physics = root.join("src/physics.rs");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", root.join("stop")),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+    let saved = run.seen.len();
+    // One write: the field, and the label's scale, which says the new
+    // program runs the save.
+    let text = fs::read_to_string(&physics).unwrap();
+    fs::write(
+        &physics,
+        text.replace(
+            "    pub ticks: i64,\n}",
+            "    pub ticks: i64,\n    seen: i64,\n}",
+        )
+        .replace("Counter { ticks: 0 }", "Counter { ticks: 0, seen: 0 }")
+        .replace("const SCALE: i64 = 1;", "const SCALE: i64 = 100;"),
+    )
+    .unwrap();
+    run.until(|line| parse(line) == Some((1, 100)));
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    let after = &run.seen[saved..];
+    let said = |text: &str| after.iter().filter(|line| line.contains(text)).count();
+    assert_eq!(
+        said("rawr: preparing again: `physics::Counter` changed its fields"),
+        1,
+        "{seen}"
+    );
+    assert_eq!(said("restarting the program"), 1, "{seen}");
+    // The save's own preparation is the only one: no new session starts,
+    // prepares or loads the program again.
+    assert_eq!(said("rawr-import: a start ran"), 0, "{seen}");
+    assert_eq!(
+        said("rawr-import: a new session's load parsed"),
+        0,
+        "{seen}"
+    );
+    // The new runner's start walked its read set twice: its storage as its
+    // Prepared pin bound, and the whole of it as it observed its inputs
+    // (#1760).
+    assert_eq!(
+        said("rawr-import: a new runner started, read-set walks 2"),
+        1,
+        "{seen}"
+    );
+    // The old program ran until the new one replaced it, a tick each
+    // 100 ms: what it printed says how long the save took to run.
+    let ticked = after
+        .iter()
+        .filter(|line| parse(line).is_some_and(|(tick, value)| value == tick))
+        .count();
+    eprintln!("the old program ticked {ticked} times after the save");
+}
+
 /// Native code built without a derive's impl doesn't call it: a native
 /// type's new derives swap in the running program, native code edited to
 /// call one builds again with it, and a derive that goes away builds again
@@ -1259,12 +1328,17 @@ fn a_panic_after_a_swap_restarts_the_program_in_a_new_process_of_its_runner() {
         1,
         "{seen}"
     );
+    // The new process holds the old one's pins, and walks its read set
+    // once, as it observes its inputs (#1760).
     assert_eq!(
-        said("rawr-import: a restart respawned its runner with no check"),
+        said("rawr-import: a restart respawned its runner with no check, read-set walks 1"),
         1,
         "{seen}"
     );
+    // The program's first start walked its read set twice: its storage
+    // as its Prepared pin bound, and the whole of it as it observed.
     assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
+    assert_eq!(said(", read-set walks 2"), 1, "{seen}");
 }
 
 /// A marked leaf writes its page as a native module's enum, whose fields
