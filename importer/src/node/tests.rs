@@ -411,6 +411,43 @@ fn fresh_process_worker() {
     fs::write(&report_path, report.as_bytes()).expect("the worker writes its test report");
 }
 
+/// A value its parents' content alone gives, as a classification.
+struct Pure;
+
+impl Value for Pure {
+    const KIND: Kind = Kind::Generic;
+    const SCHEMA: u32 = 1;
+    const CONTEXTUAL: bool = false;
+
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
+        Ok(Box::default())
+    }
+
+    fn decode(_: &[u8]) -> Result<Self, Error> {
+        Ok(Self)
+    }
+}
+
+/// Two import contexts key a contextual value apart and a pure one alike,
+/// so a pure value one context stored answers another's lookup (#1766).
+#[test]
+fn only_a_contextual_value_is_keyed_by_its_context() {
+    let key = |context: [u8; 32]| {
+        (
+            super::Direct::<Artifact>::capture(context, b"inputs", &[])
+                .unwrap()
+                .action(),
+            super::Direct::<Pure>::capture(context, b"inputs", &[])
+                .unwrap()
+                .action(),
+        )
+    };
+    let (contextual, pure) = key([1; 32]);
+    let (other_contextual, other_pure) = key([2; 32]);
+    assert_ne!(contextual, other_contextual);
+    assert_eq!(pure, other_pure);
+}
+
 #[test]
 fn direct_node_seals_once_and_a_fresh_process_reuses_without_transform_children() {
     let root = temporary("direct-reuse");

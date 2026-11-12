@@ -18,6 +18,15 @@ pub mod request;
 pub(crate) mod source_map;
 
 const REQUEST_SCHEMA: u32 = 12;
+/// The generated runner's version: the source this module writes (the
+/// runner's templates, its adapters and the bindings it emits for each
+/// root), the build request key and the runner manifest's carrier. Bump it
+/// when a change alters any file the generated runner holds. A bump
+/// rebuilds runners and nothing upstream of them: classification
+/// (`CLASSIFIER_VERSION`) and the bindings plan (the facade's `SCHEMA`)
+/// keep their own versions and stay (#1766). An installed rawr's request
+/// key also carries the rawr sources' digest (#1712), so there this
+/// version matters for a development checkout and the store's eviction.
 const GENERATOR_VERSION: u32 = 295;
 
 /// Exact pre-build cache lookup identity.

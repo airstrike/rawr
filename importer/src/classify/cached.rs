@@ -122,6 +122,8 @@ impl node::Value for Product {
         let contract = super::contract_versions();
         node::reader_schema(4, &[contract[0], contract[1], super::COMPILER_ABI])
     };
+    // The classification is its API's and its policy's alone (#1766).
+    const CONTEXTUAL: bool = false;
     const PARTS: bool = true;
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {

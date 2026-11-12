@@ -126,6 +126,13 @@ pub trait Value: Sized {
     const KIND: Kind;
     /// Version of this value's canonical output codec.
     const SCHEMA: u32;
+    /// Whether this value's key carries the import context: the project,
+    /// its Cargo home, build environment, target and limits. A value its
+    /// transform computes from its parents' content and its own inputs
+    /// alone, as a classification is from its API, leaves the context out:
+    /// a new `CONTEXT_SCHEMA` or a moved Cargo home that gives the same
+    /// parents keeps it (#1766).
+    const CONTEXTUAL: bool = true;
 
     /// Encode this value canonically. Its size is never a reason to
     /// refuse it: the store's sizes are eviction targets.
@@ -273,9 +280,12 @@ impl<K: Value> Direct<K> {
             .try_reserve_exact(parents.len())
             .map_err(|_| Error::Allocation)?;
         retained_parents.extend(parents.iter().map(content::Provenance::from_edge));
+        // The read set's lineage keeps the context; the keys carry it only
+        // for a contextual value.
+        let keyed = keyed_context::<K>(context);
         let context = Digest::from_bytes(context);
-        let recipe = Digest::recipe(context, semantic_inputs, parents);
-        let action = ActionKey::derive(K::KIND, K::SCHEMA, context, semantic_inputs, parents);
+        let recipe = Digest::recipe(keyed, semantic_inputs, parents);
+        let action = ActionKey::derive(K::KIND, K::SCHEMA, keyed, semantic_inputs, parents);
         Ok(Self {
             action,
             recipe,
@@ -323,8 +333,14 @@ impl<K: Value> Discoverable<K> {
             .try_reserve_exact(parents.len())
             .map_err(|_| Error::Allocation)?;
         retained_parents.extend_from_slice(parents);
+        let lookup = LookupKey::derive(
+            K::KIND,
+            K::SCHEMA,
+            keyed_context::<K>(context),
+            fixed_inputs,
+            parents,
+        );
         let context = Digest::from_bytes(context);
-        let lookup = LookupKey::derive(K::KIND, K::SCHEMA, context, fixed_inputs, parents);
         Ok(Self {
             lookup,
             execution: ExecutionKey::derive(lookup),
@@ -1349,6 +1365,12 @@ impl Error {
             _ => None,
         }
     }
+}
+
+/// The context a `K`'s key carries: the import context's identity, or none
+/// for a value that leaves it out ([`Value::CONTEXTUAL`]).
+pub(crate) const fn keyed_context<K: Value>(context: [u8; 32]) -> Digest {
+    Digest::from_bytes(if K::CONTEXTUAL { context } else { [0; 32] })
 }
 
 pub(crate) fn content_digest<K: Value>(bytes: &[u8]) -> Digest {

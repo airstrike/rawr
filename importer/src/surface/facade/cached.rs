@@ -81,7 +81,7 @@ impl Cached {
         let action = node::ActionKey::derive(
             node::Kind::Facade,
             <Product as node::Value>::SCHEMA,
-            node::Digest::from_bytes(parent.context().identity()),
+            node::keyed_context::<Product>(parent.context().identity()),
             &authority,
             std::slice::from_ref(parent.current_parent()),
         );
@@ -160,6 +160,8 @@ impl node::Value for Product {
         let contract = crate::classify::contract_versions();
         node::reader_schema(1, &[super::SCHEMA, contract[0], contract[1]])
     };
+    // The plan is the classified contract's alone (#1766).
+    const CONTEXTUAL: bool = false;
     const PARTS: bool = true;
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {

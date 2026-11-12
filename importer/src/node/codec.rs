@@ -53,7 +53,7 @@ impl Envelope {
             output_schema: K::SCHEMA,
             action: recipe.action,
             recipe: recipe.recipe,
-            context: recipe.context,
+            context: super::keyed_context::<K>(recipe.context.as_bytes()),
             parents: parents.into_boxed_slice(),
             content,
             content_length,
@@ -179,7 +179,7 @@ impl Envelope {
             && self.output_schema == K::SCHEMA
             && self.action == current.action
             && self.recipe == current.recipe
-            && self.context == current.context
+            && self.context == super::keyed_context::<K>(current.context.as_bytes())
             && self.parents.len() == current.parents.len()
             && self
                 .parents
