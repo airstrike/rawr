@@ -300,12 +300,26 @@ pub(crate) fn probe_ran(took: Duration) {
     }
 }
 
+thread_local! {
+    /// Whether this thread rendered a runner's sources since its last
+    /// generation said so ([`rendered`]).
+    static RENDERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark the runner's sources as rendered by this thread's generation, not
+/// kept from an earlier rendering (#1821).
+pub(crate) fn rendered() {
+    RENDERED.set(true);
+}
+
 /// With `RAWR_VERBOSE`, say how long generating a runner's sources took,
-/// `took` (#1816).
-pub(crate) fn runner_generated(took: Duration) {
+/// `took`, and how many of its `files` it rendered: all of them, or none
+/// when it kept an earlier rendering of the same inputs (#1816, #1821).
+pub(crate) fn runner_generated(took: Duration, files: usize) {
+    let rendered = if RENDERED.replace(false) { files } else { 0 };
     if verbose() {
         say(&format!(
-            "rawr-import: the runner's sources were generated in {:.1} s",
+            "rawr-import: the runner's sources were generated in {:.1} s: rendered {rendered} of {files} files",
             took.as_secs_f64()
         ));
     }
