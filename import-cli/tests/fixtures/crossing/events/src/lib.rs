@@ -35,6 +35,7 @@ pub mod signatures;
 pub mod simulator;
 pub mod spans;
 pub mod stock;
+pub mod viewed;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
@@ -1189,6 +1190,34 @@ pub mod widgets {
         }
 
         Opaque(content)
+    }
+
+    /// A widget of `name`, as elevato's `view<'a, Message: 'a>(building:
+    /// &Building) -> impl Widget<Message> + 'a`: only the output names
+    /// `Message`, so only the type a caller expects of the call fixes it.
+    pub fn plaque<'a, Message: 'a>(name: &str) -> impl Widget<Message> + 'a {
+        struct Plaque(String);
+
+        impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Plaque {
+            fn labels(&self, labels: &mut Vec<String>) {
+                labels.push(format!("'{}'", self.0));
+            }
+
+            fn press(&self, _label: &str) -> Option<Message> {
+                None
+            }
+        }
+
+        Plaque(name.to_owned())
+    }
+
+    /// `content` that sends `message` when pressed, whose `impl
+    /// Widget<Message>` input fixes the message of a `plaque` passed to it.
+    pub fn pressing<'a, Message: Clone + 'a>(
+        content: impl Widget<Message> + 'a,
+        message: Message,
+    ) -> impl Widget<Message> + 'a {
+        tile(content).on_press(message)
     }
 
     /// A label of `title` that sends what `on_press` makes of its width

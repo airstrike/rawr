@@ -19231,6 +19231,23 @@ fn render_take(
     .map_err(request::unwritable)
 }
 
+/// The table of the calls that take `value`, of type `ty`, when `ty` holds
+/// an opaque type (`opaque_table_source`): the one the consumer at hand was
+/// given, or the one the call that makes the value compiles.
+fn producing_table(ty: &convert::Type, value: &str) -> Option<String> {
+    if !holds_opaque(ty) {
+        return None;
+    }
+    if OPAQUE_CONSUMING.get() {
+        return Some("table".to_owned());
+    }
+    OPAQUE_PRODUCING.with_borrow(|table| {
+        table
+            .as_ref()
+            .map(|table| table.replace("__RAWR_WITNESS__", &format!("witness_of(&{value})")))
+    })
+}
+
 fn render_give(
     ty: &convert::Type,
     value: &str,
@@ -19299,27 +19316,16 @@ fn render_give(
                 "    witness = witness_of(&{value});\n    Err(Error::TypeMismatch)"
             )
         }
-        convert::Type::Nominal { .. } if holds_opaque(ty) => {
-            let table = if OPAQUE_CONSUMING.get() {
-                Some("table".to_owned())
-            } else {
-                OPAQUE_PRODUCING.with_borrow(|table| {
-                    table.as_ref().map(|table| {
-                        table.replace("__RAWR_WITNESS__", &format!("witness_of(&{value})"))
-                    })
-                })
-            };
-            match table {
-                Some(table) => writeln!(
-                    output,
-                    "    let table = {table};\n    let handle = insert_native!(arguments.arena, {value})?;\n    arguments.arena.set_opaque(&handle, table);\n    Ok(Dynamic::from(handle))"
-                ),
-                None => writeln!(
-                    output,
-                    "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
-                ),
-            }
-        }
+        convert::Type::Nominal { .. } if holds_opaque(ty) => match producing_table(ty, value) {
+            Some(table) => writeln!(
+                output,
+                "    let table = {table};\n    let handle = insert_native!(arguments.arena, {value})?;\n    arguments.arena.set_opaque(&handle, table);\n    Ok(Dynamic::from(handle))"
+            ),
+            None => writeln!(
+                output,
+                "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
+            ),
+        },
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
@@ -19884,6 +19890,19 @@ fn render_to_dynamic(
                 family.call(family::Reach::Insert, &held_value(ty, value))
             )
         }
+        // A value whose type holds an opaque type carries the calls that
+        // take it, as `render_give` gives one, where a call lends its
+        // arguments too: `plaque(name: &str) -> impl Widget<M>` captures
+        // the text's lifetime, so its value is made where the text is
+        // lent, and its table goes with it (#1769, #1770).
+        convert::Type::Nominal { .. } if holds_opaque(ty) && OPAQUE_WITNESSING.get() => write!(
+            output,
+            "{{ witness = witness_of(&{value}); Err::<Dynamic, Error>(Error::TypeMismatch) }}"
+        ),
+        convert::Type::Nominal { .. } if let Some(table) = producing_table(ty, value) => write!(
+            output,
+            "{{ let table = {table}; insert_native!(arguments.arena, {value}).map(|handle| {{ arguments.arena.set_opaque(&handle, table); Dynamic::from(handle) }}) }}"
+        ),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
