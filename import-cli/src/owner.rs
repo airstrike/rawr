@@ -221,7 +221,8 @@ pub fn run(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
 ) -> Result<bool, diagnostic::Report> {
-    let ran = session(target, graph, lifecycle, profile, None).map_err(Unchecked::into_report);
+    let ran =
+        session(target, graph, lifecycle, profile, None, None).map_err(Unchecked::into_report);
     events(ran.as_ref().map_err(Some), None);
     ran.map(|ended| matches!(ended, Ended::Exit(0) | Ended::Restart(_)))
 }
@@ -287,7 +288,14 @@ pub fn run_program(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let interactive = rawr_cli::supervise::interactive();
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
-    let mut ran = session(target, graph, lifecycle, profile, Some(&program));
+    let mut ran = session(
+        target,
+        graph,
+        lifecycle,
+        profile,
+        Some(&program),
+        reload.as_ref(),
+    );
     loop {
         let restarted = matches!(ran, Ok(Ended::Restart(_)));
         // A session that ended hears from `cargo check`: the one started
@@ -352,7 +360,14 @@ pub fn run_program(
             watcher = Some(next);
         }
         abort = aborts(graph.as_ref());
-        ran = session(&next, graph, lifecycle, profile, Some(&program));
+        ran = session(
+            &next,
+            graph,
+            lifecycle,
+            profile,
+            Some(&program),
+            reload.as_ref(),
+        );
     }
 }
 
@@ -380,7 +395,14 @@ pub fn run_tests(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut graph = Some(graph);
     let ran = loop {
-        match session(target, graph.take(), lifecycle, profile, Some(&program)) {
+        match session(
+            target,
+            graph.take(),
+            lifecycle,
+            profile,
+            Some(&program),
+            None,
+        ) {
             Ok(Ended::Restart(_)) => {}
             Ok(Ended::Exit(code)) => break Ok(code),
             Err(unchecked) => break Err(unchecked),
@@ -430,13 +452,16 @@ enum Ended {
 }
 
 /// One run of the program's runners, until the program ends or a save
-/// restarts it.
+/// restarts it with a new start. A restart that needs no native build
+/// starts a new process of the same runner here instead (D553.6), and
+/// `reload`'s connections hear it restarted.
 fn session(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
     program: Option<&rawr_import::process::Arguments>,
+    reload: Option<&rawr_cli::events::reload::Stream>,
 ) -> Result<Ended, Unchecked> {
     same_build(target)?;
     // Each save that changes Rawr source rebuilds the same API graph.
@@ -490,6 +515,9 @@ fn session(
     // The preparation a restart was last announced for.
     let mut announced = None;
     let mut watched = resident::Watched::default();
+    // The last save the runner compiled in place, which a restart as the
+    // program refuses it, or panics after it, starts from.
+    let mut swap = None;
     // A save whose runner build found a cache entry stale is attempted
     // again, whose preparation rebuilds it (#613).
     let mut restarts = crate::Restarts::default();
@@ -500,8 +528,22 @@ fn session(
     // the program's own end below.
     let ran = (|| -> Result<Ended, diagnostic::Report> {
         loop {
-            if let Some(ended) = reaped(&mut lane, swapped_marked, lifecycle, &source)? {
-                return Ok(ended);
+            match reaped(&mut lane, swapped_marked, lifecycle, &source)? {
+                // The running build still stands when no native input
+                // changed since it was checked.
+                Some(Ended::Restart(reason))
+                    if !refresh_required && adapter.resident_eligible(&native_baseline) =>
+                {
+                    if let Some(save) = swap.take()
+                        && respawned(&mut lane, save, &reason, reload)
+                    {
+                        swapped_marked = false;
+                        continue;
+                    }
+                    return Ok(Ended::Restart(reason));
+                }
+                Some(ended) => return Ok(ended),
+                None => {}
             }
 
             adapter.poll();
@@ -605,26 +647,47 @@ fn session(
                     // The runner admits the generation at its
                     // next call from native code, and says `swapped` then
                     // (D553.3).
-                    Ok(resident::Attempt::Swapped) if admits => {
+                    Ok(resident::Attempt::Swapped(save)) if admits => {
                         swapped_marked = true;
+                        swap = Some(save);
                         rawr_cli::events::queued();
                         work.tell(&cells);
                         continue;
                     }
-                    Ok(resident::Attempt::Swapped) => {
+                    Ok(resident::Attempt::Swapped(save)) => {
+                        swap = Some(save);
                         rawr_cli::events::swapped();
                         work.tell(&cells);
                         continue;
                     }
                     // The running `main` can't take the save, and said
                     // why: it restarts now, with no native build prepared
-                    // for a swap that couldn't happen (D553.6).
-                    Ok(resident::Attempt::Restart(reason)) => {
+                    // for a swap that couldn't happen (D553.6). The runner
+                    // compiled the save against its own build, so a new
+                    // process of it runs the save.
+                    Ok(resident::Attempt::Restart(reason, save, staged)) => {
                         rawr_import::process::say(format_args!(
                             "rawr: {reason}; restarting the program"
                         ));
                         rawr_cli::events::restarting(&reason);
-                        return Ok(Ended::Restart(reason.into()));
+                        // A native input that changed since the compile
+                        // takes the full start.
+                        if !adapter.resident_eligible(&native_baseline)
+                            || !respawned(&mut lane, save, &reason, reload)
+                        {
+                            return Ok(Ended::Restart(reason.into()));
+                        }
+                        swapped_marked = false;
+                        swap = None;
+                        for error in adapter
+                            .commit_inputs(staged)
+                            .map_err(|error| framework(error, source.clone()))?
+                        {
+                            rawr_import::process::say(format_args!(
+                                "warning: file watcher: {error}"
+                            ));
+                        }
+                        continue;
                     }
                     Ok(resident::Attempt::Prepare(staged, reason)) => {
                         rawr_import::process::say(format_args!("rawr: preparing again: {reason}"));
@@ -812,6 +875,7 @@ fn session(
                         manifests = next_manifests;
                         native_baseline = next_native_baseline;
                         watched = resident::Watched::default();
+                        swap = None;
                         refresh_required = false;
                         restarts = crate::Restarts::default();
                         for error in adapter
@@ -889,6 +953,35 @@ fn session(
             Ok(reaped(&mut lane, swapped_marked, lifecycle, &source)?.ok_or(report)?)
         }
         ran => Ok(ran?),
+    }
+}
+
+/// Restart the program for `reason` in a new process of its runner, from
+/// `save`, with no check and no native build (D553.6). `false` when it
+/// didn't start, and no runner runs: the program takes the full start.
+fn respawned(
+    lane: &mut Lane,
+    save: resident::Respawn,
+    reason: &str,
+    reload: Option<&rawr_cli::events::reload::Stream>,
+) -> bool {
+    if let Some(reload) = reload {
+        reload.starting(Some(reason));
+    }
+    match save.start(lane) {
+        Ok(_) => {
+            if rawr_cli::cells::verbose() {
+                eprintln!("rawr-import: a restart respawned its runner with no check");
+            }
+            rawr_cli::events::running();
+            true
+        }
+        Err(error) => {
+            if rawr_cli::cells::verbose() {
+                eprintln!("rawr-import: a restart couldn't respawn its runner: {error}");
+            }
+            false
+        }
     }
 }
 

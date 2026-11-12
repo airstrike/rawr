@@ -68,8 +68,17 @@ impl Bytes {
         }
     }
 
+    /// The snapshot these bytes are.
+    pub(crate) const fn snapshot(&self) -> crate::surface::Snapshot {
+        crate::surface::Snapshot::from_rawr_digest(self.digest)
+    }
+
     pub(crate) fn matches(&self, expected: crate::surface::Snapshot) -> bool {
         self.digest == *expected.as_bytes()
+    }
+
+    pub(crate) fn framed(&self) -> &[u8] {
+        &self.framed
     }
 
     pub(crate) fn into_inner(self) -> Box<[u8]> {

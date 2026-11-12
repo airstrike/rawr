@@ -90,7 +90,7 @@ impl<B> Slot<B> {
         &mut self,
         started: crate::process::hot::Started,
         revision: super::Revision,
-        snapshot: super::snapshot::Bytes,
+        snapshot: &super::snapshot::Bytes,
         freshness: super::snapshot::attempt::Freshness,
         observation: &[u8],
     ) -> Result<crate::process::resident::Outcome, crate::process::RunnerError> {

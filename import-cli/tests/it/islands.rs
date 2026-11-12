@@ -1095,7 +1095,9 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// page native code keeps as a `Box<dyn Page>`, though native code never
 /// names it (#1746): a body edit swaps in and the page keeps its count, but
 /// the type's new field, and its removal, restart the program with their
-/// reason, which says a live value holds it.
+/// reason, which says a live value holds it. Neither restart needs a
+/// native build: a new process of the running runner starts the program
+/// from the save, with no check, and the page counts from the start.
 #[test]
 fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds_it() {
     const OBJECTS: &str = concat!(
@@ -1110,7 +1112,10 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
     let _ = fs::remove_file(&stop);
     copy(Path::new(OBJECTS), &root);
     let badge = root.join("src/component/badge.rs");
-    let mut run = start(&root, &[("ISLANDS_STOP", stop.clone())]);
+    let mut run = start(
+        &root,
+        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
+    );
     // `tick N {word} M`, for the word the page's view says.
     let ticks = |word: &'static str| {
         move |line: &str| -> Option<(usize, usize)> {
@@ -1190,6 +1195,76 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
         "{seen}"
     );
     assert!(!seen.contains("preparing again"), "{seen}");
+    // Each restart started a new runner process with no check: the one
+    // start is the program's first.
+    let said = |text: &str| run.seen.iter().filter(|line| line.contains(text)).count();
+    assert_eq!(
+        said("rawr-import: a restart respawned its runner with no check"),
+        2,
+        "{seen}"
+    );
+    assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
+}
+
+/// A save whose code panics on the running program's state, as a
+/// framework's own check of its hooks can, restarts the program with the
+/// save (D553.6). It needs no native build: a new process of the running
+/// runner starts the program with no check, and the new program counts
+/// from the start, where the save's code doesn't panic.
+#[test]
+fn a_panic_after_a_swap_restarts_the_program_in_a_new_process_of_its_runner() {
+    const OBJECTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-objects"
+    );
+    let root = crate::support::fresh("islands-objects-panic");
+    let stop = root.join("stop");
+    copy(Path::new(OBJECTS), &root);
+    let badge = root.join("src/component/badge.rs");
+    let mut run = start(
+        &root,
+        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
+    );
+    let ticks = |word: &'static str| {
+        move |line: &str| -> Option<(usize, usize)> {
+            let (tick, rest) = line.strip_prefix("tick ")?.split_once(' ')?;
+            let count = rest.strip_prefix(word)?.strip_prefix(' ')?;
+            Some((tick.parse().ok()?, count.parse().ok()?))
+        }
+    };
+    let spare = ticks("spare");
+    run.until(|line| spare(line).is_some_and(|(tick, _)| tick >= 40));
+    // One write: a check the running page's count fails at once, and the
+    // view's word, which says the program runs the save.
+    let text = fs::read_to_string(&badge).unwrap();
+    let text = text
+        .replace(
+            "self.ticks += self.step.by;\n",
+            "self.ticks += self.step.by;\n        assert!(self.ticks < 40, \"counted past 40\");\n",
+        )
+        .replace(
+            "format!(\"spare {}\", self.ticks)",
+            "format!(\"fresh {}\", self.ticks)",
+        );
+    fs::write(&badge, text).unwrap();
+    let fresh = ticks("fresh");
+    run.until(|line| fresh(line) == Some((1, 1)));
+    fs::write(&stop, "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    let said = |text: &str| run.seen.iter().filter(|line| line.contains(text)).count();
+    assert_eq!(
+        said("rawr: the program panicked after a save; restarting the program"),
+        1,
+        "{seen}"
+    );
+    assert_eq!(
+        said("rawr-import: a restart respawned its runner with no check"),
+        1,
+        "{seen}"
+    );
+    assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
 }
 
 /// A marked leaf writes its page as a native module's enum, whose fields
