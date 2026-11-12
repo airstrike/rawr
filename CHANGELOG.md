@@ -5,10 +5,17 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.190 (2026-11-12)
+
 - A running owner reuses the Cargo view its last check replayed while no watched file changed, parsing no Cargo metadata and hashing no recorded input again. `RAWR_VERBOSE` says how many Cargo views each round parsed, compared and kept. (#1759)
 - The start's status line names the step the start is in (reading the API, checking, building the runner, starting) instead of 'resolving dependencies' throughout. (#1763)
 - A new context schema, a moved Cargo home or a changed build variable no longer classifies a project's API or selects its bindings again when the API is unchanged. (#1766)
 - A crate function whose generic appears only in its returned `impl Trait<T>` takes that type from where its value goes, the enclosing function's `impl Trait<T>` return or a crate function's `impl Trait<T>` parameter, so `fn view(&self) -> impl Widget<Message> { crate::view(..) }` needs no turbofish. (#1769)
+- A start walks its runner's read set once after its pins instead of six times, and a restart in a new process of the same runner keeps its pins with no new transaction. (#1760)
+- A restart after a full preparation starts from that preparation, or in a new process of the running runner when its build is unchanged. (#1761)
+- Each session of a run loads the program through its parse cells, and rustc's version is asked once per run. (#1762)
+- An edit to the project's crate is checked incrementally on the nightly, as cargo check checks it, instead of from scratch on every edit. (#1779; part of #1772)
 
 ## 0.3.189 (2026-11-11)
 
