@@ -498,12 +498,24 @@ impl Graph {
     /// native Rust (D501): a save that changes it needs a new native build.
     #[must_use]
     pub fn island_shape(&self) -> Option<super::island::Shape> {
-        self.island_shadow().map(|shadow| shadow.shape)
+        self.island_shadow_for(None).map(|shadow| shadow.shape)
     }
 
     /// The generated files that stand for the marked modules in a native
-    /// root's shadow crate.
+    /// root's shadow crate, each trampoline's body only for a function the
+    /// last check recorded native code naming (`package::called`, #1807).
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) fn island_shadow(&self) -> Option<super::island::Shadow> {
+        let called = super::called::kept(self.entry_package().root());
+        self.island_shadow_for(called.as_ref())
+    }
+
+    /// The shadow files with the bodies of the functions in `called`, or of
+    /// all of them.
+    fn island_shadow_for(
+        &self,
+        called: Option<&std::collections::BTreeSet<String>>,
+    ) -> Option<super::island::Shadow> {
         let entry = self.entry_package();
         let root = entry.native_root()?;
         let module_root = root.path().parent()?;
@@ -518,6 +530,7 @@ impl Graph {
                 (source.modules(), source.path(), source.text(), unit.items())
             }),
             self.native_root_items(),
+            called,
         ))
     }
 

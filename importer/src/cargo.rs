@@ -230,6 +230,11 @@ pub struct Request {
     /// input of the product: a build that records the same one goes on.
     #[cfg(feature = "rustc-driver")]
     kept: Option<crate::record::Record>,
+    /// The bodies the generated crates' trampolines were written with,
+    /// when a check that has them written again is to stop the build
+    /// before its probe (#1807). It is no input of the product either.
+    #[cfg(feature = "rustc-driver")]
+    bodies: Option<crate::uses::Bodies>,
 }
 
 /// A currently validated semantic resolution owner ready for API publication.
@@ -280,7 +285,9 @@ impl Prepared {
         let owner = match &self.owner {
             resolution::owner::Resolved::Owner(owner) => owner,
             resolution::owner::Resolved::Shared(_) => return Ok(None),
-            resolution::owner::Resolved::Recorded(record) => return Ok(Some(record.clone())),
+            resolution::owner::Resolved::Recorded(stopped) => {
+                return Ok(Some(stopped.instances.clone()));
+            }
         };
         let basis = crate::expand::Basis::of(owner.expansion());
         let mut instances = Vec::new();
@@ -290,6 +297,26 @@ impl Prepared {
             }
         }
         Ok(Some(crate::record::Record::new(instances)))
+    }
+
+    /// What native code uses of the marked modules, as this run's check
+    /// recorded it beside the generated crates' artifacts (D935.3), a
+    /// build that stopped before its probe's too. `None` when shared
+    /// bindings replayed and no check ran, or no generated crate has a
+    /// record.
+    ///
+    /// # Errors
+    ///
+    /// A record can't be read.
+    pub fn recorded_uses(&self) -> std::io::Result<Option<crate::uses::Uses>> {
+        match &self.owner {
+            resolution::owner::Resolved::Owner(owner) => {
+                let basis = crate::expand::Basis::of(owner.expansion());
+                crate::uses::Uses::recorded(basis.artifacts())
+            }
+            resolution::owner::Resolved::Shared(_) => Ok(None),
+            resolution::owner::Resolved::Recorded(stopped) => Ok(stopped.uses.clone()),
+        }
     }
 
     /// Whether every selected crate replayed shared bindings, so no nightly
@@ -512,9 +539,14 @@ struct Built {
 impl Built {
     /// The instances this build's check recorded beside each selected
     /// crate's artifact (D866), as [`Prepared::recorded_instances`] reads
-    /// them after the probe. `None` when an artifact or record can't be
-    /// read: the probe and its completion find out why.
-    fn recorded_instances(&self, limits: &Limits) -> Option<crate::record::Record> {
+    /// them after the probe, and what native code uses of the marked
+    /// modules (D935.3), as [`Prepared::recorded_uses`] reads it. `None`
+    /// when an artifact or record can't be read: the probe and its
+    /// completion find out why.
+    fn recorded(
+        &self,
+        limits: &Limits,
+    ) -> Option<(crate::record::Record, Option<crate::uses::Uses>)> {
         let mut allocation = crate::extract::Allocation::new(limits);
         let selected = self
             .build
@@ -526,7 +558,10 @@ impl Built {
                 instances.extend_from_slice(record.instances());
             }
         }
-        Some(crate::record::Record::new(instances))
+        let uses =
+            crate::uses::Uses::recorded(selected.iter().map(|artifact| artifact.rmeta.as_path()))
+                .ok()?;
+        Some((crate::record::Record::new(instances), uses))
     }
 }
 
@@ -932,6 +967,17 @@ impl Request {
     #[must_use]
     pub fn kept_instances(mut self, kept: crate::record::Record) -> Self {
         self.kept = Some(kept);
+        self
+    }
+
+    /// This request, whose recorded crates' trampolines have `bodies`
+    /// (#1807): a cold build whose check records uses that have them
+    /// written again stops before its probe, as a new instance does
+    /// ([`Prepared::recorded_uses`]).
+    #[cfg(feature = "rustc-driver")]
+    #[must_use]
+    pub fn kept_bodies(mut self, bodies: crate::uses::Bodies) -> Self {
+        self.bodies = Some(bodies);
         self
     }
 
@@ -2475,6 +2521,8 @@ impl Builder {
             recorded: self.recorded.into_boxed_slice(),
             #[cfg(feature = "rustc-driver")]
             kept: None,
+            #[cfg(feature = "rustc-driver")]
+            bodies: None,
         })
     }
 }

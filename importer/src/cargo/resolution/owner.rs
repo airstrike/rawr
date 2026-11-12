@@ -375,9 +375,10 @@ struct Evaluation {
     settled: Mutex<Vec<crate::bindings::Settled>>,
     /// What shared bindings gave in place of a cold extraction.
     shared: Mutex<Option<Shared>>,
-    /// The record of a cold build whose check recorded other instances
-    /// than the request kept, which stopped before its probe.
-    recorded: Mutex<Option<crate::record::Record>>,
+    /// What a cold build's check recorded when it stopped before its
+    /// probe: other instances than the request kept, or uses that have the
+    /// crates written again.
+    recorded: Mutex<Option<Stopped>>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
 }
@@ -474,7 +475,16 @@ pub(in crate::cargo) fn prepare_cached_in(
 pub(crate) enum Resolved {
     Owner(Box<Ready>),
     Shared(Box<SharedReady>),
-    Recorded(crate::record::Record),
+    Recorded(Box<Stopped>),
+}
+
+/// What the check of a build that stopped before its probe recorded: the
+/// instances native code calls marked generics at (D869), and what native
+/// code uses of the marked modules, whose new names need their bodies
+/// (#1807).
+pub(crate) struct Stopped {
+    pub(crate) instances: crate::record::Record,
+    pub(crate) uses: Option<crate::uses::Uses>,
 }
 
 /// The marker a cold attempt stops with when shared bindings answer it.
@@ -586,13 +596,13 @@ fn evaluate(
     ) {
         Ok(node) => node,
         Err(error) => {
-            if let Some(record) = state
+            if let Some(stopped) = state
                 .recorded
                 .lock()
                 .ok()
                 .and_then(|mut recorded| recorded.take())
             {
-                return Ok(Resolved::Recorded(record));
+                return Ok(Resolved::Recorded(Box::new(stopped)));
             }
             let shared = state
                 .shared
@@ -1028,15 +1038,28 @@ impl Evaluation {
             &self.limits,
         )?;
         // A check that recorded new instances is checked again with them,
-        // whose build this probe would not be (D869).
-        if let Some(record) = self.request.kept.as_ref().and_then(|kept| {
-            built
-                .recorded_instances(&self.limits)
-                .filter(|record| record != kept && !record.instances().is_empty())
-        }) && let Ok(mut recorded) = self.recorded.lock()
+        // whose build this probe would not be (D869), and so is one whose
+        // uses have the crates written with other bodies (#1807).
+        if (self.request.kept.is_some() || self.request.bodies.is_some())
+            && let Some((instances, uses)) = built.recorded(&self.limits)
         {
-            *recorded = Some(record);
-            return Err(node::Error::State(NEW_INSTANCES));
+            let new_instances = self
+                .request
+                .kept
+                .as_ref()
+                .is_some_and(|kept| instances != *kept && !instances.instances().is_empty());
+            let rewritten = self
+                .request
+                .bodies
+                .as_ref()
+                .zip(uses.as_ref())
+                .is_some_and(|(bodies, uses)| bodies.rewritten(uses));
+            if (new_instances || rewritten)
+                && let Ok(mut recorded) = self.recorded.lock()
+            {
+                *recorded = Some(Stopped { instances, uses });
+                return Err(node::Error::State(NEW_INSTANCES));
+            }
         }
         let mut completed = self.request.complete_parts_in(
             &self.cached,
