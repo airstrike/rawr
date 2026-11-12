@@ -3848,7 +3848,8 @@
     {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
     {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)"}
+    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5030,7 +5031,8 @@
             {"number":1638,"title":"Keep the runner's first compile of marked code and its installed bindings across starts","state":"closed"},
             {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
             {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
-            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"closed"}
+            {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"closed"},
+            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open"}
           ]
         },
         {
