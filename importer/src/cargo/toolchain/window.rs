@@ -22,9 +22,11 @@ pub(crate) const RANGE: &str = "nightly-2026-07-11 through nightly-2026-11-02";
 /// of the merge that made it. A nightly whose commit is from that day but
 /// precedes the merge is the one ambiguity; none of the window's edges is.
 #[cfg_attr(not(test), allow(dead_code, reason = "the build script reads it"))]
-pub(crate) const CHANGES: [(&str, &str); 14] = [
+pub(crate) const CHANGES: [(&str, &str); 16] = [
     // `DefKind::InlineConst` merged into `DefKind::AnonConst` (#159113).
     ("rawr_rustc_anon_inline_const", "2026-07-11"),
+    // `LocalModDefId` became `LocalModId` (#159197).
+    ("rawr_rustc_mod_id", "2026-07-15"),
     // `predicates_of` and `explicit_super_predicates_of` became
     // `clauses_of` and `explicit_super_clauses_of` (#160102).
     ("rawr_rustc_clause_queries", "2026-07-28"),
@@ -51,6 +53,10 @@ pub(crate) const CHANGES: [(&str, &str); 14] = [
     // `type const` items were removed, with `DefKind`'s `is_type_const`
     // (#162517).
     ("rawr_rustc_no_type_const", "2026-09-12"),
+    // A `use` item keeps its tree: `ItemKind::Use` holds a `UseTree`, whose
+    // nested trees `visit_use` visits, instead of one item per leaf
+    // (#161349).
+    ("rawr_rustc_use_tree", "2026-09-24"),
     // `rustc_driver::run_compiler` became `compiler_entrypoint` (#163661).
     ("rawr_rustc_compiler_entrypoint", "2026-10-02"),
     // A const generic parameter records its argument position (#164285).

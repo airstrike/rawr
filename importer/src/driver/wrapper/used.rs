@@ -10,9 +10,9 @@
 //! support module, whose table names the marked modules' generated makers
 //! and entries on the runner's behalf.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use rustc_hir::def::{DefKind, Res};
+use rustc_hir::def::{DefKind, PerNS, Res};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{HirId, ItemKind, UseKind};
 use rustc_middle::hir::nested_filter;
@@ -20,6 +20,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_span::{FileName, Span, Symbol};
 
+use crate::compat::LocalModId;
 use crate::uses;
 
 /// How every file the shadow crate generates in place of a marked one
@@ -33,7 +34,7 @@ const SUPPORT: &str = "__rawr_island";
 pub(super) fn uses(tcx: TyCtxt<'_>) -> uses::Uses {
     let mut walk = Walk {
         tcx,
-        files: HashMap::new(),
+        files: BTreeMap::new(),
         recorder: uses::Recorder::default(),
         results: None,
         names: HashMap::new(),
@@ -63,8 +64,9 @@ pub(super) fn uses(tcx: TyCtxt<'_>) -> uses::Uses {
 
 struct Walk<'tcx> {
     tcx: TyCtxt<'tcx>,
-    /// Whether each source file is one the shadow crate generated.
-    files: HashMap<FileName, bool>,
+    /// Whether each source file is one the shadow crate generated. A
+    /// newer compiler's `FileName` isn't `Hash`.
+    files: BTreeMap<FileName, bool>,
     recorder: uses::Recorder,
     /// The type check of the body being read.
     results: Option<&'tcx ty::TypeckResults<'tcx>>,
@@ -94,8 +96,7 @@ impl<'tcx> Walk<'tcx> {
         let tcx = self.tcx;
         if tcx.def_kind(def_id) == DefKind::Mod {
             if let Some(local) = def_id.as_local() {
-                let (module, ..) =
-                    tcx.hir_get_module(rustc_span::def_id::LocalModDefId::new_unchecked(local));
+                let (module, ..) = tcx.hir_get_module(LocalModId::new_unchecked(local));
                 return self.generated(module.spans.inner_span);
             }
             let children = tcx.module_children(def_id);
@@ -305,12 +306,37 @@ impl<'tcx> Walk<'tcx> {
         }
     }
 
-    /// A native `use module::*;` of a marked module.
+    /// Each native `use module::*;` of a marked module, nested in a tree
+    /// or not.
     fn glob(&mut self, item: &'tcx rustc_hir::Item<'tcx>) {
-        let ItemKind::Use(path, UseKind::Glob) = item.kind else {
-            return;
-        };
-        for res in path.res.present_items() {
+        #[cfg(not(rawr_rustc_use_tree))]
+        if let ItemKind::Use(path, UseKind::Glob) = item.kind {
+            self.globbed(item, path.res);
+        }
+        #[cfg(rawr_rustc_use_tree)]
+        if let ItemKind::Use(tree) = item.kind {
+            self.glob_tree(item, tree);
+        }
+    }
+
+    /// The globs in `tree`, which a newer compiler keeps whole instead of
+    /// lowering each leaf to its own item.
+    #[cfg(rawr_rustc_use_tree)]
+    fn glob_tree(&mut self, item: &'tcx rustc_hir::Item<'tcx>, tree: rustc_hir::UseTree<'tcx>) {
+        match tree.kind {
+            UseKind::Glob => self.globbed(item, tree.prefix.res),
+            UseKind::Nested { items } => {
+                for &(nested, ..) in items {
+                    self.glob_tree(item, nested);
+                }
+            }
+            UseKind::Single(_) => {}
+        }
+    }
+
+    /// A glob in `item` of the module `res` names.
+    fn globbed(&mut self, item: &'tcx rustc_hir::Item<'tcx>, res: PerNS<Option<Res>>) {
+        for res in res.present_items() {
             if let Res::Def(DefKind::Mod | DefKind::Enum, def_id) = res
                 && self.marked(def_id)
                 && let Some(module) = self.path(def_id)
@@ -349,11 +375,20 @@ impl<'tcx> Visitor<'tcx> for Walk<'tcx> {
         intravisit::walk_path(self, path);
     }
 
+    #[cfg(not(rawr_rustc_use_tree))]
     fn visit_use(&mut self, path: &'tcx rustc_hir::UsePath<'tcx>, id: HirId) {
         for res in path.res.present_items() {
             self.resolved(res);
         }
         intravisit::walk_use(self, path, id);
+    }
+
+    #[cfg(rawr_rustc_use_tree)]
+    fn visit_use(&mut self, tree: &'tcx rustc_hir::UseTree<'tcx>, id: HirId, _: LocalDefId) {
+        for res in tree.prefix.res.present_items() {
+            self.resolved(res);
+        }
+        intravisit::walk_use(self, tree, id);
     }
 
     fn visit_qpath(&mut self, qpath: &'tcx rustc_hir::QPath<'tcx>, id: HirId, _span: Span) {
