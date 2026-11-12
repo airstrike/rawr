@@ -24,7 +24,7 @@ pub(crate) use recipe::{Package, Recipe};
 pub(crate) use record::Commitment;
 pub(crate) use record::Record;
 #[cfg(feature = "rustc-driver")]
-pub(crate) use replay::{Compared, Completed};
+pub(crate) use replay::{Compared, Completed, Kept};
 
 #[cfg(test)]
 mod tests;

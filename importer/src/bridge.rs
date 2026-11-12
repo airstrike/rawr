@@ -275,6 +275,8 @@ impl<B> GenerationRequestKey<B> {
     where
         B: crate::surface::Runner,
     {
+        // A launch is building its runner from here, a build hit included.
+        crate::progress::stage(3);
         if matches!(&self.profile, profile::Profile::Historical(_)) {
             return generate::cached::materialize_historical(self);
         }

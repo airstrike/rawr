@@ -245,15 +245,43 @@ impl Product {
     }
 }
 
-// Pure owner-replay interpretation staged for one graph evaluation.
-// The first replay charges its authenticated parse; later consumers still run
-// every current check and reuse a value only when this observation's sealed
-// commitment names the same exact bytes. Never a Context, GraphBudget, or Replay.
-#[derive(Default)]
+// Pure owner-replay interpretation this process staged last, for every graph
+// evaluation it runs (#1759). The first replay charges its authenticated
+// parse; later replays, in this graph or a later one, still run every current
+// check and reuse a value only when that observation's sealed commitment
+// names the same exact bytes. Never a Context, GraphBudget, or Replay.
 struct Stage {
     lock: Option<(Limits, cargo::universe::Candidate)>,
     receipt: Option<StagedReceipt>,
     record: Option<StagedRecord>,
+}
+
+const EMPTY: Stage = Stage {
+    lock: None,
+    receipt: None,
+    record: None,
+};
+
+#[cfg(not(test))]
+static STAGE: Mutex<Stage> = Mutex::new(EMPTY);
+
+#[cfg(test)]
+thread_local! {
+    /// A test thread stages as a process would: tests running beside it
+    /// leave its stage alone.
+    static STAGE: std::cell::RefCell<Stage> = const { std::cell::RefCell::new(EMPTY) };
+}
+
+/// Run `staged` over this process's stage.
+fn staged<T>(staged: impl FnOnce(&mut Stage) -> Result<T, node::Error>) -> Result<T, node::Error> {
+    #[cfg(test)]
+    return STAGE.with_borrow_mut(staged);
+    #[cfg(not(test))]
+    staged(
+        &mut *STAGE
+            .lock()
+            .map_err(|_| node::Error::State("resolution replay stage was poisoned"))?,
+    )
 }
 
 struct StagedReceipt {
@@ -344,13 +372,13 @@ fn recorded(wire: &[u8; BYTES]) -> Option<Arc<Recorded>> {
 }
 
 fn remember(wire: [u8; BYTES], replay: &replay::Replay) {
+    let Some(bundle) = replay.watched.bundle() else {
+        return;
+    };
     if recorded(&wire).is_some() {
         return;
     }
-    let files = Arc::new(Recorded::of(
-        replay.decoded.entries(),
-        replay.watched.bundle(),
-    ));
+    let files = Arc::new(Recorded::of(replay.decoded.entries(), bundle));
     if let Ok(mut recorded) = RECORDED.lock() {
         recorded.insert(0, (wire, files));
         recorded.truncate(RECORDED_BUNDLES);
@@ -371,7 +399,6 @@ struct Evaluation {
     /// build (`cargo::semantic_request_identity`).
     semantic: cargo::Digest,
     accounts: node::account::Key<Accounts>,
-    stage: node::account::Key<Stage>,
     captured: Mutex<Captured>,
     /// The shared tables a cold extraction of this evaluation left.
     settled: Mutex<Vec<crate::bindings::Settled>>,
@@ -547,7 +574,6 @@ fn evaluate(
         identity,
         semantic,
         accounts,
-        stage: node::account::Key::new()?,
         #[cfg(test)]
         script,
         captured: Mutex::new(Captured {
@@ -749,7 +775,7 @@ impl Evaluation {
                             node::read_set::Scope::Complete,
                         )
                         .map_err(error)?;
-                    let replay = self.replay(observed, graph, &mut accounts.cargo)?;
+                    let replay = self.replay(observed, &mut accounts.cargo)?;
                     if replay.completion.proof().complete().as_bytes() != &value.complete {
                         return Err(node::Error::Codec(
                             "resolution owner completion identity differs",
@@ -784,7 +810,6 @@ impl Evaluation {
     fn replay(
         &self,
         observed: bundle::PendingReplay<'_, '_, '_>,
-        graph: &node::GraphBudget,
         cargo_account: &mut cargo::unit::Allocation,
     ) -> Result<replay::Replay, node::Error> {
         let definition = self
@@ -799,50 +824,46 @@ impl Evaluation {
         let lock_commitment = observed.commitment(paths.final_form().lock())?;
         let receipt_commitment = observed.commitment(paths.receipt())?;
         let record_commitment = observed.commitment(paths.record())?;
-        let (lock, receipt) = self.stage.with(
-            graph,
-            || Ok(Stage::default()),
-            |stage| {
-                let lock = match stage.lock.as_ref().filter(|(limits, lock)| {
-                    *limits == self.limits && lock.names(definition, lock_commitment)
-                }) {
-                    Some((_, lock)) => {
-                        stage_hit();
-                        lock.clone()
-                    }
-                    None => {
-                        let lock_bytes = read(paths.final_form().lock())?;
-                        observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
-                        let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
-                        stage.lock = Some((self.limits, lock.clone()));
-                        lock
-                    }
-                };
-                let receipt = match &stage.receipt {
-                    Some(staged)
-                        if staged.limits == self.limits
-                            && staged.universe == *definition.identity()
-                            && staged.commitment == receipt_commitment =>
-                    {
-                        stage_hit();
-                        staged.receipt.clone()
-                    }
-                    _ => {
-                        let receipt_bytes = read(paths.receipt())?;
-                        observed.require_bytes(paths.receipt(), &receipt_bytes)?;
-                        let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
-                        stage.receipt = Some(StagedReceipt {
-                            limits: self.limits,
-                            universe: *definition.identity(),
-                            commitment: receipt_commitment,
-                            receipt: receipt.clone(),
-                        });
-                        receipt
-                    }
-                };
-                Ok((lock, receipt))
-            },
-        )?;
+        let (lock, receipt) = staged(|stage| {
+            let lock = match stage.lock.as_ref().filter(|(limits, lock)| {
+                *limits == self.limits && lock.names(definition, lock_commitment)
+            }) {
+                Some((_, lock)) => {
+                    stage_hit();
+                    lock.clone()
+                }
+                None => {
+                    let lock_bytes = read(paths.final_form().lock())?;
+                    observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
+                    let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
+                    stage.lock = Some((self.limits, lock.clone()));
+                    lock
+                }
+            };
+            let receipt = match &stage.receipt {
+                Some(staged)
+                    if staged.limits == self.limits
+                        && staged.universe == *definition.identity()
+                        && staged.commitment == receipt_commitment =>
+                {
+                    stage_hit();
+                    staged.receipt.clone()
+                }
+                _ => {
+                    let receipt_bytes = read(paths.receipt())?;
+                    observed.require_bytes(paths.receipt(), &receipt_bytes)?;
+                    let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
+                    stage.receipt = Some(StagedReceipt {
+                        limits: self.limits,
+                        universe: *definition.identity(),
+                        commitment: receipt_commitment,
+                        receipt: receipt.clone(),
+                    });
+                    receipt
+                }
+            };
+            Ok((lock, receipt))
+        })?;
         if !receipt.matches_request(self.identity) {
             return Err(node::Error::Codec(
                 "resolution bundle receipt belongs to another request",
@@ -873,25 +894,25 @@ impl Evaluation {
             record: record_commitment,
             context,
         };
-        let staged = self.stage.with(
-            graph,
-            || Ok(Stage::default()),
-            |stage| match stage.record.as_ref().filter(|staged| {
-                staged.names(
-                    &key,
-                    paths.root(),
-                    &self.request.target,
-                    &self.request.profile,
-                )
-            }) {
-                Some(staged) => {
-                    stage_hit();
-                    Ok(Some(Arc::clone(&staged.decoded)))
-                }
-                None => Ok(None),
-            },
-        )?;
-        let fresh = match &staged {
+        let kept = staged(|stage| {
+            Ok(
+                match stage.record.as_ref().filter(|staged| {
+                    staged.names(
+                        &key,
+                        paths.root(),
+                        &self.request.target,
+                        &self.request.profile,
+                    )
+                }) {
+                    Some(staged) => {
+                        stage_hit();
+                        Some(Arc::clone(&staged.decoded))
+                    }
+                    None => None,
+                },
+            )
+        })?;
+        let fresh = match &kept {
             Some(_) => None,
             None => Some((
                 Box::<Path>::from(paths.root()),
@@ -910,27 +931,23 @@ impl Evaluation {
                 self.identity,
                 context,
                 Some(receipt),
-                staged,
+                kept,
                 &self.limits,
                 &self.limits,
                 cargo_account,
             )
             .map_err(error)?;
         if let Some((root, target, profile)) = fresh {
-            self.stage.with(
-                graph,
-                || Ok(Stage::default()),
-                |stage| {
-                    stage.record = Some(StagedRecord {
-                        key,
-                        root,
-                        target,
-                        profile,
-                        decoded: Arc::clone(&replay.decoded),
-                    });
-                    Ok(())
-                },
-            )?;
+            staged(|stage| {
+                stage.record = Some(StagedRecord {
+                    key,
+                    root,
+                    target,
+                    profile,
+                    decoded: Arc::clone(&replay.decoded),
+                });
+                Ok(())
+            })?;
         }
         Ok(replay)
     }

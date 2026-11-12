@@ -1549,14 +1549,14 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     };
     assert!(
         round(1)
-            .ends_with("probes 0, read 0, canonicalized 0, classified 0, generated 0, parsed 0"),
+            .contains("probes 0, read 0, canonicalized 0, classified 0, generated 0, parsed 0,"),
         "{said}"
     );
     for number in 2..=4 {
         let stages = round(number);
         assert!(stages.contains(", probes 1, read "), "{said}");
         assert!(!stages.contains("read 0,"), "{said}");
-        assert!(stages.ends_with(", parsed 0"), "{said}");
+        assert!(stages.contains(", parsed 0, Cargo views "), "{said}");
         if number > 2 {
             assert!(
                 stages.starts_with("harnesses 0, compiled 0, copied 0, sealed 0, probes 1,"),

@@ -16,6 +16,7 @@ use crate::cargo;
 const SCHEMA: u32 = 3;
 
 /// Current request authority, captured before any shared API is consumed.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Current {
     project: PathBuf,
     compiler: String,

@@ -39,7 +39,44 @@ pub(crate) struct Completed {
     complete: [u8; 32],
 }
 
+/// Compared inputs as this process keeps them between graphs, with no graph
+/// account (#1759). A later replay takes them only while the stamps taken
+/// before they were compared all hold, which proves it would compare the
+/// same bytes to the same result.
+pub(crate) struct Kept {
+    schema: u32,
+    entries: Box<[input::proof::Entry]>,
+    fingerprint: input::fingerprint::Fingerprint,
+    native: input::native::Inputs,
+    complete: [u8; 32],
+}
+
+impl Kept {
+    /// The kept comparison, accounted to the replay of `graph` that takes it.
+    pub(crate) fn completed(&self, graph: &node::GraphBudget) -> Completed {
+        Completed {
+            schema: self.schema,
+            entries: self.entries.clone(),
+            fingerprint: self.fingerprint,
+            native: self.native,
+            graph: graph.clone(),
+            complete: self.complete,
+        }
+    }
+}
+
 impl Completed {
+    /// What a later replay of the same bytes may take (`Kept`).
+    pub(crate) fn kept(&self) -> Kept {
+        Kept {
+            schema: self.schema,
+            entries: self.entries.clone(),
+            fingerprint: self.fingerprint,
+            native: self.native,
+            complete: self.complete,
+        }
+    }
+
     /// Borrow owned identity only; this does not grant publication authority.
     pub(crate) const fn fingerprint(&self) -> input::fingerprint::Fingerprint {
         self.fingerprint

@@ -739,11 +739,12 @@ fn changed_inputs_recapture_the_stored_resolution() {
 }
 
 /// A later consumer in one graph reuses the staged record interpretation
-/// without decoding any record wire, while a fresh graph decodes afresh because
-/// the stage never crosses evaluations.
+/// without decoding any record wire, and so does a fresh graph, which takes
+/// the last replay's comparison of the inputs whole while every stamp it took
+/// holds, and compares again once one moves (#1759).
 #[cfg(unix)]
 #[test]
-fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
+fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves() {
     let Fixture {
         root,
         request,
@@ -772,7 +773,7 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
     );
     drop(prepared);
     let bundle = ATTEMPT.with(|slot| slot.borrow().clone().unwrap());
-    let record = crate::cargo::resolution::layout::Paths::observe(bundle)
+    let record = crate::cargo::resolution::layout::Paths::observe(bundle.clone())
         .unwrap()
         .record()
         .to_path_buf();
@@ -793,36 +794,69 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
     drop(prepared);
     drop(cold);
 
-    // A fresh Context opens a fresh graph: its first replay decodes the record
-    // again, because the first graph's stage is not visible to it.
-    let mut request = Fixture::request(&root, context.environment().clone());
-    request.universe = universe;
-    let fresh = crate::context::Context::capture_config(
-        context.project(),
-        &request.config,
-        context.target(),
-        &limits,
-    )
-    .unwrap();
-    cargo::toolchain::Attestation::fixture_replay(&fresh);
-    let cached = cargo::CachedToolchain {
-        attestation: fresh.cached_toolchain().unwrap(),
-        context: fresh.clone(),
+    // A fresh Context opens a fresh graph, as each check of a running owner
+    // does. What this process kept answers its replays: no record is decoded
+    // and no input read again (#1759).
+    let warm = |universe: &Option<cargo::universe::Catalog>| {
+        let mut request = Fixture::request(&root, context.environment().clone());
+        request.universe = universe.clone();
+        let fresh = crate::context::Context::capture_config(
+            context.project(),
+            &request.config,
+            context.target(),
+            &limits,
+        )
+        .unwrap();
+        cargo::toolchain::Attestation::fixture_replay(&fresh);
+        let cached = cargo::CachedToolchain {
+            attestation: fresh.cached_toolchain().unwrap(),
+            context: fresh.clone(),
+        };
+        let first = validates();
+        let before = hits();
+        let views = crate::cargo::resolution::replay::VIEWS.with(Cell::get);
+        let warm =
+            owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
+                .unwrap();
+        drop(warm);
+        drop(fresh);
+        let after = crate::cargo::resolution::replay::VIEWS.with(Cell::get);
+        (
+            validates() - first,
+            hits() - before,
+            [0, 1, 2].map(|view| after[view] - views[view]),
+        )
     };
-    let warm_first = validates();
-    let before = hits();
-    let warm =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
-            .unwrap();
-    assert!(validates() > warm_first, "the warm graph replays the owner");
-    let warm_replays = validates() - warm_first;
+    let (replays, staged, views) = warm(&universe);
+    assert!(replays > 0, "the warm graph replays the owner");
     assert_eq!(
-        hits() - before,
-        3 * (warm_replays - 1),
-        "every later replay of the warm graph reuses its own staged values"
+        staged,
+        3 * replays,
+        "every replay of the warm graph reuses the staged values"
     );
-    drop(warm);
-    drop(fresh);
+    assert_eq!(views, [0, 0, replays], "parsed, compared, kept");
+
+    // The same bytes written again move a stamp: the workspace manifest the
+    // request names, and the bundle's lock. The next graph compares its
+    // inputs again, and decodes nothing.
+    let manifest = root.join("authority/Cargo.toml");
+    fs::write(&manifest, fs::read(&manifest).unwrap()).unwrap();
+    let (_, _, views) = warm(&universe);
+    assert_eq!(
+        views[..2],
+        [0, 1],
+        "the manifest's new stamp compares again"
+    );
+    let lock = crate::cargo::resolution::layout::Paths::observe(bundle)
+        .unwrap()
+        .final_form()
+        .lock()
+        .to_path_buf();
+    fs::set_permissions(&lock, fs::metadata(&lock).unwrap().permissions()).unwrap();
+    let (_, _, views) = warm(&universe);
+    assert_eq!(views[..2], [0, 1], "the lock's new stamp compares again");
+    let (replays, _, views) = warm(&universe);
+    assert_eq!(views, [0, 0, replays], "and then keeps it");
     drop(context);
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();

@@ -15,6 +15,11 @@
 //! silent; once shown, the line stays up until the window appears or the launch
 //! fails.
 //!
+//! A stage begins where its work does: a Cargo child of its kind, the
+//! runner's generation (building runner) and the runner's build, a hit
+//! included (starting). The line names the stage, or the step of it the
+//! launch named last, such as the check's "reading API" (#1763).
+//!
 //! A check shows its phase on the same line instead: the phase's name, and
 //! for extraction the units Cargo has finished of the planned total. It has
 //! no bar and no clock, and is redrawn only when the phase or its count moves.
@@ -68,6 +73,9 @@ struct State {
     /// Whether this process shows a check's phases.
     phases: bool,
     phase: Option<&'static str>,
+    /// The step of its stage a launch named last, which its line says in
+    /// place of the stage's name (#1763).
+    step: Option<&'static str>,
 }
 
 /// The phase whose line counts Cargo's finished units.
@@ -164,6 +172,7 @@ pub fn finish(success: bool) {
     state.launch = None;
     state.phases = false;
     state.phase = None;
+    state.step = None;
 }
 
 /// Show a check's phases on the status line until [`finish`].
@@ -171,10 +180,18 @@ pub fn begin_phases() {
     lock().phases = true;
 }
 
-/// Enter `phase` of a check. Outside a check, or during a launch, whose
-/// line names its own stages, nothing is shown.
+/// Enter `phase` of a check. During a launch, the phase is the step of
+/// its stage the line names; outside a check or a launch, nothing is
+/// shown.
 pub fn phase(phase: &'static str) {
     let mut state = lock();
+    if state.launch.is_some() {
+        if state.step != Some(phase) {
+            state.step = Some(phase);
+            draw(&mut state);
+        }
+        return;
+    }
     if !state.phases || state.phase == Some(phase) {
         return;
     }
@@ -331,7 +348,9 @@ pub fn work() -> Work {
 /// the API, how many compiler sidecars it canonicalized into an API, how
 /// many definitions it classified, how many classified paths it generated
 /// bindings for, and how many of the program's sources it parsed. A stage a cache
-/// answered counts nothing.
+/// answered counts nothing. Last, what its replays of a stored Cargo view
+/// did: how many parsed the view's metadata, how many read and hashed its
+/// recorded inputs again, and how many took what this process kept (#1759).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Round {
     harnessed: usize,
@@ -344,6 +363,15 @@ pub struct Round {
     classified: usize,
     generated: usize,
     parsed: usize,
+    views: Views,
+}
+
+/// What one round's replays of a stored Cargo view did ([`View`]).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Views {
+    parsed: usize,
+    compared: usize,
+    kept: usize,
 }
 
 impl std::fmt::Display for Round {
@@ -351,7 +379,8 @@ impl std::fmt::Display for Round {
         write!(
             formatter,
             "harnesses {}, compiled {}, copied {}, sealed {}, probes {}, read {}, \
-             canonicalized {}, classified {}, generated {}, parsed {}",
+             canonicalized {}, classified {}, generated {}, parsed {}, \
+             Cargo views parsed {}, compared {}, kept {}",
             self.harnessed,
             self.compiled,
             self.copied,
@@ -361,7 +390,10 @@ impl std::fmt::Display for Round {
             self.canonicalized,
             self.classified,
             self.generated,
-            self.parsed
+            self.parsed,
+            self.views.parsed,
+            self.views.compared,
+            self.views.kept,
         )
     }
 }
@@ -438,6 +470,32 @@ pub fn parsed(sources: usize) {
     count_round(|round| &mut round.parsed, sources);
 }
 
+/// What one replay of a stored Cargo view did ([`Round`]).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum View {
+    /// It parsed the view's metadata and unit graph.
+    Parsed,
+    /// It took the parse this process kept, and read and hashed the
+    /// recorded inputs again.
+    Compared,
+    /// It took the parse and the comparison this process kept.
+    Kept,
+}
+
+/// Count one replay of a stored Cargo view in this round.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn view(view: View) {
+    count_round(
+        |round| match view {
+            View::Parsed => &mut round.views.parsed,
+            View::Compared => &mut round.views.compared,
+            View::Kept => &mut round.views.kept,
+        },
+        1,
+    );
+}
+
 /// How many lines this process has printed above the status line: a
 /// command that did nothing printed none.
 pub fn said() -> usize {
@@ -457,9 +515,13 @@ fn say_above(state: &mut State, line: &str) {
 
 /// Enter `stage` (1-based); stages only move forward.
 pub(crate) fn stage(stage: usize) {
-    lock().advance(stage, Instant::now());
-    // The build that feeds extraction is a check's extracting phase.
-    if stage == 2 {
+    let mut state = lock();
+    state.advance(stage, Instant::now());
+    let launching = state.launch.is_some();
+    drop(state);
+    // The build that feeds extraction is a check's extracting phase; a
+    // launch's line names it by its stage.
+    if stage == 2 && !launching {
         phase(EXTRACTING);
     }
 }
@@ -517,7 +579,15 @@ impl State {
             shown: 0.0,
             phases: false,
             phase: None,
+            step: None,
         }
+    }
+
+    /// What the line says the launch is doing: the step of its stage it
+    /// named last, else the stage.
+    fn label(&self) -> &'static str {
+        self.step
+            .unwrap_or(STAGES[self.stage.clamp(1, STAGES.len()) - 1])
     }
 
     fn start(&mut self, now: Instant, file: Option<PathBuf>, previous: Option<[Record; 4]>) {
@@ -547,6 +617,7 @@ impl State {
             self.since = Some(now);
             self.lines = 0;
             self.compiling = 0;
+            self.step = None;
         }
     }
 
@@ -639,7 +710,7 @@ fn draw(state: &mut State) {
     if stderr.is_terminal() {
         let style = Style::terminal(&stderr);
         state.tick = state.tick.wrapping_add(1);
-        let line = render(state.stage, percent, launch.elapsed(), state.tick, &style);
+        let line = render(state.label(), percent, launch.elapsed(), state.tick, &style);
         let _ = write!(stderr, "\r\x1b[2K{line}");
         state.drawn = true;
     } else if state.announced < state.stage {
@@ -649,7 +720,7 @@ fn draw(state: &mut State) {
             color: false,
             truecolor: false,
         };
-        let line = render(state.stage, percent, launch.elapsed(), 0, &style);
+        let line = render(state.label(), percent, launch.elapsed(), 0, &style);
         let _ = writeln!(stderr, "{line}");
         state.announced = state.stage;
     }
@@ -775,10 +846,9 @@ pub mod palette {
     }
 }
 
-fn render(stage: usize, percent: f64, elapsed: Duration, tick: usize, style: &Style) -> String {
+fn render(name: &str, percent: f64, elapsed: Duration, tick: usize, style: &Style) -> String {
     use palette::{DARK_GRAY, LIGHT_GRAY, LIGHT_RED, MID_GRAY, RED};
     const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let name = STAGES[stage.clamp(1, STAGES.len()) - 1];
     let percent = percent.clamp(0.0, 1.0);
     let secs = elapsed.as_secs();
     let time = if secs >= 60 {
@@ -914,7 +984,7 @@ mod tests {
         assert_eq!(count(b"{\"pkg_id\":1}{\"pkg_id\":2}", b"\"pkg_id\""), 2);
         assert_eq!(count(b"   Compiling a\n   Compiling b\n", b"Compiling "), 2);
         assert_eq!(
-            render(3, 0.67, Duration::from_secs(108), 2, &WIDE),
+            render(STAGES[2], 0.67, Duration::from_secs(108), 2, &WIDE),
             "rawr ⠹ building runner  ━━━━━━━━━━━━━━━━────────  67%  1m48s"
         );
         let colored = Style {
@@ -924,7 +994,7 @@ mod tests {
             truecolor: true,
         };
         assert_eq!(
-            render(3, 0.5, Duration::from_secs(9), 3, &colored),
+            render(STAGES[2], 0.5, Duration::from_secs(9), 3, &colored),
             "\x1b[1;38;2;248;113;113mrawr\x1b[0m \x1b[38;2;228;0;43m⠸\x1b[0m \
              \x1b[38;2;200;200;200mbuilding runner\x1b[0m  \
              \x1b[38;2;228;0;43m━━━━━━━━━━━━\x1b[0m\x1b[38;2;74;74;74m────────────\x1b[0m  \
@@ -934,7 +1004,7 @@ mod tests {
             truecolor: false,
             ..colored
         };
-        assert!(render(3, 0.5, Duration::ZERO, 0, &colored).contains("\x1b[38;5;160m━"));
+        assert!(render(STAGES[2], 0.5, Duration::ZERO, 0, &colored).contains("\x1b[38;5;160m━"));
         let narrow = Style {
             width: Some(42),
             unicode: false,
@@ -942,7 +1012,7 @@ mod tests {
             truecolor: false,
         };
         assert_eq!(
-            render(2, 0.52, Duration::from_secs(72), 1, &narrow),
+            render(STAGES[1], 0.52, Duration::from_secs(72), 1, &narrow),
             "rawr / building API  ====----  52%  1m12s"
         );
         let tiny = Style {
@@ -951,7 +1021,12 @@ mod tests {
             color: false,
             truecolor: false,
         };
-        assert_eq!(render(3, 0.1, Duration::ZERO, 0, &tiny).chars().count(), 19);
+        assert_eq!(
+            render(STAGES[2], 0.1, Duration::ZERO, 0, &tiny)
+                .chars()
+                .count(),
+            19
+        );
         let plain = Style {
             width: None,
             unicode: false,
@@ -959,9 +1034,21 @@ mod tests {
             truecolor: false,
         };
         assert_eq!(
-            render(1, 0.04, Duration::from_secs(4), 0, &plain),
+            render(STAGES[0], 0.04, Duration::from_secs(4), 0, &plain),
             "rawr > resolving dependencies  4%  4s"
         );
+    }
+
+    #[test]
+    fn a_launch_line_names_its_last_step_until_its_stage_moves() {
+        let (mut state, now) = launch(None);
+        assert_eq!(state.label(), "resolving dependencies");
+        state.step = Some("reading API");
+        assert_eq!(state.label(), "reading API");
+        state.advance(3, now);
+        assert_eq!(state.label(), "building runner");
+        state.advance(4, now);
+        assert_eq!(state.label(), "starting");
     }
 
     #[test]
@@ -980,7 +1067,7 @@ mod tests {
         // More finished units than the plan listed caps the crate share.
         state.lines = 284;
         assert!((state.percent(now) - (0.10 + 0.45 * 0.9)).abs() < 1e-9);
-        let line = render(2, state.percent(now), Duration::ZERO, 0, &WIDE);
+        let line = render(STAGES[1], state.percent(now), Duration::ZERO, 0, &WIDE);
         assert!(line.contains('━') && line.contains("  50%"), "{line}");
     }
 
@@ -1062,7 +1149,7 @@ mod tests {
         assert!(state.drawn, "a stage change never clears the line");
         let next = state.percent(later);
         assert!(next >= end);
-        assert!(render(3, next, Duration::ZERO, 0, &WIDE).contains('━'));
+        assert!(render(STAGES[2], next, Duration::ZERO, 0, &WIDE).contains('━'));
         assert_eq!(
             state.current[1],
             Record {

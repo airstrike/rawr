@@ -203,6 +203,37 @@ pub(crate) fn get(identity: Option<Identity>, domain: Domain) -> Option<[u8; 32]
         .copied()
 }
 
+/// The bytes of the file at `path` and their SHA-256: the digest this memo
+/// holds for the identity the file kept across the read, else computed and
+/// remembered.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn read_sha256(path: &Path) -> std::io::Result<(Vec<u8>, [u8; 32])> {
+    let before = std::fs::metadata(path)?;
+    let bytes = std::fs::read(path)?;
+    let after = std::fs::metadata(path)?;
+    let identity = Identity::of(&before)
+        .filter(|identity| Identity::of(&after) == Some(*identity))
+        .filter(|identity| identity.length == bytes.len() as u64);
+    if let Some(digest) = get(identity, Domain::Sha256) {
+        return Ok((bytes, digest));
+    }
+    let digest = Sha256::digest(&bytes).into();
+    insert(identity, Domain::Sha256, digest);
+    Ok((bytes, digest))
+}
+
+/// The length and SHA-256 of the file at `path`, with no read while this
+/// memo holds the digest of its current identity.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn sha256(path: &Path) -> std::io::Result<(u64, [u8; 32])> {
+    let metadata = std::fs::metadata(path)?;
+    if let Some(digest) = get(Identity::of(&metadata), Domain::Sha256) {
+        return Ok((metadata.len(), digest));
+    }
+    let (bytes, digest) = read_sha256(path)?;
+    Ok((bytes.len() as u64, digest))
+}
+
 /// Remember a digest computed from bytes read while the file kept `identity`.
 pub(crate) fn insert(identity: Option<Identity>, domain: Domain, digest: [u8; 32]) {
     let Some(identity) = identity else { return };

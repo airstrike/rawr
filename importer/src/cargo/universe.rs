@@ -169,6 +169,7 @@ pub(crate) struct Pending {
     receipt: Option<Receipt>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Completion {
     proof: Proof,
     receipt: Option<Receipt>,

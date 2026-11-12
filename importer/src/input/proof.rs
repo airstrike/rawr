@@ -22,7 +22,7 @@ pub(in crate::input) mod protected;
 pub(super) const SCHEMA: u32 = 10;
 
 /// Canonical freshness evidence consumed when a captured graph is published.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Proof {
     schema: u32,
     entries: Box<[Entry]>,
@@ -948,6 +948,12 @@ impl Proof {
             native: None,
             entries,
         }
+    }
+
+    /// What this proof read, entry by entry.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn entries(&self) -> &[Entry] {
+        &self.entries
     }
 
     /// Clone only bounded filesystem identities required by the production
