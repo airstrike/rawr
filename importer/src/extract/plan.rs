@@ -663,6 +663,29 @@ impl Plan {
         })
     }
 
+    /// Whether a probe run again could answer this plan's demand from the
+    /// artifacts its build sealed: no selected crate has a table whose
+    /// recorded inputs no longer hold. A crate whose files changed since,
+    /// as after an edit to the project, is another build, which its own
+    /// harness probes; a probe of the old artifacts would only be read
+    /// past (#1794).
+    pub(crate) fn shared_inputs_hold(&self, current: &crate::input::bindings::Current) -> bool {
+        self.entries.iter().all(|entry| {
+            let Some(shared) = self.sharing.keys.get(&entry.unit_correlation) else {
+                return true;
+            };
+            let recorded = [self.sharing.directory(shared), self.sharing.staged.as_ref()]
+                .into_iter()
+                .flatten()
+                .filter_map(|bindings| crate::bindings::meta(bindings, &shared.key)?.inputs)
+                .collect::<Vec<_>>();
+            recorded.is_empty()
+                || recorded
+                    .iter()
+                    .any(|inputs| inputs.validate(current).is_some())
+        })
+    }
+
     /// The selected crate at `index`, replayed from its shared table for
     /// this plan's demand: its sidecar fragment, the external crates it
     /// names, and what the replayed API is a function of. `None` when its

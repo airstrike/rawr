@@ -253,8 +253,10 @@ static RUNNER_UNITS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_BUILDS: AtomicUsize = AtomicUsize::new(0);
 
 /// Count one runner build and the units it compiled, from its JSON
-/// `messages`.
-pub(crate) fn runner_built(messages: &[u8]) {
+/// `messages`. With `RAWR_VERBOSE`, say which units it compiled, in
+/// Cargo's order, and the time from its start to its last artifact,
+/// `took` (#1795).
+pub(crate) fn runner_built(messages: &[u8], took: Duration) {
     RUNNER_BUILDS.fetch_add(1, Ordering::Relaxed);
     let compiled = messages
         .split(|byte| *byte == b'\n')
@@ -262,8 +264,29 @@ pub(crate) fn runner_built(messages: &[u8]) {
             count(line, b"\"reason\":\"compiler-artifact\"") > 0
                 && count(line, b"\"fresh\":false") > 0
         })
-        .count();
-    RUNNER_UNITS.fetch_add(compiled, Ordering::Relaxed);
+        .collect::<Vec<_>>();
+    RUNNER_UNITS.fetch_add(compiled.len(), Ordering::Relaxed);
+    if !verbose() {
+        return;
+    }
+    let names = compiled
+        .iter()
+        .filter_map(|line| {
+            let message = serde_json::from_slice::<serde_json::Value>(line).ok()?;
+            message["target"]["name"].as_str().map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    say(&format!(
+        "rawr-import: the runner build compiled {} units in {:.1} s: {}",
+        compiled.len(),
+        took.as_secs_f64(),
+        names.join(", "),
+    ));
+}
+
+/// Whether `RAWR_VERBOSE` asks the process to say what it did.
+fn verbose() -> bool {
+    std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0")
 }
 
 /// How many units this process's runner builds compiled: a warm start's
@@ -435,16 +458,36 @@ fn rounds_lock() -> std::sync::MutexGuard<'static, Vec<Round>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Add to the current round's count of one stage; outside a round,
-/// nothing is counted.
+thread_local! {
+    /// Whether this thread's work counts toward no round ([`uncounted`]).
+    static UNCOUNTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `work` on this thread counting toward no round: what a process
+/// does off a round's path, as it reads ahead for the next save, is no
+/// stage of whichever round is current when it lands.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn uncounted<T>(work: impl FnOnce() -> T) -> T {
+    UNCOUNTED.set(true);
+    let done = work();
+    UNCOUNTED.set(false);
+    done
+}
+
+/// Add to the current round's count of one stage; outside a round, or
+/// [`uncounted`], nothing is counted.
 fn count_round(stage: impl FnOnce(&mut Round) -> &mut usize, amount: usize) {
+    if UNCOUNTED.get() {
+        return;
+    }
     if let Some(round) = rounds_lock().last_mut() {
         *stage(round) += amount;
     }
 }
 
-/// Count `definitions` read from the API in this round.
-#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+/// Count `definitions` read from the API in this round: those a
+/// canonicalization joined and settled, or those decoded from a stored
+/// API. A graph built from the last settlement reads none (#1786).
 pub(crate) fn read(definitions: usize) {
     count_round(|round| &mut round.read, definitions);
 }

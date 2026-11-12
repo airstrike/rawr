@@ -23,6 +23,7 @@ mod fragment;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod plan;
 pub(crate) mod protocol;
+mod settled;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod shared;
 pub(crate) mod sidecar;
@@ -1009,6 +1010,7 @@ type ExclusionPath = Box<[Box<str>]>;
 type ExclusionsByPath = BTreeMap<ExclusionPath, Exclusion>;
 type ManifestExclusions = BTreeMap<Box<str>, ExclusionsByPath>;
 
+#[derive(Clone)]
 pub struct Policy {
     exclusions: ManifestExclusions,
     usage: PolicyUsage,
@@ -1045,6 +1047,7 @@ struct Key {
     namespace: identity::Namespace,
 }
 
+#[derive(Clone)]
 struct Exclusion {
     reason: Box<str>,
     span: model::Span,
@@ -2630,35 +2633,68 @@ fn materialize_document(
     }
     allocation.sort_keys(current.len());
     current.sort_unstable();
-    let graph = stored.replay(context, current, limits, &mut allocation)?;
-    if api::retained::keeps_graphs() {
-        let limits = *limits;
-        std::thread::spawn(move || keep_reads(document.fragments, &authority, &limits));
+    if !api::retained::keeps_graphs() {
+        let graph = stored.replay(context, current, limits, &mut allocation)?;
+        crate::progress::read(graph.definitions().len());
+        return Ok(graph);
     }
+    // Fragments with the bodies the last settlement in this process was
+    // made of: it is their API, and no stored definition is decoded
+    // (#1786).
+    if let Some(keys) = fragment::keys(&document.fragments) {
+        let catalog = Catalog::from_fragments(&document.fragments, &authority, &mut allocation)?;
+        let identity = policy.cache_identity()?;
+        if let Some(settled) = settled::take(&keys, &catalog, limits, &identity) {
+            return settled.seal(current, context, &mut allocation, SealMode::Direct);
+        }
+    }
+    let graph = stored.replay(context, current, limits, &mut allocation)?;
+    crate::progress::read(graph.definitions().len());
+    let limits = *limits;
+    let policy = policy.clone();
+    std::thread::spawn(move || {
+        crate::progress::uncounted(|| keep_reads(document.fragments, &authority, &policy, &limits));
+    });
     Ok(graph)
 }
 
-/// Read each fragment of a replayed API for the next canonicalization in
-/// this process to take (#1776). The replay read none, so the save after
-/// a launch that replayed its API would read every crate's fragment again,
-/// though only one crate changed. It runs off the thread that replayed.
+/// Read each fragment of a replayed API, and settle them under `policy`,
+/// for the next canonicalization in this process to take (#1776, #1786).
+/// The replay read none, so the save after a launch that replayed its API
+/// would read every crate's fragment again, and settle them all, though
+/// only one crate changed or none did. It runs off the thread that
+/// replayed.
 #[cfg(feature = "rustc-driver")]
 fn keep_reads(
     fragments: Vec<protocol::Fragment>,
     authority: &InvocationAuthority,
+    policy: &Policy,
     limits: &cargo::Limits,
 ) {
     let mut allocation = Allocation::new(limits);
     let Ok(catalog) = Catalog::from_fragments(&fragments, authority, &mut allocation) else {
         return;
     };
-    let Ok((reads, _, kept, _)) =
-        Candidate::read_kept(fragments, &catalog, limits, &mut allocation)
+    let keyed = fragment::keyed(fragments);
+    let keys = keyed
+        .iter()
+        .map(|(key, _)| *key)
+        .collect::<Option<Vec<_>>>();
+    let Ok((reads, _, kept, _)) = Candidate::read_kept(keyed, &catalog, limits, &mut allocation)
     else {
         return;
     };
-    if reads.iter().all(|read| read.failure.is_none()) {
-        kept.publish();
+    if reads.iter().any(|read| read.failure.is_some()) {
+        return;
+    }
+    kept.publish();
+    let (Some(keys), Ok(identity)) = (keys, policy.cache_identity()) else {
+        return;
+    };
+    let settled = Candidate::join(reads, &mut allocation)
+        .and_then(|candidate| candidate.settle(policy, limits, &mut allocation));
+    if let Ok((settled, _)) = settled {
+        settled::keep(keys, &catalog, limits, identity, settled);
     }
 }
 
@@ -2826,13 +2862,40 @@ fn canonicalize_fragments(
         let kept = matches!(seal, SealMode::Direct) && api::retained::keeps_graphs();
         #[cfg(not(feature = "rustc-driver"))]
         let kept = false;
-        let candidate = if kept {
-            Candidate::from_kept_fragments(fragments, &catalog, limits, allocation)?
-        } else {
+        if !kept {
             crate::progress::canonicalized(fragments.len());
-            Candidate::from_fragments(fragments, &catalog, limits, allocation)?
-        };
-        candidate.finish(policy, context, limits, allocation, seal)
+            let candidate = Candidate::from_fragments(fragments, &catalog, limits, allocation)?;
+            let graph = candidate.finish(policy, context, limits, allocation, seal)?;
+            crate::progress::read(graph.definitions().len());
+            return Ok(graph);
+        }
+        let keyed = fragment::keyed(fragments);
+        let keys = keyed
+            .iter()
+            .map(|(key, _)| *key)
+            .collect::<Option<Vec<_>>>();
+        let identity = policy.cache_identity()?;
+        // The same bodies as the last settlement's: only the invocations
+        // are read, and no definition (#1786).
+        if let Some(settled) = keys
+            .as_deref()
+            .and_then(|keys| settled::take(keys, &catalog, limits, &identity))
+        {
+            let mut invocations = Vec::new();
+            allocation.reserve(&mut invocations, keyed.len())?;
+            for (_, fragment) in &keyed {
+                invocations.push(invocation(fragment, allocation)?);
+            }
+            return settled.seal(invocations, context, allocation, seal);
+        }
+        let candidate = Candidate::from_kept_fragments(keyed, &catalog, limits, allocation)?;
+        let (settled, invocations) = candidate.settle(policy, limits, allocation)?;
+        if let Some(keys) = keys {
+            settled::keep(keys, &catalog, limits, identity, settled.clone());
+        }
+        let graph = settled.seal(invocations, context, allocation, seal)?;
+        crate::progress::read(graph.definitions().len());
+        Ok(graph)
     })();
     result.map_err(|error| allocation.failure(error))
 }
@@ -3500,13 +3563,12 @@ impl Candidate {
     /// join: after an edit to one crate, only its fragment is read again
     /// (#1776).
     fn from_kept_fragments(
-        fragments: Vec<protocol::Fragment>,
+        keyed: Vec<(Option<[u8; 32]>, protocol::Fragment)>,
         catalog: &Catalog,
         limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
-        let (reads, accounts, next, anew) =
-            Self::read_kept(fragments, catalog, limits, allocation)?;
+        let (reads, accounts, next, anew) = Self::read_kept(keyed, catalog, limits, allocation)?;
         crate::progress::canonicalized(anew);
         let joined = Self::join(reads, allocation);
         for worker in accounts {
@@ -3523,18 +3585,12 @@ impl Candidate {
     /// one read anew. With each worker's account, the reads to keep, and
     /// how many fragments were read anew.
     fn read_kept(
-        fragments: Vec<protocol::Fragment>,
+        keyed: Vec<(Option<[u8; 32]>, protocol::Fragment)>,
         catalog: &Catalog,
         limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<(Vec<fragment::Read>, Vec<Allocation>, fragment::Kept, usize)> {
         let workers = crate::parallel::workers();
-        let (keyed, _) = crate::parallel::map_owned_with_on(
-            workers,
-            fragments,
-            || (),
-            |(), fragment| (fragment::key(&fragment), fragment),
-        );
         let mut kept = fragment::Kept::take(catalog, limits);
         let fragments = keyed
             .into_iter()
@@ -3819,10 +3875,22 @@ impl Candidate {
         allocation: &mut Allocation,
         seal: SealMode<'_>,
     ) -> Result<api::Graph<api::Captured>> {
+        let (settled, invocations) = self.settle(policy, limits, allocation)?;
+        settled.seal(invocations, context, allocation, seal)
+    }
+
+    /// This candidate under `policy`: everything its graph holds but the
+    /// invocations, which it gives back, and the context they frame.
+    fn settle(
+        self,
+        policy: &Policy,
+        limits: &cargo::Limits,
+        allocation: &mut Allocation,
+    ) -> Result<(settled::Settled, Vec<api::Invocation>)> {
         // Extraction reads only demanded items, so an exclusion for an
         // item that was never read has nothing to exclude.
         allocation.category(EvidenceCategory::Raw);
-        let raw = raw_canonical(&self, context, allocation)?;
+        let body = raw_body(&self, allocation)?;
         for export in self.exports.values() {
             validate_alias_chain(export, &self.definitions, &self.spellings)?;
         }
@@ -3974,39 +4042,17 @@ impl Candidate {
         let mut anonymous = Vec::new();
         allocation.reserve(&mut anonymous, self.anonymous.len())?;
         anonymous.extend(self.anonymous);
-        allocation.category(EvidenceCategory::Graph);
-        allocation.final_graph(
-            self.invocations.len(),
-            definitions.len(),
-            paths.len(),
-            implementations.len(),
-            support_values.len(),
-            anonymous.len(),
-        );
-        let seal_graph = || {
-            api::Graph::seal_with_raw(
-                self.invocations,
-                definitions,
-                paths,
-                implementations,
-                self.scalar_predicate_proofs,
-                support_values,
-                anonymous,
-                self.index,
-                raw,
-                allocation,
-            )
+        let settled = settled::Settled {
+            body,
+            definitions,
+            paths,
+            implementations,
+            scalar_predicate_proofs: self.scalar_predicate_proofs,
+            support: support_values,
+            anonymous,
+            index: self.index,
         };
-        match seal {
-            SealMode::Direct => seal_graph(),
-            #[cfg(feature = "rustc-driver")]
-            SealMode::Evidence(session) => session.observe_inline(
-                crate::process::EvidenceInlineStage::GraphSealing,
-                seal_graph,
-            ),
-            #[cfg(not(feature = "rustc-driver"))]
-            SealMode::Marker(_) => unreachable!("the marker carries no sealing authority"),
-        }
+        Ok((settled, self.invocations))
     }
 
     fn fixed_closure(
@@ -4809,11 +4855,9 @@ fn insert_fixed_support(
     Ok(())
 }
 
-fn raw_canonical(
-    candidate: &Candidate,
-    context: &api::Context,
-    allocation: &mut Allocation,
-) -> Result<api::Raw> {
+/// The encoding of `candidate`'s raw body: everything of its raw and
+/// semantic documents but their context and invocations.
+fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Vec<u8>> {
     let mut definitions = Vec::new();
     allocation.temporary_conversions(candidate.definitions.len());
     allocation.reserve(&mut definitions, candidate.definitions.len())?;
@@ -4838,29 +4882,24 @@ fn raw_canonical(
         implementations: &candidate.implementations,
         scalar_predicate_proofs: &candidate.scalar_predicate_proofs,
     };
-    let (canonical, semantic) = raw_pair(context, &candidate.invocations, &body, allocation)?;
-    Ok(api::Graph::raw_pair(
-        canonical,
-        semantic,
-        context.resolution_universe(),
-    ))
+    api::semantic::encode_once(&body, allocation)
 }
 
-/// The raw and semantic encodings of one pre-policy graph. They differ only in
-/// their context and invocations, so the body is encoded once and each header
-/// is spliced around it; the bytes equal encoding each whole document, which
-/// took four passes over the graph (measure and write, twice).
+/// The raw and semantic encodings of one pre-policy graph, whose body
+/// [`raw_body`] encoded. They differ only in their context and invocations,
+/// so each header is spliced around the body; the bytes equal encoding each
+/// whole document, which took four passes over the graph (measure and
+/// write, twice).
 fn raw_pair(
     context: &api::Context,
     invocations: &[api::Invocation],
-    body: &RawBody<'_>,
+    body: &[u8],
     allocation: &mut Allocation,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     let encoding = |error: serde_json::Error| Error::Extraction {
         code: "raw-canonical-encoding",
         reason: error.to_string().into_boxed_str(),
     };
-    let body = api::semantic::encode_once(body, allocation)?;
     let header = |context: Vec<u8>, invocations: Vec<u8>| {
         const SCHEMA: &[u8] = br#"{"schema":3,"context":"#;
         const INVOCATIONS: &[u8] = br#","invocations":"#;
@@ -6954,7 +6993,8 @@ mod allocation {
             scalar_predicate_proofs: &proofs,
         };
         let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
-        let (raw, semantic) = raw_pair(&context, &invocations, &body, &mut allocation).unwrap();
+        let encoded = api::semantic::encode_once(&body, &mut allocation).unwrap();
+        let (raw, semantic) = raw_pair(&context, &invocations, &encoded, &mut allocation).unwrap();
         let whole = serde_json::to_vec(&Whole {
             schema: 3,
             context: &context,

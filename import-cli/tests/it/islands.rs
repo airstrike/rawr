@@ -2583,6 +2583,11 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// none, as the private field is none of the crate's API, and the path
 /// crates `common` and `ui` changed nothing. The field made public changes
 /// the project crate's API, whose fragment alone is read again (#1776).
+/// A private field reads no definition at all: its fragments' bodies are
+/// the last settlement's, which it takes whole (#1786). A save after one
+/// that built probes its own build once, never the last build's artifacts
+/// first (#1794), and each restart says what its runner build compiled
+/// (#1795).
 #[test]
 fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let root = THEME.project();
@@ -2613,9 +2618,23 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 2
     });
-    edit(&home, "    seen: u8,\n}", "    pub seen: u8,\n}");
+    // Another private field, after a save that built: inboard's case.
+    edit(
+        &home,
+        "    seen: u8,\n}",
+        "    seen: u8,\n    seen_again: u8,\n}",
+    );
+    edit(
+        &home,
+        "            seen: 0,\n        }",
+        "            seen: 0,\n            seen_again: 0,\n        }",
+    );
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 3
+    });
+    edit(&home, "    seen: u8,\n", "    pub seen: u8,\n");
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 4
     });
     fs::write(&stop, "").unwrap();
     let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
@@ -2632,16 +2651,27 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr-import: a save's round: "))
         .collect::<Vec<_>>();
-    // A round for each save. The first probes its build once and takes
-    // every fragment's read as the launch kept it; the second reads the
-    // project crate's again, and takes `common`'s and `ui`'s.
+    // A round for each save, each probing its own build once. The first
+    // two take every fragment's read and the settlement the launch or the
+    // last save kept, and read no definition; the third reads the project
+    // crate's fragment again, and takes `common`'s and `ui`'s.
     assert!(
-        rounds.len() == 2
-            && rounds[0].contains(", probes 1, read 325, canonicalized 0, ")
-            && rounds[1].contains(", canonicalized 1, "),
+        rounds.len() == 3
+            && rounds[0].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
+            && rounds[1].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
+            && rounds[2].contains(", probes 1, ")
+            && rounds[2].contains(", canonicalized 1, "),
         "{rounds:?}\n{seen}"
     );
     eprintln!("the saves' rounds:\n{}", rounds.join("\n"));
+    // Each restart's runner build says what it compiled.
+    let built = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the runner build compiled "))
+        .collect::<Vec<_>>();
+    assert!(built.len() >= 3, "{built:?}\n{seen}");
+    eprintln!("the runner builds:\n{}", built.join("\n"));
 }
 
 /// An edit to a function of a path crate of the project changes what

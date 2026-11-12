@@ -128,9 +128,9 @@ impl Continuation {
     }
 
     /// Build the captured graph, from the stored API product when deferred.
+    /// What it reads of the API counts where it is read (#1786).
     pub(crate) fn materialize(self) -> Result<Materialized, node::Error> {
         let graph = build(&self.product, self.graph)?;
-        crate::progress::read(graph.definitions().len());
         Ok(Materialized {
             product: self.product,
             graph,
@@ -153,7 +153,9 @@ impl Continuation {
         };
         let proof = publication.proof(api)?;
         if KEEP.load(Ordering::Relaxed) && matches!(graph, Lazy::Pending(_)) {
-            std::thread::spawn(move || drop(build(&product, graph)));
+            std::thread::spawn(move || {
+                crate::progress::uncounted(|| drop(build(&product, graph)));
+            });
         }
         Ok(proof)
     }
