@@ -237,11 +237,19 @@ pub(super) fn remember(rawr: &Path, resolution: &Resolution<'_>) {
     }
     let hex = crate::extract::engine::hex;
     let materials = resolution.materials;
+    let document: [u8; 32] = Sha256::digest(&materials.document).into();
     // The memo is written only after its document, so it never names one
-    // that is not there.
-    if !write(&rawr.join(DOCUMENT), &materials.document) {
+    // that is not there. The document's digest is remembered for the file
+    // written. The next run's `materials` finds it in the digests table, and
+    // an unchanged run appends nothing there (#1780).
+    let Some(written) = write(&rawr.join(DOCUMENT), &materials.document) else {
         return;
-    }
+    };
+    crate::file_digest::insert(
+        crate::file_digest::Identity::of(&written),
+        crate::file_digest::Domain::Sha256,
+        document,
+    );
     let memo = Written {
         schema: SCHEMA,
         request: hex(resolution.request),
@@ -250,22 +258,26 @@ pub(super) fn remember(rawr: &Path, resolution: &Resolution<'_>) {
         native: hex(resolution.native),
         files: resolution.files,
         entries,
-        document: (
-            materials.document.len() as u64,
-            hex(&Sha256::digest(&materials.document)),
-        ),
+        document: (materials.document.len() as u64, hex(&document)),
         external: &materials.external,
         context: &materials.context,
     };
     if let Ok(bytes) = serde_json::to_vec(&memo) {
-        write(&rawr.join(FILE), &bytes);
+        let _ = write(&rawr.join(FILE), &bytes);
     }
 }
 
-/// Write `bytes` to `path` whole, through a temporary beside it.
-fn write(path: &Path, bytes: &[u8]) -> bool {
+/// Write `bytes` to `path` whole, through a temporary beside it, and give
+/// the metadata of the file written, as it is at `path` once renamed there.
+/// Each writer renames a file of its own over `path`, so that metadata is
+/// of these bytes.
+fn write(path: &Path, bytes: &[u8]) -> Option<fs::Metadata> {
+    use std::io::Write as _;
     let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
-    fs::write(&temporary, bytes).is_ok() && fs::rename(&temporary, path).is_ok()
+    let mut file = fs::File::create(&temporary).ok()?;
+    file.write_all(bytes).ok()?;
+    fs::rename(&temporary, path).ok()?;
+    file.metadata().ok()
 }
 
 /// The remembered resolution for `request` under `attestation`, when every
@@ -467,6 +479,16 @@ mod tests {
                     context: crate::api::Context::fixture(),
                 },
             },
+        );
+        // The written document's digest is remembered for the file as it
+        // is, so the next run hashes it from the digests table (#1780).
+        let written = std::fs::metadata(rawr.join(super::DOCUMENT)).unwrap();
+        assert_eq!(
+            crate::file_digest::get(
+                crate::file_digest::Identity::of(&written),
+                crate::file_digest::Domain::Sha256,
+            ),
+            Some(Sha256::digest(b"{\"schema\":1}").into())
         );
         let memo = recall(&rawr, &request, &attestation, &current).unwrap();
         assert_eq!(memo.identity(), Some([3; 32]));

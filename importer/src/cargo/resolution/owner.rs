@@ -1245,12 +1245,13 @@ impl Evaluation {
         native.update(b"rawr.bindings.native/v1");
         native.update(shared.identity);
         // A file not there yet, as a lock cargo has not written, is watched
-        // for its appearance.
+        // for its appearance. Each digest is remembered for the file's
+        // identity, so the next run's recall of this resolution reads none
+        // of these files again (#1780).
         let mut file = |role: input::proof::Role, path: &Path| -> Option<()> {
             let text = path.to_str()?;
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+            match crate::file_digest::read_sha256(path) {
+                Ok((bytes, digest)) => {
                     native.update(digest);
                     files.push(memo::File::new(role, text, Some((bytes.len(), digest))));
                     entries.push(input::proof::Entry::File {

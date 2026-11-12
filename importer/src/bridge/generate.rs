@@ -11979,16 +11979,26 @@ fn opaque_table_source(
 /// the witness of the type that holds it where `_` spells the opaque type.
 /// A type with several holes is shaped so only when `only` says each one
 /// is the opaque type, as `Hover<_, _>` of `hover(a, b)` is for two values
-/// of it (#1368).
+/// of it (#1368). The operand is taken so whether it is the binding's whole
+/// value or, when native code didn't lend a copy of it, the value of its
+/// `lent_copy!` match (#1797).
 fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
-    let take = format!(" = take_like(arguments, {position}, _w)?;");
+    let take = format!("take_like(arguments, {position}, _w)?");
+    let whole = format!(" = {take};");
+    let lent = format!(" = match lent_copy!(arguments, {position}, ");
+    let unlent = format!(" None => {take} }};");
     let mut shaped = String::with_capacity(body.len());
     for line in body.split_inclusive('\n') {
         let held = line
             .trim_start()
             .strip_prefix("let ")
             .and_then(|rest| rest.split_once(": "))
-            .and_then(|(_, rest)| rest.split_once(&take))
+            .and_then(|(_, rest)| {
+                rest.split_once(&whole).or_else(|| {
+                    rest.split_once(&lent)
+                        .filter(|_| line.trim_end().ends_with(&unlent))
+                })
+            })
             .map(|(ty, _)| ty)
             .filter(|ty| *ty != "_");
         let Some(ty) = held else {
@@ -12012,7 +12022,7 @@ fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
         shaped.push_str(&line.replacen(
             &take,
             &format!(
-                " = take_like(arguments, {position}, {{ fn shape<{lifetimes}T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
+                "take_like(arguments, {position}, {{ fn shape<{lifetimes}T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?"
             ),
             1,
         ));
@@ -25842,6 +25852,14 @@ mod tests {
         );
         assert!(
             shaped.ends_with("    let receiver: _ = take_like(arguments, 0, _w)?;\n"),
+            "{shaped}"
+        );
+        // The take of an operand native code may lend a copy of, as the
+        // `Map` that `badge(..).map(..)` gave (#1797).
+        let body = "    let argument_0: Map<_, Box<dyn Fn(u8) -> crate::Message>, u8> = match lent_copy!(arguments, 0, Map<_, Box<dyn Fn(u8) -> crate::Message>, u8>) { Some(copy) => copy?, None => take_like(arguments, 0, _w)? };\n";
+        let shaped = super::shape_witnesses(body, 0, false);
+        assert!(
+            shaped.ends_with("None => take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(u8) -> crate::Message>, u8>> { std::marker::PhantomData } shape(_w) })? };\n"),
             "{shaped}"
         );
     }
