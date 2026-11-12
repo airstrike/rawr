@@ -49,6 +49,7 @@ pub fn check(
             graph,
             revision,
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+            None,
         )
         .map_err(|error| unchecked(error, fallback))?;
     Ok((source, prepared.take_settlement()))
@@ -229,6 +230,7 @@ pub fn run(
         None,
         None,
         &cells(target),
+        &mut rawr_import::api::Kept::default(),
     )
     .map_err(Unchecked::into_report);
     events(ran.as_ref().map_err(Some), None);
@@ -298,6 +300,8 @@ pub fn run_program(
     let interactive = rawr_cli::supervise::interactive();
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
     let cells = cells(target);
+    // The API graph each session's saves share, kept across restarts.
+    let mut kept = rawr_import::api::Kept::default();
     let mut ran = session(
         target,
         Origin::graph(graph),
@@ -306,6 +310,7 @@ pub fn run_program(
         Some(&program),
         reload.as_ref(),
         &cells,
+        &mut kept,
     );
     loop {
         let restarted = matches!(ran, Ok(Ended::Restart(..)));
@@ -397,6 +402,7 @@ pub fn run_program(
             Some(&program),
             reload.as_ref(),
             &cells,
+            &mut kept,
         );
     }
 }
@@ -425,6 +431,7 @@ pub fn run_tests(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
     let cells = cells(target);
+    let mut kept = rawr_import::api::Kept::default();
     let ran = loop {
         match session(
             target,
@@ -434,6 +441,7 @@ pub fn run_tests(
             Some(&program),
             None,
             &cells,
+            &mut kept,
         ) {
             Ok(Ended::Restart(_, prepared)) => {
                 origin = Origin {
@@ -532,7 +540,9 @@ impl Origin {
 /// starts a new process of the same runner here instead (D553.6), and
 /// `reload`'s connections hear it restarted. Each save reads the program's
 /// unchanged sources from their parses in `cells`, and parses only those
-/// whose text changed (#1604).
+/// whose text changed (#1604). Each save shares the API graph `kept`, which
+/// outlasts the session (#1822).
+#[allow(clippy::too_many_arguments)]
 fn session(
     target: &rawr::project::Target,
     origin: Origin,
@@ -541,10 +551,11 @@ fn session(
     program: Option<&rawr_import::process::Arguments>,
     reload: Option<&rawr_cli::events::reload::Stream>,
     cells: &rawr::package::Cells,
+    kept: &mut rawr_import::api::Kept,
 ) -> Result<Ended, Unchecked> {
     same_build(target)?;
-    // Each save that changes Rawr source rebuilds the same API graph.
-    rawr_import::api::keep_graphs();
+    // Each save that changes Rawr source reads the same API fragments.
+    rawr_import::extract::keep_fragment_reads();
     // What the program starts from, read before it is prepared: a save
     // restarts it only when this changed. The caller's load is it.
     let mut started_from = program.and_then(|_| match &origin.graph {
@@ -576,8 +587,15 @@ fn session(
     }
     rawr_import::progress::begin(&root);
     let start = resident::Start::now();
-    let initial =
-        initial_watched_program(target, origin, &target_path, lifecycle, profile, program);
+    let initial = initial_watched_program(
+        target,
+        origin,
+        &target_path,
+        lifecycle,
+        profile,
+        program,
+        Some(&mut *kept),
+    );
     rawr_import::progress::finish(initial.is_ok());
     start.tell();
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
@@ -661,6 +679,7 @@ fn session(
                                     None,
                                     revision,
                                     &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+                                    Some(&mut *kept),
                                 )
                                 .map_err(|error| import(error, source.clone()))
                         });
@@ -776,7 +795,8 @@ fn session(
                     }
                 };
                 let preparation = resident::Start::now();
-                let prepared = profile.prepare(&next_target, None, revision, &scope);
+                let prepared =
+                    profile.prepare(&next_target, None, revision, &scope, Some(&mut *kept));
                 preparation.tell_preparation();
                 let prepared = match prepared {
                     Ok(prepared) => prepared,
@@ -1235,8 +1255,15 @@ pub fn initial(
         snapshot,
         inputs,
         manifests: _,
-    } = prepare_on_lane(&mut lane, target, Origin::graph(graph), profile, &source)
-        .map_err(Unchecked::into_report)?;
+    } = prepare_on_lane(
+        &mut lane,
+        target,
+        Origin::graph(graph),
+        profile,
+        &source,
+        None,
+    )
+    .map_err(Unchecked::into_report)?;
     let installed = if started {
         lane.replace_built_started(built, snapshot)
     } else {
@@ -1273,6 +1300,7 @@ pub fn initial_watched(
         lifecycle,
         profile,
         None,
+        None,
     )
     .map_err(Unchecked::into_report)
 }
@@ -1285,6 +1313,7 @@ fn initial_watched_program(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
     program: Option<&rawr_import::process::Arguments>,
+    mut kept: Option<&mut rawr_import::api::Kept>,
 ) -> Result<
     (
         Lane,
@@ -1296,7 +1325,14 @@ fn initial_watched_program(
 > {
     let source = fallback(target)?;
     let mut lane = open_lane(target, lifecycle, program, &source)?;
-    let mut initial = prepare_on_lane(&mut lane, target, origin, profile, &source)?;
+    let mut initial = prepare_on_lane(
+        &mut lane,
+        target,
+        origin,
+        profile,
+        &source,
+        kept.as_deref_mut(),
+    )?;
     let adapter = match rawr_watch::Adapter::open_inputs(initial.inputs.clone(), DEBOUNCE) {
         Ok(adapter) => adapter,
         Err(error) => {
@@ -1345,13 +1381,25 @@ fn initial_watched_program(
             }
             Ok(crate::native::Watched::Obsolete) => {
                 drop(staged);
-                initial = refresh_initial(&mut lane, target_path, profile, &source)?;
+                initial = refresh_initial(
+                    &mut lane,
+                    target_path,
+                    profile,
+                    &source,
+                    kept.as_deref_mut(),
+                )?;
             }
             // An input of the build changed since it was prepared: it is
             // prepared again, whose lookups rebuild what went stale.
             Err(error) if error.read_set_stale() => {
                 drop(staged);
-                initial = refresh_initial(&mut lane, target_path, profile, &source)?;
+                initial = refresh_initial(
+                    &mut lane,
+                    target_path,
+                    profile,
+                    &source,
+                    kept.as_deref_mut(),
+                )?;
             }
             // A save as the program started (D531.9): it starts again from
             // the saved files.
@@ -1360,7 +1408,13 @@ fn initial_watched_program(
                 rawr_import::process::say(
                     "rawr: the source changed as the program started; starting it again",
                 );
-                initial = refresh_initial(&mut lane, target_path, profile, &source)?;
+                initial = refresh_initial(
+                    &mut lane,
+                    target_path,
+                    profile,
+                    &source,
+                    kept.as_deref_mut(),
+                )?;
             }
             Err(error) => {
                 drop(staged);
@@ -1393,6 +1447,7 @@ fn prepare_on_lane(
     origin: Origin,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
+    mut kept: Option<&mut rawr_import::api::Kept>,
 ) -> Result<Initial, Unchecked> {
     // A save while the runner builds (D531.9): the build is kept, and the
     // program is prepared again from the saved files.
@@ -1423,6 +1478,7 @@ fn prepare_on_lane(
                 graph.take(),
                 revision,
                 &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+                kept.as_deref_mut(),
             ),
         };
         let prepared = match prepared {
@@ -1502,10 +1558,11 @@ fn refresh_initial(
     target_path: &Path,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
+    kept: Option<&mut rawr_import::api::Kept>,
 ) -> Result<Initial, Unchecked> {
     let target = rawr::project::Target::discover(target_path)
         .map_err(|error| rawr::diagnostic::Report::from_project(&error))?;
-    prepare_on_lane(lane, &target, Origin::default(), profile, source)
+    prepare_on_lane(lane, &target, Origin::default(), profile, source, kept)
 }
 
 /// Latest wins: once a newer change is waiting, an older attempt's failure is

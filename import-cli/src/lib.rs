@@ -35,13 +35,15 @@ pub const MANIFEST: &str = include_str!("../manifest.toml");
 /// program and the runner source a host adds to it.
 pub trait Profile {
     /// Resolve, extract, check and seal the runner request for `target`,
-    /// from `graph` when the caller already loaded it.
+    /// from `graph` when the caller already loaded it. An owner that
+    /// prepares again on each save passes the API graph it `kept`.
     fn prepare(
         &self,
         target: &rawr::project::Target,
         graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+        kept: Option<&mut rawr_import::api::Kept>,
     ) -> Result<Prepared, Error>;
 
     /// A socket under the project's build directory that the host's window

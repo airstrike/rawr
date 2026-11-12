@@ -128,8 +128,18 @@ impl crate::Profile for Plain {
         mut graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+        mut kept: Option<&mut rawr_import::api::Kept>,
     ) -> Result<crate::Prepared, crate::Error> {
-        crate::again_while_stale(|| prepare(self.build, target, graph.take(), revision, scope))
+        crate::again_while_stale(|| {
+            prepare(
+                self.build,
+                target,
+                graph.take(),
+                revision,
+                scope,
+                kept.as_deref_mut(),
+            )
+        })
     }
 }
 
@@ -489,8 +499,9 @@ fn prepare(
     graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+    kept: Option<&mut rawr_import::api::Kept>,
 ) -> Result<crate::Prepared, crate::Error> {
-    prepare_resolving(build, target, graph, revision, scope, Resolve::Last)
+    prepare_resolving(build, target, graph, revision, scope, Resolve::Last, kept)
 }
 
 /// [`prepare`], resolving the API `resolve` says.
@@ -501,6 +512,7 @@ fn prepare_resolving(
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
     resolve: Resolve,
+    mut kept: Option<&mut rawr_import::api::Kept>,
 ) -> Result<crate::Prepared, crate::Error> {
     use crate::Error;
     // The program's parses, read from its cells and remembered: each round's
@@ -684,8 +696,21 @@ fn prepare_resolving(
             Err(rawr_import::checked::Evaluation::Cache(error)) => return Err(Error::cache(error)),
         };
         break match warm {
-            Ok(warm) => (warm.demand, warm.profile, warm.checked, warm.native),
+            Ok(warm) => {
+                // The graph the next save that changes Rawr source needs,
+                // built off the start's path.
+                if let Some(kept) = kept.as_deref_mut() {
+                    kept.keep(warm.graph);
+                }
+                (warm.demand, warm.profile, warm.checked, warm.native)
+            }
             Err(api) => {
+                // The graph the owner kept or is building for this API,
+                // shared, and kept for the next save (#1822).
+                let api = match kept.as_deref_mut() {
+                    Some(kept) => kept.graph(api).map_err(Error::cache)?,
+                    None => api,
+                };
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
                     adapter,
@@ -755,7 +780,7 @@ fn prepare_resolving(
                         if !expand(&graph, &error, basis, &limits)? {
                             return Err(Error::Rawr(error));
                         }
-                        return prepare(build, target, None, revision, scope);
+                        return prepare(build, target, None, revision, scope, kept);
                     }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if error.rust_application().is_some() =>
@@ -866,7 +891,7 @@ fn prepare_resolving(
             if !last.kept().names(&request.build_request_key())
                 && resolved != crate::runner_demand::own(&crate_demand, &seed)
             {
-                return prepare_resolving(build, target, None, revision, scope, Resolve::Own);
+                return prepare_resolving(build, target, None, revision, scope, Resolve::Own, kept);
             }
             request
         }

@@ -28,6 +28,27 @@ mod settled;
 pub(crate) mod shared;
 pub(crate) mod sidecar;
 
+/// Whether this process keeps what it reads of each API fragment for its
+/// next save ([`keep_fragment_reads`]).
+#[cfg(feature = "rustc-driver")]
+static KEEP_FRAGMENT_READS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Keep what this process reads of each API fragment, and the settlement
+/// it made of them, for its next save (#1776). A `rawr run` owner
+/// canonicalizes the same fragments on each save that changes only Rawr
+/// source.
+#[cfg(feature = "rustc-driver")]
+pub fn keep_fragment_reads() {
+    KEEP_FRAGMENT_READS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether this process keeps its fragment reads ([`keep_fragment_reads`]).
+#[cfg(feature = "rustc-driver")]
+fn keeps_fragment_reads() -> bool {
+    KEEP_FRAGMENT_READS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(feature = "rustc-driver")]
 pub(crate) struct DirectPublication {
     context: api::Context,
@@ -2633,7 +2654,7 @@ fn materialize_document(
     }
     allocation.sort_keys(current.len());
     current.sort_unstable();
-    if !api::retained::keeps_graphs() {
+    if !keeps_fragment_reads() {
         let graph = stored.replay(context, current, limits, &mut allocation)?;
         crate::progress::read(graph.definitions().len());
         return Ok(graph);
@@ -2861,7 +2882,7 @@ fn canonicalize_fragments(
         // Only a process that canonicalizes again keeps what it read, and
         // an evidence measurement reads every fragment itself.
         #[cfg(feature = "rustc-driver")]
-        let kept = matches!(seal, SealMode::Direct) && api::retained::keeps_graphs();
+        let kept = matches!(seal, SealMode::Direct) && keeps_fragment_reads();
         #[cfg(not(feature = "rustc-driver"))]
         let kept = false;
         if !kept {
