@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.198",
+  "version": "0.3.199",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,13 +9,18 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A save that puts back sources an earlier save prepared reuses that save's native build: no new harness, copy, seal or probe.","issues":[1817],"refs":[1794]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.199",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A save that puts back sources an earlier save prepared reuses that save's native build: no new harness, copy, seal or probe.","issues":[1817],"refs":[1794]},
+          {"text":"rawr's copy of a crate with marked modules no longer type-checks the island's support code on every rebuild: the support is a package built once and shared across saves.","issues":[1808]},
+          {"text":"rawr's copy of a crate gives a marked function's trampoline its body only when native code calls the function, so the copy type-checks about a quarter less code; a new native call writes the body and checks again before anything runs.","issues":[1807]},
+          {"text":"With RAWR_VERBOSE, a save says what its nightly check compiled and how long it took, how long the probe and each phase took, what the start is still doing in the background, and how long generating and staging the runner's sources took and how many files that wrote.","issues":[1820],"refs":[1815,1816]}
+        ]
+      },
       {
         "version": "0.3.198",
         "date": "2026-11-12",
@@ -3990,8 +3995,8 @@
     {"issue":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"closed","category":"Divergences from rustc","release":"0.3.197"},
     {"issue":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.197"},
-    {"issue":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.199"},
+    {"issue":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.199"},
     {"issue":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
     {"issue":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
@@ -4000,8 +4005,18 @@
     {"issue":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1815,"title":"The first native save after a start prepares in 205 s where the next takes 66 s, with the same counters","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1816,"title":"About 37 s pass between restarting and the runner build's start with nothing printed","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1817,"title":"A save back to sources an earlier save sealed reuses that save's harness","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1818,"title":"'failed to get ahash as a dependency' is printed without the cause Cargo gave","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1817,"title":"A save back to sources an earlier save sealed reuses that save's harness","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.199"},
+    {"issue":1818,"title":"'failed to get ahash as a dependency' is printed without the cause Cargo gave","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1819,"title":"Generate crossing types' glue only where needed, without making a marked-only edit rebuild the copy","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1820,"title":"RAWR_VERBOSE save and restart timings","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.199"},
+    {"issue":1821,"title":"A native edit renders and stores the whole runner source again","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1822,"title":"A save waits on the API graph's lock even when it needs no build or a different one","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1823,"title":"Shared Dynamic reads and writes sleep and retry, then return None that callers unwrap","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1824,"title":"Cargo work takes three overlapping locks in varying order, and a clash fails a save","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1825,"title":"The run owner's per-save state sits in process statics behind locks","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1827,"title":"Every store open takes the bootstrap and publication locks, from 55 call sites","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5198,13 +5213,22 @@
             {"number":1799,"title":"A rawr run owner holds the dependencies' API about three times over","state":"open"},
             {"number":1801,"title":"rawr's copy of the program's crate compiles about 3.5 times slower than cargo's build of it","state":"open"},
             {"number":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed"},
-            {"number":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open"},
-            {"number":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open"},
+            {"number":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"closed"},
+            {"number":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"closed"},
             {"number":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open"},
             {"number":1815,"title":"The first native save after a start prepares in 205 s where the next takes 66 s, with the same counters","state":"open"},
             {"number":1816,"title":"About 37 s pass between restarting and the runner build's start with nothing printed","state":"open"},
             {"number":1817,"title":"A save back to sources an earlier save sealed reuses that save's harness","state":"closed"},
-            {"number":1818,"title":"'failed to get ahash as a dependency' is printed without the cause Cargo gave","state":"open"}
+            {"number":1818,"title":"'failed to get ahash as a dependency' is printed without the cause Cargo gave","state":"open"},
+            {"number":1819,"title":"Generate crossing types' glue only where needed, without making a marked-only edit rebuild the copy","state":"open"},
+            {"number":1821,"title":"A native edit renders and stores the whole runner source again","state":"open"},
+            {"number":1822,"title":"A save waits on the API graph's lock even when it needs no build or a different one","state":"open"},
+            {"number":1823,"title":"Shared Dynamic reads and writes sleep and retry, then return None that callers unwrap","state":"open"},
+            {"number":1824,"title":"Cargo work takes three overlapping locks in varying order, and a clash fails a save","state":"open"},
+            {"number":1825,"title":"The run owner's per-save state sits in process statics behind locks","state":"open"},
+            {"number":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"open"},
+            {"number":1827,"title":"Every store open takes the bootstrap and publication locks, from 55 call sites","state":"open"},
+            {"number":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"open"}
           ]
         },
         {

@@ -5,7 +5,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.199 (2026-11-12)
+
 - A save that puts back sources an earlier save prepared reuses that save's native build: no new harness, copy, seal or probe. (#1817; part of #1794)
+- rawr's copy of a crate with marked modules no longer type-checks the island's support code on every rebuild: the support is a package built once and shared across saves. (#1808)
+- rawr's copy of a crate gives a marked function's trampoline its body only when native code calls the function, so the copy type-checks about a quarter less code; a new native call writes the body and checks again before anything runs. (#1807)
+- With RAWR_VERBOSE, a save says what its nightly check compiled and how long it took, how long the probe and each phase took, what the start is still doing in the background, and how long generating and staging the runner's sources took and how many files that wrote. (#1820; part of #1815, #1816)
 
 ## 0.3.198 (2026-11-12)
 
