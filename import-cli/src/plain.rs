@@ -471,6 +471,17 @@ fn keep_expansions(
     Ok(())
 }
 
+/// Whether a preparation resolves the API its project's last runner was
+/// resolved for, which it takes while that runner covers it (#1743).
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Resolve {
+    /// The last runner's paths with the program's own, when the program
+    /// names none it didn't.
+    Last,
+    /// The program's own paths.
+    Own,
+}
+
 /// Resolve, extract, check and seal a program's runner with no host profile.
 fn prepare(
     build: rawr_cli::base::Build,
@@ -478,6 +489,18 @@ fn prepare(
     graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+) -> Result<crate::Prepared, crate::Error> {
+    prepare_resolving(build, target, graph, revision, scope, Resolve::Last)
+}
+
+/// [`prepare`], resolving the API `resolve` says.
+fn prepare_resolving(
+    build: rawr_cli::base::Build,
+    target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
+    revision: rawr_import::supervisor::Revision,
+    scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+    resolve: Resolve,
 ) -> Result<crate::Prepared, crate::Error> {
     use crate::Error;
     // The program's parses, read from its cells and remembered: each round's
@@ -518,12 +541,22 @@ fn prepare(
     let mut settlement = rawr_import::bindings::Settlement::default();
     let mut remembered = !crate_demand.is_empty();
     let seed = graph.rust_demand_seed();
+    // The last runner, when this program names no path its API wasn't
+    // resolved for: its API is resolved again, and its runner kept while
+    // it covers the program's native items (#1743).
+    let mut last = crate::runner_demand::load(&project).filter(|last| {
+        resolve == Resolve::Last && last.resolves(&seed) && last.resolves(&crate_demand)
+    });
     // Proof-backed applications of imported calls whose candidate depends
     // on the call's receiver and lexical scope (D650), proved from the
     // dependencies' intrinsic facts, acquired once.
     let mut applications = Vec::new();
     // Whether the check ran again for a new record of native instances.
     let mut instances_retried = false;
+    // What the last check recorded of native code's uses.
+    let mut uses;
+    // The paths the last round resolved the crates' API for.
+    let mut resolved = Vec::new();
     // Why the call a check stopped at has no application, when the check
     // tried to prove it in place.
     let mut unproved = None;
@@ -534,12 +567,16 @@ fn prepare(
         rawr_import::progress::begin_round();
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
+        if let Some(last) = &last {
+            request_demand.extend(last.paths().iter().cloned());
+        }
         // The record a retry stored names types of its own (D869).
         if instances_retried {
             request_demand.extend(graph.rust_demand_seed());
         }
         request_demand.sort_unstable();
         request_demand.dedup();
+        resolved.clone_from(&request_demand);
         let environment = Environment::capture().map_err(Error::other)?;
         let universe = rawr_import::cargo::universe::Catalog::plain().map_err(Error::other)?;
         let request = match graph.rust_import_plain(environment, universe, &request_demand, &limits)
@@ -549,6 +586,11 @@ fn prepare(
                 return Err(Error::other(rawr_import::Error::Request {
                     reason: "the crate has no Rust dependency or native module".into(),
                 }));
+            }
+            // The last runner's paths no longer resolve: the program's own.
+            Err(_) if last.is_some() => {
+                last = None;
+                continue;
             }
             Err(_) if remembered => {
                 remembered = false;
@@ -587,6 +629,14 @@ fn prepare(
         }
         // What a crate derive's expansion runs against: this run's own build.
         let basis = prepared.expansion_basis();
+        // What native code uses of the marked modules, as the same check
+        // recorded it beside the generated crates (D935.3).
+        uses = basis
+            .as_ref()
+            .map(|basis| rawr_import::uses::Uses::recorded(basis.artifacts()))
+            .transpose()
+            .map_err(Error::other)?
+            .flatten();
         rawr_import::progress::phase("reading API");
         let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();
@@ -784,6 +834,22 @@ fn prepare(
     let request = demand
         .request_retained(native, profile, revision)
         .map_err(Error::cache)?;
+    // The last runner, while it covers this program's native items
+    // (#1743); else a runner of the program's own demand.
+    let request = match &last {
+        Some(last) => {
+            let request = request.keeping(last.kept());
+            // Another runner, for an API resolved for more than the
+            // program names: resolve the program's own.
+            if !last.kept().names(&request.build_request_key())
+                && resolved != crate::runner_demand::own(&crate_demand, &seed)
+            {
+                return prepare_resolving(build, target, None, revision, scope, Resolve::Own);
+            }
+            request
+        }
+        None => request,
+    };
     let outputs = rawr_import::location::outputs_here(&project);
     let native = rawr::reload::source::Inputs::imported(request.watch())
         .outside(&outputs)
@@ -791,6 +857,8 @@ fn prepare(
     let inputs = rawr::reload::source::Inputs::from_graph(&source).with_native(&native);
     Ok(
         crate::Prepared::new(request, transport, project, inputs, &graph, limits)
-            .with_settlement(settlement),
+            .with_settlement(settlement)
+            .with_uses(uses)
+            .with_demand(resolved.into_boxed_slice()),
     )
 }

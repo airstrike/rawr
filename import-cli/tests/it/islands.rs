@@ -145,10 +145,11 @@ fn a_pub_type_s_new_derives_swap_and_a_native_use_or_lost_derive_builds_again() 
 }
 
 /// Native code built without an item never names it: a new pub struct
-/// and a new pub fn swap in the running program, and once a native build
-/// has them, taking them away builds again and names them (#1741).
+/// and a new pub fn swap in the running program (#1741), and once a native
+/// build has them, taking them away swaps too, as the build's check
+/// recorded that native code names neither (D935.3).
 #[test]
-fn a_new_pub_item_swaps_and_a_lost_one_builds_again_naming_it() {
+fn a_new_pub_item_swaps_and_a_lost_one_native_code_doesn_t_name_swaps() {
     let root = ISLANDS.project();
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
@@ -188,26 +189,128 @@ fn a_new_pub_item_swaps_and_a_lost_one_builds_again_naming_it() {
     run.until(|line| parse(line) == Some((1, 100)));
     let restarts = run.seen.len();
 
-    // Both gone: native code may name them, so it builds again.
+    // Both gone, and a body edit that says the program runs the save:
+    // native code names neither, so it keeps running.
     let text = fs::read_to_string(&physics).unwrap();
     let (kept, _) = text.split_once("\n#[derive(Debug)]").unwrap();
     fs::write(
         &physics,
-        kept.replace(" + inset().radius as i64 - 1)", ")") + "\n",
+        kept.replace(" + inset().radius as i64 - 1)", ")")
+            .replace("const SCALE: i64 = 100;", "const SCALE: i64 = 10;")
+            + "\n",
     )
     .unwrap();
-    run.until(|line| parse(line) == Some((1, 100)));
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 10));
     let seen = run.seen.join("\n");
+    assert!(parse(&swapped).is_some_and(|(tick, _)| tick > 1), "{seen}");
     assert!(
-        run.seen[restarts..].iter().any(|line| line
-            == "stderr: rawr: native code can no longer see `physics::Inset` and \
-                `physics::inset`; restarting the program"),
+        run.seen[restarts..]
+            .iter()
+            .all(|line| !line.contains("preparing again") && !line.contains("restarting")),
         "{seen}"
     );
 
     fs::write(root.join("stop"), "").unwrap();
     let status = run.wait();
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
+/// A pub item native code names is recorded by the native build's check:
+/// taking it away prepares a new native build, and the line names it, so
+/// rustc says what native code still names (D935.3).
+#[test]
+fn removing_a_pub_item_native_code_names_builds_again_naming_it() {
+    let root = ISLANDS.project();
+    let physics = root.join("src/physics.rs");
+    let events = root.join("events.jsonl");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", root.join("stop")),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+
+    let text = fs::read_to_string(&physics).unwrap();
+    let (kept, _) = text.split_once("\npub fn label").unwrap();
+    fs::write(&physics, format!("{kept}\n")).unwrap();
+    // The new native build fails where native code still names it, as
+    // rustc says, and the last good program keeps running.
+    let told = run.told(&events, |text| text.contains("\"event\":\"failed\""));
+    assert!(told.contains("E0425"), "{told}");
+    run.child.kill().unwrap();
+    run.wait();
+    let seen = run.seen.join("\n");
+    assert!(
+        run.seen.iter().any(|line| line
+            == "stderr: rawr: preparing again: native code can no longer see `physics::label`"),
+        "{seen}"
+    );
+    assert!(!seen.contains("restarting"), "{seen}");
+}
+
+/// A name native code resolves in a scope that glob-imports a marked
+/// module is recorded with the module: a new item of that name shadows
+/// what native code found, here the prelude's `Result`, so it builds
+/// again, as cargo would (#1744). A new item of another name swaps.
+#[test]
+fn a_new_name_a_glob_import_of_a_marked_module_shadows_builds_again() {
+    let root = ISLANDS.project();
+    let physics = root.join("src/physics.rs");
+    let main = root.join("src/main.rs");
+    edit(&main, "mod physics;\n", "mod physics;\nuse physics::*;\n");
+    edit(
+        &main,
+        "fn main() {",
+        "fn ticks(counter: &Counter) -> Result<i64, String> {\n    \
+         Ok(counter.ticks)\n}\n\nfn main() {",
+    );
+    edit(
+        &main,
+        "counter.step();",
+        "counter.step();\n        let _ = ticks(&counter);",
+    );
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+
+    // Another name: in place.
+    let text = fs::read_to_string(&physics).unwrap();
+    fs::write(
+        &physics,
+        text.replace("const SCALE: i64 = 1;", "const SCALE: i64 = 100;")
+            + "\npub type Outcome = std::result::Result<i64, String>;\n",
+    )
+    .unwrap();
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
+    assert!(parse(&swapped).is_some_and(|(tick, _)| tick > 3));
+    let restarts = run.seen.len();
+
+    // The prelude's name: native code would find the module's now.
+    let text = fs::read_to_string(&physics).unwrap();
+    fs::write(
+        &physics,
+        text + "\npub type Result<T, E = String> = std::result::Result<T, E>;\n",
+    )
+    .unwrap();
+    run.until(|line| parse(line) == Some((1, 100)));
+    let seen = run.seen.join("\n");
+    assert!(
+        run.seen[..restarts]
+            .iter()
+            .all(|line| !line.contains("preparing again") && !line.contains("restarting")),
+        "{seen}"
+    );
+    assert!(
+        run.seen[restarts..].iter().any(|line| line
+            == "stderr: rawr: native code now finds `physics::Result` through a glob import; \
+                restarting the program"),
+        "{seen}"
+    );
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{seen}");
 }
 
 /// A supervised run whose marked file fails its check says `failed` and
@@ -1530,6 +1633,64 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     assert!(written.is_empty(), "written again: {written:?}\n{said}");
 }
 
+/// A save that drops a crate call from a marked function swaps, and the
+/// next start keeps the runner it ran on, which still covers the smaller
+/// demand, instead of building one for it (#1743): no runner build.
+#[test]
+fn a_start_after_a_save_that_dropped_a_native_use_builds_no_runner() {
+    let root = THEME.project();
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    // `ui::base` at the marked theme: its only marked call.
+    edit(
+        &root.join("src/home.rs"),
+        "        ui::base(theme)\n",
+        "        \"base\"\n",
+    );
+    edit(
+        &root.join("src/widget/sidebar.rs"),
+        "\"{label} row\"",
+        "\"{label} item\"",
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick item styled 0"));
+    let told = run.told(&events, |text| text.contains("\"swapped\""));
+    assert!(!told.contains("\"preparing\""), "{told}");
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+
+    // The next start, which ends at once.
+    let second = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env("RAWR_VERBOSE", "1")
+        .env("ISLANDS_STOP", &stop)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "{said}");
+    let started = said
+        .lines()
+        .find(|line| line.starts_with("rawr-import: a start ran "))
+        .unwrap_or_else(|| panic!("{said}"));
+    assert!(started.contains(", runner builds 0,"), "{started}\n{said}");
+}
+
 /// A marked function generic over the message that native code calls
 /// through a generic native helper, as inboard's `small_input` calls
 /// `row_group`, swaps a body edit into the running program: the instance
@@ -1825,22 +1986,17 @@ fn a_save_parses_only_the_file_it_changed() {
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
-    // Only the field and the `cfg` build native code again. The runner
-    // each starts lowers again only the files that name what the save
-    // changed, from what the earlier runner kept (#1725).
+    // Only the field builds native code again: native code holds a
+    // `State`, and names no `widget::sidebar::default`, which the `cfg`
+    // takes away in place (D935.3). The runner the field starts lowers
+    // again only the file that names what the save changed, from what the
+    // earlier runner kept (#1725).
     let prepared = run
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr: preparing again: "))
         .collect::<Vec<_>>();
-    assert_eq!(
-        prepared,
-        [
-            "`home::State` changed its fields",
-            "native code can no longer see `widget::sidebar::default`",
-        ],
-        "{seen}"
-    );
+    assert_eq!(prepared, ["`home::State` changed its fields"], "{seen}");
     let started = run
         .seen
         .iter()
@@ -1852,10 +2008,8 @@ fn a_save_parses_only_the_file_it_changed() {
             [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
         })
         .collect::<Vec<_>>();
-    // The field: `home.rs` alone, which declares `State`. The `cfg`: the
-    // sidebar it changed, and `sidebar.rs` and `theme.rs`, which write
-    // `default`.
-    assert_eq!(started[1..], [[1, 1], [3, 3]], "{seen}");
+    // The field: `home.rs` alone, which declares `State`.
+    assert_eq!(started[1..], [[1, 1]], "{seen}");
     // Each save says what it did; one the watcher heard twice compiles the
     // same text again and parses nothing.
     let parsed = |prefix: &str, rest: &str| {
@@ -1877,7 +2031,7 @@ fn a_save_parses_only_the_file_it_changed() {
             "stderr: rawr-import: a save parsed ",
             ", Cargo resolutions 0, API tables loaded 0, facades registered 0, watch roots staged 0"
         ),
-        8,
+        9,
         "{seen}"
     );
     // The runner reads for its instances and lowers again only the file
@@ -1898,8 +2052,11 @@ fn a_save_parses_only_the_file_it_changed() {
         })
         .filter(|counts| *counts != [0; 3])
         .collect::<Vec<_>>();
-    // The save with the error fails as it reveals, and lowers nothing.
+    // The `cfg` swaps in place, and lowers again the sidebar it changed
+    // and `sidebar.rs` and `theme.rs`, which write `default`. The save with
+    // the error fails as it reveals, and lowers nothing.
     let mut saved = vec![[1, 1, 1]; 8];
+    saved.push([1, 3, 3]);
     saved.push([1, 1, 0]);
     assert_eq!(runner, saved, "{seen}");
 }

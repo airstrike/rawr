@@ -34,7 +34,10 @@
 //! function body, a private item) swaps in the running program at the
 //! next call through a trampoline, and so does a type's new derive or a
 //! new item native code can see, which the native code built without it
-//! never names (#1737, #1741).
+//! never names (#1737, #1741). With the uses the running build's check
+//! recorded, a change needs a new native build only where it reaches one
+//! of them, so an item native code doesn't name goes away in place too
+//! (`reach`, D935.3).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -42,6 +45,9 @@ use std::path::Path;
 
 use crate::item::{self, type_ref};
 use crate::{ImmutableString, Span};
+
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+mod reach;
 
 /// The module of the shadow crate's root that holds the island's runtime
 /// support. The Rawr root calls its `main` to start the program.
@@ -189,6 +195,10 @@ enum Kind {
     /// maker the runner looks up to give a marked value to native code as
     /// a `dyn Trait` (#1741).
     Implicit,
+    /// A trait impl's function, or the impl when it has none: native code
+    /// calls it through the trait, for a value of a type its header names,
+    /// without naming it.
+    Impl,
     Other,
 }
 
@@ -228,7 +238,7 @@ impl Shape {
         }
         let what = |kind: Kind| match kind {
             Kind::Type => "its fields",
-            Kind::Function => "its signature",
+            Kind::Function | Kind::Impl => "its signature",
             Kind::Constant => "its value, which native code reads",
             Kind::Implicit | Kind::Other => "what native code sees of it",
         };
@@ -2123,7 +2133,7 @@ impl<'a> Generator<'a> {
             shape.insert(
                 prefix.clone(),
                 Entry {
-                    kind: Kind::Other,
+                    kind: Kind::Impl,
                     text: format!("{header} {{}}"),
                 },
             );
@@ -2132,7 +2142,8 @@ impl<'a> Generator<'a> {
         // Drop glue calls a `Drop` impl's `drop` unnamed.
         let kind = match trait_.and_then(|path| path.segments.last()) {
             Some(last) if last.name.text == "Drop" => Kind::Implicit,
-            _ => Kind::Function,
+            Some(_) => Kind::Impl,
+            None => Kind::Function,
         };
         let mut beside = Vec::new();
         for function in functions {
@@ -2171,7 +2182,7 @@ impl<'a> Generator<'a> {
             shape.insert(
                 format!("{prefix}::{GIVE}"),
                 Entry {
-                    kind: Kind::Function,
+                    kind: Kind::Impl,
                     text: format!("{header}\n{given}"),
                 },
             );
@@ -7952,6 +7963,119 @@ mod tests {
             ball("impl page::Page for Ball { fn title(&self) -> String { String::new() } }\n");
         assert_eq!(
             before.shape.change(&held.shape).as_deref(),
+            Some("native code can now see `physics::Ball as dyn page::Page`")
+        );
+    }
+
+    /// With the uses the running build's check recorded, a change needs a
+    /// new native build only where it reaches one (D935.3): an item native
+    /// code doesn't name goes away in place, one it names or a type it
+    /// holds builds again and is named, and a new item builds again only
+    /// where native code looked its name up (#1744).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_change_builds_again_only_where_it_reaches_a_recorded_use() {
+        let ball = |more: &str| {
+            generate(&format!(
+                "// rawr\nuse crate::page;\npub struct Ball {{ pub x: f64 }}\n\
+                 impl Ball {{ pub fn rise(&mut self) {{ self.x += 1.0; }} }}\n\
+                 pub fn fall(ball: &mut Ball) {{ ball.x -= 1.0; }}\n{more}"
+            ))
+        };
+        let mut recorder = rawr_import::uses::Recorder::default();
+        recorder.name("physics::Ball".to_owned());
+        recorder.hold("physics::Ball".to_owned());
+        recorder.name("physics::fall".to_owned());
+        recorder.probe("physics::Ball", "rise");
+        recorder.probe("physics::Ball", "describe");
+        recorder.scope("physics", "Result");
+        recorder.trait_("Clone".to_owned());
+        let uses = recorder.finish();
+        let before = ball("pub fn inset() -> f32 { 1.0 }\n");
+        // Gone, unnamed: in place. Gone, named: again, naming it.
+        let unnamed = ball("");
+        assert_eq!(before.shape.used_change(&unnamed.shape, &uses), None);
+        assert!(before.shape.change(&unnamed.shape).is_some());
+        let named = generate(
+            "// rawr\nuse crate::page;\npub struct Ball { pub x: f64 }\n\
+             impl Ball { pub fn rise(&mut self) { self.x += 1.0; } }\n\
+             pub fn inset() -> f32 { 1.0 }\n",
+        );
+        assert_eq!(
+            before.shape.used_change(&named.shape, &uses).as_deref(),
+            Some("native code can no longer see `physics::fall`")
+        );
+        // A held type's fields, and a named function's signature.
+        let fields = generate(
+            "// rawr\nuse crate::page;\npub struct Ball { pub x: f64, pub y: f64 }\n\
+             impl Ball { pub fn rise(&mut self) { self.x += 1.0; } }\n\
+             pub fn fall(ball: &mut Ball) { ball.x -= 1.0; }\npub fn inset() -> f32 { 1.0 }\n",
+        );
+        assert_eq!(
+            before.shape.used_change(&fields.shape, &uses).as_deref(),
+            Some("`physics::Ball` changed its fields")
+        );
+        let signature = ball("pub fn inset() -> f64 { 1.0 }\n");
+        assert_eq!(before.shape.used_change(&signature.shape, &uses), None);
+        // A new name where native code looked: a member it probed, a name a
+        // glob of the module resolved, a trait it uses for a held type.
+        let probed = ball("impl Ball { pub fn describe(&self) {} }\n");
+        assert_eq!(
+            unnamed.shape.used_change(&probed.shape, &uses).as_deref(),
+            Some("native code now finds `physics::Ball::describe` where it looked up its name")
+        );
+        let shadowing = ball("pub type Result = std::result::Result<(), ()>;\n");
+        assert_eq!(
+            unnamed
+                .shape
+                .used_change(&shadowing.shape, &uses)
+                .as_deref(),
+            Some("native code now finds `physics::Result` through a glob import")
+        );
+        let elsewhere = ball("pub type Outcome = std::result::Result<(), ()>;\n");
+        assert_eq!(unnamed.shape.used_change(&elsewhere.shape, &uses), None);
+        let defaulted =
+            ball("impl Default for Ball { fn default() -> Ball { Ball { x: 0.0 } } }\n");
+        assert_eq!(unnamed.shape.used_change(&defaulted.shape, &uses), None);
+        let cloned =
+            ball("impl Clone for Ball { fn clone(&self) -> Ball { Ball { x: self.x } } }\n");
+        assert_eq!(
+            unnamed.shape.used_change(&cloned.shape, &uses).as_deref(),
+            Some("native code may now select `physics::Ball::Clone::clone`")
+        );
+        // A derive: a lost one on a held type builds again, a new one only
+        // for a trait native code uses.
+        let derived = |derives: &str| {
+            generate(&format!(
+                "// rawr\n{derives}pub struct Ball {{ pub x: f64 }}\n\
+                 pub fn fall(ball: &mut Ball) {{ ball.x -= 1.0; }}\n"
+            ))
+        };
+        assert_eq!(
+            derived("")
+                .shape
+                .used_change(&derived("#[derive(Debug)]\n").shape, &uses),
+            None
+        );
+        assert_eq!(
+            derived("")
+                .shape
+                .used_change(&derived("#[derive(Clone)]\n").shape, &uses)
+                .as_deref(),
+            Some("`physics::Ball` derives Clone now")
+        );
+        assert_eq!(
+            derived("#[derive(Debug)]\n")
+                .shape
+                .used_change(&derived("").shape, &uses)
+                .as_deref(),
+            Some("`physics::Ball` no longer derives Debug")
+        );
+        // A stand-in, reached through a trait object native code holds.
+        let held =
+            ball("impl page::Page for Ball { fn title(&self) -> String { String::new() } }\n");
+        assert_eq!(
+            unnamed.shape.used_change(&held.shape, &uses).as_deref(),
             Some("native code can now see `physics::Ball as dyn page::Page`")
         );
     }
