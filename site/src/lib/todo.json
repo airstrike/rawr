@@ -3922,7 +3922,9 @@
     {"issue":1790,"title":"rawr run's cargo check of a project leaves superseded check units in the project's target","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1791,"title":"Other toolchains' nightly build directories in rawr home retire by a day of idleness, not by state","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1792,"title":"The runner compiles its generated crates without debug info","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.192"},
-    {"issue":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1794,"title":"Every native preparation builds a new harness, copies 3045 files, seals and probes twice: 74 s on inboard","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5108,7 +5110,9 @@
             {"number":1788,"title":"A fresh rawr check or a new rawr run keeps no fragment reads and re-reads every sidecar","state":"open"},
             {"number":1789,"title":"The restart's runner build after a field change takes 117 s on inboard where cargo builds the crate in about 20 s","state":"open"},
             {"number":1792,"title":"The runner compiles its generated crates without debug info","state":"closed"},
-            {"number":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open"}
+            {"number":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open"},
+            {"number":1794,"title":"Every native preparation builds a new harness, copies 3045 files, seals and probes twice: 74 s on inboard","state":"open"},
+            {"number":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"open"}
           ]
         },
         {
