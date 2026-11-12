@@ -404,11 +404,12 @@ fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
     assert!(failure.contains("mismatched types"), "{failure}");
 }
 
-/// A supervised run whose program ends says `ended` and waits for a save.
-/// A wait for a line the program never printed ends there, with what the
-/// run printed, instead of waiting for that save.
+/// A supervised run whose program returns from `main` says `ended` and
+/// ends with the program's status 0, instead of waiting for a save
+/// (#1800). A wait for a line the program never printed ends there, with
+/// what the run printed.
 #[test]
-fn a_wait_ends_when_the_program_ends_without_its_line() {
+fn a_program_that_returns_from_main_ends_the_run_with_status_0() {
     let root = ISLANDS.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -416,17 +417,23 @@ fn a_wait_ends_when_the_program_ends_without_its_line() {
     fs::write(&stop, "").unwrap();
     let mut run = start(
         &root,
-        &[("ISLANDS_STOP", stop), ("RAWR_MCP_EVENTS", events)],
+        &[("ISLANDS_STOP", stop), ("RAWR_MCP_EVENTS", events.clone())],
     );
     let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run.until(|line| parse(line).is_some())
     }));
     let failure = waited.expect_err("the program ticked");
     let failure = failure.downcast_ref::<String>().map_or("", String::as_str);
+    assert!(failure.contains(" without it\n"), "{failure}");
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    let told = fs::read_to_string(&events).unwrap();
     assert!(
-        failure.starts_with("the program ended ({\"event\":\"ended\",\"status\":0}) without it"),
-        "{failure}"
+        told.contains("{\"event\":\"ended\",\"status\":0}"),
+        "{told}"
     );
+    assert!(!seen.contains("a save runs it again"), "{seen}");
 }
 
 /// A package whose `target` holds a big subtree that git ignores, as a
@@ -580,7 +587,7 @@ fn swapped_is_told_before_the_call_that_admits_the_save_runs() {
         run.seen.join("\n")
     );
 
-    // A supervised run waits for the next save once its program ends.
+    // A program that returns from `main` ends the run with it (#1800).
     fs::write(&stop, "").unwrap();
     let ended = run.told(&events, |text| text.contains("\"ended\""));
     assert!(
@@ -3315,7 +3322,7 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
     run.until(|line| line == "line beta!");
     drop(stdin);
     run.until(|line| line == "done");
-    // Supervised, the run outlives its program, which a save would run again.
+    // The program returns from `main`, which ends the run with it (#1800).
     let told = run.told(&events, |text| text.contains("\"ended\""));
     assert!(told.contains(r#""status":0"#), "{told}");
     assert!(

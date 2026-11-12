@@ -309,7 +309,7 @@ fn new_check_and_run_make_and_run_a_plain_crate_with_arguments_and_stdin() {
 }
 
 #[test]
-fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
+fn a_started_program_that_returns_from_main_ends_its_session() {
     let sandbox = Sandbox::new("mcp-start");
     let mut client = Client::start(&sandbox);
     client.request("initialize", json!({ "protocolVersion": "2025-06-18" }));
@@ -320,12 +320,16 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
 
     let started = client.call("start", json!({ "path": "app" }));
     assert_eq!(started["isError"], false, "{started}");
-    let state = started["structuredContent"]["state"]
+    let mut state = started["structuredContent"]["state"]
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(state == "running" || state == "ended", "{started}");
-    // The program ends; `wait` returns that, with what it printed.
+    assert!(
+        ["running", "ended", "exited"].contains(&state.as_str()),
+        "{started}"
+    );
+    // The program returns from `main`, which ends `rawr run` with status 0
+    // (#1800); `wait` returns that, with what it printed.
     let mut seen: Vec<String> = started["structuredContent"]["events"]
         .as_array()
         .unwrap()
@@ -336,7 +340,8 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    while !seen.iter().any(|event| event == "ended") {
+    let mut status = started["structuredContent"]["status"].clone();
+    while state != "exited" {
         let waited = client.call("wait", json!({ "path": "app" }));
         output.push_str(
             waited["structuredContent"]["stdout"]
@@ -346,12 +351,28 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
         for event in waited["structuredContent"]["events"].as_array().unwrap() {
             seen.push(event["event"].as_str().unwrap().to_owned());
         }
+        state = waited["structuredContent"]["state"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        status = waited["structuredContent"]["status"].clone();
     }
+    assert!(seen.iter().any(|event| event == "ended"), "{seen:?}");
+    assert_eq!(status, 0);
     assert!(output.contains("one\n"), "{output}");
 
-    // Supervised, an ended program runs again on the next save.
-    std::fs::write(&main, "// rawr\nfn main() {\n    println!(\"two\");\n}\n").unwrap();
-    let mut output = String::new();
+    // `start` runs it again, here as a program that keeps running.
+    std::fs::write(
+        &main,
+        "// rawr\nfn main() {\n    println!(\"two\");\n    loop {\n        std::thread::sleep(std::time::Duration::from_millis(50));\n    }\n}\n",
+    )
+    .unwrap();
+    let started = client.call("start", json!({ "path": "app" }));
+    assert_eq!(started["isError"], false, "{started}");
+    let mut output = started["structuredContent"]["stdout"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     while !output.contains("two") {
         let waited = client.call("wait", json!({ "path": "app" }));
         output.push_str(

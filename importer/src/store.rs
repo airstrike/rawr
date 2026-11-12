@@ -1889,22 +1889,41 @@ impl Store {
             })
     }
 
+    /// Check that `expected` is still in the store as a read set recorded
+    /// it. An entry whose files are gone, as when a project's `target` is
+    /// deleted under a running owner, is stale: the run starts again and
+    /// rebuilds it, as a cold start would (#1802). Files that are there and
+    /// differ are corrupt.
     pub(crate) fn revalidate_read_set_entry(
         &self,
         expected: Entry,
         budget: &crate::node::GraphBudget,
     ) -> Result<(), Error> {
+        self.revalidate_present_read_set_entry(expected, budget)
+            .map_err(|error| match error {
+                Error::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+                    Error::StaleReadSet {
+                        action: expected.action,
+                    }
+                }
+                error => error,
+            })
+    }
+
+    fn revalidate_present_read_set_entry(
+        &self,
+        expected: Entry,
+        budget: &crate::node::GraphBudget,
+    ) -> Result<(), Error> {
+        let gone = || Error::StaleReadSet {
+            action: expected.action,
+        };
         let action_relative = PathBuf::from("actions")
             .join(expected.kind.directory())
             .join(crate::node::STORAGE_DIRECTORY)
             .join(expected.action.directory());
         let action =
-            entry::existing_directory_budgeted(&self.root, &action_relative)?.ok_or_else(|| {
-                Error::Corrupt {
-                    path: self.root.join(&action_relative),
-                    reason: "read-set action directory is missing",
-                }
-            })?;
+            entry::existing_directory_budgeted(&self.root, &action_relative)?.ok_or_else(gone)?;
         let envelope_path = action.join("envelope");
         let envelope_bytes = entry::read_whole(&envelope_path)?;
         let action_record = self.validate_allocation_record(
@@ -1939,11 +1958,8 @@ impl Store {
             .join(expected.kind.directory())
             .join(format!("{:08x}", expected.schema))
             .join(expected.content.directory());
-        let content = entry::existing_directory_budgeted(&self.root, &content_relative)?
-            .ok_or_else(|| Error::Corrupt {
-                path: self.root.join(&content_relative),
-                reason: "read-set content directory is missing",
-            })?;
+        let content =
+            entry::existing_directory_budgeted(&self.root, &content_relative)?.ok_or_else(gone)?;
         let payload = content.join("payload");
         // Both payload digests are pure functions of its bytes: computed once
         // per physical identity and reused by every later revalidation.

@@ -58,7 +58,7 @@ fn file() -> Option<&'static Mutex<File>> {
 }
 
 /// Whether a `rawr mcp` server supervises this run: it reads the events,
-/// and a program that ends runs again on the next save, as at a terminal.
+/// and a program that fails runs again on the next save, as at a terminal.
 #[must_use]
 pub fn supervised() -> bool {
     std::env::var_os(EVENTS).is_some_and(|path| !path.is_empty())

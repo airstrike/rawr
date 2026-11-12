@@ -2872,6 +2872,71 @@ fn final_read_set_rejects_content_drift_after_it_was_sealed() {
     fs::remove_dir_all(root).expect("the read-set-content fixture retires");
 }
 
+/// A read set whose entry's action directory is gone, as when a project's
+/// `target` is deleted under a running owner, is stale, not corrupt, so the
+/// run starts again (#1802). With the whole store gone, the store the next
+/// attempt opens misses and rebuilds the entry, as a cold start would. A
+/// truncated payload stays corrupt.
+#[test]
+fn a_read_set_entry_whose_action_directory_is_gone_is_stale_and_rebuilds() {
+    let root = temporary("read-set-gone");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the typed store opens");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let recipe = context
+        .direct::<Artifact>(b"read-set-gone")
+        .expect("the direct recipe seals");
+    let built = std::cell::Cell::new(0);
+    let build = || {
+        built.set(built.get() + 1);
+        Ok(Artifact(b"read-set-gone".to_vec().into_boxed_slice()))
+    };
+    let validated = evaluator
+        .direct(&recipe, build)
+        .expect("the direct node publishes");
+    let proof = evaluator
+        .seal_read_set([validated.receipt().read_set().clone()])
+        .expect("the final read set seals");
+    let action = find_file(store.root(), "envelope")
+        .parent()
+        .expect("the envelope is in its action directory")
+        .to_path_buf();
+    fs::remove_dir_all(&action).expect("the fixture deletes the action directory");
+    assert!(matches!(
+        evaluator.revalidate_read_set(&proof),
+        Err(Error::StaleReadSet { action }) if action == validated.receipt().action()
+    ));
+
+    // The project's `target` is deleted: the next attempt opens a new store.
+    fs::remove_dir_all(store.root()).expect("the fixture deletes the store");
+    let store = context.open_store().expect("a deleted store opens empty");
+    let evaluator = Evaluator::new(&store, &counts);
+    let rebuilt = evaluator
+        .direct(&recipe, build)
+        .expect("the missing entry rebuilds");
+    assert_eq!(built.get(), 2);
+    let proof = evaluator
+        .seal_read_set([rebuilt.receipt().read_set().clone()])
+        .expect("the rebuilt read set seals");
+    evaluator
+        .revalidate_read_set(&proof)
+        .expect("the rebuilt entry revalidates");
+
+    let payload = find_file(store.root(), "payload");
+    let length = fs::metadata(&payload).expect("the payload is there").len();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&payload)
+        .and_then(|file| file.set_len(length - 1))
+        .expect("the fixture truncates the payload");
+    assert!(matches!(
+        evaluator.revalidate_read_set(&proof),
+        Err(Error::Corrupt { .. })
+    ));
+    fs::remove_dir_all(root).expect("the read-set-gone fixture retires");
+}
+
 #[test]
 fn four_pin_roles_deduplicate_one_exact_closure_and_repeat_without_mutation() {
     use crate::store::PinRole;

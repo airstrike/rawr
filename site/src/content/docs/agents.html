@@ -66,7 +66,7 @@
   <li><code>preparing</code>: a save can&rsquo;t compile inside the running program, for the reason given, so rawr prepares it again.</li>
   <li><code>restarting</code>: a save restarts the program, for the reason given.</li>
   <li><code>failed</code>: a start or a save failed, with diagnostics. The last good program keeps running.</li>
-  <li><code>ended</code>: the program ended, with its status. The next save runs it again.</li>
+  <li><code>ended</code>: the program ended, with its status. A program that panicked or exited with an error runs again on the next save. One that exited with status 0 ends the session, which then reads <code>exited</code>, and <code>start</code> runs it again.</li>
   <li><code>paused</code>: the program paused at a breakpoint or after a step, with its file, line and function. <code>wait</code> and <code>status</code> then say <code>paused</code>.</li>
   <li><code>resumed</code>: a paused program went on.</li>
 </ul>
