@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.190",
+  "version": "0.3.191",
   "examples": {
     "running": 34,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.191",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A save that changes a held type in your program rebuilds only rawr's copy of your crate, the runner code that names it, and the runner: 3 units where it was 6 on a test project.","issues":[1775]},
+          {"text":"rawr and `cargo build` share the units of your project's path packages, so neither rebuilds them after the other.","issues":[1777]}
+        ]
+      },
       {
         "version": "0.3.190",
         "date": "2026-11-12",
@@ -3888,13 +3896,16 @@
     {"issue":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1773,"title":"A crate opaque output that captures a named &'a str input fails to compile in the runner (E0597)","state":"open","category":"Divergences from rustc"},
     {"issue":1774,"title":"A crate function written -> impl Trait + use<..> is missing from its facade (E0425)","state":"open","category":"Divergences from rustc"},
-    {"issue":1775,"title":"The runner's base and every adapter crate recompile for any edit to the project's crate","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1775,"title":"The runner's base and every adapter crate recompile for any edit to the project's crate","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.191"},
     {"issue":1776,"title":"The probe re-extracts and canonicalizes every root's API after an edit to one crate","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1777,"title":"rawr's runner builds the project's path packages under different hashes from cargo build","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1778,"title":"scripts/cargo.mjs prunes rawr's runner units in a rawr project's target","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1777,"title":"rawr's runner builds the project's path packages under different hashes from cargo build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.191"},
+    {"issue":1778,"title":"scripts/cargo.mjs prunes rawr's runner units in a rawr project's target","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1779,"title":"rawr's nightly check of the project's crate runs incrementally","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.190"},
     {"issue":1780,"title":"islands::a_second_run_of_an_unchanged_project_rebuilds_nothing fails: the second run adds shared digests","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1781,"title":"When a new runner replaces an old one, the old runner has already exited 0 before its Shutdown","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1781,"title":"When a new runner replaces an old one, the old runner has already exited 0 before its Shutdown","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1782,"title":"scripts/cargo.mjs keeps every incremental session in a crate's directory: 13 GB, 396 sessions over 123 crates","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1783,"title":"A project's target holds rawr runner units from every rawr build: inboard's target/debug is 43 GB and target/rawr 18 GB","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1784,"title":"A runner over a program whose script types never reach native code keeps its base depending on the program's crate","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5069,11 +5080,12 @@
             {"number":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"closed"},
             {"number":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"closed"},
             {"number":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open"},
-            {"number":1775,"title":"The runner's base and every adapter crate recompile for any edit to the project's crate","state":"open"},
+            {"number":1775,"title":"The runner's base and every adapter crate recompile for any edit to the project's crate","state":"closed"},
             {"number":1776,"title":"The probe re-extracts and canonicalizes every root's API after an edit to one crate","state":"open"},
-            {"number":1777,"title":"rawr's runner builds the project's path packages under different hashes from cargo build","state":"open"},
-            {"number":1778,"title":"scripts/cargo.mjs prunes rawr's runner units in a rawr project's target","state":"open"},
-            {"number":1779,"title":"rawr's nightly check of the project's crate runs incrementally","state":"closed"}
+            {"number":1777,"title":"rawr's runner builds the project's path packages under different hashes from cargo build","state":"closed"},
+            {"number":1778,"title":"scripts/cargo.mjs prunes rawr's runner units in a rawr project's target","state":"closed"},
+            {"number":1779,"title":"rawr's nightly check of the project's crate runs incrementally","state":"closed"},
+            {"number":1784,"title":"A runner over a program whose script types never reach native code keeps its base depending on the program's crate","state":"open"}
           ]
         },
         {
@@ -5244,7 +5256,9 @@
             {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
             {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"},
             {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed"},
-            {"number":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open"}
+            {"number":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open"},
+            {"number":1782,"title":"scripts/cargo.mjs keeps every incremental session in a crate's directory: 13 GB, 396 sessions over 123 crates","state":"closed"},
+            {"number":1783,"title":"A project's target holds rawr runner units from every rawr build: inboard's target/debug is 43 GB and target/rawr 18 GB","state":"open"}
           ]
         },
         {

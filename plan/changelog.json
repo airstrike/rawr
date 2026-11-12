@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.191",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"A save that changes a held type in your program rebuilds only rawr's copy of your crate, the runner code that names it, and the runner: 3 units where it was 6 on a test project.","issues":[1775]},
+        {"text":"rawr and `cargo build` share the units of your project's path packages, so neither rebuilds them after the other.","issues":[1777]}
+      ]
+    },
+    {
       "version": "0.3.190",
       "date": "2026-11-12",
       "entries": [
