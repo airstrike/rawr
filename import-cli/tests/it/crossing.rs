@@ -510,6 +510,72 @@ fn a_crate_generic_only_an_opaque_output_names_needs_an_expected_type() {
     assert!(stderr.contains("type annotations needed"), "{stderr}");
 }
 
+/// elevato's view with a lifetime (#1804): the crate's `floors<'a,
+/// Message: 'a>(floors: u8) -> impl Widget<Message> + 'a`, given by a free
+/// function whose `impl Widget<Message>` fixes `Message`. The output is
+/// `cargo run`'s.
+#[test]
+fn an_outliving_opaque_output_takes_the_expected_type() {
+    let (rawr, cargo) = both_printed("elevated_lifetimes.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 floors 0 <'Increment'> 3@16"),
+        "{rawr}"
+    );
+}
+
+/// elevato's view over an extension trait (#1804): the crate's
+/// `shaft<Message>(..) -> impl Framed<Message>`, `Framed` defaulting its
+/// theme and renderer and extending `Widget` through a blanket impl, is
+/// fixed by an enclosing `impl Framed<Message>` and by an `impl
+/// Widget<Message>` only the supertrait names. The output is `cargo run`'s.
+#[test]
+fn an_extension_traits_opaque_output_takes_the_expected_type() {
+    let (rawr, cargo) = both_printed("elevated_extension.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("last view pad 0 floors 0 floors 0 <'Increment'> 3@16"),
+        "{rawr}"
+    );
+}
+
+/// elevato's view from a method (#1804): `fn lobby(&self, building:
+/// &Building) -> impl Widget<Message>` gives the crate's
+/// `lobby(building.floors)`, with the crate's own `Message` imported by a
+/// `use`. The output is `cargo run`'s.
+#[test]
+fn a_methods_opaque_output_of_an_imported_message_takes_the_expected_type() {
+    let (rawr, cargo) = both_printed("elevated_method.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("3 message Call") && rawr.contains("last view pad 0 floors 0"),
+        "{rawr}"
+    );
+}
+
+/// elevato's program (#1804): the `game` crate's `view<'a, Message:
+/// 'a>(..) -> impl Framed<Message> + 'a` over `events`'s extension trait,
+/// whose defaulted renderer `game` can't name, given by a method
+/// `view(&self, building: &Building) -> impl Framed<Message>` with
+/// `game`'s re-exported `Message`. The opaque type's impl leaves the
+/// renderer to the trait's default, as rustc reads the bound. The output
+/// is `cargo run`'s.
+#[test]
+fn another_crates_extension_trait_output_takes_the_expected_type() {
+    let manifest = CROSSING.read("Cargo.toml").replace(
+        "[dependencies]",
+        "[dependencies]\ngame = { path = \"game\" }",
+    );
+    let main = CROSSING.read("variants/elevated_game.rs");
+    let root = CROSSING.lease(&[("Cargo.toml", &manifest), ("src/main.rs", &main)]);
+    let (rawr, cargo) = both_printed_in(&root, "", &[]);
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view game floors 0") && rawr.ends_with("last view game floors 0"),
+        "{rawr}"
+    );
+}
+
 /// iced's `ViewFn` shape, as elevato's game (#1770): the crate's `run`
 /// takes `Program::view` as a higher-ranked `View<'a, P, M>`, whose blanket
 /// impl for every `Fn(&'a P, &'a Building) -> W` gives what the method

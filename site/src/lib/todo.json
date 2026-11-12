@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.196",
+  "version": "0.3.197",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,13 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"rawr's copy of a crate with marked modules builds its generated glue only where it is called, roughly halving the copy's codegen: 3,522 functions instead of 9,124 on a 13-screen test app.","issues":[1806],"refs":[1801]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.197",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"rawr's copy of a crate with marked modules builds its generated glue only where it is called, roughly halving the copy's codegen: 3,522 functions instead of 9,124 on a 13-screen test app.","issues":[1806],"refs":[1801]},
+          {"text":"A crate function whose output is `impl Trait<T>` of another crate's trait, as elevato's `view` over iced's `Widget`, takes `T` from the expected type even where the trait's defaulted parameters name types the crate can't, so `elevato::view(building)` needs no `::<Message>`.","issues":[1804]}
+        ]
+      },
       {
         "version": "0.3.196",
         "date": "2026-11-12",
@@ -3970,12 +3973,15 @@
     {"issue":1801,"title":"rawr's copy of the program's crate compiles about 3.5 times slower than cargo's build of it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.196"},
     {"issue":1803,"title":"After a native edit removed a function's generic, the runner still called it with the old turbofish (E0107)","state":"open","category":"Divergences from rustc"},
-    {"issue":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"open","category":"Divergences from rustc"},
+    {"issue":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"closed","category":"Divergences from rustc","release":"0.3.197"},
     {"issue":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.197"},
     {"issue":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4659,7 +4665,7 @@
             {"number":1796,"title":"A slot's inputs all take the lifetime its borrowing output has","state":"open"},
             {"number":1797,"title":"crossing::an_opaque_widget_takes_the_types_a_later_use_fixes fails E0308 in an opaque table entry on main","state":"closed"},
             {"number":1803,"title":"After a native edit removed a function's generic, the runner still called it with the old turbofish (E0107)","state":"open"},
-            {"number":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"open"}
+            {"number":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"closed"}
           ]
         }
       ]
@@ -5202,7 +5208,10 @@
             {"number":1780,"title":"islands::a_second_run_of_an_unchanged_project_rebuilds_nothing fails: the second run adds shared digests","state":"closed"},
             {"number":1781,"title":"When a new runner replaces an old one, the old runner has already exited 0 before its Shutdown","state":"open"},
             {"number":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"closed"},
-            {"number":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open"}
+            {"number":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open"},
+            {"number":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"open"},
+            {"number":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"open"},
+            {"number":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"open"}
           ]
         },
         {
