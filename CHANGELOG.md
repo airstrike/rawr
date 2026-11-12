@@ -5,9 +5,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.189 (2026-11-11)
+
 - Checking a project from a terminal and then from an editor or script that sets `CARGO_HOME` to its default path no longer rebuilds the dependencies with the nightly every round. An unset `CARGO_HOME` and its default path are the same home, a `CARGO_HOME` reached through a symlink works, and a shared table settled under other inputs costs one build, then replays. (#1754)
 - A start after a save that dropped a crate call from a marked function keeps the runner it ran on, which still covers the program, instead of building a new one. (#1743)
 - Removing a pub item from a marked module swaps into the running program unless native code names it, and a new marked item that shadows a name native code resolves through a glob import rebuilds native code, as cargo would. (#1756; part of #1744)
+- A restart that needs no new native build, such as a save the running program refuses or a panic after a swap, starts a new process of the running runner with no check, in about 0.1 s on a small project instead of a full start. The new program starts with fresh state. (#1764; part of #1755)
 
 ## 0.3.188 (2026-11-11)
 

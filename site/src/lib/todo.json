@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-11",
-  "version": "0.3.188",
+  "version": "0.3.189",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,15 +9,18 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Checking a project from a terminal and then from an editor or script that sets `CARGO_HOME` to its default path no longer rebuilds the dependencies with the nightly every round. An unset `CARGO_HOME` and its default path are the same home, a `CARGO_HOME` reached through a symlink works, and a shared table settled under other inputs costs one build, then replays.","issues":[1754]},
-        {"text":"A start after a save that dropped a crate call from a marked function keeps the runner it ran on, which still covers the program, instead of building a new one.","issues":[1743]},
-        {"text":"Removing a pub item from a marked module swaps into the running program unless native code names it, and a new marked item that shadows a name native code resolves through a glob import rebuilds native code, as cargo would.","issues":[1756],"refs":[1744]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.189",
+        "date": "2026-11-11",
+        "entries": [
+          {"text":"Checking a project from a terminal and then from an editor or script that sets `CARGO_HOME` to its default path no longer rebuilds the dependencies with the nightly every round. An unset `CARGO_HOME` and its default path are the same home, a `CARGO_HOME` reached through a symlink works, and a shared table settled under other inputs costs one build, then replays.","issues":[1754]},
+          {"text":"A start after a save that dropped a crate call from a marked function keeps the runner it ran on, which still covers the program, instead of building a new one.","issues":[1743]},
+          {"text":"Removing a pub item from a marked module swaps into the running program unless native code names it, and a new marked item that shadows a name native code resolves through a glob import rebuilds native code, as cargo would.","issues":[1756],"refs":[1744]},
+          {"text":"A restart that needs no new native build, such as a save the running program refuses or a panic after a swap, starts a new process of the running runner with no check, in about 0.1 s on a small project instead of a full start. The new program starts with fresh state.","issues":[1764],"refs":[1755]}
+        ]
+      },
       {
         "version": "0.3.188",
         "date": "2026-11-11",
@@ -3839,7 +3842,7 @@
     {"issue":1740,"title":"A new pub struct no marked file names lowers every marked file after its native build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
     {"issue":1741,"title":"A new pub item no native code uses prepares a native build; it could swap as a new derive does","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
     {"issue":1742,"title":"RAWR_VERBOSE says what each start ran: Cargo resolutions, nightly builds, probes, runner builds and rounds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.187"},
-    {"issue":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1743,"title":"A start after a swap that dropped native uses rebuilds the runner, though the running one still covers them","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
     {"issue":1744,"title":"A new marked item can change what native code means while the running program keeps the old meaning","state":"open","category":"Divergences from rustc"},
     {"issue":1745,"title":"A runner whose owner is killed kept running: its protocol thread panicked on the dead stderr pipe","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1746,"title":"A removed or changed marked type restarts the program only when a live value or native code depends on it","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
@@ -3850,16 +3853,17 @@
     {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
     {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
     {"issue":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
     {"issue":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open","category":"Divergences from rustc"},
     {"issue":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1759,"title":"The resolution owner's Cargo view replay is redone for every check in a running owner","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1760,"title":"A start walks its runner's read-set closure six times","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1761,"title":"A restart after a full preparation prepares again","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1762,"title":"Each owner session parses the program twice without its cells and runs rustc --version again","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1764,"title":"A restart that needs no native build respawns the running runner with no check","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"}
   ],
   "groups": [
     {
@@ -5047,7 +5051,8 @@
             {"number":1760,"title":"A start walks its runner's read-set closure six times","state":"open"},
             {"number":1761,"title":"A restart after a full preparation prepares again","state":"open"},
             {"number":1762,"title":"Each owner session parses the program twice without its cells and runs rustc --version again","state":"open"},
-            {"number":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"open"}
+            {"number":1763,"title":"The start's stage line is misleading: it says resolving dependencies while nothing is resolved","state":"open"},
+            {"number":1764,"title":"A restart that needs no native build respawns the running runner with no check","state":"closed"}
           ]
         },
         {
