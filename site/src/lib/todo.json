@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.192",
+  "version": "0.3.193",
   "examples": {
     "running": 34,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.193",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A marked fn can return a crate's opaque widget that borrows what native code lent it through a higher-ranked trait, as iced's `ViewFn` takes `Program::view`; the lent value is borrowed in place, never copied.","issues":[1770],"refs":[965]}
+        ]
+      },
       {
         "version": "0.3.192",
         "date": "2026-11-12",
@@ -3900,7 +3907,7 @@
     {"issue":1767,"title":"A shared resolution's remembered.json is parsed again for every check in a running owner","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"closed","category":"Divergences from rustc","release":"0.3.190"},
-    {"issue":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"closed","category":"Divergences from rustc","release":"0.3.193"},
     {"issue":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.192"},
     {"issue":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1773,"title":"A crate opaque output that captures a named &'a str input fails to compile in the runner (E0597)","state":"open","category":"Divergences from rustc"},
@@ -3924,7 +3931,9 @@
     {"issue":1792,"title":"The runner compiles its generated crates without debug info","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.192"},
     {"issue":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1794,"title":"Every native preparation builds a new harness, copies 3045 files, seals and probes twice: 74 s on inboard","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1796,"title":"A slot's inputs all take the lifetime its borrowing output has","state":"open","category":"Divergences from rustc"},
+    {"issue":1797,"title":"crossing::an_opaque_widget_takes_the_types_a_later_use_fixes fails E0308 in an opaque table entry on main","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4602,9 +4611,11 @@
             {"number":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open"},
             {"number":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"closed"},
             {"number":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"closed"},
-            {"number":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open"},
+            {"number":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"closed"},
             {"number":1773,"title":"A crate opaque output that captures a named &'a str input fails to compile in the runner (E0597)","state":"open"},
-            {"number":1774,"title":"A crate function written -> impl Trait + use<..> is missing from its facade (E0425)","state":"open"}
+            {"number":1774,"title":"A crate function written -> impl Trait + use<..> is missing from its facade (E0425)","state":"open"},
+            {"number":1796,"title":"A slot's inputs all take the lifetime its borrowing output has","state":"open"},
+            {"number":1797,"title":"crossing::an_opaque_widget_takes_the_types_a_later_use_fixes fails E0308 in an opaque table entry on main","state":"open"}
           ]
         }
       ]

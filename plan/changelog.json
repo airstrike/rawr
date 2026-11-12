@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.193",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"A marked fn can return a crate's opaque widget that borrows what native code lent it through a higher-ranked trait, as iced's `ViewFn` takes `Program::view`; the lent value is borrowed in place, never copied.","issues":[1770],"refs":[965]}
+      ]
+    },
+    {
       "version": "0.3.192",
       "date": "2026-11-12",
       "entries": [

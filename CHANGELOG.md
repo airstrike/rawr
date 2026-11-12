@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.193 (2026-11-12)
+
+- A marked fn can return a crate's opaque widget that borrows what native code lent it through a higher-ranked trait, as iced's `ViewFn` takes `Program::view`; the lent value is borrowed in place, never copied. (#1770; part of #965)
+
 ## 0.3.192 (2026-11-12)
 
 - After an edit to one crate, a `rawr run` save re-reads only the API of crates whose API changed, and `RAWR_VERBOSE` prints each round of a save's preparation. (#1776)
