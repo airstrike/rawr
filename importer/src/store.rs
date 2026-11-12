@@ -1430,8 +1430,11 @@ impl Store {
         retention: &crate::node::read_set::Retention,
     ) -> Result<pins::Guard, Error> {
         retention.require_proof(proof)?;
+        // One storage walk, once the pin is bound: the bind itself refuses
+        // an entry the store no longer registers, and the walk after it,
+        // in the same project lease, sees all a walk before it would
+        // (#1760).
         let result = lease::with_project(&self.root, self.project, || {
-            retention.validate_storage(self)?;
             lease::with_publication(&self.root, |publication| {
                 let mut recovery = recovery::Budget::new();
                 pins::recover_empty_before_new_project(
@@ -1455,6 +1458,42 @@ impl Store {
         })?;
         match result {
             Ok(((), [guard])) => Ok(guard),
+            Err(
+                transaction::Rejected::Operation(never)
+                | transaction::Rejected::Cleanup { failure: never, .. },
+            ) => match never {},
+        }
+    }
+
+    /// Bind the Live and LastGood roles to an admitted closure whose
+    /// Prepared pin the caller holds, with no walk of it: that pin kept
+    /// every entry since the admission walked them, and these roles bind
+    /// the same entries (#1760).
+    pub(crate) fn bind_live_last_good_held(
+        &self,
+        proof: &crate::node::ReadSetProof,
+    ) -> Result<[pins::Guard; 2], Error> {
+        let result = lease::with_project(&self.root, self.project, || {
+            lease::with_publication(&self.root, |publication| {
+                let mut recovery = recovery::Budget::new();
+                pins::recover_empty_before_new_project(
+                    publication,
+                    &self.root,
+                    self.project,
+                    &mut recovery,
+                )?;
+                transaction::Transaction::bind(
+                    publication,
+                    &self.root,
+                    self.project,
+                    [PinRole::Live, PinRole::LastGood],
+                    proof,
+                )?
+                .finish(|| Ok(()), || Ok::<(), std::convert::Infallible>(()))
+            })
+        })?;
+        match result {
+            Ok(((), guards)) => Ok(guards),
             Err(
                 transaction::Rejected::Operation(never)
                 | transaction::Rejected::Cleanup { failure: never, .. },

@@ -901,8 +901,9 @@ fn scopes_survive_union_dedup_and_complete_every_admission_boundary() {
     assert_eq!(proof.len(), 1);
     assert_eq!(*scopes.lock().unwrap(), [Scope::Consumer]);
     scopes.lock().unwrap().clear();
+    // A runner's union seals with no walk: its admission walks it (#1760).
     let prepared = Prepared::seal_union(context, [fragment.clone(), fragment]).unwrap();
-    assert_eq!(*scopes.lock().unwrap(), [Scope::Complete]);
+    assert_eq!(*scopes.lock().unwrap(), []);
     scopes.lock().unwrap().clear();
     prepared.revalidate().unwrap();
     prepared.pin_prepared().unwrap();

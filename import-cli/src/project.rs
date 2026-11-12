@@ -42,8 +42,28 @@ pub fn toolchain(root: &Path) -> Result<(), String> {
 /// The version of the Rust compiler the project at `root` builds with, as
 /// `rustc --version` prints it there: rustup picks the toolchain from the
 /// directory (`RUSTUP_TOOLCHAIN`, an override, a `rust-toolchain.toml`
-/// above it, or the default). `None` when it cannot tell.
+/// above it, or the default). `None` when it cannot tell. Asked once per
+/// process for each root: every session of a run checks it, and the
+/// answer can't change while the run lasts, as the runner build's own
+/// question of its compiler (#663).
 fn active_version(root: &Path) -> Option<String> {
+    static ASKED: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> =
+        std::sync::Mutex::new(Vec::new());
+    // Held while rustc answers, so a concurrent asker waits for that
+    // answer instead of asking again.
+    let mut answers = ASKED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, version)) = answers.iter().find(|(known, _)| known == root) {
+        return version.clone();
+    }
+    let version = ask_version(root);
+    answers.push((root.to_path_buf(), version.clone()));
+    version
+}
+
+/// `rustc --version` at `root`, as [`active_version`] reads it.
+fn ask_version(root: &Path) -> Option<String> {
     let output = std::process::Command::new("rustc")
         .arg("--version")
         .current_dir(root)

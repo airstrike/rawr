@@ -273,12 +273,14 @@ impl Native {
 
 /// What this process had done when a program's start began: Cargo's
 /// resolutions, the nightly's builds, the probes, the runner builds and
-/// the check's rounds. A restart that needs no native build runs none of
-/// the first four (#1739).
+/// the check's rounds, and its walks of runner read sets. A restart that
+/// needs no native build runs none of the first four (#1739), and a start
+/// walks its runner's read set once its build is done (#1760).
 pub(super) struct Start {
     api: rawr_import::progress::Work,
     runner_builds: usize,
     rounds: usize,
+    walks: usize,
 }
 
 impl Start {
@@ -288,6 +290,7 @@ impl Start {
             api: rawr_import::progress::work(),
             runner_builds: rawr_import::progress::runner_builds(),
             rounds: rawr_import::progress::rounds().len(),
+            walks: rawr_import::progress::read_set_walks(),
         }
     }
 
@@ -301,12 +304,13 @@ impl Start {
         let rounds = rawr_import::progress::rounds();
         let rounds = rounds.get(self.rounds..).unwrap_or_default();
         eprintln!(
-            "rawr-import: a start ran Cargo resolutions {}, nightly builds {}, probes {}, runner builds {}, rounds {}",
+            "rawr-import: a start ran Cargo resolutions {}, nightly builds {}, probes {}, runner builds {}, rounds {}, read-set walks {}",
             api.resolved() - self.api.resolved(),
             api.built() - self.api.built(),
             api.probed() - self.api.probed(),
             rawr_import::progress::runner_builds() - self.runner_builds,
             rounds.len(),
+            rawr_import::progress::read_set_walks() - self.walks,
         );
         for round in rounds {
             eprintln!("rawr-import: a start's round: {round}");
@@ -375,6 +379,19 @@ pub(super) struct Respawn {
 }
 
 impl Respawn {
+    /// A save of `snapshot`, which `observation` watches, that the running
+    /// runner compiled against its own build in the full preparation's
+    /// route (#1761).
+    pub(super) const fn new(
+        snapshot: rawr_import::supervisor::snapshot::Bytes,
+        observation: Arc<[u8]>,
+    ) -> Self {
+        Self {
+            snapshot,
+            observation,
+        }
+    }
+
     /// Restart the program in a new process of `lane`'s runner, from this
     /// save. On an error no runner runs.
     pub(super) fn start(

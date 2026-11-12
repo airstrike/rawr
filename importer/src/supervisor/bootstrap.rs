@@ -3,11 +3,48 @@
 impl super::Owner {
     /// Allocate one epoch, authenticate its artifact, prepare the exact
     /// snapshot, consume activation authority, and return only after admission.
+    /// The runner's read set is walked once, just before admission.
     pub fn bootstrap<B>(
+        &mut self,
+        manifest: crate::runner::Manifest<crate::runner::Built, B>,
+        snapshot: super::snapshot::Bytes,
+        process: &crate::process::Owner,
+    ) -> Result<crate::process::Candidate<crate::process::Admitted, B>, Error> {
+        self.bootstrap_checked(manifest, snapshot, process, Check::BeforeAdmission)
+    }
+
+    /// [`Self::bootstrap`], whose admitted runner then observes the inputs
+    /// `observation` names before its read set is walked, once (#1760): a
+    /// change after that walk is the runner's to see, and one before it
+    /// is the walk's. The walk before admission proves nothing more, as
+    /// nothing runs the program until this returns.
+    pub fn bootstrap_observed<B>(
+        &mut self,
+        manifest: crate::runner::Manifest<crate::runner::Built, B>,
+        snapshot: super::snapshot::Bytes,
+        process: &crate::process::Owner,
+        observation: &[u8],
+    ) -> Result<crate::process::Candidate<crate::process::Admitted, B>, Error> {
+        let mut admitted =
+            self.bootstrap_checked(manifest, snapshot, process, Check::AfterObservation)?;
+        if let Err(failure) = admitted.observe_initial(observation) {
+            return match admitted.shutdown() {
+                Ok(()) => Err(Error::Process(failure)),
+                Err(cleanup) => Err(Error::ObserveCleanup {
+                    failure: Box::new(failure),
+                    cleanup: Box::new(cleanup),
+                }),
+            };
+        }
+        Ok(admitted)
+    }
+
+    fn bootstrap_checked<B>(
         &mut self,
         mut manifest: crate::runner::Manifest<crate::runner::Built, B>,
         snapshot: super::snapshot::Bytes,
         process: &crate::process::Owner,
+        check: Check,
     ) -> Result<crate::process::Candidate<crate::process::Admitted, B>, Error> {
         if !snapshot.matches(manifest.request.snapshot) {
             return Err(Error::Snapshot(super::snapshot::Error::Mismatch));
@@ -17,10 +54,12 @@ impl super::Owner {
             .map_err(Error::Node)?;
         let read_set = manifest.take_prepared_read_set();
         if let Some(read_set) = read_set {
+            let checked = match check {
+                Check::BeforeAdmission => Some(&read_set),
+                Check::AfterObservation => None,
+            };
             let mut admitted = read_set
-                .with_startup_pin(|| {
-                    self.bootstrap_current(manifest, snapshot, process, Some(&read_set))
-                })
+                .with_startup_pin(|| self.bootstrap_current(manifest, snapshot, process, checked))
                 .map_err(Error::Node)??;
             if let Err(failure) = admitted.restore_prepared_read_set(read_set) {
                 return match admitted.shutdown() {
@@ -59,6 +98,15 @@ pub(crate) fn admit_current<T>(
     admit().map_err(Error::Process)
 }
 
+/// Where a bootstrap walks its runner's read set, once.
+#[derive(Clone, Copy)]
+enum Check {
+    /// Just before admission.
+    BeforeAdmission,
+    /// Once the admitted runner observes its inputs.
+    AfterObservation,
+}
+
 /// Failure before a whole-process candidate becomes admissible.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -69,6 +117,12 @@ pub enum Error {
         #[source]
         failure: crate::node::Error,
         cleanup: crate::process::RunnerError,
+    },
+    #[error("the admitted runner failed to observe its inputs: {failure}; stopping it also failed: {cleanup}")]
+    ObserveCleanup {
+        #[source]
+        failure: Box<crate::process::RunnerError>,
+        cleanup: Box<crate::process::RunnerError>,
     },
     #[error(transparent)]
     Supervisor(#[from] super::Error),
