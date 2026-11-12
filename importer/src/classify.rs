@@ -18,6 +18,12 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
+/// The classification's version: what this module decides about each path
+/// of an API. Bump it when a change alters a classified outcome or its
+/// encoding. A bump classifies each API again, and with the contract's
+/// fingerprint, selects its bindings plan again and rebuilds its runners.
+/// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
+/// plan change the facade's `SCHEMA` (#1766).
 const CLASSIFIER_VERSION: u32 = 176;
 
 /// The contract schema and classifier version every contract fingerprint

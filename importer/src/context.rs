@@ -8,6 +8,12 @@ use sha2::{Digest as _, Sha256};
 
 use crate::cargo;
 
+/// The context identity's version: what of the project, Cargo home,
+/// environment, target and limits a context's identity holds. Bump it when
+/// a change alters that identity. A bump builds every context-keyed node
+/// again, its API among them, but classification and the bindings plan
+/// read only their parents' content and stay ([`crate::node::Value::CONTEXTUAL`],
+/// #1766).
 const CONTEXT_SCHEMA: u32 = 6;
 const LAUNCHER_POLICY_SCHEMA: u32 = 1;
 

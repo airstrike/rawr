@@ -1708,6 +1708,43 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     assert!(written.is_empty(), "written again: {written:?}\n{said}");
 }
 
+/// A start under another import context, here a `CFLAGS` no crate of the
+/// fixture reads, keeps the API's classification and its bindings plan:
+/// they are computed from the API alone, so they are not keyed by the
+/// context, as an install that moved `CONTEXT_SCHEMA` would have had them
+/// computed again (#1766).
+#[test]
+fn a_start_under_another_context_classifies_and_generates_nothing() {
+    const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::fresh("islands-theme-context");
+    copy(Path::new(SOURCE), &root);
+    let mut first = start(&root, &[]);
+    let status = first.wait();
+    assert!(status.success(), "{}", first.seen.join("\n"));
+    let second = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env("RAWR_VERBOSE", "1")
+        .env("CFLAGS", "-DRAWR_ANOTHER_CONTEXT")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "{said}");
+    let round = said
+        .lines()
+        .find(|line| line.starts_with("rawr-import: round 1: "))
+        .unwrap_or_else(|| panic!("{said}"));
+    // The context moved: its API is read again, to the same content.
+    assert!(!round.contains(" read 0,"), "{round}");
+    for count in ["classified 0,", "generated 0,"] {
+        assert!(round.contains(count), "{count} in {round}");
+    }
+}
+
 /// A save that drops a crate call from a marked function swaps, and the
 /// next start keeps the runner it ran on, which still covers the smaller
 /// demand, instead of building one for it (#1743): no runner build.
