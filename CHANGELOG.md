@@ -7,6 +7,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A running owner reuses the Cargo view its last check replayed while no watched file changed, parsing no Cargo metadata and hashing no recorded input again. `RAWR_VERBOSE` says how many Cargo views each round parsed, compared and kept. (#1759)
 - The start's status line names the step the start is in (reading the API, checking, building the runner, starting) instead of 'resolving dependencies' throughout. (#1763)
+- A new context schema, a moved Cargo home or a changed build variable no longer classifies a project's API or selects its bindings again when the API is unchanged. (#1766)
 
 ## 0.3.189 (2026-11-11)
 
