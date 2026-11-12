@@ -119,6 +119,10 @@ pub mod crossing;
 pub mod diagnostic;
 mod engine;
 mod eval;
+/// Window frames carried across the restarts of a program `rawr run` runs
+/// (#1811): a generated runner's start calls it.
+#[doc(hidden)]
+pub mod frames;
 mod func;
 /// std's `Cow` at runtime, as a generated binding reads one.
 #[doc(hidden)]
