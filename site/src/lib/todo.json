@@ -3876,7 +3876,8 @@
     {"issue":1767,"title":"A shared resolution's remembered.json is parsed again for every check in a running owner","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"open","category":"Divergences from rustc"},
-    {"issue":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open","category":"Divergences from rustc"}
+    {"issue":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open","category":"Divergences from rustc"},
+    {"issue":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5215,7 +5216,8 @@
             {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed"},
             {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
             {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"},
-            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed"}
+            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed"},
+            {"number":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open"}
           ]
         },
         {
