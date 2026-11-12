@@ -467,8 +467,9 @@ impl Drop for Terminal {
 /// D534.6's terminal acceptance, in a pseudo-terminal: a body edit
 /// repaints with no key pressed and keeps the selection; a failing save
 /// writes nothing while the program has the screen; a new field restarts
-/// with one line on a restored screen; and after `q`, Ctrl-C, a panic and
-/// a restart, `stty -g` is what it was before the run.
+/// with one line on a restored screen; and after a restart, a panic and
+/// `q`, `stty -g` is what it was before the run. `q` ends the run with the
+/// program (#1800).
 #[test]
 fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it() {
     let root = ISLANDS.lease(&[]);
@@ -538,23 +539,19 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
         screen.alternate && screen.rows().iter().any(|row| row.contains("keys=0:"))
     });
 
-    // `q` ends it, and the terminal is as it was.
-    terminal.keys(b"q");
+    // A panic ends it, the terminal is as it was, and the run waits for a
+    // save.
+    terminal.keys(b"!");
     terminal.ended(1);
+    assert!(terminal.main_text().contains("asked to panic"));
     assert_eq!(terminal.stty(), before);
 
-    // A save runs it again; Ctrl-C ends it.
+    // A save runs it again. `q` returns from its `main`, which ends the run
+    // with status 0 (#1800), and the terminal is as it was.
     edit(&app, "\"tui-three\"", "\"tui-four\"");
     terminal.shows("tui-four");
-    terminal.keys(b"\x03");
-    terminal.ended(2);
-    assert_eq!(terminal.stty(), before);
-
-    // And a panic ends it.
-    edit(&app, "\"tui-four\"", "\"tui-five\"");
-    terminal.shows("tui-five");
-    terminal.keys(b"!");
-    terminal.ended(3);
-    assert!(terminal.main_text().contains("asked to panic"));
+    terminal.keys(b"q");
+    let status = terminal.child.wait().unwrap();
+    assert!(status.success(), "{status}\n{}", terminal.main_text());
     assert_eq!(terminal.stty(), before);
 }

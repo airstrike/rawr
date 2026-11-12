@@ -37,7 +37,9 @@ pub enum Phase {
     Restarting,
     /// It failed to start; a save that fixes it starts it.
     Failed,
-    /// It ended with this status; a save runs it again.
+    /// It ended with this status. One that failed runs again on a save; one
+    /// that exited with status 0 ended `rawr run` too, which [`Self::Exited`]
+    /// follows.
     Ended(i32),
     /// `rawr run` itself exited with this status.
     Exited(i32),

@@ -4,8 +4,9 @@
 //! one being the program's name as `cargo run` gives it, and it inherits
 //! stdin, stdout and stderr. `rawr` watches the program's files meanwhile:
 //! a save that still compiles restarts a program that is running, and
-//! runs again one that ended when stdin is a terminal. Without a terminal
-//! the command ends with the program, with its exit status.
+//! runs again one that failed when stdin is a terminal. A program that
+//! exits with status 0 ends the command, and so does any end without a
+//! terminal: the command ends with the program's exit status (#1800).
 
 use std::ffi::{OsStr, OsString};
 use std::io::IsTerminal as _;
@@ -100,8 +101,10 @@ fn location(target: &rawr::project::Target) -> PathBuf {
     )
 }
 
-/// Whether a program that ended runs again on a save: when someone at a
-/// terminal can give it input again, or a `rawr mcp` supervises the run.
+/// Whether a program that panicked or exited with an error runs again on a
+/// save: when someone at a terminal can give it input again, or a `rawr
+/// mcp` supervises the run. A program that exits with status 0 ends the
+/// run either way (#1800).
 #[must_use]
 pub fn interactive() -> bool {
     std::io::stdin().is_terminal() || crate::events::supervised()
@@ -124,7 +127,7 @@ pub fn exit_code(status: ExitStatus) -> ExitCode {
 }
 
 /// Run the loaded program in its own process with `arguments`, restart it
-/// on each save that compiles, and run it again after it ends when
+/// on each save that compiles, and run it again after it fails when
 /// [`interactive`]. `cargo`'s errors are printed when the program first
 /// ends.
 #[must_use]
@@ -157,7 +160,7 @@ pub fn run(
                     child = None;
                     crate::events::exited(status);
                     crate::cargo::after_run(cargo.take().map(crate::cargo::Pending::finish));
-                    if !interactive || watcher.is_none() {
+                    if !interactive || watcher.is_none() || status.success() {
                         return exit_code(status);
                     }
                     eprintln!("rawr: the program ended; a save runs it again");

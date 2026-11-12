@@ -94,8 +94,11 @@ impl Run {
 
     /// The text of the `RAWR_MCP_EVENTS` file `events` once `accept` takes
     /// it. A run that says `failed` first, exits first, or whose program
-    /// ends first fails the test.
+    /// ends first fails the test. A run that exits has written all its
+    /// events, so they are read once more before that: a program that ends
+    /// with status 0 ends its run with the `ended` it wrote (#1800).
     pub fn told(&mut self, events: &Path, accept: impl Fn(&str) -> bool) -> String {
+        let mut gone = None;
         loop {
             let text = fs::read_to_string(events).unwrap_or_default();
             if accept(&text) {
@@ -104,10 +107,13 @@ impl Run {
                 }
                 return text;
             }
-            if let Some(why) = self.gone() {
+            if let Some(why) = gone {
                 self.fail(&format!("{why} first"));
             }
-            std::thread::sleep(LOOK);
+            gone = self.gone();
+            if gone.is_none() {
+                std::thread::sleep(LOOK);
+            }
         }
     }
 

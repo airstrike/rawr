@@ -158,7 +158,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "start",
-            "description": "Start a program that keeps running, such as a window, and keep it running: a save reloads it, and one that ends runs again on the next save. Returns once it runs, with `running`, or `failed` with diagnostics; a first start builds its Rust dependencies first, and tells its progress meanwhile. Starting a program again replaces it. Programs that draw a terminal UI are refused for now.",
+            "description": "Start a program that keeps running, such as a window, and keep it running: a save reloads it, and one that panics or exits with an error runs again on the next save. One that exits with status 0 ends the session, and `start` runs it again. Returns once it runs, with `running`, or `failed` with diagnostics; a first start builds its Rust dependencies first, and tells its progress meanwhile. Starting a program again replaces it. Programs that draw a terminal UI are refused for now.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

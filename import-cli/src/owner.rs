@@ -255,9 +255,10 @@ fn events(
 
 /// `rawr run` of a program (D500.1): it runs with `arguments` after its
 /// name, as `cargo run` gives them, and with this process's stdin. A save
-/// swaps or restarts it as [`run`] does. Once it ends, a save runs it again
-/// when stdin is a terminal; otherwise, or when Ctrl-C ended it, this
-/// returns its exit status.
+/// swaps or restarts it as [`run`] does. A program that panics or exits
+/// with an error runs again on a save when stdin is a terminal or a `rawr
+/// mcp` supervises the run; otherwise, or when it exits with status 0 or
+/// Ctrl-C ended it, this returns its exit status (#1800).
 ///
 /// `cargo`'s errors are printed when the program first ends. A program
 /// whose copy fails to build as `cargo check` fails shows cargo's errors
@@ -340,7 +341,9 @@ pub fn run_program(
             rawr_cli::cargo::after_run(checked);
             match settled {
                 Ok(Ended::Exit(101)) if abort && !interactive => return Ok(ABORTED),
-                Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
+                Ok(Ended::Exit(code)) if !interactive || code == 0 || code == INTERRUPTED => {
+                    return Ok(code);
+                }
                 Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
                 Err(report) if !interactive || watcher.is_none() => return Err(report),
                 Err(Some(report)) => rawr_import::process::say(diagnostic::render(&report)),
