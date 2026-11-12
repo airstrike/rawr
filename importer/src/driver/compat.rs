@@ -13,6 +13,11 @@ pub(crate) use rustc_middle::metadata::{ModChild, Reexport};
 #[cfg(rawr_rustc_resolve_module)]
 pub(crate) use rustc_middle::middle::resolve::{ModChild, Reexport};
 
+#[cfg(not(rawr_rustc_mod_id))]
+pub(crate) use rustc_span::def_id::LocalModDefId as LocalModId;
+#[cfg(rawr_rustc_mod_id)]
+pub(crate) use rustc_span::def_id::LocalModId;
+
 #[cfg(rawr_rustc_attr_ir)]
 pub(crate) use rustc_attr_ir::{StabilityLevel, UnstableReason};
 #[cfg(not(rawr_rustc_attr_ir))]
