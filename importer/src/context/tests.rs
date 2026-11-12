@@ -241,7 +241,7 @@ fn an_unset_cargo_home_and_its_default_path_are_one_context() {
 }
 
 /// A variable is fingerprinted once. rawr's Cargo always builds with
-/// `CARGO_INCREMENTAL=0`, which the projection keys, so the shell's value
+/// `CARGO_INCREMENTAL=1`, which the projection keys, so the shell's value
 /// leaves both the context and the projection as they are (#625).
 #[test]
 fn an_exported_cargo_incremental_keeps_the_context_and_projection() {

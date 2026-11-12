@@ -604,7 +604,10 @@ impl Environment {
             values.push((OsString::from(key.as_ref()), OsString::from(value.as_ref())));
         }
         values.push(("CARGO_TARGET_DIR".into(), target_dir.as_os_str().to_owned()));
-        values.push(("CARGO_INCREMENTAL".into(), "0".into()));
+        // Incremental, as `cargo check` is: Cargo gives it to path packages
+        // alone, so an edit to the project's crate checks what changed, not
+        // the whole crate again (#1772). Registry crates build as before.
+        values.push(("CARGO_INCREMENTAL".into(), "1".into()));
         values.push(("RUSTC".into(), rustc.as_os_str().to_owned()));
         values.push(("RUSTDOC".into(), rustdoc.as_os_str().to_owned()));
         if let Some(loader) = loader {
