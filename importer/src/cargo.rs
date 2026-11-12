@@ -3797,6 +3797,7 @@ fn cargo_execute_authoritative_build(
         manifest,
         environment,
         (target, target),
+        crate::deps::nightly::Build::Extraction,
         limits,
     )
     .map(|(bytes, _)| bytes)

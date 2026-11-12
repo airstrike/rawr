@@ -609,6 +609,7 @@ pub(in crate::cargo) fn build(
         paths.manifest(),
         environment,
         (paths.target(), paths.build()),
+        crate::deps::nightly::Build::Resolution,
         limits,
     )
 }
@@ -617,9 +618,15 @@ pub(in crate::cargo) fn build(
 /// Cargo's messages name into `build`, the build root the unit graph names;
 /// the messages returned name the copies. `target` is the Cargo target
 /// directory, whose outputs are made the build's own (`relocate::unshare`).
+/// `kind` names which of the project's builds it is, for the directory's
+/// prune.
 #[allow(
     clippy::type_complexity,
     reason = "Build parsing retains the exact successful command environment"
+)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is one Cargo input the two callers give apart"
 )]
 pub(in crate::cargo) fn shared_build(
     native: &impl ToolPaths,
@@ -628,6 +635,7 @@ pub(in crate::cargo) fn shared_build(
     manifest: &Path,
     environment: Box<[(OsString, OsString)]>,
     (target, build): (&Path, &Path),
+    kind: crate::deps::nightly::Build,
     limits: &Limits,
 ) -> Result<(Box<[u8]>, Box<[(OsString, OsString)]>)> {
     // One build directory per machine per pinned toolchain, in rawr's home
@@ -669,11 +677,18 @@ pub(in crate::cargo) fn shared_build(
             stale.cleaned(&package);
         }
     }
-    let bytes = native
+    let named = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
     super::relocate::unshare(target)?;
-    let bytes = super::relocate::relocate(&bytes, &shared, build)?;
+    let bytes = super::relocate::relocate(&named, &shared, build)?;
+    let key = crate::deps::nightly::Key {
+        project: &request.project_root,
+        build: kind,
+        target: &request.target,
+        profile: &request.profile,
+    };
+    crate::deps::nightly::prune(&shared, &named, &key);
     drop(lock);
     crate::deps::retire_nightly(&home, &shared);
     Ok((bytes, command.into_environment()))
