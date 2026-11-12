@@ -14,15 +14,23 @@
 //! link that names another by a relative path must find it through a link
 //! too. When one would land outside the project's workspace, or on a name
 //! the runner uses itself, nothing is placed and the manifest stays as it is.
+//!
+//! The packages rawr generates beside the runner, as its copy of the
+//! program's crate, name the project's path packages by their absolute
+//! paths, as the import request does. The runner names a copy of each under
+//! its root instead ([`COPIES`], #1777): its manifest names them through the
+//! runner's links, and every other entry is a link to the original's, so
+//! Cargo sees one path for each path package and one hash.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, TableLike};
 
 /// The names the runner's own directory uses.
-const RUNNER: [&str; 8] = [
+const RUNNER: [&str; 9] = [
     "Cargo.toml",
     "Cargo.lock",
     "build.rs",
@@ -31,7 +39,12 @@ const RUNNER: [&str; 8] = [
     "target",
     "rawr-generated-manifest.carrier",
     "incremental-directories",
+    COPIES,
 ];
+
+/// The directory under the runner's root that holds its copies of the
+/// packages rawr generates beside it (#1777).
+const COPIES: &str = "rawr-copies";
 
 /// The dependency tables of a manifest or of one `target.<cfg>` table.
 const DEPENDENCIES: [&str; 3] = ["dependencies", "build-dependencies", "dev-dependencies"];
@@ -41,7 +54,9 @@ const INHERITED: [&str; 3] = ["package", "dependencies", "lints"];
 
 /// `manifest`, the runner's, with each path dependency under `workspace`
 /// named through a link in `runner` at its path under `workspace`, and the
-/// links in place. The project's `[workspace]` tables a member inherits from
+/// links in place. A package rawr generates beside the runner, as its copy
+/// of the program's crate, is named through its copy under the runner
+/// ([`COPIES`]). The project's `[workspace]` tables a member inherits from
 /// come along. Returns `manifest` unchanged when the packages can't all be
 /// placed.
 #[must_use]
@@ -49,27 +64,206 @@ pub fn mirror(workspace: &Path, runner: &Path, manifest: &str) -> String {
     place(workspace, runner, manifest).unwrap_or_else(|| manifest.to_owned())
 }
 
-fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
-    let workspace = fs::canonicalize(workspace).ok()?;
-    fs::create_dir_all(runner).ok()?;
-    let inside = fs::canonicalize(runner).ok().and_then(|runner| {
-        let inside = runner.strip_prefix(&workspace).ok()?;
-        Some(inside.components().next()?.as_os_str().to_owned())
-    });
-    let mut document = manifest.parse::<DocumentMut>().ok()?;
-    // A name the runner uses, or the directory that holds the runner.
-    let reserved = |name: &str| {
-        RUNNER.contains(&name) || inside.as_deref().is_some_and(|inside| inside == name)
-    };
-    let under = |path: &Path| -> Option<PathBuf> {
-        let relative = path.strip_prefix(&workspace).ok()?;
-        let first = relative.components().next()?.as_os_str().to_str()?;
-        (!reserved(first)).then(|| relative.to_path_buf())
-    };
+/// The project's workspace root, and the runner's directory below it.
+struct Root<'a> {
+    workspace: PathBuf,
+    runner: &'a Path,
+    /// The top-level directory under the workspace that holds the runner.
+    inside: Option<OsString>,
+}
 
-    // The runner's path dependencies under the project's workspace.
+impl<'a> Root<'a> {
+    fn new(workspace: &Path, runner: &'a Path) -> Option<Self> {
+        let workspace = fs::canonicalize(workspace).ok()?;
+        fs::create_dir_all(runner).ok()?;
+        let inside = fs::canonicalize(runner).ok().and_then(|runner| {
+            let inside = runner.strip_prefix(&workspace).ok()?;
+            Some(inside.components().next()?.as_os_str().to_owned())
+        });
+        Some(Self {
+            workspace,
+            runner,
+            inside,
+        })
+    }
+
+    /// A name the runner uses, or the directory that holds the runner.
+    fn reserved(&self, name: &str) -> bool {
+        RUNNER.contains(&name) || self.inside.as_deref().is_some_and(|inside| inside == name)
+    }
+
+    /// `path` under the workspace, when it can be placed.
+    fn under(&self, path: &Path) -> Option<PathBuf> {
+        let relative = path.strip_prefix(&self.workspace).ok()?;
+        let first = relative.components().next()?.as_os_str().to_str()?;
+        (!self.reserved(first)).then(|| relative.to_path_buf())
+    }
+
+    /// The absolute `path` under the workspace, as written or as it resolves.
+    fn relative(&self, path: &Path) -> Option<PathBuf> {
+        self.under(&normalize(path)).or_else(|| {
+            fs::canonicalize(path)
+                .ok()
+                .and_then(|path| self.under(&path))
+        })
+    }
+
+    /// Whether `directory`, a package's, is one rawr generates beside the
+    /// runner.
+    fn beside(&self, directory: &Path) -> bool {
+        normalize(directory).parent() == normalize(self.runner).parent()
+    }
+
+    /// `pending`, every package Cargo reaches from them through relative
+    /// paths, and the workspace's own path dependencies, all of which must
+    /// be placed. `None` when one can't be.
+    fn closure(&self, mut pending: Vec<PathBuf>) -> Option<BTreeSet<PathBuf>> {
+        let root = read(&self.workspace.join("Cargo.toml"))?;
+        if let Some(dependencies) = root
+            .get("workspace")
+            .and_then(|workspace| workspace.get("dependencies"))
+            .and_then(Item::as_table_like)
+        {
+            for (_, dependency) in dependencies.iter() {
+                if let Some(path) = dependency.as_table_like().and_then(relative_path) {
+                    pending.push(self.under(&normalize(&self.workspace.join(path)))?);
+                }
+            }
+        }
+        let mut seen = BTreeSet::new();
+        while let Some(relative) = pending.pop() {
+            if !seen.insert(relative.clone()) {
+                continue;
+            }
+            let directory = self.workspace.join(&relative);
+            let Some(mut package) = read(&directory.join("Cargo.toml")) else {
+                continue;
+            };
+            let mut reached = Vec::new();
+            for_each_dependency(package.as_table_mut(), &mut |dependency| {
+                if let Some(path) = relative_path(dependency) {
+                    reached.push(normalize(&directory.join(path)));
+                }
+            });
+            for path in reached {
+                pending.push(self.under(&path)?);
+            }
+        }
+        Some(seen)
+    }
+
+    /// One link per top-level directory of `seen`, and none left from
+    /// another manifest.
+    fn link(&self, seen: &BTreeSet<PathBuf>) -> Option<()> {
+        let names = seen
+            .iter()
+            .filter_map(|relative| relative.components().next())
+            .map(|first| first.as_os_str().to_owned())
+            .collect::<BTreeSet<_>>();
+        for entry in fs::read_dir(self.runner).ok()?.flatten() {
+            let name = entry.file_name();
+            if entry.file_type().ok()?.is_symlink()
+                && (!names.contains(&name)
+                    || fs::read_link(entry.path()).ok()? != self.workspace.join(&name))
+            {
+                fs::remove_file(entry.path()).ok()?;
+            }
+        }
+        for name in &names {
+            let link = self.runner.join(name);
+            match fs::symlink_metadata(&link) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {}
+                Ok(_) => return None,
+                Err(_) => link_directory(&self.workspace.join(name), &link).ok()?,
+            }
+        }
+        Some(())
+    }
+
+    /// The copy under the runner of `directory`, a package rawr generates
+    /// beside it.
+    fn copy(&self, directory: &Path) -> Option<PathBuf> {
+        Some(self.runner.join(COPIES).join(directory.file_name()?))
+    }
+
+    /// Write the copy of each of `generated`, each package's manifest with
+    /// its path dependencies named through the runner's links and the other
+    /// copies, and every other entry of its directory a link to the
+    /// original, so its sources, build script and assets are the
+    /// original's. A copy no package needs goes.
+    fn write_copies(&self, generated: &[PathBuf]) -> Option<()> {
+        let copies = self.runner.join(COPIES);
+        fs::create_dir_all(&copies).ok()?;
+        let named = generated
+            .iter()
+            .filter_map(|directory| directory.file_name().map(OsString::from))
+            .collect::<BTreeSet<_>>();
+        for entry in fs::read_dir(&copies).ok()?.flatten() {
+            if !named.contains(&entry.file_name()) {
+                fs::remove_dir_all(entry.path()).ok()?;
+            }
+        }
+        for directory in generated {
+            let mut package = read(&directory.join("Cargo.toml"))?;
+            // Each path from the copy's directory: another copy, a link, or
+            // the absolute path.
+            for_each_dependency(package.as_table_mut(), &mut |dependency| {
+                let Some(path) = dependency.get("path").and_then(Item::as_str) else {
+                    return;
+                };
+                let path = normalize(&directory.join(path));
+                let renamed = if generated.contains(&path) {
+                    self.copy(&path).unwrap_or(path)
+                } else {
+                    self.relative(&path)
+                        .map_or(path, |relative| self.runner.join(relative))
+                };
+                dependency.insert("path", toml_edit::value(renamed.display().to_string()));
+            });
+            // It is a member of the runner's workspace now.
+            package.remove("workspace");
+            let copy = self.copy(directory)?;
+            fs::create_dir_all(&copy).ok()?;
+            let manifest = package.to_string();
+            let target = copy.join("Cargo.toml");
+            if fs::read_to_string(&target).ok().as_deref() != Some(manifest.as_str()) {
+                fs::write(&target, manifest).ok()?;
+            }
+            let entries = fs::read_dir(directory)
+                .ok()?
+                .flatten()
+                .map(|entry| entry.file_name())
+                .filter(|name| name != "Cargo.toml" && name != "Cargo.lock" && name != "target")
+                .collect::<BTreeSet<_>>();
+            for entry in fs::read_dir(&copy).ok()?.flatten() {
+                let name = entry.file_name();
+                if name != "Cargo.toml"
+                    && (!entries.contains(&name)
+                        || fs::read_link(entry.path()).ok()? != directory.join(&name))
+                {
+                    fs::remove_file(entry.path()).ok()?;
+                }
+            }
+            for name in &entries {
+                let link = copy.join(name);
+                if fs::symlink_metadata(&link).is_err() {
+                    link_entry(&directory.join(name), &link).ok()?;
+                }
+            }
+        }
+        Some(())
+    }
+}
+
+fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
+    let root = Root::new(workspace, runner)?;
+    let mut document = manifest.parse::<DocumentMut>().ok()?;
+
+    // The runner's path dependencies under the project's workspace, and the
+    // packages rawr generates beside the runner.
     let mut placed = Vec::new();
     let mut unplaced = Vec::new();
+    let mut generated = Vec::new();
     for_each_dependency(document.as_table_mut(), &mut |dependency| {
         let Some(path) = dependency.get("path").and_then(Item::as_str) else {
             return;
@@ -78,9 +272,15 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
         if !path.is_absolute() {
             return;
         }
-        let relative = under(&normalize(path))
-            .or_else(|| fs::canonicalize(path).ok().and_then(|path| under(&path)));
-        match relative {
+        if root.beside(path) {
+            generated.push(normalize(path));
+            if let Some(copy) = root.copy(path) {
+                let relative = copy.strip_prefix(root.runner).unwrap_or(&copy);
+                dependency.insert("path", toml_edit::value(slashed(relative)));
+            }
+            return;
+        }
+        match root.relative(path) {
             Some(relative) => {
                 placed.push(relative.clone());
                 dependency.insert("path", toml_edit::value(slashed(&relative)));
@@ -106,52 +306,37 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
             else {
                 continue;
             };
-            let relative = under(&normalize(path))
-                .or_else(|| fs::canonicalize(path).ok().and_then(|path| under(&path)));
-            if let Some(relative) = relative {
+            if let Some(relative) = root.relative(path) {
                 *entry = slashed(&relative).into();
             }
         }
     }
 
-    // Every package Cargo reaches from those through relative paths, and
-    // the workspace's own dependencies, must be placed too.
-    let root = read(&workspace.join("Cargo.toml"))?;
-    let mut seen = BTreeSet::new();
-    let mut pending = placed.clone();
-    if let Some(dependencies) = root
-        .get("workspace")
-        .and_then(|workspace| workspace.get("dependencies"))
-        .and_then(Item::as_table_like)
-    {
-        for (_, dependency) in dependencies.iter() {
-            if let Some(path) = dependency.as_table_like().and_then(relative_path) {
-                pending.push(under(&normalize(&workspace.join(path)))?);
-            }
-        }
-    }
-    while let Some(relative) = pending.pop() {
-        if !seen.insert(relative.clone()) {
-            continue;
-        }
-        let directory = workspace.join(&relative);
-        let Some(mut package) = read(&directory.join("Cargo.toml")) else {
-            continue;
-        };
-        let mut reached = Vec::new();
+    // The generated packages' own path dependencies are placed too; those
+    // they reach beside the runner are generated as well.
+    let mut pending = generated.clone();
+    while let Some(directory) = pending.pop() {
+        let mut package = read(&directory.join("Cargo.toml"))?;
         for_each_dependency(package.as_table_mut(), &mut |dependency| {
-            if let Some(path) = relative_path(dependency) {
-                reached.push(normalize(&directory.join(path)));
+            let Some(path) = dependency.get("path").and_then(Item::as_str) else {
+                return;
+            };
+            let path = normalize(&directory.join(path));
+            if root.beside(&path) {
+                if !generated.contains(&path) {
+                    generated.push(path.clone());
+                    pending.push(path);
+                }
+            } else if let Some(relative) = root.relative(&path) {
+                placed.push(relative);
             }
         });
-        for path in reached {
-            pending.push(under(&path)?);
-        }
     }
+    let seen = root.closure(placed)?;
 
-    // A package the runner names by its own path that names a placed one,
-    // as the crate of a program's native modules names the project's path
-    // dependencies, would make Cargo see that package at two paths.
+    // Any other package the runner names by its own path that names a
+    // placed one by its absolute path would make Cargo see that package at
+    // two paths.
     for directory in &unplaced {
         let Some(mut package) = read(&directory.join("Cargo.toml")) else {
             continue;
@@ -161,7 +346,8 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
             let Some(path) = dependency.get("path").and_then(Item::as_str) else {
                 return;
             };
-            named |= under(&normalize(&directory.join(path)))
+            named |= root
+                .under(&normalize(&directory.join(path)))
                 .is_some_and(|relative| seen.iter().any(|placed| relative.starts_with(placed)));
         });
         if named {
@@ -169,32 +355,12 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
         }
     }
 
-    // One link per top-level directory, and none left from another manifest.
-    let names = seen
-        .iter()
-        .filter_map(|relative| relative.components().next())
-        .map(|first| first.as_os_str().to_owned())
-        .collect::<BTreeSet<_>>();
-    for entry in fs::read_dir(runner).ok()?.flatten() {
-        let name = entry.file_name();
-        if entry.file_type().ok()?.is_symlink()
-            && (!names.contains(&name)
-                || fs::read_link(entry.path()).ok()? != workspace.join(&name))
-        {
-            fs::remove_file(entry.path()).ok()?;
-        }
-    }
-    for name in &names {
-        let link = runner.join(name);
-        match fs::symlink_metadata(&link) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {}
-            Ok(_) => return None,
-            Err(_) => link_directory(&workspace.join(name), &link).ok()?,
-        }
-    }
+    root.link(&seen)?;
+    root.write_copies(&generated)?;
 
     // The tables a placed member inherits, as the project's workspace has them.
-    if let Some(inherited) = root.get("workspace").and_then(Item::as_table_like) {
+    let project = read(&root.workspace.join("Cargo.toml"))?;
+    if let Some(inherited) = project.get("workspace").and_then(Item::as_table_like) {
         let table = document
             .get_mut("workspace")
             .and_then(Item::as_table_like_mut)?;
@@ -288,6 +454,21 @@ fn link_directory(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
 }
 
+/// A link at `link` to `target`, a file or a directory.
+#[cfg(unix)]
+fn link_entry(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn link_entry(target: &Path, link: &Path) -> std::io::Result<()> {
+    if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -376,13 +557,14 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// The crate of a program's native modules lives under `target/`, so
-    /// the runner names it by its own path, and it names the project's
-    /// path dependency by its absolute path. A link for that dependency
-    /// would make Cargo see one package at two paths.
+    /// rawr's copy of the program's crate lives beside the runner, outside
+    /// its root, and names the project's path dependency by its absolute
+    /// path. The runner names the copy's own copy under its root instead,
+    /// whose manifest names the dependency through the runner's link: one
+    /// package at one path, hashed as `cargo build` hashes it (#1777).
     #[test]
-    fn a_package_named_by_its_own_path_that_names_a_placed_one_leaves_the_manifest_alone() {
-        let root = scratch("shadow");
+    fn a_package_generated_beside_the_runner_is_named_through_its_copy() {
+        let root = scratch("copy");
         let project = root.join("app");
         write(
             &project.join("Cargo.toml"),
@@ -392,21 +574,44 @@ mod tests {
             &project.join("events/Cargo.toml"),
             "[package]\nname = \"events\"\n",
         );
+        let generated = project.join("target/rawr/crate");
         write(
-            &project.join("target/rawr/crate/Cargo.toml"),
+            &generated.join("Cargo.toml"),
             &format!(
-                "[package]\nname = \"app\"\n\n[dependencies]\nevents = {{ path = \"{}\" }}\n",
+                "[package]\nname = \"app\"\n\n[lib]\npath = \"src/lib.rs\"\n\n\
+                 [dependencies]\nevents = {{ path = \"{}\" }}\n\n[workspace]\n",
                 project.join("events").display()
             ),
         );
+        write(&generated.join("src/lib.rs"), "");
         let runner = project.join("target/rawr/runner");
         let manifest = format!(
             "[workspace]\n\n[dependencies]\napp = {{ path = \"{}\" }}\nevents = {{ path = \"{}\" }}\n",
-            project.join("target/rawr/crate").display(),
+            generated.display(),
             project.join("events").display()
         );
-        assert_eq!(super::mirror(&project, &runner, &manifest), manifest);
-        assert!(fs::symlink_metadata(runner.join("events")).is_err());
+        let mirrored = super::mirror(&project, &runner, &manifest);
+        assert!(
+            mirrored.contains("app = { path = \"rawr-copies/crate\" }"),
+            "{mirrored}"
+        );
+        assert!(
+            mirrored.contains("events = { path = \"events\" }"),
+            "{mirrored}"
+        );
+        let copy = runner.join("rawr-copies/crate");
+        let copied = fs::read_to_string(copy.join("Cargo.toml")).unwrap();
+        assert!(
+            copied.contains(&format!("path = \"{}\"", runner.join("events").display())),
+            "{copied}"
+        );
+        assert!(!copied.contains("[workspace]"), "{copied}");
+        assert_eq!(
+            fs::read_link(copy.join("src")).unwrap(),
+            generated.join("src")
+        );
+        // A second pass changes nothing.
+        assert_eq!(super::mirror(&project, &runner, &manifest), mirrored);
         fs::remove_dir_all(root).unwrap();
     }
 
