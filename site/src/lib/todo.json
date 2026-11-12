@@ -14,7 +14,8 @@
       "entries": [
         {"text":"A running owner reuses the Cargo view its last check replayed while no watched file changed, parsing no Cargo metadata and hashing no recorded input again. `RAWR_VERBOSE` says how many Cargo views each round parsed, compared and kept.","issues":[1759]},
         {"text":"The start's status line names the step the start is in (reading the API, checking, building the runner, starting) instead of 'resolving dependencies' throughout.","issues":[1763]},
-        {"text":"A new context schema, a moved Cargo home or a changed build variable no longer classifies a project's API or selects its bindings again when the API is unchanged.","issues":[1766]}
+        {"text":"A new context schema, a moved Cargo home or a changed build variable no longer classifies a project's API or selects its bindings again when the API is unchanged.","issues":[1766]},
+        {"text":"A crate function whose generic appears only in its returned `impl Trait<T>` takes that type from where its value goes, the enclosing function's `impl Trait<T>` return or a crate function's `impl Trait<T>` parameter, so `fn view(&self) -> impl Widget<Message> { crate::view(..) }` needs no turbofish.","issues":[1769]}
       ]
     },
     "releases": [
@@ -3875,10 +3876,12 @@
     {"issue":1766,"title":"A generator bump costs inboard a 6.5-minute API rebuild on the next start","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1767,"title":"A shared resolution's remembered.json is parsed again for every check in a running owner","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"open","category":"Divergences from rustc"},
+    {"issue":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"closed","category":"Divergences from rustc"},
     {"issue":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open","category":"Divergences from rustc"},
     {"issue":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1773,"title":"A crate opaque output that captures a named &'a str input fails to compile in the runner (E0597)","state":"open","category":"Divergences from rustc"},
+    {"issue":1774,"title":"A crate function written -> impl Trait + use<..> is missing from its facade (E0425)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4555,8 +4558,10 @@
             {"number":1369,"title":"A method taking `&mut Vec<String>` on a value a scope frame's region holds fails to compile in the runner","state":"closed"},
             {"number":1370,"title":"A frame that joins an outer region keeps its values to the outer frame's end, so a loop piles them up","state":"open"},
             {"number":1626,"title":"A crate type's associated const of type &'static [&'static str] is refused","state":"closed"},
-            {"number":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"open"},
-            {"number":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open"}
+            {"number":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"closed"},
+            {"number":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open"},
+            {"number":1773,"title":"A crate opaque output that captures a named &'a str input fails to compile in the runner (E0597)","state":"open"},
+            {"number":1774,"title":"A crate function written -> impl Trait + use<..> is missing from its facade (E0425)","state":"open"}
           ]
         }
       ]
