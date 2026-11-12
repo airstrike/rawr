@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use super::{build, proof, Allocation, Baseline};
 use crate::cargo;
 
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 
 /// Current request authority, captured before any shared API is consumed.
 pub(crate) struct Current {
@@ -50,7 +50,7 @@ impl Current {
             config: *config.universe_context().as_bytes(),
             projection: config
                 .projection()
-                .entries()
+                .build_entries()
                 .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
                 .collect(),
             environment: {

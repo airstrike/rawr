@@ -8,7 +8,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::cargo;
 
-const CONTEXT_SCHEMA: u32 = 5;
+const CONTEXT_SCHEMA: u32 = 6;
 const LAUNCHER_POLICY_SCHEMA: u32 = 1;
 
 /// Canonical project, Cargo-home, environment, target, and limit authority.
@@ -296,9 +296,11 @@ fn identity(
         None => digest.update([0]),
     }
     // Key on build-relevant variables only; children still inherit all.
+    // `CARGO_HOME` is the resolved home retained above, set or unset
+    // (#1754).
     let relevant: Vec<_> = environment
         .entries()
-        .filter(|(key, _)| cargo::config::projection::build_relevant(key))
+        .filter(|(key, _)| *key != "CARGO_HOME" && cargo::config::projection::build_relevant(key))
         .collect();
     digest.update((relevant.len() as u64).to_le_bytes());
     for (key, value) in relevant {
