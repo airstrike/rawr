@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"After an edit to one crate, a `rawr run` save re-reads only the API of crates whose API changed, and `RAWR_VERBOSE` prints each round of a save's preparation.","issues":[1776]}
+    ]
   },
   "releases": [
     {

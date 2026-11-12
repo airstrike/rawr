@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- After an edit to one crate, a `rawr run` save re-reads only the API of crates whose API changed, and `RAWR_VERBOSE` prints each round of a save's preparation. (#1776)
 
 ## 0.3.191 (2026-11-12)
 
