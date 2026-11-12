@@ -842,7 +842,12 @@ impl Std {
             Self::PartialOrd => "::std::cmp::PartialOrd",
             Self::Ord => "::std::cmp::Ord",
         };
-        format!("impl {path} for {stand_in} {{\n{body}}}\n")
+        let inline = if body.is_empty() {
+            ""
+        } else {
+            "    #[inline]\n"
+        };
+        format!("impl {path} for {stand_in} {{\n{inline}{body}}}\n")
     }
 }
 
@@ -1845,7 +1850,7 @@ impl<'a> Generator<'a> {
                     }
                     if self.tracks_drop(file, declared) {
                         let text = format!(
-                            "impl ::std::ops::Drop for {} {{\n    fn drop(&mut self) {{\n        \
+                            "impl ::std::ops::Drop for {} {{\n    #[inline]\n    fn drop(&mut self) {{\n        \
                              crate::{MODULE}::ended(self);\n    }}\n}}\n",
                             declared.name.text
                         );
@@ -2263,7 +2268,8 @@ impl<'a> Generator<'a> {
             ),
         };
         let island = format!("crate::{MODULE}");
-        let mut text = format!("fn {GIVE}(self, __call: &mut {island}::Call<'_>){clause}{{\n");
+        let mut text =
+            format!("#[inline]\nfn {GIVE}(self, __call: &mut {island}::Call<'_>){clause}{{\n");
         match stand {
             Some(Stand { written, make, .. }) => {
                 let _ = writeln!(
@@ -2289,7 +2295,7 @@ impl<'a> Generator<'a> {
         };
         let _ = writeln!(
             text,
-            "fn {GIVEN_NAME}(&self) -> &'static str {{\n    \"+{named}\"\n}}"
+            "#[inline]\nfn {GIVEN_NAME}(&self) -> &'static str {{\n    \"+{named}\"\n}}"
         );
         Some(text)
     }
@@ -2653,7 +2659,7 @@ impl<'a> Generator<'a> {
                     reasons.join("; ")
                 )
             );
-            return Ok(text);
+            return Ok(inlined(function, text));
         }
         // Each `impl Trait`'s owned stand-in, made before the call starts,
         // as making it may run native code that calls marked code too; a
@@ -3015,7 +3021,7 @@ impl<'a> Generator<'a> {
             }
             return Ok(format!("{public}{entry}"));
         }
-        Ok(text)
+        Ok(inlined(function, text))
     }
 
     /// How one field of `ty` of the marked type at `path` goes to the
@@ -3087,10 +3093,14 @@ impl<'a> Generator<'a> {
         };
         format!(
             "impl{generics} {island}::Parts for {name} {{\n    \
+             #[inline]\n    \
              fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n        \
              {whole}\n{lend}    }}\n    \
+             #[inline]\n    \
              fn lend_mut<'c>(&'c mut self, call: &mut {island}::Call<'c>) {{\n{lend_mut}    }}\n    \
+             #[inline]\n    \
              fn give(self, out: &mut {island}::Out) {{\n{give}    }}\n    \
+             #[inline]\n    \
              fn take_into(&mut self, input: &mut {island}::In<'_>) {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n\
              {take_into}    }}\n}}\n"
@@ -3318,9 +3328,9 @@ impl<'a> Generator<'a> {
             item::StructForm::Unit => take.push_str(name),
         }
         let mut text = format!(
-            "impl{generics} {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
+            "impl{generics} {island}::Put for {ty} {{\n    #[inline]\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              out.structure({path:?}, {count});\n{put}    }}\n}}\n\
-             impl{generics} {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             impl{generics} {island}::Take for {ty} {{\n    #[inline]\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              input.structure({path:?}, {count});\n        {take}\n    }}\n}}\n"
         );
@@ -3361,9 +3371,9 @@ impl<'a> Generator<'a> {
             let _ = writeln!(take, "            ({variant_name:?}, {count}) => {built},");
         }
         let mut text = format!(
-            "impl{generics} {island}::Put for {ty} {{\n    fn put(&self, out: &mut {island}::Out) {{\n        \
+            "impl{generics} {island}::Put for {ty} {{\n    #[inline]\n    fn put(&self, out: &mut {island}::Out) {{\n        \
              match self {{\n{put}        }}\n    }}\n}}\n\
-             impl{generics} {island}::Take for {ty} {{\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
+             impl{generics} {island}::Take for {ty} {{\n    #[inline]\n    fn take(input: &mut {island}::In<'_>) -> Self {{\n        \
              #[allow(unused_imports)]\n        use {island}::{{ByMove as _, ByWire as _}};\n        \
              match input.variant({path:?}) {{\n{take}            (variant, count) => input.unknown({path:?}, variant, count),\n        }}\n    }}\n}}\n"
         );
@@ -3392,10 +3402,26 @@ impl<'a> Generator<'a> {
             )
         };
         format!(
-            "impl{generics} {island}::Mirror for {ty} {{\n    fn give(self, out: &mut {island}::Out) {{\n        \
+            "impl{generics} {island}::Mirror for {ty} {{\n    #[inline]\n    fn give(self, out: &mut {island}::Out) {{\n        \
              {give}\n    }}\n    \
+             #[inline]\n    \
              fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n        {lend}\n    }}\n}}\n"
         )
+    }
+}
+
+/// `trampoline`, the text of `function`'s, `#[inline]` unless `function`
+/// says how it inlines. rustc then builds it only where it is called, as
+/// cargo's build of a binary builds only what `main` reaches, and not as
+/// a public item of rawr's copy of the crate, a library (#1801).
+fn inlined(function: &item::Function, trampoline: String) -> String {
+    let attributed = function.header.attributes.iter().any(|attribute| {
+        matches!(attribute.path.segments.as_ref(), [only] if only.name.text == "inline")
+    });
+    if attributed {
+        trampoline
+    } else {
+        format!("#[inline]\n{trampoline}")
     }
 }
 
@@ -3531,7 +3557,7 @@ fn formatting(trait_: &type_ref::Path) -> bool {
 fn rendered_fmt(member: &str) -> String {
     let island = format!("crate::{MODULE}");
     format!(
-        "fn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n    \
+        "#[inline]\nfn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n    \
          let mut __call = {island}::Call::new({member:?}, true);\n    \
          __call.argument(self);\n    \
          __call.argument(&::std::string::String::new());\n    \
@@ -4818,21 +4844,23 @@ fn lend(name: &str, mutable: bool, referent: &str, island: &str, text: &mut Stri
         let _ = writeln!(
             text,
             "        #[allow(unsafe_code)]\n        \
+             #[inline]\n        \
              fn mutable(nonce: u64, visit: &mut dyn FnMut(&mut {referent})) -> {result} {{\n            \
              {island}::reach(nonce, {key}, false, |place| {{\n                \
              // SAFETY: `Key`'s lend is this call's `&mut {referent}`, claimed exclusively.\n                \
              visit(unsafe {{ &mut *place.cast::<{referent}>() }})\n            }})\n        }}\n        \
-             static MUTABLE: fn(u64, &mut dyn FnMut(&mut {referent})) -> {result} = mutable;"
+             const MUTABLE: fn(u64, &mut dyn FnMut(&mut {referent})) -> {result} = mutable;"
         );
     }
     let _ = writeln!(
         text,
         "        #[allow(unsafe_code)]\n        \
+         #[inline]\n        \
          fn shared(nonce: u64, visit: &mut dyn FnMut(&{referent})) -> {result} {{\n            \
          {island}::reach(nonce, {key}, true, |place| {{\n                \
          // SAFETY: `Key`'s lend is this call's `{referent}`, claimed shared.\n                \
          visit(unsafe {{ &*place.cast_const().cast::<{referent}>() }})\n            }})\n        }}\n        \
-         static SHARED: fn(u64, &mut dyn FnMut(&{referent})) -> {result} = shared;\n        \
+         const SHARED: fn(u64, &mut dyn FnMut(&{referent})) -> {result} = shared;\n        \
          {island}::Lend::new({key}, {}, &SHARED)\n    }};",
         if mutable { "Some(&MUTABLE)" } else { "None" }
     );
@@ -4870,13 +4898,14 @@ fn lend_slice(name: &str, element: &str, island: &str, text: &mut String) {
         "    let {name}_lend = {{
         struct Key;
         #[allow(unsafe_code)]
+        #[inline]
         fn shared(nonce: u64, visit: &mut dyn FnMut(&[{element}])) -> {result} {{
             {island}::reach(nonce, {key}, true, |place| {{
                 // SAFETY: `Key`'s lend is this call's `&[{element}]`, claimed shared.
                 visit(unsafe {{ *place.cast_const().cast::<&[{element}]>() }})
             }})
         }}
-        static SHARED: fn(u64, &mut dyn FnMut(&[{element}])) -> {result} = shared;
+        const SHARED: fn(u64, &mut dyn FnMut(&[{element}])) -> {result} = shared;
         {island}::Lend::new({key}, None, &SHARED)
     }};
     // SAFETY: the lend's accessor reads its key's place as a `&[{element}]`.
@@ -5631,6 +5660,7 @@ pub mod __rawr_island {
     macro_rules! lend_part {
         ($call:expr, $value:expr, $ty:ty) => {{
             struct Key;
+            #[inline]
             fn shared(
                 nonce: u64,
                 visit: &mut dyn FnMut(&$ty),
@@ -5640,7 +5670,7 @@ pub mod __rawr_island {
                     visit(unsafe { &*place.cast_const().cast::<$ty>() })
                 })
             }
-            static SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+            const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
             #[allow(unused_imports)]
             use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
             let lend = crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED);
@@ -5662,6 +5692,7 @@ pub mod __rawr_island {
         ($call:expr, $value:expr, $ty:ty) => {{
             // Not `Key`, which a marked type `$ty` may be named.
             struct WholeKey;
+            #[inline]
             fn shared(
                 nonce: u64,
                 visit: &mut dyn FnMut(&$ty),
@@ -5671,7 +5702,7 @@ pub mod __rawr_island {
                     visit(unsafe { &*place.cast_const().cast::<$ty>() })
                 })
             }
-            static SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+            const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
             let lend = crate::__rawr_island::Lend::new(
                 ::std::any::TypeId::of::<WholeKey>(),
                 ::std::option::Option::None,
@@ -5691,6 +5722,7 @@ pub mod __rawr_island {
     macro_rules! lend_part_mut {
         ($call:expr, $value:expr, $ty:ty) => {{
             struct Key;
+            #[inline]
             fn mutable(
                 nonce: u64,
                 visit: &mut dyn FnMut(&mut $ty),
@@ -5700,6 +5732,7 @@ pub mod __rawr_island {
                     visit(unsafe { &mut *place.cast::<$ty>() })
                 })
             }
+            #[inline]
             fn shared(
                 nonce: u64,
                 visit: &mut dyn FnMut(&$ty),
@@ -5709,8 +5742,8 @@ pub mod __rawr_island {
                     visit(unsafe { &*place.cast_const().cast::<$ty>() })
                 })
             }
-            static MUTABLE: fn(u64, &mut dyn FnMut(&mut $ty)) -> ::std::result::Result<(), u8> = mutable;
-            static SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+            const MUTABLE: fn(u64, &mut dyn FnMut(&mut $ty)) -> ::std::result::Result<(), u8> = mutable;
+            const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
             #[allow(unused_imports)]
             use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
             let lend = crate::__rawr_island::Lend::new(
@@ -7576,6 +7609,33 @@ mod tests {
         assert!(rawr.ends_with("fn main() {\n    crate::__rawr_island::main();\n}\n"));
     }
 
+    /// Each trampoline and each function of a crossing type's glue is
+    /// `#[inline]`, so rustc builds only those native code or the runner
+    /// calls, as a binary's build does (#1801). A function that says how it
+    /// inlines keeps its own word alone.
+    #[test]
+    fn trampolines_and_glue_are_inline() {
+        let shadow = generate(
+            "// rawr\npub struct Ball {\n    pub x: f64,\n}\n\
+             pub fn fall(ball: &mut Ball) {}\n\
+             #[inline(never)]\npub fn rise(ball: &mut Ball) {}\n",
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        for expected in [
+            "#[inline]\npub fn fall(",
+            "impl crate::__rawr_island::Put for Ball {\n    #[inline]\n    fn put(",
+            "impl crate::__rawr_island::Take for Ball {\n    #[inline]\n    fn take(",
+            "impl crate::__rawr_island::Mirror for Ball {\n    #[inline]\n    fn give(",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        let rise = text.find("pub fn rise(").expect("`rise` has a trampoline");
+        assert!(!text[..rise].ends_with("#[inline]\n"), "{text}");
+    }
+
     #[test]
     fn visible_items_get_trampolines_and_private_ones_nothing() {
         let shadow = generate(
@@ -7805,7 +7865,7 @@ mod tests {
             "    let __a0_lend = {\n        struct Key;\n",
             "fn mutable(nonce: u64, visit: &mut dyn FnMut(&mut Frame<'_>)) -> ::std::result::Result<(), u8> {",
             "visit(unsafe { &mut *place.cast::<Frame<'_>>() })",
-            "static SHARED: fn(u64, &mut dyn FnMut(&Frame<'_>)) -> ::std::result::Result<(), u8> = shared;",
+            "const SHARED: fn(u64, &mut dyn FnMut(&Frame<'_>)) -> ::std::result::Result<(), u8> = shared;",
             "crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), Some(&MUTABLE), &SHARED)",
             "let () = unsafe { __call.lend(__a0, __a0_lend, ::std::any::type_name::<Frame<'_>>()) };",
             "    __call.mutable(&*__a1);\n",
@@ -8277,7 +8337,7 @@ mod tests {
         );
         assert!(
             text.contains(
-                "impl ::std::ops::Drop for State {\n    fn drop(&mut self) {\n        \
+                "impl ::std::ops::Drop for State {\n    #[inline]\n    fn drop(&mut self) {\n        \
                  crate::__rawr_island::ended(self);\n    }\n}\n"
             ) && text.contains("let __value = ::std::mem::ManuallyDrop::new(self);")
                 && text.contains("let __f1 = unsafe { ::std::ptr::read(&__value.title) };"),
@@ -8537,6 +8597,7 @@ mod tests {
         assert!(
             text.contains(
                 "impl page::Page for crate::physics::__RawrBadge {\n    \
+                 #[inline]\n    \
                  fn title(&self) -> String {\n        \
                  let mut __call = crate::__rawr_island::Call::new(\"physics::Badge::Page::title\", true);\n        \
                  __call.object(&self.0);\n"
@@ -8602,6 +8663,7 @@ mod tests {
         assert!(
             text.contains(
                 "impl ::std::fmt::Display for crate::physics::__RawrBadge {\n    \
+                 #[inline]\n    \
                  fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {\n        \
                  f.write_str(&self.0.text(\"physics::Badge\", crate::__rawr_island::DISPLAY))\n"
             ),
@@ -8610,6 +8672,7 @@ mod tests {
         assert!(
             text.contains(
                 "impl ::std::clone::Clone for crate::physics::__RawrBadge {\n    \
+                 #[inline]\n    \
                  fn clone(&self) -> Self {\n        \
                  Self(self.0.duplicate(\"physics::Badge\"))\n"
             ),
