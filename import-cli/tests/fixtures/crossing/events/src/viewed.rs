@@ -108,6 +108,33 @@ pub fn floors<'a, M: Clone + 'a>(
     }
 }
 
+/// A tower of `floors`, as a canvas that borrows nothing.
+struct Tower<M> {
+    floors: u8,
+    lit: u8,
+    on_press: M,
+}
+
+impl<M: Clone> Widget<M> for Tower<M> {
+    fn label(&self) -> String {
+        format!("tower {}/{}", self.lit, self.floors)
+    }
+
+    fn press(&self) -> Option<M> {
+        (self.lit < self.floors).then(|| self.on_press.clone())
+    }
+}
+
+/// A tower of `floors`, `lit` of them lit, sending `on_press` while some
+/// are dark.
+pub fn tower<M: Clone>(floors: u8, lit: u8, on_press: M) -> impl Widget<M> {
+    Tower {
+        floors,
+        lit,
+        on_press,
+    }
+}
+
 /// A view of a program and a building, as iced's `ViewFn`.
 pub trait View<'a, P, M> {
     /// The widget `program` shows of `building`.

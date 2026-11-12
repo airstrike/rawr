@@ -517,12 +517,24 @@ fn a_crate_generic_only_an_opaque_output_names_needs_an_expected_type() {
 /// 'a` that borrows the building. The game maps and boxes it. The output
 /// is `cargo run`'s.
 #[test]
-#[ignore = "blocked (#965): a slot's output of an opaque type that borrows what native code lent the slot isn't held; the `floors` adapter takes the lent building as an arena value"]
 fn a_crates_opaque_value_through_a_higher_ranked_view_trait_runs() {
     let (rawr, cargo) = both_printed("viewed.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view map floors 0/2") && rawr.contains("3 view map floors 2/2"),
+        "{rawr}"
+    );
+}
+
+/// The `ViewFn` shape of `viewed.rs`, where the crate's `tower(..)` gives
+/// an opaque `impl Widget<M>` that borrows nothing of the building. The
+/// output is `cargo run`'s.
+#[test]
+fn a_crates_owned_opaque_value_through_a_higher_ranked_view_trait_runs() {
+    let (rawr, cargo) = both_printed("viewed_owned.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view map tower 0/2") && rawr.contains("3 view map tower 2/2"),
         "{rawr}"
     );
 }

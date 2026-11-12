@@ -163,6 +163,21 @@ impl Family {
         }
     }
 
+    /// The bounds of what a wrapper gives, as `Widget<crate::Message>`, for
+    /// a signature that names it as `impl Widget<crate::Message> +
+    /// use<'x>`.
+    pub(super) fn bounds(&self) -> Option<String> {
+        let Self::Given(index) = self else {
+            return None;
+        };
+        WRAPPERS.with_borrow(|wrappers| {
+            wrappers
+                .values()
+                .find(|wrapper| wrapper.index == *index)
+                .map(|wrapper| wrapper.bounds.clone())
+        })
+    }
+
     /// The call that makes the value of a family a wrapper gives, of the
     /// inputs by the names the call through it named them.
     pub(super) fn made(&self) -> Option<String> {

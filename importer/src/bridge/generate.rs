@@ -3128,6 +3128,16 @@ pub fn lent_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__r
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent))
 }
 
+/// Whether an argument at `indices` is a value native code lent and keeps
+/// as long as the anchored call's result (`Lent::kept`), which only that
+/// call's region reaches.
+#[allow(dead_code)]
+pub fn kept_lent(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> bool {
+    indices
+        .iter()
+        .any(|index| lent_value(arguments, *index).is_some_and(|lent| lent.is_kept()))
+}
+
 /// A crate value a call's output keeps borrowed (D568): shared from its
 /// slot, or lent by native code to a marked function, which keeps it as
 /// long as the anchored call's result (#1413).
@@ -7880,9 +7890,14 @@ fn render_source(
     // Every adapter that reaches a region's value of an opaque type names
     // how the region holds it (`family`), so each is declared first: a
     // call on what another such call gives is declared once that one is.
+    let mut given = std::collections::BTreeSet::new();
     for plan in plans {
         record_bounds(plan)?;
         record_witness(plan)?;
+        given.extend(slot_outputs(plan));
+    }
+    for plan in plans {
+        declare_lent_given(plan, &given)?;
     }
     let mut boxed = Vec::new();
     loop {
@@ -12437,6 +12452,11 @@ fn render_adapter_body(
                     && !is_future(&substituted(signature.output(), signature, substitutions)?)
                     && lent_cell(signature, substitutions)?.is_none(),
             );
+            // An opaque output a slot gives native code, made of a value
+            // native code lent the slot, in the slot's region (#1770).
+            if viewed && replay.is_none() && functions.is_empty() && mappers.is_empty() {
+                render_anchored_given(signature, substitutions, output)?;
+            }
             // An opening that returns on every path, as a call pinned for
             // the runner's life out of any region does, ends the adapter:
             // a frame written after it would never run.
@@ -13858,6 +13878,75 @@ fn render_anchored_output(
     .map_err(request::unwritable)
 }
 
+/// A call whose opaque output borrows a crate value native code lent a
+/// slot and keeps as long as the slot's output, as elevato's `view` gives
+/// `floors(building, ..)` of the `&'a Building` its `View<'a, ..>` lends
+/// (#1770, #965): made in the slot's region through the output's wrapper
+/// (`declare_lent_given`), which the slot takes it out of at the lend's
+/// lifetime. Each lent input is reached there as it is, never copied. A
+/// call taking no such lend makes its output as it does elsewhere.
+fn render_anchored_given(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    if REGION_ARGUMENTS.get() {
+        return Ok(());
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let Some(family) = given_family(&returned) else {
+        return Ok(());
+    };
+    let Some(made) = family.made() else {
+        return Ok(());
+    };
+    let mut lent = Vec::new();
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        let input = substituted(declared, signature, substitutions)?;
+        if viewed_native(&input).is_some() && keeps_borrow(signature, position, declared) {
+            lent.push(position.to_string());
+        }
+    }
+    if lent.is_empty() {
+        return Ok(());
+    }
+    let mut taken = Vec::new();
+    {
+        let _kept = KeptLends::enter(true);
+        for (position, declared) in signature.inputs().iter().enumerate() {
+            render_take_input(
+                position,
+                position,
+                declared,
+                signature,
+                substitutions,
+                None,
+                &mut taken,
+            )?;
+        }
+    }
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
+    let reaches = kept_reaches("Some(&*region)");
+    KEPT_REACHES.with_borrow_mut(Vec::clear);
+    writeln!(
+        output,
+        "    if let Some(anchor) = __rawr_internal::scope::anchor()
+        && kept_lent(arguments, &[{lent}])
+    {{
+{taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;
+            let _ = &pins;{reaches}
+            let made = lend(arguments.arena, || {made});
+            Ok::<Dynamic, Error>(Dynamic::from(region.{inserted}))
+        }})
+        .map_err(|error| Error::Lent(\"a slot's region\", error))?;
+    }}",
+        lent = lent.join(", "),
+        inserted = family.call(family::Reach::Insert, "made"),
+    )
+    .map_err(request::unwritable)
+}
+
 /// Whether an input of the call is a native value that carries a lifetime,
 /// as a widget a view made does.
 fn lifetime_inputs(
@@ -14775,6 +14864,121 @@ fn record_witness(plan: &Plan) -> Result<(), request::Error> {
             inputs.join(", ")
         ),
     );
+    Ok(())
+}
+
+/// The output types, spelled at `'x`, of each slot `plan`'s call takes, a
+/// script function that fills a callable parameter (`render_slot`).
+fn slot_outputs(plan: &Plan) -> Vec<String> {
+    let (Operation::Function {
+        signature,
+        substitutions,
+        slots,
+        crossings,
+        ..
+    }
+    | Operation::Method {
+        signature,
+        substitutions,
+        slots,
+        crossings,
+        ..
+    }) = plan.operation()
+    else {
+        return Vec::new();
+    };
+    let crossed = Crossed { slots, crossings };
+    let mut outputs = Vec::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        if let Some(call) = crossed.slot_at(position, input) {
+            // One whose type has no spelling names nothing here; the slot
+            // itself says why (`render_slot`).
+            if let Ok(returned) = substituted(call.output(), signature, substitutions) {
+                outputs.extend(scoped_type(&returned));
+            }
+        }
+    }
+    outputs
+}
+
+/// Declare the wrapper of the crate function `plan`, whose opaque output
+/// borrows a crate value it takes by `&T` (`lent_cell`), when a slot gives
+/// that output to native code (`slot_outputs`): as elevato's `view` gives
+/// `floors(building, ..)` of the building native code lent it, which the
+/// slot hands back at the lend's lifetime (#1770, #965). The call is made
+/// in the slot's region through the wrapper, whose inputs are the call's
+/// at `'x`, so the slot names its output as what the wrapper gives.
+fn declare_lent_given(
+    plan: &Plan,
+    given: &std::collections::BTreeSet<String>,
+) -> Result<(), request::Error> {
+    let Operation::Function {
+        signature,
+        substitutions,
+        constants,
+        functions,
+        mappers,
+        container_parameters,
+        associated,
+        call,
+        slots,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(());
+    };
+    if !functions.is_empty() || !mappers.is_empty() || call.is_some() || !slots.is_empty() {
+        return Ok(());
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let convert::Type::Nominal { definition, .. } = &returned else {
+        return Ok(());
+    };
+    if !is_opaque(definition) {
+        return Ok(());
+    }
+    let Some(key) = scoped_type(&returned).filter(|key| given.contains(key)) else {
+        return Ok(());
+    };
+    if family::Ops::held(&key).is_some() || family::of(&key).is_some() {
+        return Ok(());
+    }
+    if lent_cell(signature, substitutions)?.is_none() {
+        return Ok(());
+    }
+    let Some(bounds) = opaque_bounds(signature, substitutions)? else {
+        return Ok(());
+    };
+    let mut inputs = Vec::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        let input = substituted(input, signature, substitutions)?;
+        let Some(ty) = scoped_type(&input).filter(|_| !holds_opaque(&input)) else {
+            return Ok(());
+        };
+        inputs.push((format!("argument_{position}"), ty));
+    }
+    let mut made = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        *associated,
+        &mut made,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        &mut made,
+    )?;
+    made.write_all(b"(").map_err(request::unwritable)?;
+    argument_list(inputs.len(), 0, &mut made)?;
+    made.write_all(b")").map_err(request::unwritable)?;
+    let made = String::from_utf8(made).map_err(request::unwritable)?;
+    family::Wrapper::new(inputs, made, bounds).declare(key);
     Ok(())
 }
 
@@ -17196,20 +17400,39 @@ fn render_slot(
     // arena's value at `'static`, which borrows nothing: the slot is
     // generic over its type, which the witness picks where the call takes
     // the slot.
-    let witness = held_witness(&returned);
-    let family = if witness.is_none() && (call.borrows() || carries_lifetime(&returned)) {
+    // An opaque output made of a value native code lent the slot, as
+    // elevato's `view` gives `floors(building, ..)` of the `&'a Building`
+    // it is lent (#1770), is made in the slot's region through its
+    // wrapper (`declare_lent_given`): the slot gives it at the lend's
+    // lifetime as what the wrapper gives, `impl Bounds + use<'x>`, and the
+    // lend lasts as long (`Lent::kept`).
+    let given = given_family(&returned);
+    let witness = if given.is_some() {
+        None
+    } else {
+        held_witness(&returned)
+    };
+    let family = if given.is_none()
+        && witness.is_none()
+        && (call.borrows() || carries_lifetime(&returned))
+    {
         // The slot's signature names the output's type, which a wrapper's
         // family can't (`family`).
         Some(written_family(&returned).ok_or_else(|| drift("a slot's borrowing output"))?)
     } else {
         None
     };
-    let lifetime = if family.is_some() { "'x " } else { "" };
+    let lifetime = if family.is_some() || given.is_some() {
+        "'x "
+    } else {
+        ""
+    };
     // A script value made on a thread with no arena is made where it is
     // first used (`DeferProbe`): its function may make native values, as
     // `Message::Tick(Local::now())` does, which only the owner's arena
     // holds.
     let deferred = family.is_none()
+        && given.is_none()
         && is_proxied(&returned)
         && !inputs
             .iter()
@@ -17302,12 +17525,18 @@ fn render_slot(
                 && !carries_lifetime(ty) =>
             {
                 let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
-                let borrow = if *borrowed_mutably { "&mut " } else { "&" };
-                parameters.push(format!("{name}: {borrow}{rust}"));
-                if *borrowed_mutably {
+                let mut lend = LentInput::new(position, *borrowed_mutably, rust.clone());
+                let borrow = if *borrowed_mutably {
                     mutable.push(position.to_string());
-                }
-                let lend = LentInput::new(position, *borrowed_mutably, rust);
+                    "&mut ".to_owned()
+                } else if given.is_some() {
+                    // The output borrows it, at the slot's `'x`.
+                    lend = lend.kept();
+                    format!("&{lifetime}")
+                } else {
+                    "&".to_owned()
+                };
+                parameters.push(format!("{name}: {borrow}{rust}"));
                 values.push(lend.value());
                 lends.push(lend);
             }
@@ -17411,8 +17640,26 @@ fn render_slot(
     // native code took of the view may hold one of its values
     // (`Region::keep`, #1217).
     let mut constant_pins = String::new();
-    let (generics, rust, body) = match &family {
-        Some(family) => {
+    // How the output is taken out of the region, and the type the slot
+    // gives it as: its family's, or what its wrapper gives.
+    let regional = match (&family, &given) {
+        (Some(family), _) => Some((
+            format!("take::<{family}>(scoped)"),
+            format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
+        )),
+        (None, Some(given)) => Some((
+            given.call(family::Reach::Take, "scoped"),
+            format!(
+                "impl {} + use<'x>",
+                given
+                    .bounds()
+                    .ok_or_else(|| drift("a slot's opaque output's bounds"))?
+            ),
+        )),
+        (None, None) => None,
+    };
+    let (generics, rust, body) = match regional {
+        Some((taken, rust)) => {
             let pins = pins.unwrap_or_else(|| {
                 constant_pins = format!(
                     "\n    static PINS_{local}: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant();"
@@ -17428,18 +17675,14 @@ fn render_slot(
             .map(|scoped| *scoped)
             .unwrap_or_else(|| panic!(\"rawr: a script function gave native code a value that doesn't borrow what it was lent\"));
         let output = region
-            .take::<{family}>(scoped)
+            .{taken}
             .unwrap_or_else(|error| panic!(\"rawr: {{error}}\"));
         static SITE: __rawr_internal::scope::Site = __rawr_internal::scope::Site::new();
         region.keep(&SITE);
         output"
             );
             let (items, body) = lent_around(&lends, held_around(&held, invoked));
-            (
-                "<'x>",
-                format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
-                format!("{items}{body}"),
-            )
+            ("<'x>", rust, format!("{items}{body}"))
         }
         None => {
             let mut converted = String::new();
@@ -22720,6 +22963,19 @@ fn written_family(ty: &convert::Type) -> Option<String> {
     (!boxed).then_some(name)
 }
 
+/// The family of `ty`, an opaque type a wrapper makes (`family::Wrapper`),
+/// whether or not its lifetimes are known, as a crate function's `impl
+/// Widget<M> + 'a` that borrows a lent input is made (`declare_lent_given`).
+fn given_family(ty: &convert::Type) -> Option<family::Family> {
+    let convert::Type::Nominal { definition, .. } = ty else {
+        return None;
+    };
+    if !is_opaque(definition) {
+        return None;
+    }
+    family::of(&scoped_type(ty)?)
+}
+
 /// Whether the Rust type spelled `text` has an argument `_`.
 fn names_inferred(text: &str) -> bool {
     let identifier = |character: Option<char>| {
@@ -23753,6 +24009,9 @@ struct LentInput {
     rust: String,
     family: String,
     reads: bool,
+    /// Native code keeps the borrow as long as the slot's output, which
+    /// borrows it (`Lent::kept`).
+    kept: bool,
 }
 
 impl LentInput {
@@ -23766,7 +24025,15 @@ impl LentInput {
             family: rust.clone(),
             rust,
             reads: true,
+            kept: false,
         }
+    }
+
+    /// The value lent shared at the lifetime of the slot's output, which
+    /// borrows it, so a call in the slot's region may borrow it there
+    /// (`Region::lent`).
+    fn kept(self) -> Self {
+        Self { kept: true, ..self }
     }
 
     /// A value of a type with lifetimes, as iced's `Shell<'_, Message>`:
@@ -23779,6 +24046,7 @@ impl LentInput {
             rust,
             family,
             reads: false,
+            kept: false,
         }
     }
 
@@ -23789,6 +24057,7 @@ impl LentInput {
             mutable,
             rust,
             reads,
+            kept,
             ..
         } = self;
         let writer = if *mutable {
@@ -23801,8 +24070,9 @@ impl LentInput {
         } else {
             String::new()
         };
+        let kept = if *kept { ".kept()" } else { "" };
         format!(
-            "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {rust:?}, {writer}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)){reads})"
+            "Dynamic::from(__rawr_internal::scope::Lent::new(lent_{position}, {rust:?}, {writer}, Some(&REACH_{position} as __rawr_internal::scope::Accessor)){reads}{kept})"
         )
     }
 }
@@ -23833,6 +24103,7 @@ fn lent_around(lends: &[LentInput], call: String) -> (String, String) {
         rust: target,
         family,
         reads,
+        ..
     } in lends.iter().rev()
     {
         let lend = if *borrowed_mutably {
