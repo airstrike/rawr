@@ -3840,9 +3840,10 @@
     {"issue":1748,"title":"No islands test drives a save refused at admission, where the runner exits and rawr run restarts","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1749,"title":"Adapters name their crate by its whole facade, so a path-crate edit lowers every file calling its adapters","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1750,"title":"A second run at a project whose path crate was edited before fails its first start (stale read-set, E0432)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
-    {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
-    {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4973,7 +4974,8 @@
             {"number":1697,"title":"plain test a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home expects a whole-walk table","state":"open"},
             {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"},
             {"number":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open"},
-            {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"}
+            {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"},
+            {"number":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"open"}
           ]
         },
         {
@@ -5164,7 +5166,7 @@
             {"number":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed"},
             {"number":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed"},
             {"number":1733,"title":"Builds outside scripts/cargo.mjs in target/debug go unrecorded, so their units are removed and rebuilt","state":"open"},
-            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"open"}
+            {"number":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed"}
           ]
         },
         {
