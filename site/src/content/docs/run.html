@@ -153,6 +153,7 @@ fn main() {
   <li>a panic after a save, such as a framework&rsquo;s check that its hooks keep their order.</li>
 </ul>
 <div class="block"><pre><code>rawr: `Scale` changed its fields; restarting the program</code></pre></div>
+<p>A restart that needs a new native build builds it while the program keeps running. The old program ends just before the new one starts, so the terminal, a port or a lock it held is free for the new one. A build that fails leaves the old program running and prints the error. A program that ends with status 0 during the build ends the run. Nothing of the old program&rsquo;s state carries over to the new one.</p>
 
 <h3 id="next-event">When the edit shows</h3>
 <p>A loop that runs every frame shows the edit at its next frame. A game loop and a ratatui loop are such loops.</p>
