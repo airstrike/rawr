@@ -175,7 +175,7 @@ impl Projection {
             insert_environment(&mut values, environment, &key);
         }
 
-        insert_derived(&mut values, "CARGO_INCREMENTAL", "0");
+        insert_derived(&mut values, "CARGO_INCREMENTAL", "1");
         insert_derived(
             &mut values,
             "rawr.context.cargo_commit",
@@ -318,7 +318,7 @@ impl Projection {
 /// result for another's instead of keeping both.
 ///
 /// `CARGO_INCREMENTAL` is absent. rawr's own Cargo commands always run with
-/// `0`, which the projection keys, and incremental compilation changes how a
+/// `1`, which the projection keys, and incremental compilation changes how a
 /// build is cached, never what it produces. Keying the shell's value too gave
 /// one variable two fingerprints, so an exported `CARGO_INCREMENTAL` split the
 /// context from the resolution it reuses (#625).

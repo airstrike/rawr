@@ -230,7 +230,7 @@ fn environment(
         .1;
     let mut values: Vec<(OsString, OsString)> = vec![
         ("CARGO_HOME".into(), OsString::from(home)),
-        ("CARGO_INCREMENTAL".into(), "0".into()),
+        ("CARGO_INCREMENTAL".into(), "1".into()),
         ("CARGO_TARGET_DIR".into(), target.as_os_str().to_owned()),
         ("RUSTC".into(), rustc.as_os_str().to_owned()),
         ("RUSTDOC".into(), rustdoc.as_os_str().to_owned()),
