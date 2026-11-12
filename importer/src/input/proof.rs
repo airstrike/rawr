@@ -993,7 +993,7 @@ impl Proof {
     /// the proof's entries carry: `path+file:///dir#name@version`, or
     /// `path+file:///dir#version` when the directory is named as the
     /// package.
-    pub(crate) fn path_packages(&self) -> Vec<(String, String)> {
+    fn path_packages(&self) -> Vec<(String, String)> {
         let mut packages = self
             .entries
             .iter()
@@ -1021,6 +1021,65 @@ impl Proof {
         packages.sort_unstable();
         packages.dedup();
         packages
+    }
+
+    /// The path packages a runner's sources may name: each of
+    /// [`Self::path_packages`] but the harness's own, whose manifest and
+    /// lock the runner is made from and which no runner depends on. Its
+    /// directory is new for each harness a save seals, and a launch's proof
+    /// names no such package, so with it each save's runner sources were new;
+    /// without it a harness of the same manifest and lock renders the same
+    /// sources (#1821).
+    pub(crate) fn runner_path_packages(&self) -> Vec<(String, String)> {
+        let harness = self.entries.iter().find_map(|entry| match entry {
+            Entry::File {
+                role: Role::Harness,
+                path,
+                ..
+            } => {
+                let path = Path::new(path.as_ref());
+                (path.file_name() == Some("Cargo.toml".as_ref()))
+                    .then(|| path.parent())
+                    .flatten()
+            }
+            _ => None,
+        });
+        let mut packages = self.path_packages();
+        packages.retain(|(_, directory)| Some(Path::new(directory)) != harness);
+        packages
+    }
+
+    /// What [`Self::runner_harness`] reads, by content: the harness's
+    /// manifest's and lock's names, lengths and digests, which the bytes it
+    /// reads must match. Where the harness is doesn't enter, so a new
+    /// harness of the same manifest and lock digests the same (#1821).
+    pub(crate) fn runner_harness_digest(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"rawr.import.runner-harness/v1");
+        for entry in &self.entries {
+            let Entry::File {
+                role: Role::Harness,
+                path,
+                bytes,
+                digest: file,
+                ..
+            } = entry
+            else {
+                continue;
+            };
+            let name = match Path::new(path.as_ref())
+                .file_name()
+                .and_then(|name| name.to_str())
+            {
+                Some(name @ ("Cargo.toml" | "Cargo.lock")) => name,
+                _ => continue,
+            };
+            digest.update((name.len() as u64).to_le_bytes());
+            digest.update(name.as_bytes());
+            digest.update((*bytes as u64).to_le_bytes());
+            digest.update(file);
+        }
+        digest.finalize().into()
     }
 
     pub(crate) fn runner_harness(&self, limit: usize) -> Result<Harness> {

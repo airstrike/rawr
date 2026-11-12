@@ -7125,8 +7125,9 @@ fn render<B: crate::surface::Runner>(
     native: &crate::input::proof::Proof,
     profile: &crate::profile::Proof,
 ) -> Result<Product, request::Error> {
+    crate::progress::rendered();
     let harness = native.runner_harness(request.allocation.limits().1)?;
-    let paths = native.path_packages();
+    let paths = native.runner_path_packages();
     let mut hidden = Vec::new();
     let mut sources = Vec::new();
     let mut spans = Vec::new();

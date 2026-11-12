@@ -27,7 +27,7 @@ const REQUEST_SCHEMA: u32 = 12;
 /// keep their own versions and stay (#1766). An installed rawr's request
 /// key also carries the rawr sources' digest (#1712), so there this
 /// version matters for a development checkout and the store's eviction.
-const GENERATOR_VERSION: u32 = 305;
+const GENERATOR_VERSION: u32 = 306;
 
 /// Exact pre-build cache lookup identity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -165,6 +165,40 @@ pub(crate) fn build_request_key<B: crate::surface::Runner>(
     Ok(BuildRequestKey(digest.finalize().into()))
 }
 
+/// What rendering a runner's sources reads: the build request's parts but
+/// the native build, of which rendering reads only the harness's manifest
+/// and lock and the path packages a runner may name. A native edit that
+/// leaves them as they were, as a private field's does, renders the same
+/// sources, which the overlay this keys keeps (#1821).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn rendering_key<B: crate::surface::Runner>(
+    request: &crate::surface::Request<B>,
+    native: &crate::input::proof::Proof,
+    profile: &crate::profile::Proof,
+) -> Result<[u8; 32], request::Error> {
+    let mut digest = Sha256::new();
+    digest.update(b"rawr.import.rendering/v1");
+    digest.update(REQUEST_SCHEMA.to_le_bytes());
+    digest.update(GENERATOR_VERSION.to_le_bytes());
+    digest.update(crate::host::DIGEST);
+    digest.update(request.contract.as_bytes());
+    digest.update(request.fingerprint.as_bytes());
+    digest.update(native.runner_harness_digest());
+    for (package, directory) in native.runner_path_packages() {
+        for text in [package, directory] {
+            digest.update(u64::try_from(text.len()).unwrap_or(u64::MAX).to_le_bytes());
+            digest.update(text.as_bytes());
+        }
+    }
+    digest.update(profile.owner_fingerprint());
+    digest.update(generate::semantic_digest(request)?);
+    digest.update([u8::from(crate::universe::enabled())]);
+    let limits = request.allocation.limits();
+    digest.update(u64::try_from(limits.0).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(u64::try_from(limits.1).unwrap_or(u64::MAX).to_le_bytes());
+    Ok(digest.finalize().into())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl<B> GenerationRequestKey<B> {
     /// Borrow the exact cache lookup identity without generating owned files.
@@ -296,7 +330,12 @@ impl<B> GenerationRequestKey<B> {
                 generate::materialize(self)
             })
         };
-        crate::progress::runner_generated(began.elapsed());
+        crate::progress::runner_generated(
+            began.elapsed(),
+            generated
+                .as_ref()
+                .map_or(0, |manifest| manifest.files.len()),
+        );
         generated
     }
 }

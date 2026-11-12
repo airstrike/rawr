@@ -4,12 +4,14 @@ use crate::node;
 
 // v3: the generated source never reads the Rawr snapshot, so a Rawr-only edit
 // reuses the overlay instead of regenerating identical source.
-const DOMAIN: &[u8] = b"rawr.generated.overlay/v3";
+// v4: nor the native build, but for the harness's manifest and lock and the
+// path packages, so a native edit that leaves them reuses it too (#1821).
+const DOMAIN: &[u8] = b"rawr.generated.overlay/v4";
 const MAGIC: &[u8; 8] = b"RAWROVL1";
 const HEADER_BYTES: usize = 112;
 
 /// The overlay's store schema: its codec with the versions its action key
-/// carries through the generator and the build request key (request schema,
+/// carries through the generator and the rendering key (request schema,
 /// contract schema and classifier), so an overlay an older generator wrote
 /// has another schema and the store evicts it (#630).
 pub(crate) const SCHEMA: u32 = {
@@ -121,16 +123,24 @@ fn node_error(error: node::Error) -> super::request::Error {
     super::request::Error::Node(Box::new(error))
 }
 
-fn authority<B>(
+/// The overlay's own inputs, under its profile parent: what rendering its
+/// sources reads ([`super::super::rendering_key`]), not the build request,
+/// which carries the native build. The product holds nothing else of the
+/// request: its assembly adds the build request key. So a native edit that
+/// leaves what rendering reads as it was, as a private field's does, finds
+/// the overlay its last rendering kept and renders and stores nothing
+/// (#1821).
+fn authority<B: crate::surface::Runner>(
     key: &super::super::GenerationRequestKey<B>,
 ) -> Result<Box<[u8]>, super::request::Error> {
+    let rendering = super::super::rendering_key(&key.request, &key.native, key.profile.value())?;
     let mut authority = Vec::new();
     authority
-        .try_reserve_exact(DOMAIN.len().saturating_add(40))
+        .try_reserve_exact(DOMAIN.len().saturating_add(4 + rendering.len()))
         .map_err(|_| super::request::Error::Allocation)?;
     authority.extend_from_slice(DOMAIN);
     authority.extend_from_slice(&super::super::generator_version().to_le_bytes());
-    authority.extend_from_slice(key.build.as_bytes());
+    authority.extend_from_slice(&rendering);
     Ok(authority.into_boxed_slice())
 }
 

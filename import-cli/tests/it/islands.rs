@@ -2598,7 +2598,9 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// for finds that harness: it binds, copies and seals none, and probes
 /// nothing (#1794). Each save's nightly check compiles only the project's
 /// copy and its harness, the first after the start too (#1815), and each
-/// restart writes only the runner sources the edit changed (#1816).
+/// restart writes only the runner sources the edit changed (#1816). A
+/// private field's restart renders none of them: it takes the sources a
+/// rendering of the same inputs kept, the launch's too (#1821).
 #[test]
 fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let root = THEME.project();
@@ -2733,13 +2735,13 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let generated = run
         .seen
         .iter()
-        .filter(|line| {
-            line.starts_with("stderr: rawr-import: the runner's sources were generated in ")
+        .filter_map(|line| {
+            line.strip_prefix("stderr: rawr-import: the runner's sources were generated in ")
         })
-        .count();
+        .collect::<Vec<_>>();
     assert!(
         staged.len() == 4
-            && generated >= 4
+            && generated.len() >= 4
             && staged.iter().all(|line| {
                 let (written, files) = line
                     .split_once(": wrote ")
@@ -2751,6 +2753,30 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         "{staged:?}\n{seen}"
     );
     eprintln!("the runner's staging:\n{}", staged.join("\n"));
+    // Each generation after the start's renders none of the runner's files
+    // but the last: a private field changes nothing rendering reads, so its
+    // runner takes the sources a rendering of the same inputs kept, and only
+    // the field made public, which changes the project crate's API, renders
+    // them again (#1821).
+    let rendered = generated
+        .iter()
+        .map(|line| {
+            let (rendered, files) = line
+                .split_once(": rendered ")
+                .and_then(|(_, counts)| counts.strip_suffix(" files"))
+                .and_then(|counts| counts.split_once(" of "))
+                .unwrap();
+            [rendered, files].map(|count| count.parse::<usize>().unwrap())
+        })
+        .collect::<Vec<_>>();
+    let [_, saves @ .., [last, files]] = rendered.as_slice() else {
+        panic!("a start and each save generate: {generated:?}\n{seen}")
+    };
+    assert!(
+        saves.iter().all(|[rendered, _]| *rendered == 0) && last == files && *files > 2,
+        "{generated:?}\n{seen}"
+    );
+    eprintln!("the runner's generation:\n{}", generated.join("\n"));
     // Each restart's runner build says what it compiled.
     let built = run
         .seen
