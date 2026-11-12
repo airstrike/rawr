@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.196 (2026-11-12)
+
+- A save that changes the program compiles two runner crates instead of three: what names the program is part of the runner's own binary. (#1793; part of #1789)
+- A program that returns from `main` ends `rawr run` with status 0, as under `cargo run`; one that panics or exits with an error still waits for the save that fixes it. Under `rawr mcp` a clean exit ends the session and `start` runs it again. (#1800)
+- Deleting a project's `target` while `rawr run` runs it no longer stops the run with 'node store entry is corrupt'; the missing entries rebuild, as on a cold start. (#1802)
+
 ## 0.3.195 (2026-11-12)
 
 - An opaque widget taken through a later `.map(..)` compiles again, so `badge(..).map(..)` inside `column!` runs as cargo runs it. (#1797)

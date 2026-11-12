@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.3.196",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"A save that changes the program compiles two runner crates instead of three: what names the program is part of the runner's own binary.","issues":[1793],"refs":[1789]},
+        {"text":"A program that returns from `main` ends `rawr run` with status 0, as under `cargo run`; one that panics or exits with an error still waits for the save that fixes it. Under `rawr mcp` a clean exit ends the session and `start` runs it again.","issues":[1800]},
+        {"text":"Deleting a project's `target` while `rawr run` runs it no longer stops the run with 'node store entry is corrupt'; the missing entries rebuild, as on a cold start.","issues":[1802]}
+      ]
+    },
+    {
       "version": "0.3.195",
       "date": "2026-11-12",
       "entries": [

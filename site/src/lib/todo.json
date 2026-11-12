@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.195",
+  "version": "0.3.196",
   "examples": {
     "running": 34,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.196",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A save that changes the program compiles two runner crates instead of three: what names the program is part of the runner's own binary.","issues":[1793],"refs":[1789]},
+          {"text":"A program that returns from `main` ends `rawr run` with status 0, as under `cargo run`; one that panics or exits with an error still waits for the save that fixes it. Under `rawr mcp` a clean exit ends the session and `start` runs it again.","issues":[1800]},
+          {"text":"Deleting a project's `target` while `rawr run` runs it no longer stops the run with 'node store entry is corrupt'; the missing entries rebuild, as on a cold start.","issues":[1802]}
+        ]
+      },
       {
         "version": "0.3.195",
         "date": "2026-11-12",
@@ -3945,18 +3954,19 @@
     {"issue":1790,"title":"rawr run's cargo check of a project leaves superseded check units in the project's target","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1791,"title":"Other toolchains' nightly build directories in rawr home retire by a day of idleness, not by state","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1792,"title":"The runner compiles its generated crates without debug info","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.192"},
-    {"issue":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.196"},
     {"issue":1794,"title":"Every native preparation builds a new harness, copies 3045 files, seals and probes twice: 74 s on inboard","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.194"},
     {"issue":1796,"title":"A slot's inputs all take the lifetime its borrowing output has","state":"open","category":"Divergences from rustc"},
     {"issue":1797,"title":"crossing::an_opaque_widget_takes_the_types_a_later_use_fixes fails E0308 in an opaque table entry on main","state":"closed","category":"Divergences from rustc","release":"0.3.195"},
     {"issue":1798,"title":"A save probes once, and a save that changes no crate's API reads no definitions","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.194"},
     {"issue":1799,"title":"A rawr run owner holds the dependencies' API about three times over","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.196"},
     {"issue":1801,"title":"rawr's copy of the program's crate compiles about 3.5 times slower than cargo's build of it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.196"},
     {"issue":1803,"title":"After a native edit removed a function's generic, the runner still called it with the old turbofish (E0107)","state":"open","category":"Divergences from rustc"},
-    {"issue":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"open","category":"Divergences from rustc"}
+    {"issue":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"open","category":"Divergences from rustc"},
+    {"issue":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5146,7 +5156,7 @@
             {"number":1788,"title":"A fresh rawr check or a new rawr run keeps no fragment reads and re-reads every sidecar","state":"open"},
             {"number":1789,"title":"The restart's runner build after a field change takes 117 s on inboard where cargo builds the crate in about 20 s","state":"open"},
             {"number":1792,"title":"The runner compiles its generated crates without debug info","state":"closed"},
-            {"number":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"open"},
+            {"number":1793,"title":"The program's member and the runner binary are separate crates, so a program edit compiles both","state":"closed"},
             {"number":1794,"title":"Every native preparation builds a new harness, copies 3045 files, seals and probes twice: 74 s on inboard","state":"open"},
             {"number":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"closed"},
             {"number":1798,"title":"A save probes once, and a save that changes no crate's API reads no definitions","state":"closed"},
@@ -5178,7 +5188,8 @@
             {"number":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open"},
             {"number":1780,"title":"islands::a_second_run_of_an_unchanged_project_rebuilds_nothing fails: the second run adds shared digests","state":"closed"},
             {"number":1781,"title":"When a new runner replaces an old one, the old runner has already exited 0 before its Shutdown","state":"open"},
-            {"number":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"open"}
+            {"number":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"closed"},
+            {"number":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open"}
           ]
         },
         {
@@ -5231,7 +5242,7 @@
             {"number":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed"},
             {"number":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open"},
             {"number":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open"},
-            {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"open"}
+            {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"}
           ]
         }
       ]
