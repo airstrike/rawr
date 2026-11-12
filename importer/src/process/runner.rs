@@ -1168,10 +1168,10 @@ impl<B> Candidate<Admitted, B> {
         if inner.reaped {
             return Ok(());
         }
-        if let Some(refresh) =
+        let asked = if let Some(refresh) =
             refresh.filter(|_| inner.started && inner.manifest().profile.owns_product_lifecycle())
         {
-            resident::retire(&mut inner, refresh)?;
+            resident::retire(&mut inner, refresh)
         } else {
             let key = *inner.key.as_bytes();
             exchange(
@@ -1180,7 +1180,16 @@ impl<B> Candidate<Admitted, B> {
                 key.to_vec(),
                 crate::protocol::Tag::Exited,
                 &key,
-            )?;
+            )
+        };
+        match asked {
+            Ok(()) => {}
+            // Its program ended on its own, with success, before it was
+            // asked to: the runner is gone as retiring it would leave it.
+            Err(Error::WorkPeer {
+                status: Some(0), ..
+            }) => return Ok(()),
+            Err(error) => return Err(error),
         }
         let status = inner.child.wait().map_err(resource_error)?;
         inner.reaped = true;
