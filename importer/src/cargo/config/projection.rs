@@ -9,7 +9,7 @@ use crate::cargo::{self, toolchain};
 use crate::process::parallelism;
 use crate::{Error, Result};
 
-const SCHEMA: u32 = 10;
+const SCHEMA: u32 = 11;
 
 pub(super) const fn schema() -> u32 {
     SCHEMA
@@ -263,6 +263,14 @@ impl Projection {
             .map(|entry| (entry.key.as_ref(), entry.value.as_deref()))
     }
 
+    /// The entries that can change what Cargo builds: every one but how
+    /// rawr schedules and bounds its own work, which no build output reads.
+    /// A shared table's inputs check these, so a check with other jobs or
+    /// limits replays it (#1754).
+    pub(crate) fn build_entries(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.entries().filter(|(key, _)| !scheduling(key))
+    }
+
     pub(super) fn try_clone(&self) -> Result<Self> {
         let mut entries = Vec::new();
         entries
@@ -362,28 +370,47 @@ fn universe_entry(key: &str) -> bool {
     // config contents, and the request proof bind those authorities elsewhere;
     // their machine-local spellings must not split an otherwise identical
     // compiler-affecting resolution universe.
-    !matches!(key, "CARGO_HOME" | "HOME" | "PATH")
-        && !matches!(
-            key,
-            "rawr.context.parallelism_schema"
-                | "rawr.context.jobs"
-                | "rawr.context.canonical_allocation_items"
-                | "rawr.context.canonical_allocation_bytes"
-                | "rawr.context.input_proof_bytes"
-                | "rawr.context.retained_graph_items"
-                | "rawr.context.retained_graph_bytes"
-                | "rawr.context.classified_contract_items"
-                | "rawr.context.classified_contract_bytes"
-                | "rawr.context.stage_schema"
-        )
+    !matches!(key, "CARGO_HOME" | "HOME" | "PATH") && !scheduling(key)
 }
 
+/// Whether `key` is how rawr schedules or bounds its own work.
+fn scheduling(key: &str) -> bool {
+    matches!(
+        key,
+        "rawr.context.parallelism_schema"
+            | "rawr.context.jobs"
+            | "rawr.context.canonical_allocation_items"
+            | "rawr.context.canonical_allocation_bytes"
+            | "rawr.context.input_proof_bytes"
+            | "rawr.context.retained_graph_items"
+            | "rawr.context.retained_graph_bytes"
+            | "rawr.context.classified_contract_items"
+            | "rawr.context.classified_contract_bytes"
+            | "rawr.context.stage_schema"
+    )
+}
+
+/// `CARGO_HOME` enters as the home Cargo uses, unset or not: an unset one
+/// is `$HOME/.cargo`, and a set one is the directory it names. A shell
+/// without it and a `cargo test` that rustup gave it share one projection
+/// (#1754). A value Cargo can't use keeps its text.
 fn insert_environment(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     environment: &Environment,
     key: &str,
 ) {
-    let value = environment.value(key).map(|value| keyed_value(key, value));
+    let home = match key {
+        "CARGO_HOME" => environment
+            .context_cargo_home()
+            .ok()
+            .flatten()
+            .and_then(|home| home.into_os_string().into_string().ok()),
+        _ => None,
+    };
+    let value = match home {
+        Some(home) => Some(home.into()),
+        None => environment.value(key).map(|value| keyed_value(key, value)),
+    };
     insert(values, key, value.as_deref());
 }
 
@@ -392,7 +419,20 @@ fn insert_environment(
 /// each looked-up tool's resolved canonical path and content digest, never its
 /// spelling: shells that order or repeat directories differently but resolve
 /// the same tools share one result. Children still inherit the text.
+///
+/// `HOME` and `CARGO_HOME` contribute the directory they name, symlinks
+/// resolved as Cargo follows them, so two spellings of one home share one
+/// result too (#1754).
 pub(crate) fn keyed_value<'value>(key: &str, value: &'value str) -> std::borrow::Cow<'value, str> {
+    if matches!(key, "HOME" | "CARGO_HOME") {
+        let path = std::path::Path::new(value);
+        let resolved = path
+            .is_absolute()
+            .then(|| std::fs::canonicalize(path).ok())
+            .flatten()
+            .and_then(|resolved| resolved.into_os_string().into_string().ok());
+        return resolved.map_or(value.into(), Into::into);
+    }
     if key != "PATH" {
         return value.into();
     }
@@ -542,7 +582,7 @@ mod tests {
                 .entries()
                 .any(|(name, projected)| name == key && projected == Some(value)));
         }
-        assert_eq!(projection.schema(), 10);
+        assert_eq!(projection.schema(), 11);
         assert!(!projection
             .entries()
             .any(|(name, _)| name.contains("rss") || name == "rawr.context.resource_schema"));
@@ -611,6 +651,59 @@ mod tests {
             .expect("changed retained authority projects");
             assert_ne!(projection, changed_projection);
         }
+    }
+
+    /// An unset `CARGO_HOME`, one set to `$HOME/.cargo` and one spelled
+    /// through a symlink name one home, so they project the same (#1754).
+    /// Jobs are no build input a shared table checks.
+    #[test]
+    fn an_unset_cargo_home_and_its_default_path_project_the_same() {
+        let root =
+            std::env::temp_dir().join(format!("rawr-projection-home-{}", std::process::id()));
+        let home = root.join("home");
+        let cargo_home = home.join(".cargo");
+        std::fs::create_dir_all(&cargo_home).expect("the fixture Cargo home creates");
+        let link = root.join("home-link");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&home, &link).expect("the home symlink creates");
+        let text =
+            |path: &std::path::Path| path.to_str().expect("fixture paths are Unicode").to_owned();
+        let derive = |pairs: &[(&str, String)], jobs: usize| {
+            let environment =
+                Environment::from_pairs(pairs.iter().map(|(key, value)| (*key, value.as_str())))
+                    .expect("the fixture environment seals");
+            let jobs =
+                parallelism::Proof::fixture(NonZeroUsize::new(jobs).expect("jobs are nonzero"))
+                    .expect("fixture parallelism seals");
+            Projection::derive_governed(
+                &environment,
+                "aarch64-apple-darwin",
+                "dev",
+                jobs,
+                &Limits::standard(),
+            )
+            .expect("the fixture projection derives")
+        };
+        let unset = derive(&[("HOME", text(&home))], 7);
+        let default = derive(
+            &[("HOME", text(&home)), ("CARGO_HOME", text(&cargo_home))],
+            7,
+        );
+        let linked = derive(
+            &[
+                ("HOME", text(&link)),
+                ("CARGO_HOME", text(&link.join(".cargo"))),
+            ],
+            8,
+        );
+        let resolved = text(&std::fs::canonicalize(&cargo_home).expect("the home resolves"));
+        assert!(unset
+            .entries()
+            .any(|(key, value)| key == "CARGO_HOME" && value == Some(resolved.as_str())));
+        assert_eq!(unset, default);
+        assert!(unset.build_entries().eq(linked.build_entries()));
+        assert_ne!(unset, linked, "jobs stay in the sealed projection");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -474,8 +474,14 @@ pub(crate) fn stage(
         else {
             continue;
         };
-        // A table the driver read where it settled is read there again.
-        if publish.table == table(&publish.bindings, key) {
+        // A table the driver read where it settled is read there again
+        // when the settled entry checks these inputs. One settled under
+        // others is staged, naming the settled table: else each later
+        // demand finds no table that holds and builds again (#1754).
+        if publish.table == table(&publish.bindings, key)
+            && meta(&publish.bindings, key)
+                .is_some_and(|settled| settled.inputs.as_ref() == Some(inputs))
+        {
             continue;
         }
         let mut meta = publish.meta.clone();

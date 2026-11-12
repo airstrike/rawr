@@ -679,14 +679,23 @@ impl Plan {
         use crate::extract::engine;
         let shared = self.sharing.keys.get(&entry.unit_correlation)?;
         // The settled table, or one this project extracted and has not
-        // settled yet.
-        let (bindings, read) = [self.sharing.directory(shared), self.sharing.staged.as_ref()]
-            .into_iter()
-            .flatten()
-            .find_map(|bindings| Some((bindings, crate::bindings::read(bindings, &shared.key)?)))?;
-        // Inputs are checked before any replay: a path crate's files, as a
-        // git crate's declared ones (#398).
-        let inputs = read.meta.inputs.as_ref()?.validate(current)?;
+        // settled yet, whose inputs hold. Inputs are checked before any
+        // replay: a path crate's files, as a git crate's declared ones
+        // (#398). A settled table whose inputs don't hold leaves the staged
+        // one this project made under its own (#1754).
+        let (bindings, read, witness) =
+            [self.sharing.directory(shared), self.sharing.staged.as_ref()]
+                .into_iter()
+                .flatten()
+                .find_map(|bindings| {
+                    let read = crate::bindings::read(bindings, &shared.key)?;
+                    let validated = read.meta.inputs.as_ref()?.validate(current)?;
+                    let identity = validated.identity()?;
+                    let inputs = validated.inputs().clone();
+                    let witness = (identity, inputs, validated.into_filesystem());
+                    Some((bindings, read, witness))
+                })?;
+        let (inputs_identity, replayed_inputs, filesystem) = witness;
         let table = crate::extract::sidecar::read::<engine::Table>(&read.table).ok()?;
         if table.schema != engine::TABLE_SCHEMA {
             return None;
@@ -860,12 +869,10 @@ impl Plan {
         fragment.push(b',');
         fragment.extend_from_slice(body.get(1..)?);
         let mut identity = shared.key.as_bytes().to_vec();
-        identity.extend(inputs.identity()?);
+        identity.extend(inputs_identity);
         identity.extend(meta.scripts_identity()?);
         identity.extend(digest.as_bytes());
         identity.extend(Sha256::digest(&body));
-        let replayed_inputs = inputs.inputs().clone();
-        let filesystem = inputs.into_filesystem();
         Some(SharedReplay {
             key: &shared.key,
             bindings,

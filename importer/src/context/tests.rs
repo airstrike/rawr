@@ -213,6 +213,33 @@ fn only_build_relevant_environment_changes_context_identity() {
     assert_ne!(base, identity(&[("PATH", "/x")]));
 }
 
+/// An unset `CARGO_HOME` and one set to `$HOME/.cargo` are one home, so
+/// they are one context (#1754).
+#[test]
+fn an_unset_cargo_home_and_its_default_path_are_one_context() {
+    let fixture = Fixture::new("default-home");
+    let home = fixture.root.join("home");
+    fs::create_dir_all(home.join(".cargo")).expect("the default Cargo home exists");
+    let home = home.to_str().expect("the path is Unicode").to_owned();
+    let default = format!("{home}/.cargo");
+    let identity = |pairs: &[(&str, &str)]| {
+        let environment = cargo::config::Environment::from_pairs(pairs.iter().copied())
+            .expect("the environment seals");
+        Context::capture(
+            &fixture.project,
+            environment,
+            "target-a",
+            &cargo::Limits::standard(),
+        )
+        .expect("the context seals")
+        .identity()
+    };
+    assert_eq!(
+        identity(&[("HOME", &home)]),
+        identity(&[("HOME", &home), ("CARGO_HOME", &default)])
+    );
+}
+
 /// A variable is fingerprinted once. rawr's Cargo always builds with
 /// `CARGO_INCREMENTAL=0`, which the projection keys, so the shell's value
 /// leaves both the context and the projection as they are (#625).
