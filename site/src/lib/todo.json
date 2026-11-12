@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.197",
+  "version": "0.3.198",
   "examples": {
     "running": 34,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.198",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A marked `main` whose save needs a new native build keeps running while the runner builds, and ends just before the new program starts, so its terminal, ports and locks are free; a build that fails leaves it running and prints the error.","issues":[1810]},
+          {"text":"The runner protocol no longer carries the unused state-carry messages; no state crosses a restart.","issues":[1812]},
+          {"text":"On macOS, a program `rawr run` restarts, or starts again later, opens its windows where you left them, unless the program now asks for a different size or position.","issues":[1811]}
+        ]
+      },
       {
         "version": "0.3.197",
         "date": "2026-11-12",
@@ -3979,9 +3988,11 @@
     {"issue":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
+    {"issue":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
+    {"issue":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
+    {"issue":1813,"title":"A marked main keeps taking swaps while its new runner builds","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5209,9 +5220,11 @@
             {"number":1781,"title":"When a new runner replaces an old one, the old runner has already exited 0 before its Shutdown","state":"open"},
             {"number":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"closed"},
             {"number":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open"},
-            {"number":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"open"},
-            {"number":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"open"},
-            {"number":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"open"}
+            {"number":1810,"title":"A marked main's native rebuild kills the program before the build; keep it running until the new runner is ready","state":"closed"},
+            {"number":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"closed"},
+            {"number":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"closed"},
+            {"number":1813,"title":"A marked main keeps taking swaps while its new runner builds","state":"open"},
+            {"number":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open"}
           ]
         },
         {

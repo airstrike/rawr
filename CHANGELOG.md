@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.198 (2026-11-12)
+
+- A marked `main` whose save needs a new native build keeps running while the runner builds, and ends just before the new program starts, so its terminal, ports and locks are free; a build that fails leaves it running and prints the error. (#1810)
+- The runner protocol no longer carries the unused state-carry messages; no state crosses a restart. (#1812)
+- On macOS, a program `rawr run` restarts, or starts again later, opens its windows where you left them, unless the program now asks for a different size or position. (#1811)
+
 ## 0.3.197 (2026-11-12)
 
 - rawr's copy of a crate with marked modules builds its generated glue only where it is called, roughly halving the copy's codegen: 3,522 functions instead of 9,124 on a 13-screen test app. (#1806; part of #1801)

@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.3.198",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"A marked `main` whose save needs a new native build keeps running while the runner builds, and ends just before the new program starts, so its terminal, ports and locks are free; a build that fails leaves it running and prints the error.","issues":[1810]},
+        {"text":"The runner protocol no longer carries the unused state-carry messages; no state crosses a restart.","issues":[1812]},
+        {"text":"On macOS, a program `rawr run` restarts, or starts again later, opens its windows where you left them, unless the program now asks for a different size or position.","issues":[1811]}
+      ]
+    },
+    {
       "version": "0.3.197",
       "date": "2026-11-12",
       "entries": [
