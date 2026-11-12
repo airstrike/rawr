@@ -616,8 +616,13 @@ pub fn shared_take<T>(value: Shared<T>) -> T {
         .unwrap_or_else(|| panic!("`value` is shared (i.e. has outstanding references)"))
 }
 
-/// _(internals)_ Lock a [`Locked`] resource for immutable access.
+/// _(internals)_ Lock a [`Locked`] resource for immutable access, or
+/// `None` at once while it is borrowed for write, as
+/// [`RefCell::try_borrow`] does: a value one thread shares is borrowed for
+/// write only by a borrow still held, and waiting for it never ends.
 /// Exported under the `internals` feature only.
+///
+/// [`RefCell::try_borrow`]: std::cell::RefCell::try_borrow
 #[inline(always)]
 #[must_use]
 #[allow(dead_code)]
@@ -625,27 +630,20 @@ pub fn locked_read<T>(value: &Locked<T>) -> Option<LockGuard<'_, T>> {
     #[cfg(not(feature = "sync"))]
     return value.try_borrow().ok();
 
+    // A holder that panicked left the value as it was, as a `RefCell` does.
     #[cfg(feature = "sync")]
-    {
-        {
-            // Spin-lock for a short while before giving up
-            for _ in 0..5 {
-                match value.try_read() {
-                    Ok(guard) => return Some(guard),
-                    Err(std::sync::TryLockError::WouldBlock) => {
-                        std::thread::sleep(std::time::Duration::from_millis(10))
-                    }
-                    Err(_) => return None,
-                }
-            }
-
-            None
-        }
+    match value.try_read() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
     }
 }
 
-/// _(internals)_ Lock a [`Locked`] resource for mutable access.
+/// _(internals)_ Lock a [`Locked`] resource for mutable access, or `None`
+/// at once while it is borrowed, as [`RefCell::try_borrow_mut`] does.
 /// Exported under the `internals` feature only.
+///
+/// [`RefCell::try_borrow_mut`]: std::cell::RefCell::try_borrow_mut
 #[inline(always)]
 #[must_use]
 #[allow(dead_code)]
@@ -654,22 +652,56 @@ pub fn locked_write<T>(value: &Locked<T>) -> Option<LockGuardMut<'_, T>> {
     return value.try_borrow_mut().ok();
 
     #[cfg(feature = "sync")]
-    {
-        {
-            // Spin-lock for a short while before giving up
-            for _ in 0..5 {
-                match value.try_write() {
-                    Ok(guard) => return Some(guard),
-                    Err(std::sync::TryLockError::WouldBlock) => {
-                        std::thread::sleep(std::time::Duration::from_millis(10))
-                    }
-                    Err(_) => return None,
-                }
-            }
-
-            None
-        }
+    match value.try_write() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
     }
+}
+
+/// Lock a [`Locked`] resource that threads share for immutable access,
+/// waiting while another thread writes it. Only for state that no holder
+/// reaches again while it holds it, as a cell's borrow list: a conflict
+/// there is another thread's, and ends when that thread's access does.
+#[inline(always)]
+pub(crate) fn waited_read<T>(value: &Locked<T>) -> LockGuard<'_, T> {
+    #[cfg(not(feature = "sync"))]
+    return value.borrow();
+
+    #[cfg(feature = "sync")]
+    value
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Lock a [`Locked`] resource that threads share for mutable access,
+/// waiting while another thread holds it, as [`waited_read`] does.
+#[inline(always)]
+pub(crate) fn waited_write<T>(value: &Locked<T>) -> LockGuardMut<'_, T> {
+    #[cfg(not(feature = "sync"))]
+    return value.borrow_mut();
+
+    #[cfg(feature = "sync")]
+    value
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Read the value a shared [`Dynamic`][crate::Dynamic] holds, to answer
+/// what it is. A borrow for write still held as it is read is Rust's
+/// `RefCell` panic, as `RefCell::borrow`'s is: never an answer that the
+/// value is of another type.
+#[inline]
+pub(crate) fn shared_read(value: &Locked<crate::Dynamic>) -> LockGuard<'_, crate::Dynamic> {
+    locked_read(value).unwrap_or_else(|| panic!("already mutably borrowed: BorrowError"))
+}
+
+/// Write the value a shared [`Dynamic`][crate::Dynamic] holds, as a type
+/// that is asked for: a borrow still held is Rust's `RefCell` panic, as
+/// `RefCell::borrow_mut`'s is ([`shared_read`]).
+#[inline]
+pub(crate) fn shared_write(value: &Locked<crate::Dynamic>) -> LockGuardMut<'_, crate::Dynamic> {
+    locked_write(value).unwrap_or_else(|| panic!("already borrowed: BorrowMutError"))
 }
 
 /// General Rust function trait object.
@@ -785,3 +817,38 @@ pub type OnDefVarCallback = dyn Fn(bool, VarDefInfo, EvalContext) -> RawrResultO
 #[cfg(feature = "sync")]
 pub type OnDefVarCallback =
     dyn Fn(bool, VarDefInfo, EvalContext) -> RawrResultOf<bool> + Send + Sync;
+
+#[cfg(test)]
+mod tests {
+    use crate::{Dynamic, INT};
+
+    /// A shared value and a copy of it, which shares its cell.
+    fn shared() -> (Dynamic, Dynamic) {
+        let value = Dynamic::from(1 as INT).into_shared();
+        let copy = value.clone();
+        (value, copy)
+    }
+
+    /// A borrow still held is a conflict at once for a `Dynamic` read,
+    /// which its caller meets as one (#1823).
+    #[test]
+    fn a_borrowed_shared_value_is_none_at_once_as_a_dynamic() {
+        let (mut value, copy) = shared();
+        let _held = value
+            .write_lock::<Dynamic>()
+            .expect("an unborrowed value is written");
+        assert!(copy.read_lock::<Dynamic>().is_none());
+    }
+
+    /// A borrow still held is Rust's `RefCell` panic, never an answer that
+    /// the value is of another type (#1823).
+    #[test]
+    #[should_panic(expected = "already mutably borrowed")]
+    fn a_borrowed_shared_value_is_no_other_type() {
+        let (mut value, copy) = shared();
+        let _held = value
+            .write_lock::<Dynamic>()
+            .expect("an unborrowed value is written");
+        let _ = copy.is_int();
+    }
+}

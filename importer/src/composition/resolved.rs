@@ -134,6 +134,9 @@ pub struct Warm<B> {
     pub checked: checked::Retained,
     /// Native-input proof published from the revalidated owner.
     pub native: crate::input::proof::Proof,
+    /// The API's graph, unbuilt: an owner that keeps graphs builds it off
+    /// the start's path ([`crate::api::Kept::keep`]).
+    pub graph: crate::api::Deferred,
     /// Raw API identity recorded with the resolved product.
     pub api: crate::api::Fingerprint,
 }
@@ -310,13 +313,14 @@ where
     )
     .map_err(checked::Evaluation::Cache)?;
     let api_fingerprint = crate::api::Fingerprint::from_bytes(header.api);
-    let native = api.into_native_proof().map_err(cache)?;
+    let (native, graph) = api.into_native_proof().map_err(cache)?;
     Ok(Ok(Warm {
         demand,
         profile,
         facade,
         checked,
         native,
+        graph,
         api: api_fingerprint,
     }))
 }

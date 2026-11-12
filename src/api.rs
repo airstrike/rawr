@@ -30,7 +30,7 @@ pub mod build_type;
 
 pub mod deprecated;
 
-use crate::func::{locked_read, locked_write, Locked};
+use crate::func::{waited_read, waited_write, Locked};
 use crate::types::StringsInterner;
 use crate::{Dynamic, Engine};
 
@@ -52,9 +52,7 @@ impl Engine {
         if max == 0 {
             self.interned_strings = None;
         } else if let Some(ref interner) = self.interned_strings {
-            if let Some(mut guard) = locked_write(interner) {
-                guard.set_max(max);
-            }
+            waited_write(interner).set_max(max);
         } else {
             self.interned_strings = Some(Locked::new(StringsInterner::new(max)));
         }
@@ -64,9 +62,9 @@ impl Engine {
     #[inline(always)]
     #[must_use]
     pub fn max_strings_interned(&self) -> usize {
-        self.interned_strings.as_ref().map_or(0, |interner| {
-            locked_read(interner).map_or(0, |guard| guard.max())
-        })
+        self.interned_strings
+            .as_ref()
+            .map_or(0, |interner| waited_read(interner).max())
     }
 
     /// Get the default value of the custom state for each evaluation run.

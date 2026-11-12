@@ -1,8 +1,5 @@
 //! Owned API capture awaiting the connected source-consumer union.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
-
 use crate::node;
 
 /// Rebuild the captured graph from its stored API product, only when asked.
@@ -138,11 +135,14 @@ impl Continuation {
         })
     }
 
-    /// Publish the native-input proof of a current API without its graph. The
-    /// owner already revalidated this evidence; the checks match `publish`.
-    /// A process that keeps graphs builds the deferred one off this thread,
-    /// so its next save that changes Rawr source finds it built.
-    pub(crate) fn into_native_proof(self) -> Result<crate::input::proof::Proof, node::Error> {
+    /// Publish the native-input proof of a current API without its graph.
+    /// The owner already revalidated this evidence; the checks match
+    /// `publish`. The graph comes back unbuilt, for an owner that keeps
+    /// graphs to build off this thread ([`Kept::keep`]); anyone else drops
+    /// it.
+    pub(crate) fn into_native_proof(
+        self,
+    ) -> Result<(crate::input::proof::Proof, Deferred), node::Error> {
         let Self {
             product,
             graph,
@@ -152,81 +152,114 @@ impl Continuation {
             return Err(node::Error::State("historical API has no current proof"));
         };
         let proof = publication.proof(api)?;
-        if KEEP.load(Ordering::Relaxed) && matches!(graph, Lazy::Pending(_)) {
-            std::thread::spawn(move || {
-                let began = std::time::Instant::now();
-                crate::progress::uncounted(|| drop(build(&product, graph)));
-                crate::progress::deferred_graph(began.elapsed());
-            });
-        }
-        Ok(proof)
+        Ok((proof, Deferred { product, graph }))
     }
 }
 
-/// Whether this process keeps the API graph it builds (see [`keep_graphs`]).
-static KEEP: AtomicBool = AtomicBool::new(false);
-
-/// The graph this process built last, by its API product's action and
-/// content.
-#[allow(clippy::type_complexity)]
-static KEPT: Mutex<
-    Option<(
-        (node::ActionKey, node::Digest),
-        super::Graph<super::Captured>,
-    )>,
-> = Mutex::new(None);
-
-/// Keep the API graph this process builds. A `rawr run` owner builds the
-/// same graph on each save that changes only Rawr source, and decoding it
-/// takes seconds; kept, a save copies it. A warm launch that never built it
-/// builds it in the background once the program runs.
-pub fn keep_graphs() {
-    KEEP.store(true, Ordering::Relaxed);
+/// The graph of an API a warm launch resolved without it: built only by an
+/// owner that keeps it for its next save ([`Kept::keep`]).
+pub struct Deferred {
+    product: node::staging::Owned<super::cached::Product>,
+    graph: Lazy,
 }
 
-/// Whether this process keeps what it builds of the API for its next
-/// save ([`keep_graphs`]): the graph, and each fragment's read (#1776).
-pub(crate) fn keeps_graphs() -> bool {
-    KEEP.load(Ordering::Relaxed)
+/// What [`Kept`] holds for the API product its key names.
+// One per owner, matched at once; boxing the graph would only add an allocation.
+#[allow(clippy::large_enum_variant)]
+enum Held {
+    Built(super::Graph<super::Captured>),
+    Building(std::thread::JoinHandle<Result<super::Graph<super::Captured>, node::Error>>),
 }
 
-/// The graph of `product`: the captured one, the one this process kept, or
-/// one rebuilt from the stored product. The lock is held while it builds, so
-/// a save waits for a background build instead of repeating it.
+/// The API graph a long-running `rawr run` owner keeps between saves: the
+/// one it built last, or the one a warm start builds in the background,
+/// beside the identity of the API product it is the graph of. Each save
+/// that changes only Rawr source needs the same graph, and decoding it from
+/// the store takes seconds; kept, a save shares it and copies nothing.
+#[derive(Default)]
+pub struct Kept {
+    held: Option<(Key, Held)>,
+}
+
+/// An API product's action and content.
+type Key = (node::ActionKey, node::Digest);
+
+impl Kept {
+    /// Build the graph a warm launch deferred off this thread, so the next
+    /// save that changes Rawr source finds it built. One already kept or
+    /// building for the same API is not built again.
+    pub fn keep(&mut self, deferred: Deferred) {
+        let Deferred { product, graph } = deferred;
+        let key = product.identity();
+        if self.held.as_ref().is_some_and(|(held, _)| *held == key) {
+            return;
+        }
+        let held = match graph {
+            Lazy::Ready(graph) => Held::Built(graph),
+            Lazy::Pending(materialize) => Held::Building(std::thread::spawn(move || {
+                let began = std::time::Instant::now();
+                let graph = crate::progress::uncounted(|| rebuild(&product, materialize));
+                crate::progress::deferred_graph(began.elapsed());
+                graph
+            })),
+        };
+        self.held = Some((key, held));
+    }
+
+    /// `api` with its graph built: the one kept for its API product, the
+    /// one a background build of it is finishing, or one built now. The
+    /// graph is kept for the next save. A background build of another API
+    /// is not waited for.
+    pub fn graph(&mut self, mut api: Continuation) -> Result<Continuation, node::Error> {
+        let key = api.product.identity();
+        let held = match self.held.take() {
+            Some((held, graph)) if held == key => Some(graph),
+            _ => None,
+        };
+        let graph = match (api.graph, held) {
+            (Lazy::Ready(graph), _) => graph,
+            (Lazy::Pending(_), Some(Held::Built(graph))) => graph,
+            (Lazy::Pending(materialize), Some(Held::Building(building))) => {
+                let began = std::time::Instant::now();
+                let built = building.join();
+                crate::progress::waited_for_graph(began.elapsed());
+                match built {
+                    Ok(Ok(graph)) => graph,
+                    // The background build failed or panicked: this build
+                    // reports the failure as its own.
+                    Ok(Err(_)) | Err(_) => rebuild(&api.product, materialize)?,
+                }
+            }
+            (Lazy::Pending(materialize), None) => rebuild(&api.product, materialize)?,
+        };
+        api.graph = Lazy::Ready(graph.share());
+        self.held = Some((key, Held::Built(graph)));
+        Ok(api)
+    }
+}
+
+/// The graph of `product`: the captured one, or one rebuilt from the
+/// stored product.
 fn build(
     product: &node::staging::Owned<super::cached::Product>,
     graph: Lazy,
 ) -> Result<super::Graph<super::Captured>, node::Error> {
-    let key = product.identity();
-    let keep = KEEP.load(Ordering::Relaxed);
-    let mut kept = match KEPT.try_lock() {
-        Ok(kept) => kept,
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-        // A background build holds it: say how long this waited (#1815).
-        Err(std::sync::TryLockError::WouldBlock) => {
-            let began = std::time::Instant::now();
-            let kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
-            crate::progress::waited_for_graph(began.elapsed());
-            kept
-        }
-    };
-    let graph = match graph {
-        Lazy::Ready(graph) => graph,
-        Lazy::Pending(materialize) => match kept.as_ref() {
-            Some((held, graph)) if *held == key => return Ok(graph.duplicate()),
-            _ => {
-                let began = std::time::Instant::now();
-                let product = product.value();
-                let resolved = product.resolve()?;
-                let graph = materialize(Some(resolved.as_ref().unwrap_or(product)))?;
-                crate::progress::rebuilt_graph(began.elapsed());
-                graph
-            }
-        },
-    };
-    if keep {
-        *kept = Some((key, graph.duplicate()));
+    match graph {
+        Lazy::Ready(graph) => Ok(graph),
+        Lazy::Pending(materialize) => rebuild(product, materialize),
     }
+}
+
+/// The graph of `product`, decoded from the stored product.
+fn rebuild(
+    product: &node::staging::Owned<super::cached::Product>,
+    materialize: Materialize,
+) -> Result<super::Graph<super::Captured>, node::Error> {
+    let began = std::time::Instant::now();
+    let product = product.value();
+    let resolved = product.resolve()?;
+    let graph = materialize(Some(resolved.as_ref().unwrap_or(product)))?;
+    crate::progress::rebuilt_graph(began.elapsed());
     Ok(graph)
 }
 

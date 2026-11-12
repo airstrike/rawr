@@ -999,10 +999,9 @@ impl Engine {
                     && access == AccessMode::ReadOnly
                     && global.lib.iter().any(|m| !m.is_empty())
                 {
-                    crate::func::locked_write(global.constants.get_or_insert_with(|| {
+                    crate::func::waited_write(global.constants.get_or_insert_with(|| {
                         crate::Shared::new(crate::Locked::new(std::collections::BTreeMap::new()))
                     }))
-                    .unwrap()
                     .insert(var_name.name.clone(), value.clone());
                 }
 

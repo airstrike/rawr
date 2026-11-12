@@ -1,6 +1,7 @@
 //! Phase-indexed canonical normal-build Rust API evidence.
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
@@ -24,9 +25,9 @@ pub(crate) mod memo;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod retained;
 #[cfg(feature = "rustc-driver")]
-pub use retained::keep_graphs;
-#[cfg(feature = "rustc-driver")]
 pub use retained::Continuation;
+#[cfg(feature = "rustc-driver")]
+pub use retained::{Deferred, Kept};
 
 const CANONICALIZER_VERSION: u32 = 18;
 
@@ -97,16 +98,18 @@ pub struct Fingerprint([u8; 32]);
 /// # }
 /// ```
 pub struct Graph<P: Phase> {
-    invocations: Box<[Invocation]>,
-    definitions: Box<[model::Definition]>,
-    exports: Box<[ledger::Path]>,
-    implementations: Box<[model::Implementation]>,
-    scalar_predicate_proofs: Box<[model::ScalarPredicateProof]>,
-    support: Box<[ledger::Support]>,
-    anonymous: Box<[ledger::AnonymousImport]>,
+    // The ledgers are shared, never copied: an owner that keeps a graph
+    // between saves hands each save the same ledgers (#1822).
+    invocations: Arc<[Invocation]>,
+    definitions: Arc<[model::Definition]>,
+    exports: Arc<[ledger::Path]>,
+    implementations: Arc<[model::Implementation]>,
+    scalar_predicate_proofs: Arc<[model::ScalarPredicateProof]>,
+    support: Arc<[ledger::Support]>,
+    anonymous: Arc<[ledger::AnonymousImport]>,
     /// Each demanded dependency's name index, outside the fingerprint.
-    index: Box<[ledger::Index]>,
-    canonical: Box<[u8]>,
+    index: Arc<[ledger::Index]>,
+    canonical: Arc<[u8]>,
     fingerprint: Fingerprint,
     semantic_fingerprint: Fingerprint,
     stored: Option<StoredGraph>,
@@ -115,8 +118,8 @@ pub struct Graph<P: Phase> {
     retained: Usage,
     evidence: P::Evidence,
     /// Definitions and implementations by their identity's hash, built at
-    /// the first lookup.
-    lookup: std::sync::OnceLock<Lookup>,
+    /// the first lookup, and shared with the graph's copies.
+    lookup: Arc<std::sync::OnceLock<Lookup>>,
 }
 
 /// Indexes of a graph's definitions and implementations keyed by rustc's
@@ -729,53 +732,53 @@ impl<P: Phase> Graph<P> {
         retained.node()?;
         retained.category(RetainedCategory::Invocation, |retained| {
             retained.slice(&self.invocations)?;
-            for invocation in &self.invocations {
+            for invocation in self.invocations.iter() {
                 invocation.retain(retained)?;
             }
             Some(())
         })?;
         retained.category(RetainedCategory::Definition, |retained| {
             retained.slice(&self.definitions)?;
-            for definition in &self.definitions {
+            for definition in self.definitions.iter() {
                 definition.retain(retained)?;
             }
             Some(())
         })?;
         retained.category(RetainedCategory::Export, |retained| {
             retained.slice(&self.exports)?;
-            for export in &self.exports {
+            for export in self.exports.iter() {
                 export.retain(retained)?;
             }
             retained.slice(&self.index)?;
-            for index in &self.index {
+            for index in self.index.iter() {
                 index.retain(retained)?;
             }
             Some(())
         })?;
         retained.category(RetainedCategory::Implementation, |retained| {
             retained.slice(&self.implementations)?;
-            for implementation in &self.implementations {
+            for implementation in self.implementations.iter() {
                 implementation.retain(retained)?;
             }
             Some(())
         })?;
         retained.category(RetainedCategory::Predicate, |retained| {
             retained.slice(&self.scalar_predicate_proofs)?;
-            for proof in &self.scalar_predicate_proofs {
+            for proof in self.scalar_predicate_proofs.iter() {
                 proof.retain(retained)?;
             }
             Some(())
         })?;
         retained.category(RetainedCategory::Support, |retained| {
             retained.slice(&self.support)?;
-            for support in &self.support {
+            for support in self.support.iter() {
                 support.retain(retained)?;
             }
             Some(())
         })?;
         retained.category(RetainedCategory::Anonymous, |retained| {
             retained.slice(&self.anonymous)?;
-            for anonymous in &self.anonymous {
+            for anonymous in self.anonymous.iter() {
                 anonymous.retain(retained)?;
             }
             Some(())
@@ -830,19 +833,20 @@ impl Fingerprint {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Graph<Captured> {
-    /// A copy of this captured graph, as a long-running owner keeps it (see
-    /// [`keep_graphs`]).
-    pub(crate) fn duplicate(&self) -> Self {
+    /// This captured graph again, sharing its ledgers, its stored bytes and
+    /// its lookup: a long-running owner hands each save the graph it kept
+    /// without copying it (`retained::Kept`, #1822).
+    pub(crate) fn share(&self) -> Self {
         Self {
-            invocations: self.invocations.clone(),
-            definitions: self.definitions.clone(),
-            exports: self.exports.clone(),
-            implementations: self.implementations.clone(),
-            scalar_predicate_proofs: self.scalar_predicate_proofs.clone(),
-            support: self.support.clone(),
-            anonymous: self.anonymous.clone(),
-            index: self.index.clone(),
-            canonical: self.canonical.clone(),
+            invocations: Arc::clone(&self.invocations),
+            definitions: Arc::clone(&self.definitions),
+            exports: Arc::clone(&self.exports),
+            implementations: Arc::clone(&self.implementations),
+            scalar_predicate_proofs: Arc::clone(&self.scalar_predicate_proofs),
+            support: Arc::clone(&self.support),
+            anonymous: Arc::clone(&self.anonymous),
+            index: Arc::clone(&self.index),
+            canonical: Arc::clone(&self.canonical),
             fingerprint: self.fingerprint,
             semantic_fingerprint: self.semantic_fingerprint,
             stored: self.stored.as_ref().map(StoredGraph::duplicate),
@@ -850,7 +854,7 @@ impl Graph<Captured> {
             transaction: self.transaction,
             retained: self.retained,
             evidence: (),
-            lookup: std::sync::OnceLock::new(),
+            lookup: Arc::clone(&self.lookup),
         }
     }
 
@@ -1122,15 +1126,15 @@ impl Graph<Captured> {
         };
         let fingerprint = Fingerprint(Sha256::digest(&canonical).into());
         let mut graph = Self {
-            invocations: invocations.into_boxed_slice(),
-            definitions: definitions.into_boxed_slice(),
-            exports: exports.into_boxed_slice(),
-            implementations: implementations.into_boxed_slice(),
-            scalar_predicate_proofs: scalar_predicate_proofs.into_boxed_slice(),
-            support: support.into_boxed_slice(),
-            anonymous: anonymous.into_boxed_slice(),
-            index: index.into_boxed_slice(),
-            canonical: canonical.into_boxed_slice(),
+            invocations: invocations.into(),
+            definitions: definitions.into(),
+            exports: exports.into(),
+            implementations: implementations.into(),
+            scalar_predicate_proofs: scalar_predicate_proofs.into(),
+            support: support.into(),
+            anonymous: anonymous.into(),
+            index: index.into(),
+            canonical: canonical.into(),
             fingerprint,
             semantic_fingerprint,
             stored: None,
@@ -1138,7 +1142,7 @@ impl Graph<Captured> {
             transaction: Usage { items: 0, bytes: 0 },
             retained: Usage { items: 0, bytes: 0 },
             evidence: (),
-            lookup: std::sync::OnceLock::new(),
+            lookup: Arc::default(),
         };
         graph
             .validate_cardinality(allocation)
@@ -1215,7 +1219,7 @@ impl Graph<Captured> {
         let mut invocations = Vec::new();
         allocation.temporary_conversions(self.invocations.len());
         allocation.reserve(&mut invocations, self.invocations.len())?;
-        for invocation in &self.invocations {
+        for invocation in self.invocations.iter() {
             invocations.push(invocation.unit_key.as_ref());
         }
         allocation.sort_keys(invocations.len());
@@ -1239,7 +1243,7 @@ impl Graph<Captured> {
         let mut paths = Vec::new();
         allocation.temporary_conversions(self.exports.len());
         allocation.reserve(&mut paths, self.exports.len())?;
-        for path in &self.exports {
+        for path in self.exports.iter() {
             paths.push(path.key());
         }
         allocation.sort_keys(paths.len());
@@ -1256,7 +1260,7 @@ impl Graph<Captured> {
                 reason: "anonymous imports are duplicated or out of canonical order".into(),
             });
         }
-        for import in &self.anonymous {
+        for import in self.anonymous.iter() {
             if import.binding_path().len() == 0
                 || import.aliases().len() == 0
                 || !matches!(
@@ -1273,7 +1277,7 @@ impl Graph<Captured> {
                 });
             }
         }
-        for path in &self.exports {
+        for path in self.exports.iter() {
             if let ledger::Path::Imported(export) = path
                 && self
                     .definitions
@@ -1289,7 +1293,7 @@ impl Graph<Captured> {
         let mut support = Vec::new();
         allocation.temporary_conversions(self.support.len());
         allocation.reserve(&mut support, self.support.len())?;
-        for outcome in &self.support {
+        for outcome in self.support.iter() {
             support.push((outcome.id(), outcome.provenance(), outcome.role()));
         }
         allocation.sort_keys(support.len());
@@ -1300,7 +1304,7 @@ impl Graph<Captured> {
                 reason: "a support edge/role has more than one outcome".into(),
             });
         }
-        for outcome in &self.support {
+        for outcome in self.support.iter() {
             if matches!(outcome, ledger::Support::Complete { .. })
                 && self
                     .definitions
@@ -1339,7 +1343,7 @@ impl Graph<Captured> {
                 reason: "scalar predicate proofs are duplicated or out of canonical order".into(),
             });
         }
-        for proof in &self.scalar_predicate_proofs {
+        for proof in self.scalar_predicate_proofs.iter() {
             if self
                 .definitions
                 .binary_search_by(|definition| definition.id().cmp(proof.owner()))
@@ -1366,7 +1370,7 @@ impl Graph<Captured> {
                 });
             }
         }
-        for definition in &self.definitions {
+        for definition in self.definitions.iter() {
             if let model::Owner::Implementation(owner) = definition.owner() {
                 let Ok(index) = self
                     .implementations
@@ -1399,7 +1403,7 @@ impl Graph<Captured> {
                 }
             }
         }
-        for implementation in &self.implementations {
+        for implementation in self.implementations.iter() {
             for associated in implementation.associated() {
                 let Ok(index) = self
                     .definitions
@@ -1994,6 +1998,21 @@ mod tests {
 
     fn seal(allocation: &mut Allocation) -> crate::Result<Graph<super::Captured>> {
         seal_with_context(&Context::fixture(), allocation)
+    }
+
+    /// A graph an owner keeps is shared with each save, never copied (#1822).
+    #[test]
+    fn a_shared_graph_copies_no_ledger() {
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
+        let graph = seal(&mut allocation).expect("graph seals");
+        let shared = graph.share();
+        assert!(std::sync::Arc::ptr_eq(
+            &graph.invocations,
+            &shared.invocations
+        ));
+        assert!(std::sync::Arc::ptr_eq(&graph.canonical, &shared.canonical));
+        assert!(std::sync::Arc::ptr_eq(&graph.lookup, &shared.lookup));
+        assert_eq!(shared.fingerprint(), graph.fingerprint());
     }
 
     #[test]

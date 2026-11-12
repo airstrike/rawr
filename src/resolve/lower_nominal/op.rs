@@ -2076,8 +2076,9 @@ impl WitnessedOp {
                     .map_err(|_| invariant("a type witness is not a code"))
             })
             .collect::<Result<Box<[_]>, _>>()?;
-        let known = crate::func::locked_read(&self.instances)
-            .and_then(|instances| instances.get(&codes).cloned());
+        let known = crate::func::waited_read(&self.instances)
+            .get(&codes)
+            .cloned();
         let instance = match known {
             Some(instance) => instance,
             None => {
@@ -2095,9 +2096,7 @@ impl WitnessedOp {
                 let op = self.template.instantiate(&arguments);
                 let requirement = op.runtime_requirement();
                 let instance = Shared::new(WitnessedInstance { op, requirement });
-                if let Some(mut instances) = crate::func::locked_write(&self.instances) {
-                    instances.insert(codes, instance.clone());
-                }
+                crate::func::waited_write(&self.instances).insert(codes, instance.clone());
                 instance
             }
         };

@@ -1222,7 +1222,7 @@ fn first_lent(value: &Dynamic, depth: usize) -> Option<crate::scope::Nonce> {
             items.iter().find_map(|item| first_lent(item, depth))
         }
         crate::types::dynamic::Union::Shared(cell, ..) => {
-            first_lent(&*crate::func::locked_read(cell)?, depth)
+            first_lent(&crate::func::shared_read(cell), depth)
         }
         crate::types::dynamic::Union::Variant(..) => {
             if let Some(lent) = value.read_lock::<crate::scope::Lent>() {

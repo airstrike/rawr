@@ -863,16 +863,14 @@ impl Frame {
     /// This frame with the awaited future's output, ready to pass back as
     /// the function's last argument.
     pub fn resume(self, output: Dynamic) -> Dynamic {
-        if let Some(mut saved) = crate::func::locked_write(&self.0)
-            && let Some(saved) = saved.as_mut()
-        {
+        if let Some(saved) = crate::func::waited_write(&self.0).as_mut() {
             saved.input = output;
         }
         Dynamic::from(self)
     }
 
     fn take(&self) -> Option<Saved> {
-        crate::func::locked_write(&self.0)?.take()
+        crate::func::waited_write(&self.0).take()
     }
 }
 

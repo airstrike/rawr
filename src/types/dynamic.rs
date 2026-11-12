@@ -278,10 +278,10 @@ impl Dynamic {
     }
     /// Is the value held by this [`Dynamic`] a particular type?
     ///
-    /// # Panics or Deadlocks When Value is Shared
+    /// # Panics When Value is Shared
     ///
-    /// Under the `sync` feature, this call may deadlock, or [panic](https://doc.rust-lang.org/std/sync/struct.RwLock.html#panics-1).
-    /// Otherwise, this call panics if the data is currently borrowed for write.
+    /// Panics if the shared data is currently borrowed for write, as
+    /// `RefCell::borrow` does.
     #[inline]
     #[must_use]
     pub fn is<T: Any + Clone>(&self) -> bool {
@@ -339,10 +339,10 @@ impl Dynamic {
     }
     /// Get the [`TypeId`] of the value held by this [`Dynamic`].
     ///
-    /// # Panics or Deadlocks When Value is Shared
+    /// # Panics When Value is Shared
     ///
-    /// Under the `sync` feature, this call may deadlock, or [panic](https://doc.rust-lang.org/std/sync/struct.RwLock.html#panics-1).
-    /// Otherwise, this call panics if the data is currently borrowed for write.
+    /// Panics if the shared data is currently borrowed for write, as
+    /// `RefCell::borrow` does.
     #[must_use]
     pub fn type_id(&self) -> TypeId {
         match self.0 {
@@ -364,15 +364,15 @@ impl Dynamic {
 
             Union::Variant(ref v, ..) => (***v).type_id(),
 
-            Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).type_id(),
+            Union::Shared(ref cell, ..) => (*crate::func::shared_read(cell)).type_id(),
         }
     }
     /// Get the name of the type of the value held by this [`Dynamic`].
     ///
-    /// # Panics or Deadlocks When Value is Shared
+    /// # Panics When Value is Shared
     ///
-    /// Under the `sync` feature, this call may deadlock, or [panic](https://doc.rust-lang.org/std/sync/struct.RwLock.html#panics-1).
-    /// Otherwise, this call panics if the data is currently borrowed for write.
+    /// Panics if the shared data is currently borrowed for write, as
+    /// `RefCell::borrow` does.
     #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self.0 {
@@ -394,7 +394,7 @@ impl Dynamic {
 
             Union::Variant(ref v, ..) => (***v).type_name(),
 
-            Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).type_name(),
+            Union::Shared(ref cell, ..) => (*crate::func::shared_read(cell)).type_name(),
         }
     }
 }
@@ -432,7 +432,7 @@ impl Hash for Dynamic {
                 unimplemented!("Rawr nominal values require an explicit hash capability")
             }
 
-            Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).hash(state),
+            Union::Shared(ref cell, ..) => (*crate::func::shared_read(cell)).hash(state),
 
             Union::Variant(ref v, ..) => {
                 let _value_any = (***v).as_any();
@@ -1047,16 +1047,12 @@ impl Dynamic {
     /// If a [`Dynamic`] holds a _shared_ value, then it is read-only only if the shared value
     /// itself is read-only.
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its access mode cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[must_use]
     pub fn is_read_only(&self) -> bool {
         if let Union::Shared(ref cell, ..) = self.0 {
-            return match crate::func::locked_read(cell).map_or(ReadWrite, |v| v.access_mode()) {
+            return match crate::func::shared_read(cell).access_mode() {
                 ReadWrite => false,
                 ReadOnly => true,
             };
@@ -1074,12 +1070,8 @@ impl Dynamic {
     /// If a [`Dynamic`] holds a _shared_ value, then it is hashable only if the shared value
     /// itself is hashable.
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[must_use]
     pub(crate) fn is_hashable(&self) -> bool {
         match self.0 {
@@ -1142,8 +1134,10 @@ impl Dynamic {
                     dict: &mut HashSet<*const Dynamic>,
                 ) -> bool {
                     match value.0 {
-                        Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                            .is_some_and(|v| dict.insert(value) && checked_is_hashable(&v, dict)),
+                        Union::Shared(ref cell, ..) => {
+                            let v = crate::func::shared_read(cell);
+                            dict.insert(value) && checked_is_hashable(&v, dict)
+                        }
                         Union::Array(ref a, ..) => a.iter().all(|v| checked_is_hashable(v, dict)),
                         Union::Map(ref m, ..) => m.values().all(|v| checked_is_hashable(v, dict)),
                         Union::FnPtr(ref f, ..) => {
@@ -1298,12 +1292,8 @@ impl Dynamic {
     /// If the [`Dynamic`] is a _shared_ value, it returns the shared value if there are no
     /// outstanding references, or a cloned copy otherwise.
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     ///
     /// # Example
     ///
@@ -1333,12 +1323,8 @@ impl Dynamic {
     /// If the [`Dynamic`] is a _shared_ value, it returns the shared value if there are no
     /// outstanding references, or a cloned copy otherwise.
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[allow(unused_mut)]
     pub fn try_cast_result<T: Any>(mut self) -> Result<T, Self> {
         // Coded this way in order to maximally leverage potentials for dead-code removal.
@@ -1618,24 +1604,22 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, this call also fails if the data is currently borrowed for write.
-    ///
-    /// Under these circumstances, [`None`] is also returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// Asked for as a [`Dynamic`], a _shared_ value still borrowed is
+    /// [`None`] at once. Asked for as another type, the borrow is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn read_lock<T: Any + Clone>(&self) -> Option<DynamicReadLock<'_, T>> {
         if let Union::Shared(ref cell, ..) = self.0 {
-            return match crate::func::locked_read(cell) {
-                Some(guard)
-                    if TypeId::of::<Self>() == TypeId::of::<T>()
-                        || (*guard).type_id() == TypeId::of::<T>() =>
-                {
-                    Some(DynamicReadLock(DynamicReadLockInner::Guard(guard)))
-                }
-                _ => None,
-            };
+            // As a `Dynamic`, a value borrowed for write is `None`, which
+            // the caller meets as the conflict it is. As a `T`, it is no
+            // answer that the value is another type (#1823).
+            if TypeId::of::<Self>() == TypeId::of::<T>() {
+                return crate::func::locked_read(cell)
+                    .map(|guard| DynamicReadLock(DynamicReadLockInner::Guard(guard)));
+            }
+            let guard = crate::func::shared_read(cell);
+            return ((*guard).type_id() == TypeId::of::<T>())
+                .then(|| DynamicReadLock(DynamicReadLockInner::Guard(guard)));
         }
 
         self.downcast_ref()
@@ -1650,24 +1634,20 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, this call also fails if the data is currently borrowed for write.
-    ///
-    /// Under these circumstances, [`None`] is also returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// Asked for as a [`Dynamic`], a _shared_ value still borrowed is
+    /// [`None`] at once. Asked for as another type, the borrow is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn write_lock<T: Any + Clone>(&mut self) -> Option<DynamicWriteLock<'_, T>> {
         if let Union::Shared(ref cell, ..) = self.0 {
-            return match crate::func::locked_write(cell) {
-                Some(guard)
-                    if TypeId::of::<Self>() == TypeId::of::<T>()
-                        || (*guard).type_id() == TypeId::of::<T>() =>
-                {
-                    Some(DynamicWriteLock(DynamicWriteLockInner::Guard(guard)))
-                }
-                _ => None,
-            };
+            // As `read_lock`: a borrowed value is `None` only as a `Dynamic`.
+            if TypeId::of::<Self>() == TypeId::of::<T>() {
+                return crate::func::locked_write(cell)
+                    .map(|guard| DynamicWriteLock(DynamicWriteLockInner::Guard(guard)));
+            }
+            let guard = crate::func::shared_write(cell);
+            return ((*guard).type_id() == TypeId::of::<T>())
+                .then(|| DynamicWriteLock(DynamicWriteLockInner::Guard(guard)));
         }
 
         self.downcast_mut()
@@ -1952,19 +1932,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_unit(&self) -> bool {
         match self.0 {
             Union::Unit(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Unit(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Unit(..))
             }
             _ => false,
         }
@@ -1973,19 +1949,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_int(&self) -> bool {
         match self.0 {
             Union::Int(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Int(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Int(..))
             }
             _ => false,
         }
@@ -1994,19 +1966,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_float(&self) -> bool {
         match self.0 {
             Union::Float(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Float(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Float(..))
             }
             _ => false,
         }
@@ -2016,12 +1984,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[cfg(feature = "decimal")]
     #[inline]
     #[must_use]
@@ -2029,7 +1993,7 @@ impl Dynamic {
         match self.0 {
             Union::Decimal(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Decimal(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Decimal(..))
             }
             _ => false,
         }
@@ -2038,19 +2002,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_bool(&self) -> bool {
         match self.0 {
             Union::Bool(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Bool(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Bool(..))
             }
             _ => false,
         }
@@ -2059,19 +2019,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_char(&self) -> bool {
         match self.0 {
             Union::Char(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Char(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Char(..))
             }
             _ => false,
         }
@@ -2080,19 +2036,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_string(&self) -> bool {
         match self.0 {
             Union::Str(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Str(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Str(..))
             }
             _ => false,
         }
@@ -2101,19 +2053,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_array(&self) -> bool {
         match self.0 {
             Union::Array(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Array(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Array(..))
             }
             _ => false,
         }
@@ -2122,19 +2070,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_blob(&self) -> bool {
         match self.0 {
             Union::Blob(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Blob(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Blob(..))
             }
             _ => false,
         }
@@ -2143,19 +2087,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_map(&self) -> bool {
         match self.0 {
             Union::Map(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Map(..)))
+                matches!(crate::func::shared_read(cell).0, Union::Map(..))
             }
             _ => false,
         }
@@ -2166,19 +2106,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_fnptr(&self) -> bool {
         match self.0 {
             Union::FnPtr(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::FnPtr(..)))
+                matches!(crate::func::shared_read(cell).0, Union::FnPtr(..))
             }
             _ => false,
         }
@@ -2187,19 +2123,15 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, `false` is returned.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     #[must_use]
     pub fn is_timestamp(&self) -> bool {
         match self.0 {
             Union::TimeStamp(..) => true,
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::TimeStamp(..)))
+                matches!(crate::func::shared_read(cell).0, Union::TimeStamp(..))
             }
             _ => false,
         }
@@ -2213,22 +2145,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_unit(&self) -> Result<(), &'static str> {
         match self.0 {
             Union::Unit(..) => Ok(()),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Unit(..) => Some(()),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Unit(..) => Ok(()),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2240,22 +2169,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_int(&self) -> Result<INT, &'static str> {
         match self.0 {
             Union::Int(n, ..) => Ok(n),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Int(n, ..) => Some(n),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Int(n, ..) => Ok(n),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2267,22 +2193,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_float(&self) -> Result<crate::FLOAT, &'static str> {
         match self.0 {
             Union::Float(n, ..) => Ok(*n),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Float(n, ..) => Some(*n),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Float(n, ..) => Ok(*n),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2295,23 +2218,20 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[cfg(feature = "decimal")]
     #[inline]
     pub fn as_decimal(&self) -> Result<rust_decimal::Decimal, &'static str> {
         match self.0 {
             Union::Decimal(ref n, ..) => Ok(**n),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Decimal(ref n, ..) => Some(**n),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Decimal(ref n, ..) => Ok(**n),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2323,22 +2243,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_bool(&self) -> Result<bool, &'static str> {
         match self.0 {
             Union::Bool(b, ..) => Ok(b),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Bool(b, ..) => Some(b),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Bool(b, ..) => Ok(b),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2350,22 +2267,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_char(&self) -> Result<char, &'static str> {
         match self.0 {
             Union::Char(c, ..) => Ok(c),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Char(c, ..) => Some(c),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Char(c, ..) => Ok(c),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2377,12 +2291,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_immutable_string_ref(
         &self,
@@ -2398,12 +2308,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn as_immutable_string_mut(
         &mut self,
@@ -2419,12 +2325,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn as_array_ref(&self) -> Result<impl Deref<Target = Array> + '_, &'static str> {
         self.read_lock::<Array>().ok_or_else(|| self.type_name())
@@ -2437,12 +2339,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn as_array_mut(&mut self) -> Result<impl DerefMut<Target = Array> + '_, &'static str> {
         let type_name = self.type_name();
@@ -2456,12 +2354,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn as_blob_ref(&self) -> Result<impl Deref<Target = Blob> + '_, &'static str> {
         self.read_lock::<Blob>().ok_or_else(|| self.type_name())
@@ -2474,12 +2368,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn as_blob_mut(&mut self) -> Result<impl DerefMut<Target = Blob> + '_, &'static str> {
         let type_name = self.type_name();
@@ -2493,12 +2383,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn as_map_ref(&self) -> Result<impl Deref<Target = Map> + '_, &'static str> {
         self.read_lock::<Map>().ok_or_else(|| self.type_name())
@@ -2511,12 +2397,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn as_map_mut(&mut self) -> Result<impl DerefMut<Target = Map> + '_, &'static str> {
         let type_name = self.type_name();
@@ -2532,12 +2414,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn into_string(self) -> Result<String, &'static str> {
         self.into_immutable_string()
@@ -2551,22 +2429,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline]
     pub fn into_immutable_string(self) -> Result<ImmutableString, &'static str> {
         match self.0 {
             Union::Str(s, ..) => Ok(s),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Str(ref s, ..) => Some(s.clone()),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Str(ref s, ..) => Ok(s.clone()),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2578,22 +2453,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn into_array(self) -> Result<Array, &'static str> {
         match self.0 {
             Union::Array(a, ..) => Ok(*a),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Array(ref a, ..) => Some(a.as_ref().clone()),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Array(ref a, ..) => Ok(a.as_ref().clone()),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2605,12 +2477,8 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn into_typed_array<T: Variant + Clone>(self) -> Result<Vec<T>, &'static str> {
         match self.0 {
@@ -2630,18 +2498,20 @@ impl Dynamic {
             Union::Blob(b, ..) if TypeId::of::<T>() == TypeId::of::<u8>() => {
                 Ok(reify! { *b => !!! Vec<T> })
             }
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
                     Union::Array(ref a, ..) => a
                         .iter()
                         .map(|v| v.read_lock::<T>().map(|v| v.clone()))
-                        .collect(),
+                        .collect::<Option<_>>(),
                     Union::Blob(ref b, ..) if TypeId::of::<T>() == TypeId::of::<u8>() => {
                         Some(reify! { b.clone() => !!! Vec<T> })
                     }
                     _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+                }
+                .ok_or_else(|| guard.type_name())
+            }
             _ => Err(self.type_name()),
         }
     }
@@ -2653,22 +2523,19 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
-    ///
-    /// Under these circumstances, the cast also fails.
-    ///
-    /// These normally shouldn't occur since most operations in Rawr are single-threaded.
+    /// A _shared_ value still borrowed for write as it is read is Rust's
+    /// `RefCell` panic, never an answer that it is another type.
     #[inline(always)]
     pub fn into_blob(self) -> Result<Blob, &'static str> {
         match self.0 {
             Union::Blob(b, ..) => Ok(*b),
-            Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
-                .and_then(|guard| match guard.0 {
-                    Union::Blob(ref b, ..) => Some(b.as_ref().clone()),
-                    _ => None,
-                })
-                .ok_or_else(|| cell.type_name()),
+            Union::Shared(ref cell, ..) => {
+                let guard = crate::func::shared_read(cell);
+                match guard.0 {
+                    Union::Blob(ref b, ..) => Ok(b.as_ref().clone()),
+                    _ => Err(guard.type_name()),
+                }
+            }
             _ => Err(self.type_name()),
         }
     }
