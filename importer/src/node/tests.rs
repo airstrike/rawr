@@ -2787,6 +2787,68 @@ fn discoverable_node_rejects_stale_candidates_and_reuses_the_current_one() {
     fs::remove_dir_all(root).expect("the discoverable store fixture retires");
 }
 
+/// A candidate its inputs' change superseded stays in its bucket beside
+/// the one published for the new inputs, and a return to its inputs finds
+/// it again with no execution (#1794). Three such candidates still answer
+/// a lookup, as superseded ones cost no deep validation.
+#[test]
+fn a_superseded_candidate_stays_and_answers_a_return_to_its_inputs() {
+    let root = temporary("discoverable-superseded");
+    let context = prepare_fixture(&root);
+    let recipe = context
+        .discover::<Derived>(b"discoverable-superseded")
+        .expect("the discoverable recipe seals");
+    let counts = Counts::default();
+    let executions = Arc::new(AtomicUsize::new(0));
+    let evaluate = |current: &'static [u8]| {
+        let store = fixture_context(&root)
+            .open_store()
+            .expect("the graph store opens");
+        let executed = Arc::clone(&executions);
+        Evaluator::new(&store, &counts)
+            .discover(
+                &recipe,
+                move |candidate| {
+                    if candidate.0.as_ref() != current {
+                        return Err(Error::Superseded);
+                    }
+                    retain_fixture_bytes(&candidate.0)
+                },
+                move || {
+                    executed.fetch_add(1, Ordering::Relaxed);
+                    Ok(Derived(current.to_vec().into_boxed_slice()))
+                },
+            )
+            .expect("the discoverable node evaluates")
+            .value()
+            .0
+            .clone()
+    };
+    for current in [b"a".as_slice(), b"b", b"c"] {
+        assert_eq!(&*evaluate(current), current);
+    }
+    assert_eq!(executions.load(Ordering::Relaxed), 3);
+    let bucket = store_bucket(&root, &recipe);
+    assert_eq!(fs::read_dir(&bucket).unwrap().count(), 3, "{bucket:?}");
+    for current in [b"a".as_slice(), b"b", b"c", b"a"] {
+        assert_eq!(&*evaluate(current), current);
+    }
+    assert_eq!(executions.load(Ordering::Relaxed), 3);
+    assert_eq!(counts.hit.load(Ordering::Relaxed), 4);
+    fs::remove_dir_all(root).expect("the discoverable store fixture retires");
+}
+
+/// The candidate bucket `recipe` looks up in the store under `root`.
+fn store_bucket(root: &Path, recipe: &super::Discoverable<Derived>) -> PathBuf {
+    fixture_context(root)
+        .open_store()
+        .unwrap()
+        .root()
+        .join("indexes")
+        .join(Derived::KIND.directory())
+        .join(recipe.lookup.directory())
+}
+
 #[test]
 fn final_read_set_revalidates_external_facts_without_mutating_the_store() {
     let root = temporary("final-read-set");
