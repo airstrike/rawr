@@ -85,7 +85,7 @@ impl<B> Candidate<super::Admitted, B> {
             .inner
             .as_ref()
             .ok_or(Error::Consumed)?
-            .manifest
+            .manifest()
             .native
             .watch())
     }
@@ -97,7 +97,7 @@ impl<B> Candidate<super::Admitted, B> {
             .inner
             .as_ref()
             .ok_or(Error::Consumed)?
-            .manifest
+            .manifest()
             .native
             .fingerprint())
     }
@@ -108,7 +108,7 @@ impl<B> Candidate<super::Admitted, B> {
         &self,
         request: &crate::bridge::GenerationRequestKey<B>,
     ) -> Result<Option<String>, Error> {
-        Ok(request.change_from(&self.inner.as_ref().ok_or(Error::Consumed)?.manifest))
+        Ok(request.change_from(self.inner.as_ref().ok_or(Error::Consumed)?.manifest()))
     }
 
     /// Compile once inside the admitted live process. A terminal nonprepared
@@ -117,7 +117,7 @@ impl<B> Candidate<super::Admitted, B> {
         &mut self,
         started: hot::Started,
         revision: crate::supervisor::Revision,
-        snapshot: crate::supervisor::snapshot::Bytes,
+        snapshot: &crate::supervisor::snapshot::Bytes,
         freshness: crate::supervisor::snapshot::attempt::Freshness,
         observation: &[u8],
     ) -> Result<resident::Outcome, Error> {
@@ -129,7 +129,7 @@ impl<B> Candidate<super::Admitted, B> {
             super::cancel_started(inner, &started)?;
             return Ok(resident::Outcome::Unstarted);
         }
-        let attempt = protocol::resident::Attempt::bind(started.identity(), revision, &snapshot);
+        let attempt = protocol::resident::Attempt::bind(started.identity(), revision, snapshot);
         // No request bytes have gone to the child yet; local failures must
         // cancel the retained HotBegin, never leave it blocking later edits.
         let payload = (|| {
@@ -137,7 +137,7 @@ impl<B> Candidate<super::Admitted, B> {
             if route.key() != inner.key {
                 return Err(Error::Stale);
             }
-            if !freshness.matches(&snapshot) {
+            if !freshness.matches(snapshot) {
                 return Err(Error::Snapshot(
                     crate::supervisor::snapshot::Error::Mismatch,
                 ));

@@ -156,7 +156,9 @@ struct Inner<B> {
     stream: UnixStream,
     key: crate::supervisor::GenerationKey,
     epoch: crate::supervisor::Epoch,
-    manifest: crate::runner::Manifest<crate::runner::Built, B>,
+    // `None` only once [`Candidate::retire_keeping_manifest`] took it, as
+    // that consumes the candidate.
+    manifest: Option<crate::runner::Manifest<crate::runner::Built, B>>,
     // The embedded carrier cannot change when ordinary hot metadata advances.
     resident_carrier: [u8; 32],
     route: Option<crate::profile::activation::Route>,
@@ -435,7 +437,7 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             key,
             epoch,
             resident_carrier: crate::runner::manifest::carrier_identity(&carrier),
-            manifest: self,
+            manifest: Some(self),
             route: None,
             sequence: crate::profile::message::Sequence::first(),
             stdout,
@@ -456,15 +458,15 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
         crate::metrics::record_runner_owned(&crate::metrics::runner::Owned {
             runner_pid,
             runner_uid: rustix::process::geteuid().as_raw(),
-            build_request: *inner.manifest.generated.build_request_key().as_bytes(),
-            generated_manifest: inner.manifest.generated.digest(),
+            build_request: *inner.manifest().generated.build_request_key().as_bytes(),
+            generated_manifest: inner.manifest().generated.digest(),
             generation_key: *inner.key.as_bytes(),
             epoch: inner.epoch.get(),
-            artifact: inner.manifest.native_identity(),
-            executable_digest: inner.manifest.artifact().executable_digest(),
-            executable_bytes: inner.manifest.artifact().executable_bytes(),
+            artifact: inner.manifest().native_identity(),
+            executable_digest: inner.manifest().artifact().executable_digest(),
+            executable_bytes: inner.manifest().artifact().executable_bytes(),
             executable_path: inner
-                .manifest
+                .manifest()
                 .artifact()
                 .executable()
                 .as_os_str()
@@ -499,7 +501,7 @@ impl<B> Candidate<Spawned, B> {
             .inner
             .as_ref()
             .ok_or(Error::Consumed)?
-            .manifest
+            .manifest()
             .request
             .snapshot;
         if !snapshot.matches(expected) {
@@ -512,7 +514,7 @@ impl<B> Candidate<Spawned, B> {
         let nonce = transition_nonce()?;
         let mut payload = Vec::from(inner.key.as_bytes().as_slice());
         payload.extend_from_slice(&nonce);
-        payload.extend_from_slice(inner.manifest.profile.application_semantic());
+        payload.extend_from_slice(inner.manifest().profile.application_semantic());
         payload.extend_from_slice(&snapshot.into_inner());
         let mut expected = Vec::from(key);
         expected.extend_from_slice(&nonce);
@@ -602,7 +604,7 @@ impl<B> Candidate<Admitted, B> {
             .ok_or(crate::node::Error::State(
                 "admitted runner lost its manifest before read-set retention",
             ))?
-            .manifest
+            .manifest_mut()
             .restore_prepared_read_set(read_set)
     }
 
@@ -612,7 +614,7 @@ impl<B> Candidate<Admitted, B> {
             .ok_or(crate::node::Error::State(
                 "admitted runner lost its manifest before pin promotion",
             ))?
-            .manifest
+            .manifest()
             .pin_live_last_good()
     }
 
@@ -637,7 +639,7 @@ impl<B> Candidate<Admitted, B> {
         inner.observed = true;
         // The child request is already captured and its observer can revoke it
         // throughout this full validation and the remaining startup/pin work.
-        inner.manifest.revalidate_prepared()?;
+        inner.manifest().revalidate_prepared()?;
         Ok(())
     }
 
@@ -754,7 +756,7 @@ impl<B> Candidate<Admitted, B> {
             }));
         }
         if !inner
-            .manifest
+            .manifest()
             .generated
             .entries()
             .any(|candidate| candidate == &entry)
@@ -869,7 +871,7 @@ impl<B> Candidate<Admitted, B> {
         message: M,
     ) -> Result<crate::profile::message::Envelope<M>, Error> {
         let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
-        if !inner.manifest.profile.has_generated_projections() {
+        if !inner.manifest().profile.has_generated_projections() {
             return Err(Error::NoProfile);
         }
         let route = inner.route.ok_or(Error::MissingRoute)?;
@@ -925,8 +927,8 @@ impl<B> Candidate<Admitted, B> {
             // early request and its resident compilation (D355); a
             // projection-only profile's runner does not.
             live: inner.started
-                && (inner.manifest.profile.owns_product_lifecycle()
-                    || !inner.manifest.profile.has_generated_projections()),
+                && (inner.manifest().profile.owns_product_lifecycle()
+                    || !inner.manifest().profile.has_generated_projections()),
         };
         if started.live {
             let identity = started.identity();
@@ -980,7 +982,7 @@ impl<B> Candidate<Admitted, B> {
             return Err(Error::Stale);
         }
         let outcome = (|| {
-            if inner.manifest.generated.build_request_key() != request.build_request_key() {
+            if inner.manifest().generated.build_request_key() != request.build_request_key() {
                 return Ok(super::hot::Preparation::Miss(super::hot::Miss::new(
                     request, snapshot,
                 )));
@@ -1009,13 +1011,13 @@ impl<B> Candidate<Admitted, B> {
                 request.canonical_bytes(),
                 request.revision(),
                 inner.epoch,
-                &inner.manifest.native_identity(),
+                &inner.manifest().native_identity(),
             );
             let next_route = inner.route.map(|route| route.advance(next));
             let nonce = started.nonce;
             let mut payload = Vec::from(next.as_bytes().as_slice());
             payload.extend_from_slice(request.surface_fingerprint().as_bytes());
-            if inner.manifest.profile.has_generated_projections() {
+            if inner.manifest().profile.has_generated_projections() {
                 let route = next_route.ok_or(Error::MissingRoute)?;
                 payload.extend_from_slice(route.receipt().as_bytes());
             } else {
@@ -1024,7 +1026,7 @@ impl<B> Candidate<Admitted, B> {
             payload.extend_from_slice(&nonce);
             payload.extend_from_slice(request.application_semantic());
             let mut manifest = request.generate()?;
-            let mut read_set = manifest.replay_hot(&inner.manifest)?;
+            let mut read_set = manifest.replay_hot(inner.manifest())?;
             read_set.bind_snapshot(&snapshot)?;
             read_set.pin_prepared()?;
             payload.extend_from_slice(&snapshot.into_inner());
@@ -1110,7 +1112,7 @@ impl<B> Candidate<Admitted, B> {
             })
         })?;
         inner
-            .manifest
+            .manifest_mut()
             .accept_hot(prepared.manifest, prepared.read_set);
         inner.key = prepared.next;
         inner.route = prepared.route;
@@ -1147,13 +1149,26 @@ impl<B> Candidate<Admitted, B> {
         self.close(Some(refresh))
     }
 
+    /// End this runner's program and its process, and keep what it was
+    /// built as, for a new process of the same executable: a restart that
+    /// needs no native build (D553.6). Nothing of the old process carries
+    /// over. Once this returns its process group is gone, and with it the
+    /// terminal, a port or a lock it held.
+    pub fn retire_keeping_manifest(
+        mut self,
+    ) -> Result<crate::runner::Manifest<crate::runner::Built, B>, Error> {
+        let mut inner = self.take()?;
+        inner.end()?;
+        inner.manifest.take().ok_or(Error::Consumed)
+    }
+
     fn close(mut self, refresh: Option<&mut bool>) -> Result<(), Error> {
         let mut inner = self.take()?;
         if inner.reaped {
             return Ok(());
         }
         if let Some(refresh) =
-            refresh.filter(|_| inner.started && inner.manifest.profile.owns_product_lifecycle())
+            refresh.filter(|_| inner.started && inner.manifest().profile.owns_product_lifecycle())
         {
             resident::retire(&mut inner, refresh)?;
         } else {
@@ -1188,7 +1203,7 @@ impl<P, B> Candidate<P, B> {
     pub(crate) fn revision(&self) -> crate::supervisor::Revision {
         self.inner.as_ref().map_or_else(
             || unreachable!("candidate transition always retains inner ownership"),
-            |inner| inner.manifest.revision,
+            |inner| inner.manifest().revision,
         )
     }
 
@@ -1204,6 +1219,34 @@ impl<P, B> Drop for Candidate<P, B> {
 }
 
 impl<B> Inner<B> {
+    fn manifest(&self) -> &crate::runner::Manifest<crate::runner::Built, B> {
+        self.manifest
+            .as_ref()
+            .unwrap_or_else(|| unreachable!("a runner keeps its manifest while it is owned"))
+    }
+
+    fn manifest_mut(&mut self) -> &mut crate::runner::Manifest<crate::runner::Built, B> {
+        self.manifest
+            .as_mut()
+            .unwrap_or_else(|| unreachable!("a runner keeps its manifest while it is owned"))
+    }
+
+    /// End this runner's process group as a dropped runner ends: asked to
+    /// shut down, and ended when it doesn't. It returns once the group is
+    /// gone.
+    fn end(&mut self) -> Result<(), Error> {
+        if !self.reaped {
+            self.retire_before_reap();
+        }
+        if !self.reaped {
+            self.child.terminate().map_err(resource_error)?;
+            self.reaped = true;
+        }
+        // What it printed was forwarded as it printed it.
+        let _ = join_logs(self);
+        Ok(())
+    }
+
     fn retire_before_reap(&mut self) {
         if self.route.is_none() {
             return;

@@ -114,6 +114,29 @@ impl<B> Manifest<Built, B> {
         Ok(())
     }
 
+    /// Bind `snapshot` as the source a new process of this same executable
+    /// starts from: a restart that needs no native build (D553.6). The
+    /// read set is sealed again from the runner's chain and bound to
+    /// `snapshot`, and holds its closure before the last process's read
+    /// set lets go of it. The demand stays the one the runner was built
+    /// for. A new process's generation key seals `snapshot` and its own
+    /// epoch beside it, so no two starts share a key.
+    pub fn rebind_startup(
+        &mut self,
+        snapshot: &crate::supervisor::snapshot::Bytes,
+    ) -> Result<(), crate::node::Error> {
+        let read_set = self
+            .chain
+            .as_ref()
+            .map(|chain| overlay::prepare_union(chain, self.overlay.as_ref()))
+            .transpose()?;
+        self.request.snapshot = snapshot.snapshot();
+        let previous = std::mem::replace(&mut self.phase.read_set, read_set);
+        self.retain_startup(snapshot)?;
+        drop(previous);
+        Ok(())
+    }
+
     pub(crate) fn bind_startup_snapshot(
         &mut self,
         snapshot: &crate::supervisor::snapshot::Bytes,

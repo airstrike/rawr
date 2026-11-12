@@ -49,7 +49,7 @@ impl<B> Lane<B> {
         &mut self,
         started: rawr_import::process::hot::Started,
         revision: rawr_import::supervisor::Revision,
-        snapshot: rawr_import::supervisor::snapshot::Bytes,
+        snapshot: &rawr_import::supervisor::snapshot::Bytes,
         freshness: rawr_import::supervisor::snapshot::attempt::Freshness,
         observation: &[u8],
     ) -> Result<rawr_import::process::resident::Outcome, Error> {
@@ -243,6 +243,53 @@ impl<B> Lane<B> {
                 Ok(Watched::Obsolete)
             }
         }
+    }
+
+    /// Start the program again in a new process of the running runner's own
+    /// executable, from `snapshot`, which `observation` watches: a restart
+    /// that needs no native build (D553.6). The running runner ends first,
+    /// so its program lets go of the terminal, a port or a lock before the
+    /// new `main` runs. Nothing of it carries over: the new program starts
+    /// with fresh memory, statics and `main`. Its build, its store pins and
+    /// the watcher stay. On an error no runner runs, and the program takes
+    /// the full start.
+    pub(crate) fn respawn(
+        &mut self,
+        snapshot: rawr_import::supervisor::snapshot::Bytes,
+        observation: &[u8],
+    ) -> Result<rawr_import::supervisor::GenerationKey, Error> {
+        let current = self
+            .slot
+            .take()
+            .ok_or(Error::State("before it restarted"))?;
+        let mut built = current.retire_keeping_manifest()?;
+        built.rebind_startup(&snapshot).map_err(Error::Node)?;
+        let admitted = self.admit_built_observed(built, snapshot, observation)?;
+        if let Some(previous) = self.slot.install(admitted) {
+            previous.shutdown()?;
+        }
+        let started = self.slot.start().map_err(Error::Process).and_then(|()| {
+            match self.slot.pin_current_live_last_good() {
+                // A save as the program started (D531.9): it runs, and the
+                // save reaches it as any other does.
+                Ok(()) | Err(rawr_import::node::Error::SourceChanged(_)) => Ok(()),
+                Err(failure) => Err(Error::Node(failure)),
+            }
+        });
+        if let Err(failure) = started {
+            let candidate = self
+                .slot
+                .take()
+                .ok_or(Error::State("before its failed restart was stopped"))?;
+            return match candidate.shutdown() {
+                Ok(()) => Err(failure),
+                Err(cleanup) => Err(Error::InstallCleanup {
+                    failure: Box::new(failure),
+                    cleanup,
+                }),
+            };
+        }
+        self.slot.key().ok_or(Error::State("after it restarted"))
     }
 
     fn finish_watched_installation(

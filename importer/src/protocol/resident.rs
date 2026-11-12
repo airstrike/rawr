@@ -75,12 +75,12 @@ impl Attempt {
 
     pub(crate) fn encode(
         &self,
-        snapshot: crate::supervisor::snapshot::Bytes,
+        snapshot: &crate::supervisor::snapshot::Bytes,
     ) -> Result<Vec<u8>, Error> {
         if self.header[68..] != *snapshot.digest() {
             return Err(Error::Snapshot);
         }
-        let snapshot = snapshot.into_inner();
+        let snapshot = snapshot.framed();
         let length = HEADER.checked_add(snapshot.len()).ok_or(Error::Framing)?;
         if length > super::FRAME_BYTES - 5 {
             return Err(Error::Framing);
@@ -90,7 +90,7 @@ impl Attempt {
             .try_reserve_exact(length)
             .map_err(|_| Error::Allocation)?;
         payload.extend_from_slice(&self.header);
-        payload.extend_from_slice(&snapshot);
+        payload.extend_from_slice(snapshot);
         Ok(payload)
     }
 

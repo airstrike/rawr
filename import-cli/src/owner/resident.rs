@@ -355,13 +355,34 @@ impl Work {
 
 pub(super) enum Attempt {
     Settled,
-    /// The runner committed the new generation compiled against it.
-    Swapped,
+    /// The runner committed the new generation compiled against it, which a
+    /// restart starts from when the program refuses it as it admits it.
+    Swapped(Respawn),
     /// The save takes the full preparation, for this reason.
     Prepare(Option<rawr_watch::StagedInputs>, Reason),
     /// The running program can't take the save, for this reason (D553.6):
-    /// it restarts, with no preparation first.
-    Restart(Box<str>),
+    /// it restarts from the save, with no preparation first, and the save's
+    /// inputs are watched once it runs.
+    Restart(Box<str>, Respawn, rawr_watch::StagedInputs),
+}
+
+/// A save the running runner compiled against its own native build: what a
+/// new process of that runner starts the program from when the program
+/// restarts, with no check and no native build (D553.6).
+pub(super) struct Respawn {
+    snapshot: rawr_import::supervisor::snapshot::Bytes,
+    observation: Arc<[u8]>,
+}
+
+impl Respawn {
+    /// Restart the program in a new process of `lane`'s runner, from this
+    /// save. On an error no runner runs.
+    pub(super) fn start(
+        self,
+        lane: &mut super::Lane,
+    ) -> Result<rawr_import::supervisor::GenerationKey, crate::native::Error> {
+        lane.respawn(self.snapshot, &self.observation)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -466,7 +487,7 @@ pub(super) fn attempt(
             ));
         }
     };
-    let outcome = match lane.prepare_resident(started, revision, bytes, freshness, &observation) {
+    let outcome = match lane.prepare_resident(started, revision, &bytes, freshness, &observation) {
         Ok(outcome) => outcome,
         Err(error) => return failed(error, adapter, watch_request, diagnostic),
     };
@@ -488,7 +509,10 @@ pub(super) fn attempt(
             {
                 rawr_import::process::say(format_args!("warning: file watcher: {warning}"));
             }
-            Ok(Attempt::Swapped)
+            Ok(Attempt::Swapped(Respawn {
+                snapshot: bytes,
+                observation,
+            }))
         }
         resident::Outcome::NeedsPreparation if adapter.gate().request_is_current(watch_request) => {
             Ok(Attempt::Prepare(Some(staged), Reason::Uncovered))
@@ -497,7 +521,14 @@ pub(super) fn attempt(
             Ok(Attempt::Prepare(Some(staged), Reason::Unstarted))
         }
         resident::Outcome::Refused(reason) if adapter.gate().request_is_current(watch_request) => {
-            Ok(Attempt::Restart(reason))
+            Ok(Attempt::Restart(
+                reason,
+                Respawn {
+                    snapshot: bytes,
+                    observation,
+                },
+                staged,
+            ))
         }
         resident::Outcome::NeedsPreparation
         | resident::Outcome::Unstarted
