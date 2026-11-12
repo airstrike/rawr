@@ -5816,6 +5816,12 @@ fn run_protocol(
                 std::thread::Builder::new()
                     .name("rawr protocol".into())
                     .spawn(move || serve_entry(stream, received, key, live))?;
+                // Its windows show where the person left them in the run
+                // before, when it asks for the frames it asked for then
+                // (#1811).
+                if let Some(directory) = std::env::var_os("RAWR_DIRECTORY") {
+                    __rawr_internal::frames::keep(std::path::Path::new(&directory));
+                }
                 let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     __rawr_profile::run(running)
                 }));
