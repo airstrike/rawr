@@ -720,6 +720,7 @@ impl<'store> Evaluator<'store> {
         }
 
         let mut rejection_recorded = first.rejected;
+        let mut repair = first.repair;
         let mut execute = Some(execute);
         self.store.with_ownership(|ownership| {
             self.store.with_heavy_lease(|| {
@@ -734,6 +735,7 @@ impl<'store> Evaluator<'store> {
                         .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
                     rejection_recorded = true;
                 }
+                repair |= after_heavy.repair;
 
                 self.store.with_execution_lease(recipe.execution, || {
                     let rechecked =
@@ -748,6 +750,7 @@ impl<'store> Evaluator<'store> {
                             .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
                         rejection_recorded = true;
                     }
+                    repair |= rechecked.repair;
 
                     let in_flight = recipe.in_flight(self.store)?;
                     let (action, published) = self.store.with_execution_reservation(
@@ -791,7 +794,7 @@ impl<'store> Evaluator<'store> {
                         },
                     )?;
                     self.store
-                        .hint_candidate::<K>(recipe.lookup, action, rejection_recorded);
+                        .hint_candidate::<K>(recipe.lookup, action, repair);
                     if published {
                         self.metrics
                             .node(K::KIND.metric(), metrics::NodeEvent::Published);
@@ -888,6 +891,7 @@ impl<'store> Evaluator<'store> {
         }
 
         let mut rejection_recorded = first.rejected;
+        let mut repair = first.repair;
         let mut execute = Some(execute);
         self.store.with_ownership(|ownership| {
             self.store.with_heavy_lease(|| {
@@ -902,6 +906,7 @@ impl<'store> Evaluator<'store> {
                         .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
                     rejection_recorded = true;
                 }
+                repair |= after_heavy.repair;
 
                 self.store.with_execution_lease(recipe.execution, || {
                     let rechecked =
@@ -916,6 +921,7 @@ impl<'store> Evaluator<'store> {
                             .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
                         rejection_recorded = true;
                     }
+                    repair |= rechecked.repair;
 
                     let evaluate = |attempt| {
                         self.metrics
@@ -960,7 +966,7 @@ impl<'store> Evaluator<'store> {
                         }
                     }?;
                     self.store
-                        .hint_candidate::<K>(recipe.lookup, action, rejection_recorded);
+                        .hint_candidate::<K>(recipe.lookup, action, repair);
                     if published {
                         self.metrics
                             .node(K::KIND.metric(), metrics::NodeEvent::Published);
@@ -1006,7 +1012,7 @@ impl<'store> Evaluator<'store> {
         &self,
         recipe: &Discoverable<K>,
         validate: &read_set::ScopedValidator<K>,
-        stale: &mut Vec<ActionKey>,
+        stale: &mut Vec<Seen>,
     ) -> Result<Discovery<K>, Error>
     where
         K: Value + Send + Sync + 'static,
@@ -1014,39 +1020,58 @@ impl<'store> Evaluator<'store> {
         let candidates = self.store.candidates::<K>(recipe.lookup)?;
         let mut admitted = None;
         let mut rejected = candidates.rejected;
+        let mut repair = candidates.rejected;
         let mut rejected_actions = [None; MAX_DEEP_VALIDATIONS_PER_LOOKUP];
-        for (slot, action) in candidates
-            .actions
-            .iter()
-            .copied()
-            .take(MAX_DEEP_VALIDATIONS_PER_LOOKUP)
-            .enumerate()
-        {
-            // The deep-validation target records and warns; only a
-            // genuine arithmetic failure stops the lookup here.
-            if stale.contains(&action) {
+        // A candidate its inputs' change superseded costs no deep
+        // validation and stays in its bucket, for a return to those inputs
+        // (#1794). The rest are validated up to the per-lookup bound.
+        let mut deep = 0;
+        for action in candidates.actions.iter().copied() {
+            if let Some(seen) = stale.iter().find(|seen| seen.action == action) {
                 rejected = true;
+                repair |= !seen.superseded;
                 continue;
+            }
+            if deep == MAX_DEEP_VALIDATIONS_PER_LOOKUP {
+                return Ok(Discovery {
+                    hit: None,
+                    rejected: true,
+                    repair: true,
+                    rejected_actions,
+                });
             }
             // An ordinary input change rebuilds silently under the progress
             // bar; only damaged entries earn a line.
-            let current = match Check::of(self.replay_discovered(recipe, validate, action))? {
+            let check = Check::of(self.replay_discovered(recipe, validate, action))?;
+            let slot = deep;
+            if !matches!(check, Check::Superseded) {
+                deep += 1;
+            }
+            let current = match check {
                 Check::Hit(current) => current,
+                Check::Superseded => {
+                    stale.push(Seen::superseded(action));
+                    rejected = true;
+                    continue;
+                }
                 Check::Damaged(Some(proof)) => {
                     note_damaged(K::KIND);
                     rejected = true;
+                    repair = true;
                     rejected_actions[slot] = Some((action, proof));
                     continue;
                 }
                 Check::Damaged(None) => {
                     note_damaged(K::KIND);
-                    stale.push(action);
+                    stale.push(Seen::stale(action));
                     rejected = true;
+                    repair = true;
                     continue;
                 }
                 Check::Stale => {
-                    stale.push(action);
+                    stale.push(Seen::stale(action));
                     rejected = true;
+                    repair = true;
                     continue;
                 }
             };
@@ -1054,21 +1079,16 @@ impl<'store> Evaluator<'store> {
                 return Ok(Discovery {
                     hit: None,
                     rejected: true,
+                    repair: true,
                     rejected_actions,
                 });
             }
             admitted = Some(current);
         }
-        if candidates.actions.len() > MAX_DEEP_VALIDATIONS_PER_LOOKUP {
-            return Ok(Discovery {
-                hit: None,
-                rejected: true,
-                rejected_actions,
-            });
-        }
         Ok(Discovery {
             hit: admitted,
             rejected,
+            repair,
             rejected_actions,
         })
     }
@@ -1154,7 +1174,34 @@ impl<'store> Evaluator<'store> {
 struct Discovery<K> {
     hit: Option<Validated<K>>,
     rejected: bool,
+    /// Whether the next publication replaces the bucket: a candidate in it
+    /// was stale or damaged, or the bucket did not read whole. Candidates
+    /// their inputs' change superseded keep it.
+    repair: bool,
     rejected_actions: [Option<(ActionKey, Corruption)>; MAX_DEEP_VALIDATIONS_PER_LOOKUP],
+}
+
+/// A candidate one evaluation found no hit, and whether only its inputs'
+/// change superseded it.
+struct Seen {
+    action: ActionKey,
+    superseded: bool,
+}
+
+impl Seen {
+    const fn stale(action: ActionKey) -> Self {
+        Self {
+            action,
+            superseded: false,
+        }
+    }
+
+    const fn superseded(action: ActionKey) -> Self {
+        Self {
+            action,
+            superseded: true,
+        }
+    }
 }
 
 fn note_damaged(kind: Kind) {
@@ -1173,6 +1220,9 @@ fn note_damaged(kind: Kind) {
 pub(crate) enum Check<T> {
     Hit(T),
     Stale,
+    /// Its recorded inputs provably changed, shown without replaying it:
+    /// it holds for those inputs, should they return.
+    Superseded,
     /// With the proof of the candidate's own corruption, when there is one.
     Damaged(Option<Corruption>),
 }
@@ -1183,6 +1233,7 @@ impl<T> Check<T> {
         match replay {
             Ok(Some(hit)) => Ok(Self::Hit(hit)),
             Ok(None) => Ok(Self::Stale),
+            Err(Error::Superseded) => Ok(Self::Superseded),
             Err(Error::CandidateCorrupt(proof)) => Ok(Self::Damaged(Some(*proof))),
             Err(Error::Corrupt { .. }) => Ok(Self::Damaged(None)),
             Err(error) if stale(&error) => Ok(Self::Stale),
@@ -1264,6 +1315,7 @@ fn terminal_replay_failure(error: &Error) -> bool {
         | Error::CleanupRequired(_)
         | Error::StaleReadSet { .. }
         | Error::SourceChanged(_)
+        | Error::Superseded
         | Error::Transform(_) => false,
     }
 }
@@ -1330,6 +1382,10 @@ pub enum Error {
     SourceChanged(std::path::PathBuf),
     #[error("node evaluation state is invalid: {0}")]
     State(&'static str),
+    /// A candidate's recorded inputs provably changed, shown without
+    /// replaying it: it is no hit now, and holds should they return.
+    #[error("a recorded input of the candidate changed")]
+    Superseded,
     #[error("node transform child failed: {0}")]
     Transform(Box<str>),
 }

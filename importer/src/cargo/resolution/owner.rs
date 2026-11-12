@@ -55,6 +55,7 @@ use crate::{metrics, store};
 
 mod carried;
 mod memo;
+mod recorded;
 
 /// The exact admitted node and the successful replay that admitted its bytes.
 pub(crate) struct Ready {
@@ -353,36 +354,6 @@ struct Captured {
 struct Current {
     wire: [u8; BYTES],
     watched: super::watched::Watched,
-}
-
-/// The recorded input files of the bundles this process last replayed,
-/// newest first. A later lookup of one of them refuses it without a full replay
-/// when a recorded file's bytes provably changed.
-static RECORDED: Mutex<Vec<([u8; BYTES], Arc<Recorded>)>> = Mutex::new(Vec::new());
-
-/// Bundles remembered: the current one and the few an undo may return to.
-const RECORDED_BUNDLES: usize = 4;
-
-fn recorded(wire: &[u8; BYTES]) -> Option<Arc<Recorded>> {
-    let recorded = RECORDED.lock().ok()?;
-    recorded
-        .iter()
-        .find(|(known, _)| known == wire)
-        .map(|(_, files)| Arc::clone(files))
-}
-
-fn remember(wire: [u8; BYTES], replay: &replay::Replay) {
-    let Some(bundle) = replay.watched.bundle() else {
-        return;
-    };
-    if recorded(&wire).is_some() {
-        return;
-    }
-    let files = Arc::new(Recorded::of(replay.decoded.entries(), bundle));
-    if let Ok(mut recorded) = RECORDED.lock() {
-        recorded.insert(0, (wire, files));
-        recorded.truncate(RECORDED_BUNDLES);
-    }
 }
 
 #[cfg(test)]
@@ -724,7 +695,7 @@ impl Evaluation {
         graph: &node::GraphBudget,
     ) -> Result<Box<[u8]>, node::Error> {
         {
-            let mut captured = self
+            let captured = self
                 .captured
                 .lock()
                 .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
@@ -735,13 +706,15 @@ impl Evaluation {
             {
                 return value.completed();
             }
-            captured.replay = None;
-            captured.current = None;
         }
-        if recorded(&value.wire()).is_some_and(|recorded| recorded.changed()) {
-            return Err(node::Error::Transform(
-                "complete current input entries differ".into(),
-            ));
+        // A recorded file changed: this candidate is another save's, and
+        // stays for a return to it (#1794). A refused candidate leaves the
+        // capture of the one a lookup admitted before it; a replay that
+        // succeeds replaces it.
+        if recorded::find(self.cached.context.rawr(), &value.wire())
+            .is_some_and(|recorded| recorded.changed())
+        {
+            return Err(node::Error::Superseded);
         }
         // A resolution made before the nightly's stale build-script run is
         // cleaned holds that run's outputs: it is a miss, so the cold build
@@ -796,7 +769,11 @@ impl Evaluation {
             .captured
             .lock()
             .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
-        remember(value.wire(), &replay);
+        if let Some(bundle) = replay.watched.bundle() {
+            recorded::keep(self.cached.context.rawr(), &value.wire(), || {
+                Recorded::of(replay.decoded.entries(), bundle)
+            });
+        }
         captured.current = Some(Current {
             wire: value.wire(),
             watched: std::mem::take(&mut replay.watched),

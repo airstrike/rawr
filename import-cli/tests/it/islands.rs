@@ -2594,7 +2594,9 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// the last settlement's, which it takes whole (#1786). A save after one
 /// that built probes its own build once, never the last build's artifacts
 /// first (#1794), and each restart says what its runner build compiled
-/// (#1795).
+/// (#1795). A save that puts back sources an earlier save sealed a harness
+/// for finds that harness: it binds, copies and seals none, and probes
+/// nothing (#1794).
 #[test]
 fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let root = THEME.project();
@@ -2621,7 +2623,7 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
             "            wizard: None,\n            seen: 0,\n        }",
         );
     assert_ne!(edited, text);
-    fs::write(&home, edited).unwrap();
+    fs::write(&home, &edited).unwrap();
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 2
     });
@@ -2639,9 +2641,33 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 3
     });
-    edit(&home, "    seen: u8,\n", "    pub seen: u8,\n");
+    // Undo the second field: the first save's sources, which that save
+    // sealed a harness for. Then undo the first: the launch's.
+    edit(
+        &home,
+        "    seen: u8,\n    seen_again: u8,\n}",
+        "    seen: u8,\n}",
+    );
+    edit(
+        &home,
+        "            seen: 0,\n            seen_again: 0,\n        }",
+        "            seen: 0,\n        }",
+    );
     run.told(&events, |text| {
         text.matches("{\"event\":\"running\"}").count() >= 4
+    });
+    fs::write(&home, &text).unwrap();
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 5
+    });
+    // The first save's sources again.
+    fs::write(&home, &edited).unwrap();
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 6
+    });
+    edit(&home, "    seen: u8,\n", "    pub seen: u8,\n");
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 7
     });
     fs::write(&stop, "").unwrap();
     let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
@@ -2658,16 +2684,23 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr-import: a save's round: "))
         .collect::<Vec<_>>();
-    // A round for each save, each probing its own build once. The first
-    // two take every fragment's read and the settlement the launch or the
-    // last save kept, and read no definition; the third reads the project
-    // crate's fragment again, and takes `common`'s and `ui`'s.
+    // A round for each save. The first two probe their own build once,
+    // take every fragment's read and the settlement the launch or the last
+    // save kept, and read no definition; the last probes once, reads the
+    // project crate's fragment again, and takes `common`'s and `ui`'s. A save back
+    // to the first save's sources, the third and the fifth, finds the
+    // harness that save sealed: no harness, copy, seal or probe. The
+    // launch's harness is under the launch's demand, so the fourth, back
+    // to the launch's sources, builds its own.
+    let found = "harnesses 0, compiled 0, copied 0, sealed 0, probes 0, read 0, ";
     assert!(
-        rounds.len() == 3
+        rounds.len() == 6
             && rounds[0].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
             && rounds[1].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
-            && rounds[2].contains(", probes 1, ")
-            && rounds[2].contains(", canonicalized 1, "),
+            && rounds[2].starts_with(found)
+            && rounds[4].starts_with(found)
+            && rounds[5].contains(", probes 1, ")
+            && rounds[5].contains(", canonicalized 1, "),
         "{rounds:?}\n{seen}"
     );
     eprintln!("the saves' rounds:\n{}", rounds.join("\n"));

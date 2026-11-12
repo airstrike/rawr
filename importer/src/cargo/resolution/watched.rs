@@ -133,6 +133,9 @@ pub(in crate::cargo) struct Recorded {
 /// Files whose identity has no remembered digest that one check will hash.
 const UNKNOWN_FILES: usize = 64;
 
+/// The encoding a later process reads a [`Recorded`] back from.
+const MAGIC: &[u8; 8] = b"RAWRRCD1";
+
 impl Recorded {
     /// Files under `bundle` are left to the bundle's own control hashing,
     /// which reports their drift as corruption.
@@ -161,6 +164,61 @@ impl Recorded {
         Self {
             files: files.into_boxed_slice(),
         }
+    }
+
+    /// These files as bytes [`Self::decode`] reads back.
+    #[cfg(unix)]
+    pub(in crate::cargo) fn encode(&self) -> Vec<u8> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut bytes = Vec::from(*MAGIC);
+        bytes.extend_from_slice(&(self.files.len() as u64).to_le_bytes());
+        for (path, length, digest) in &self.files {
+            let path = path.as_os_str().as_bytes();
+            bytes.extend_from_slice(&(path.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(path);
+            bytes.extend_from_slice(&length.to_le_bytes());
+            bytes.extend_from_slice(digest);
+        }
+        bytes
+    }
+
+    /// The files [`Self::encode`] wrote, or `None` for bytes it did not.
+    #[cfg(unix)]
+    pub(in crate::cargo) fn decode(bytes: &[u8]) -> Option<Self> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut rest = bytes.strip_prefix(MAGIC)?;
+        let mut take = |count: usize| {
+            let (taken, after) = rest.split_at_checked(count)?;
+            rest = after;
+            Some(taken)
+        };
+        let scalar = |bytes: &[u8]| Some(u64::from_le_bytes(bytes.try_into().ok()?));
+        let count = usize::try_from(scalar(take(8)?)?).ok()?;
+        // Each file takes at least its three fixed fields.
+        if count > bytes.len() / 48 {
+            return None;
+        }
+        let mut files = Vec::with_capacity(count);
+        for _ in 0..count {
+            let path = usize::try_from(scalar(take(8)?)?).ok()?;
+            let path = PathBuf::from(std::ffi::OsStr::from_bytes(take(path)?));
+            let length = scalar(take(8)?)?;
+            let digest = take(32)?.try_into().ok()?;
+            files.push((path, length, digest));
+        }
+        rest.is_empty().then(|| Self {
+            files: files.into_boxed_slice(),
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub(in crate::cargo) fn encode(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    #[cfg(not(unix))]
+    pub(in crate::cargo) fn decode(_bytes: &[u8]) -> Option<Self> {
+        None
     }
 
     /// Whether some recorded file's current bytes provably differ.
@@ -289,6 +347,14 @@ mod tests {
         assert!(recorded.changed(), "a different length");
         std::fs::write(&path, original).unwrap();
         assert!(!recorded.changed(), "an undo restores the recorded bytes");
+        // A later process reads the same record back, and the same answers.
+        let decoded = Recorded::decode(&recorded.encode()).expect("a record decodes");
+        assert_eq!(decoded.encode(), recorded.encode());
+        std::fs::write(&path, b"pub fn dial() -> u32 { 8 }\n").unwrap();
+        assert!(decoded.changed(), "a decoded record proves the change");
+        let encoded = recorded.encode();
+        assert!(Recorded::decode(&encoded[..encoded.len() - 1]).is_none());
+        assert!(Recorded::decode(&[encoded.as_slice(), &[0]].concat()).is_none());
         std::fs::remove_file(&path).unwrap();
         assert!(recorded.changed(), "a removed file");
         std::fs::remove_dir_all(&root).unwrap();
