@@ -1522,10 +1522,15 @@ impl<'a> Parser<'a> {
                 continue;
             }
             // A script type in the bound is followed even when nothing is
-            // open, for the script impls it uses (D629).
-            if !arguments
-                .iter()
-                .any(|argument| contains_inference(&self.inference.resolve(argument)))
+            // open, for the script impls it uses (D629). So is a type the
+            // bound's arguments leave open in the bounded value, as the
+            // `Message` of a crate's `plaque::<_>()` passed as `pressing`'s
+            // `impl Widget<Message>`: the opaque type's impl fixes it, as
+            // rustc infers it from the expected type (#1769).
+            if !contains_inference(&bounded)
+                && !arguments
+                    .iter()
+                    .any(|argument| contains_inference(&self.inference.resolve(argument)))
                 && !mentions_script(&bounded)
             {
                 continue;

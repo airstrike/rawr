@@ -485,6 +485,48 @@ fn a_generic_functions_parameter_the_expected_bound_fixes_runs() {
     );
 }
 
+/// elevato's view (#1769): the crate's `plaque<'a, Message: 'a>(..) ->
+/// impl Widget<Message> + 'a` names `Message` only in its output. The
+/// enclosing function's `impl Widget<Message>`, a method's or a free
+/// function's, fixes it at a tail, and so does the `impl Widget<Message>`
+/// input of the crate's `pressing` it is passed to, as rustc infers it from
+/// the expected type. The output is `cargo run`'s.
+#[test]
+fn a_crate_generic_only_an_opaque_output_names_takes_the_expected_type() {
+    let (rawr, cargo) = both_printed("expected.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 'Board' 'Footer' <'Increment'> 0@16")
+            && rawr.contains("last view pad 0 'Board' 'Footer' <'Increment'> 3@16"),
+        "{rawr}"
+    );
+}
+
+/// The crate's `plaque` where nothing is expected of its output is rustc's
+/// E0282 at the call (#1769).
+#[test]
+fn a_crate_generic_only_an_opaque_output_names_needs_an_expected_type() {
+    let stderr = rejected_as_cargo("expected_none.rs", "E0282");
+    assert!(stderr.contains("type annotations needed"), "{stderr}");
+}
+
+/// iced's `ViewFn` shape, as elevato's game (#1770): the crate's `run`
+/// takes `Program::view` as a higher-ranked `View<'a, P, M>`, whose blanket
+/// impl for every `Fn(&'a P, &'a Building) -> W` gives what the method
+/// gives, the crate's `floors(building, ..)`, an opaque `impl Widget<M> +
+/// 'a` that borrows the building. The game maps and boxes it. The output
+/// is `cargo run`'s.
+#[test]
+#[ignore = "blocked (#965): a slot's output of an opaque type that borrows what native code lent the slot isn't held; the `floors` adapter takes the lent building as an arena value"]
+fn a_crates_opaque_value_through_a_higher_ranked_view_trait_runs() {
+    let (rawr, cargo) = both_printed("viewed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view map floors 0/2") && rawr.contains("3 view map floors 2/2"),
+        "{rawr}"
+    );
+}
+
 /// iced's gallery (#1213): `tile(picture(handle))` given by a function
 /// written `-> impl Widget<Message> + 'a`, and by one written `->
 /// Option<impl Widget<Message>>`, where only the output's defaulted
