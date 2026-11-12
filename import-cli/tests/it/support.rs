@@ -1,5 +1,6 @@
 //! What the end-to-end tests share: fixtures prepared in lanes where Cargo
-//! keeps test files ([`fixture`]), one `RAWR_HOME` for the suite, and
+//! keeps test files ([`fixture`]), fixtures that tests start from where one
+//! run left them ([`started`]), one `RAWR_HOME` for the suite, and
 //! `rawr-import run` with its output read as it comes. The suite runs its
 //! tests in parallel; a test that needs a project or a home no other test
 //! touches makes its own with [`fresh`], by a name no other test uses.
@@ -15,9 +16,11 @@ pub mod alone;
 mod events;
 pub mod fixture;
 pub mod runtime;
+pub mod started;
 
 pub use alone::alone;
 pub use fixture::Fixture;
+pub use started::Started;
 
 use events::{Events, News};
 
