@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr's copy of a crate with marked modules builds its generated glue only where it is called, roughly halving the copy's codegen: 3,522 functions instead of 9,124 on a 13-screen test app.","issues":[1806],"refs":[1801]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.196",
@@ -3966,7 +3971,11 @@
     {"issue":1802,"title":"A missing node store entry under a running owner is reported as corrupt instead of rebuilt","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.196"},
     {"issue":1803,"title":"After a native edit removed a function's generic, the runner still called it with the old turbofish (E0107)","state":"open","category":"Divergences from rustc"},
     {"issue":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"open","category":"Divergences from rustc"},
-    {"issue":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1805,"title":"A store entry whose directory alone is deleted cannot be rebuilt while the ledger still registers it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5161,7 +5170,11 @@
             {"number":1795,"title":"The restart's runner build prints nothing for its 110 s on inboard","state":"closed"},
             {"number":1798,"title":"A save probes once, and a save that changes no crate's API reads no definitions","state":"closed"},
             {"number":1799,"title":"A rawr run owner holds the dependencies' API about three times over","state":"open"},
-            {"number":1801,"title":"rawr's copy of the program's crate compiles about 3.5 times slower than cargo's build of it","state":"open"}
+            {"number":1801,"title":"rawr's copy of the program's crate compiles about 3.5 times slower than cargo's build of it","state":"open"},
+            {"number":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed"},
+            {"number":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open"},
+            {"number":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open"},
+            {"number":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open"}
           ]
         },
         {

@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- rawr's copy of a crate with marked modules builds its generated glue only where it is called, roughly halving the copy's codegen: 3,522 functions instead of 9,124 on a 13-screen test app. (#1806; part of #1801)
 
 ## 0.3.196 (2026-11-12)
 
