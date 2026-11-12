@@ -103,6 +103,17 @@ impl super::Evaluation {
         if let Some(parts) = self.shared_parts(&carried.basis(&plan)) {
             return Some(parts);
         }
+        // The carried round's key names Cargo's view, not the crates'
+        // files: after an edit to the project the key holds, but the build
+        // is another, which its harness probes once (#1794).
+        let current = crate::input::bindings::Current::capture(
+            &self.request.project_root,
+            &self.request.config,
+            &self.limits,
+        )?;
+        if !plan.shared_inputs_hold(&current) {
+            return None;
+        }
         let rawr = self.cached.context.rawr();
         let native = crate::process::Native::from_attestation(&self.cached.attestation);
         carried

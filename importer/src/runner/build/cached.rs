@@ -399,6 +399,7 @@ fn compile<B>(
     let before = crate::deps::project::Before::take(&build);
     #[cfg(feature = "rustc-driver")]
     let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
+    let began = std::time::Instant::now();
     let mut result = crate::process::project_cargo(&command, context.limits().process_limits())
         .and_then(|output| {
             // A failed adapter compilation still gives build-script evidence
@@ -407,7 +408,7 @@ fn compile<B>(
             crate::bindings::record_runner_scripts(&work, output.stdout());
             output.checked(crate::process::Program::Cargo)
         })
-        .inspect(|messages| crate::progress::runner_built(messages));
+        .inspect(|messages| crate::progress::runner_built(messages, began.elapsed()));
     // A runner that can't link the shared runtime, such as through a native
     // symbol both define, builds rawr in the project as before. It says so
     // once, and the project's next build goes there directly.
@@ -429,13 +430,14 @@ fn compile<B>(
         sync(None)?;
         #[cfg(feature = "rustc-driver")]
         let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
+        let began = std::time::Instant::now();
         result = crate::process::project_cargo(&command, context.limits().process_limits())
             .and_then(|output| {
                 #[cfg(feature = "rustc-driver")]
                 crate::bindings::record_runner_scripts(&work, output.stdout());
                 output.checked(crate::process::Program::Cargo)
             })
-            .inspect(|messages| crate::progress::runner_built(messages));
+            .inspect(|messages| crate::progress::runner_built(messages, began.elapsed()));
     }
     let name = if cfg!(windows) {
         "rawr-generated-runner.exe"

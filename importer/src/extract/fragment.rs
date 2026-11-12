@@ -91,6 +91,25 @@ pub(super) fn key(fragment: &protocol::Fragment) -> Option<[u8; 32]> {
     Some(digest.0.finalize().into())
 }
 
+/// Each fragment's read key ([`key`]), hashed across the cores; `None`
+/// when one has none.
+pub(super) fn keys(fragments: &[protocol::Fragment]) -> Option<Vec<[u8; 32]>> {
+    crate::parallel::map(fragments, key)
+}
+
+/// Each fragment with its read key ([`key`]), hashed across the cores.
+pub(super) fn keyed(
+    fragments: Vec<protocol::Fragment>,
+) -> Vec<(Option<[u8; 32]>, protocol::Fragment)> {
+    let (keyed, _) = crate::parallel::map_owned_with_on(
+        crate::parallel::workers(),
+        fragments,
+        || (),
+        |(), fragment| (key(&fragment), fragment),
+    );
+    keyed
+}
+
 /// A hasher that feeds SHA-256, so a key is a digest of what is hashed.
 struct Digest(Sha256);
 
