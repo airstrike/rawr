@@ -1689,7 +1689,9 @@ mod tests {
         let root = scratch("unchanged");
         let rawr = runner(&root, &BTreeMap::new());
         let staged = super::staged(&rawr);
-        let extraction = rawr.join("extraction");
+        // Where the driver writes its tables, in this rawr's format: the
+        // store of `rawr/extraction` an older rawr kept is retired (#1677).
+        let extraction = super::format::project(&rawr, super::format::Kept::Extraction);
         let bindings = root.join("bindings");
         let inputs = crate::input::bindings::Inputs::fixture;
         let entry = driver_table(&extraction, &bindings, "demo", b"units");

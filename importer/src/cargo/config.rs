@@ -551,14 +551,20 @@ impl Environment {
         byte_limit: usize,
     ) -> Result<Box<[(OsString, OsString)]>> {
         let loader = self.loader_path(rustc);
+        // Cargo gets the home it would use, its symlinks resolved, so the
+        // registry paths it reports are the canonical ones rawr reads: a
+        // home reached through a symlink is the directory it names (#1754).
+        let home = self.context_cargo_home().ok().flatten();
         let retained = self.values.iter().filter(|(key, _)| {
             !IMPORTER_OVERRIDDEN.contains(&key.as_ref())
                 && !(loader.is_some() && key.as_ref() == LOADER_PATH)
+                && !(home.is_some() && key.as_ref() == "CARGO_HOME")
         });
         let retained_items = retained.clone().count();
         let items = retained_items
             .saturating_add(4)
-            .saturating_add(usize::from(loader.is_some()));
+            .saturating_add(usize::from(loader.is_some()))
+            .saturating_add(usize::from(home.is_some()));
         if items > entry_limit {
             return Err(Error::Limit {
                 resource: "Cargo environment entries",
@@ -582,7 +588,10 @@ impl Environment {
                 loader
                     .as_ref()
                     .map_or(0, |value| LOADER_PATH.len().saturating_add(value.len())),
-            );
+            )
+            .saturating_add(home.as_ref().map_or(0, |home| {
+                "CARGO_HOME".len().saturating_add(home.as_os_str().len())
+            }));
         if bytes > byte_limit {
             return Err(Error::Limit {
                 resource: "Cargo environment bytes",
@@ -600,6 +609,9 @@ impl Environment {
         values.push(("RUSTDOC".into(), rustdoc.as_os_str().to_owned()));
         if let Some(loader) = loader {
             values.push((LOADER_PATH.into(), loader));
+        }
+        if let Some(home) = home {
+            values.push(("CARGO_HOME".into(), home.into_os_string()));
         }
         values.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         Ok(values.into_boxed_slice())
@@ -2161,6 +2173,48 @@ mod tests {
                 actual,
             }) if error_limit == byte_limit && actual == exact_bytes
         ));
+    }
+
+    /// Cargo runs with the home it would use, resolved: a `CARGO_HOME`
+    /// reached through a symlink and an unset one under a symlinked `HOME`
+    /// give it the directory they name, so the registry paths it reports
+    /// are canonical (#1754).
+    #[cfg(unix)]
+    #[test]
+    fn cargo_runs_with_its_home_resolved() {
+        let root = std::env::temp_dir().join(format!("rawr-command-home-{}", std::process::id()));
+        let home = root.join("home");
+        let cargo_home = home.join(".cargo");
+        fs::create_dir_all(&cargo_home).expect("the fixture Cargo home creates");
+        let link = root.join("home-link");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&home, &link).expect("the home symlink creates");
+        let resolved = fs::canonicalize(&cargo_home).expect("the Cargo home resolves");
+        let given = |pairs: &[(&str, &Path)]| {
+            let environment = Environment::from_pairs(
+                pairs
+                    .iter()
+                    .map(|(key, path)| (*key, path.to_str().expect("fixture paths are Unicode"))),
+            )
+            .expect("the fixture environment seals");
+            environment
+                .command_values(
+                    Path::new("/target"),
+                    Path::new("/toolchain/bin/rustc"),
+                    Path::new("/toolchain/bin/rustdoc"),
+                )
+                .expect("the command environment builds")
+                .iter()
+                .filter(|(key, _)| key == "CARGO_HOME")
+                .map(|(_, value)| std::path::PathBuf::from(value))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            given(&[("CARGO_HOME", &link.join(".cargo"))]),
+            std::slice::from_ref(&resolved)
+        );
+        assert_eq!(given(&[("HOME", &link)]), [resolved]);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
