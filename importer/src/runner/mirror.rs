@@ -44,7 +44,7 @@ const RUNNER: [&str; 9] = [
 
 /// The directory under the runner's root that holds its copies of the
 /// packages rawr generates beside it (#1777).
-const COPIES: &str = "rawr-copies";
+pub(crate) const COPIES: &str = "rawr-copies";
 
 /// The dependency tables of a manifest or of one `target.<cfg>` table.
 const DEPENDENCIES: [&str; 3] = ["dependencies", "build-dependencies", "dev-dependencies"];

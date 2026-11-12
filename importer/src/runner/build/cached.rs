@@ -396,7 +396,7 @@ fn compile<B>(
             file("Cargo.lock"),
         )?;
     }
-    let started = std::time::SystemTime::now();
+    let before = crate::deps::project::Before::take(&build);
     #[cfg(feature = "rustc-driver")]
     let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
     let mut result = crate::process::project_cargo(&command, context.limits().process_limits())
@@ -450,7 +450,7 @@ fn compile<B>(
         if runtime.is_some() {
             crate::deps::prune_rawr_from(&build, &crate::runner::runtime::host_sources());
         }
-        crate::deps::prune_superseded(&build, messages, started, &work);
+        crate::deps::project::prune(&build, messages, &before, &work);
         let destination = target.join("debug");
         let executable = runner_executable(messages).ok_or_else(|| {
             node::Error::Transform("the runner build named no runner executable".into())
