@@ -1,5 +1,7 @@
 //! Static Rawr source and local-package graphs.
 
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub mod called;
 mod cell;
 pub(crate) mod compile;
 mod entry;

@@ -347,10 +347,14 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
             .strip_prefix(&module_root)
             .unwrap_or(root.path());
         instances = graph.instance_entries(&shadow.generic);
-        let mut files = vec![
+        let mut files = support_package(&directory);
+        files.extend([
             (
                 directory.join("Cargo.toml"),
-                app_manifest(cargo, &Path::new("src").join(relative)),
+                with_support(
+                    app_manifest(cargo, &Path::new("src").join(relative)),
+                    &directory,
+                ),
             ),
             (
                 copies.join(relative),
@@ -362,7 +366,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
                     &instances,
                 ),
             ),
-        ];
+        ]);
         files.extend(
             shadow
                 .files
@@ -477,13 +481,17 @@ fn bin_crate(
     let directory = library.with_file_name("bin");
     let package = cargo.path.parent().unwrap_or(module_root);
     let copies = directory.join("src");
-    let mut files = vec![
-        (directory.join("Cargo.toml"), bin_manifest(cargo, library)),
+    let mut files = support_package(&directory);
+    files.extend([
+        (
+            directory.join("Cargo.toml"),
+            with_support(bin_manifest(cargo, library), &directory),
+        ),
         (
             copies.join("main.rs"),
             native_root(bin.root(), package, true, &[], &[]),
         ),
-    ];
+    ]);
     // The binary's modules are beside its root, wherever Cargo finds it.
     let module_root = bin.root().path().parent().unwrap_or(module_root);
     for module in bin.modules() {
@@ -498,6 +506,34 @@ fn bin_crate(
     files.extend(build_script(cargo, &directory, features)?);
     write_changed(files)?;
     Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
+}
+
+/// The files of the island's support package (`island::package`), beside
+/// `directory`, a generated package of a crate with marked modules: the
+/// same for every crate and every save, so Cargo builds it once (#1808).
+fn support_package(directory: &Path) -> Vec<(std::path::PathBuf, String)> {
+    let package = directory.with_file_name(super::island::PACKAGE_DIRECTORY);
+    super::island::package()
+        .into_iter()
+        .map(|(path, text)| (package.join(path), text))
+        .collect()
+}
+
+/// `manifest`, a generated package's beside the support package, with the
+/// dependency its island module re-exports the package by.
+fn with_support(manifest: String, directory: &Path) -> String {
+    let package = directory.with_file_name(super::island::PACKAGE_DIRECTORY);
+    let line = format!(
+        "{} = {{ package = {:?}, path = {:?} }}\n",
+        super::island::PACKAGE_CRATE,
+        super::island::PACKAGE_NAME,
+        package.display().to_string()
+    );
+    manifest.replacen(
+        "\n[dependencies]\n",
+        &format!("\n[dependencies]\n{line}"),
+        1,
+    )
 }
 
 /// Where in a generated package the copy of the build script `script`

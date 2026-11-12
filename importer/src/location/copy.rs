@@ -359,7 +359,8 @@ fn signature(line: &str) -> Option<&str> {
 /// call or says why native code can't call it yet.
 fn called(line: &str) -> Option<&str> {
     let (_, after) = line
-        .split_once("__rawr_island::Call::new(\"")
+        .split_once("__rawr_island::call(\"")
+        .or_else(|| line.split_once("__rawr_island::uncalled(\""))
         .or_else(|| line.split_once("native code can't call `"))?;
     after.split(['"', '`']).next()
 }
@@ -545,7 +546,7 @@ error: could not compile `app` (lib) due to 2 previous errors; 1 warning emitted
              // sees of it. Each function hands its arguments to the interpreter.\n\
              impl State {{\n    \
              pub fn mark_all_read(&mut self, __a0: impl IntoIterator<Item = Id>) {{\n        \
-             let mut __call = crate::__rawr_island::Call::new(\"workspace::inbox::State::mark_all_read\", true);\n        \
+             let mut __call = crate::__rawr_island::call(\"workspace::inbox::State::mark_all_read\", true);\n        \
              __call.unit();\n        \
              crate::__rawr_island::give!(__call, __a0);\n    \
              }}\n}}\n",

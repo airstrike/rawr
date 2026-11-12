@@ -553,6 +553,9 @@ fn prepare_resolving(
     let mut applications = Vec::new();
     // Whether the check ran again for a new record of native instances.
     let mut instances_retried = false;
+    // Whether it ran again for the bodies of marked functions native code
+    // names that rawr's copy was written without.
+    let mut called_retried = false;
     // What the last check recorded of native code's uses.
     let mut uses;
     // The paths the last round resolved the crates' API for.
@@ -608,6 +611,16 @@ fn prepare_resolving(
         } else {
             request.kept_instances(rawr::package::instances::kept(&project))
         };
+        // So does one whose uses have rawr's copy written with other bodies
+        // (#1807).
+        let request = if called_retried {
+            request
+        } else {
+            request.kept_bodies(rawr::package::called::kept(&project).map_or(
+                rawr_import::uses::Bodies::Every,
+                rawr_import::uses::Bodies::Named,
+            ))
+        };
         rawr_import::progress::phase("resolving");
         let mut prepared = request
             .prepare_cached_in(&limits, scope)
@@ -616,27 +629,36 @@ fn prepare_resolving(
         // The instances native code calls marked generics at, as this check
         // recorded them (D866): a record the shadow crate's table doesn't
         // hold yet is written, and the crate checked again with it (D869).
-        let record = prepared.recorded_instances().map_err(Error::other)?;
-        if let Some(record) = &record
-            && rawr::package::instances::store(&project, record).map_err(Error::other)?
-            && !rawr::package::instances::kept(&project)
-                .instances()
-                .is_empty()
-            && !instances_retried
-        {
-            instances_retried = true;
+        let new_instances = match prepared.recorded_instances().map_err(Error::other)? {
+            Some(record) => {
+                rawr::package::instances::store(&project, &record).map_err(Error::other)?
+                    && !rawr::package::instances::kept(&project)
+                        .instances()
+                        .is_empty()
+                    && !instances_retried
+            }
+            None => false,
+        };
+        // What native code uses of the marked modules, as the same check
+        // recorded it beside the generated crates (D935.3). A marked
+        // function native code names gets its trampoline's body: a name
+        // the record lacks is kept, and the copy written with its body and
+        // checked again, as is the first record (#1807).
+        uses = prepared.recorded_uses().map_err(Error::other)?;
+        let new_bodies = match &uses {
+            Some(uses) => {
+                rawr::package::called::store(&project, uses.named()).map_err(Error::other)?
+                    && !called_retried
+            }
+            None => false,
+        };
+        if new_instances || new_bodies {
+            instances_retried |= new_instances;
+            called_retried |= new_bodies;
             continue;
         }
         // What a crate derive's expansion runs against: this run's own build.
         let basis = prepared.expansion_basis();
-        // What native code uses of the marked modules, as the same check
-        // recorded it beside the generated crates (D935.3).
-        uses = basis
-            .as_ref()
-            .map(|basis| rawr_import::uses::Uses::recorded(basis.artifacts()))
-            .transpose()
-            .map_err(Error::other)?
-            .flatten();
         rawr_import::progress::phase("reading API");
         let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();

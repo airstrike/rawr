@@ -56,6 +56,28 @@ pub struct Uses {
     traits: BTreeSet<String>,
 }
 
+/// The marked functions whose trampolines rawr wrote a generated crate
+/// with bodies for (#1807): every one, before any check recorded what
+/// native code names, or those named.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Bodies {
+    Every,
+    Named(BTreeSet<String>),
+}
+
+impl Bodies {
+    /// Whether rawr writes the crate again for `uses`, a check's of it:
+    /// with the bodies of the functions it names alone, or with one it
+    /// names that the crate lacks the body of.
+    #[must_use]
+    pub fn rewritten(&self, uses: &Uses) -> bool {
+        match self {
+            Self::Every => true,
+            Self::Named(named) => !named.is_superset(&uses.named),
+        }
+    }
+}
+
 /// The uses one check finds, as it finds them.
 #[derive(Default)]
 pub struct Recorder {
@@ -109,6 +131,12 @@ impl Recorder {
 }
 
 impl Uses {
+    /// The marked items native code names, by their paths.
+    #[must_use]
+    pub fn named(&self) -> &BTreeSet<String> {
+        &self.named
+    }
+
     /// Whether native code names the marked item at `path`.
     #[must_use]
     pub fn names(&self, path: &str) -> bool {
@@ -299,5 +327,21 @@ mod tests {
         assert!(uses.uses_trait("Clone") && !uses.uses_trait("Debug"));
         let other = Uses::default().with(uses.clone());
         assert!(other.names("physics::label"));
+    }
+
+    /// A crate written with every body is written again for its first
+    /// record, and one written with named bodies only for a name it lacks.
+    #[test]
+    fn bodies_are_written_again_only_for_a_name_they_lack() {
+        use super::Bodies;
+        let mut recorder = Recorder::default();
+        recorder.name("physics::label".to_owned());
+        let uses = recorder.finish();
+        let named =
+            |names: &[&str]| Bodies::Named(names.iter().map(|name| (*name).to_owned()).collect());
+        assert!(Bodies::Every.rewritten(&uses));
+        assert!(named(&[]).rewritten(&uses));
+        assert!(!named(&["physics::label"]).rewritten(&uses));
+        assert!(!named(&["physics::label", "physics::inset"]).rewritten(&uses));
     }
 }

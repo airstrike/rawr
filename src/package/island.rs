@@ -662,11 +662,14 @@ pub(crate) fn mirrors<'a>(
 
 /// Generate the shadow files of the marked sources of a crate whose root
 /// is native. `module_root` is the directory of the crate root; `sources`
-/// yields each marked source's module path, file, text and items.
+/// yields each marked source's module path, file, text and items. Only the
+/// functions `called` names get their trampolines' bodies, when it names
+/// any ([`Generator::called`]); the shape is the same either way.
 pub(crate) fn shadow<'a>(
     module_root: &Path,
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a Path, &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
+    called: Option<&'a BTreeSet<String>>,
 ) -> Shadow {
     let sources = sources
         .into_iter()
@@ -677,7 +680,8 @@ pub(crate) fn shadow<'a>(
             items,
         })
         .collect::<Vec<_>>();
-    let generator = Generator::new(&sources, root);
+    let mut generator = Generator::new(&sources, root);
+    generator.called = called;
     let mut files = Vec::new();
     let mut shape = BTreeMap::new();
     let mut refused = Vec::new();
@@ -761,6 +765,29 @@ struct Generator<'a> {
     /// `pub use theme::Theme;` makes `crate::Theme` the marked
     /// `theme::Theme`.
     uses: BTreeMap<String, Vec<String>>,
+    /// The marked functions native code names, as the last check recorded
+    /// them (`package::called`, #1807): every other trampoline is its
+    /// signature over a body that never runs. `None` gives each its body.
+    called: Option<&'a BTreeSet<String>>,
+}
+
+/// A function's trampoline as its shape has it, and as native code that
+/// doesn't call the function is built with: its signature over a body
+/// that never runs, unless it is generic, whose instance entries the
+/// support table may name, or says why it can't cross (#1807).
+struct Stub {
+    text: String,
+    uncalled: Option<String>,
+}
+
+impl Stub {
+    /// The text native code is built with, `called` or not.
+    fn built(&self, called: bool) -> &str {
+        match &self.uncalled {
+            Some(uncalled) if !called => uncalled,
+            _ => &self.text,
+        }
+    }
 }
 
 /// A std trait a stand-in implements for the marked type it holds, as a
@@ -942,6 +969,7 @@ impl<'a> Generator<'a> {
             entries: std::cell::RefCell::default(),
             parameters: std::cell::RefCell::default(),
             uses,
+            called: None,
         };
         // A generic one crosses too: each part of a type its parameters
         // name is a native one, which only an instance entry moves (D869).
@@ -1893,13 +1921,13 @@ impl<'a> Generator<'a> {
                     }
                     let path = path_of(file.modules, &declared.name.text);
                     match self.stub(file, declared, None, Owner::None, false, &path) {
-                        Ok(text) => {
-                            items.push_str(&text);
+                        Ok(stub) => {
+                            items.push_str(stub.built(self.calls(&path)));
                             shape.insert(
                                 path,
                                 Entry {
                                     kind: Kind::Function,
-                                    text,
+                                    text: stub.text,
                                 },
                             );
                         }
@@ -1976,6 +2004,12 @@ impl<'a> Generator<'a> {
         }
         text.push_str(&items);
         text
+    }
+
+    /// Whether native code may call the marked function at `path`: it
+    /// names it, or no check recorded what native code names.
+    fn calls(&self, path: &str) -> bool {
+        self.called.is_none_or(|called| called.contains(path))
     }
 
     /// Copy one item as declared, its Rawr-only attributes dropped.
@@ -2154,14 +2188,17 @@ impl<'a> Generator<'a> {
         for function in functions {
             let member = format!("{prefix}::{}", function.name.text);
             let stub = match owner {
-                Owner::Marked(_) if formats && function.name.text == "fmt" => {
-                    Ok(rendered_fmt(&member))
-                }
+                Owner::Marked(_) if formats && function.name.text == "fmt" => Ok(Stub {
+                    text: rendered_fmt(&member),
+                    uncalled: None,
+                }),
                 _ => self.stub(file, function, Some(declared), owner, false, &member),
             };
             match stub {
                 Ok(stub) => {
-                    for line in stub.lines() {
+                    // A trait's function is called through the trait, unnamed.
+                    let called = trait_.is_some() || self.calls(&member);
+                    for line in stub.built(called).lines() {
                         let _ = writeln!(text, "    {line}");
                     }
                     // A generic method's instance entry goes beside the impl.
@@ -2170,7 +2207,7 @@ impl<'a> Generator<'a> {
                         member,
                         Entry {
                             kind,
-                            text: format!("{header}\n{stub}{entries}"),
+                            text: format!("{header}\n{}{entries}", stub.text),
                         },
                     );
                 }
@@ -2379,7 +2416,7 @@ impl<'a> Generator<'a> {
             let member = format!("{path}::{}::{}", last.name.text, function.name.text);
             match self.stub(file, function, None, Owner::None, true, &member) {
                 Ok(stub) => {
-                    for line in stub.lines() {
+                    for line in stub.text.lines() {
                         let _ = writeln!(text, "    {line}");
                     }
                 }
@@ -2420,7 +2457,7 @@ impl<'a> Generator<'a> {
         owner: Owner<'_>,
         object: bool,
         path: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Stub, String> {
         // The function's and its impl's type parameters are in scope
         // while it is written ([`Generator::parameters`]).
         let parameters = outer
@@ -2444,7 +2481,7 @@ impl<'a> Generator<'a> {
         owner: Owner<'_>,
         object: bool,
         path: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Stub, String> {
         if let Some(type_ref::Type::Path(output)) = &function.output {
             let first = output
                 .segments
@@ -2659,8 +2696,15 @@ impl<'a> Generator<'a> {
                     reasons.join("; ")
                 )
             );
-            return Ok(inlined(function, text));
+            return Ok(Stub {
+                text: inlined(function, text),
+                uncalled: None,
+            });
         }
+        let uncalled = inlined(
+            function,
+            format!("{signature} {{\n    {island}::uncalled({path:?})\n}}\n"),
+        );
         // Each `impl Trait`'s owned stand-in, made before the call starts,
         // as making it may run native code that calls marked code too; a
         // generic function's trampoline makes it before it hands the call
@@ -2695,13 +2739,13 @@ impl<'a> Generator<'a> {
             let _ = if given.is_empty() {
                 writeln!(
                     text,
-                    "    let mut __call = {island}::Call::new({island}::keyed({path:?}, \
+                    "    let mut __call = {island}::call({island}::keyed({path:?}, \
                      ::std::any::type_name::<{tuple}>()), {owned});"
                 )
             } else {
                 writeln!(
                     text,
-                    "    let mut __call = {island}::Call::new({island}::keyed_given({path:?}, \
+                    "    let mut __call = {island}::call({island}::keyed_given({path:?}, \
                      ::std::any::type_name::<{tuple}>(), &[{}]), {owned});",
                     given.join(", ")
                 )
@@ -2709,7 +2753,7 @@ impl<'a> Generator<'a> {
         } else {
             let _ = writeln!(
                 text,
-                "    let mut __call = {island}::Call::new({path:?}, {owned});"
+                "    let mut __call = {island}::call({path:?}, {owned});"
             );
         }
         if matches!(kept, Some(Borrowed::Pinned)) {
@@ -3015,13 +3059,21 @@ impl<'a> Generator<'a> {
                 .borrow_mut()
                 .insert(path.to_owned(), format!("crate::{}", modules.join("::")));
             // A method's entry is beside its impl, which can't hold it.
-            if outer.is_some() {
+            let text = if outer.is_some() {
                 self.entries.borrow_mut().push(entry);
-                return Ok(public);
-            }
-            return Ok(format!("{public}{entry}"));
+                public
+            } else {
+                format!("{public}{entry}")
+            };
+            return Ok(Stub {
+                text,
+                uncalled: None,
+            });
         }
-        Ok(inlined(function, text))
+        Ok(Stub {
+            text: inlined(function, text),
+            uncalled: (!object).then_some(uncalled),
+        })
     }
 
     /// How one field of `ty` of the marked type at `path` goes to the
@@ -3558,7 +3610,7 @@ fn rendered_fmt(member: &str) -> String {
     let island = format!("crate::{MODULE}");
     format!(
         "#[inline]\nfn fmt(&self, __f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n    \
-         let mut __call = {island}::Call::new({member:?}, true);\n    \
+         let mut __call = {island}::call({member:?}, true);\n    \
          __call.argument(self);\n    \
          __call.argument(&::std::string::String::new());\n    \
          let mut __reply = __call.send();\n    \
@@ -5143,7 +5195,2439 @@ pub(crate) fn support(
         )
 }
 
-/// The wire format matches [`crate::island`]'s.
+/// The island's support package (#1808): what a copy's [`MODULE`]
+/// re-exports, the same for every crate and every save, which rawr writes
+/// beside the copy as [`PACKAGE`] at [`PACKAGE_DIRECTORY`], so Cargo
+/// builds it once.
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub(crate) const PACKAGE_DIRECTORY: &str = "island";
+
+/// The package's name, and its library's, by which a copy depends on it.
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub(crate) const PACKAGE_NAME: &str = "rawr-island-support";
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub(crate) const PACKAGE_CRATE: &str = "__rawr_island_support";
+
+/// The package's files, by their paths in its directory.
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+pub(crate) fn package() -> [(&'static str, String); 2] {
+    let manifest = format!(
+        "# Generated by Rawr: the island's support, which each copy of a crate\n\
+         # with marked modules re-exports.\n\
+         [package]\nname = {PACKAGE_NAME:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n\
+         build = false\nautobins = false\npublish = false\n\n\
+         [lib]\nname = {PACKAGE_CRATE:?}\npath = \"src/lib.rs\"\n\n[workspace]\n"
+    );
+    [("Cargo.toml", manifest), ("src/lib.rs", PACKAGE.to_owned())]
+}
+
+/// The support package's library. The wire format matches
+/// [`crate::island`]'s.
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+const PACKAGE: &str = r#"//! Generated by Rawr: how the native code of a crate reaches its marked
+//! modules, which Rawr interprets. Each copy of a crate with marked modules
+//! re-exports this package from its `__rawr_island` module, which adds what
+//! depends on the crate: its stand-ins' makers, its instance table and its
+//! `main`. Nothing here depends on the crate, so Cargo builds it once.
+#![doc(hidden)]
+#![allow(unsafe_code, dead_code, unused_imports, clippy::all)]
+
+// Defined by the `rawr` crate the runner links.
+unsafe extern "Rust" {
+    fn __rawr_island_call_v4(
+        path: &str,
+        arguments: &[u8],
+        given: &mut [::std::option::Option<Given>],
+        lent: &[(
+            ::std::any::TypeId,
+            &'static str,
+            *mut (),
+            ::std::option::Option<&'static (dyn ::std::any::Any + Sync)>,
+            &'static (dyn ::std::any::Any + Sync),
+        )],
+        natives: &mut ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
+    ) -> ::std::vec::Vec<u8>;
+    fn __rawr_scope_claim_v1(
+        nonce: u64,
+        key: ::std::any::TypeId,
+        shared: bool,
+    ) -> ::std::result::Result<*mut (), u8>;
+    fn __rawr_scope_release_v1(nonce: u64, shared: bool);
+    fn __rawr_island_start_v1(entry: fn() -> i32);
+    fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]);
+    fn __rawr_island_release_v1(handle: u64);
+    fn __rawr_island_unanchor_v1(address: u64, ty: u64);
+    fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8>;
+    fn __rawr_island_next_v1(
+        handle: u64,
+        natives: &mut ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
+    ) -> ::std::vec::Vec<u8>;
+}
+
+/// What makes a native trait's object of a program value: the
+/// trait's path below the crate's root and the value's handle give a
+/// box of the stand-in, or `None` for another trait
+/// (`rawr::island::Maker`).
+pub type Maker = fn(&str, u64) -> ::std::option::Option<Given>;
+
+/// Register `makers`, a crate's stand-ins' makers by their types' paths
+/// from the crate's root, before its first call into marked code, which
+/// is where a program value becomes a trait object.
+pub fn register(makers: &[(&'static str, Maker)]) {
+    // SAFETY: the runner links `rawr`, which defines the function with
+    // this exact signature.
+    unsafe { __rawr_island_objects_v1(makers) }
+}
+
+/// Start the program at `entry`, a crate root's `main`: the runner calls
+/// it once this returns, on a thread of its own.
+pub fn start(entry: fn() -> i32) {
+    // SAFETY: as for `register`.
+    unsafe { __rawr_island_start_v1(entry) }
+}
+
+/// The body of the trampoline of the marked function at `path` when the
+/// crate's last check found no native code naming it, so its call can't
+/// come: native code built since names it, and was checked again first.
+#[cold]
+pub fn uncalled(path: &str) -> ! {
+    ::std::panic!(
+        "rawr: native code called `{path}`, which the last check didn't see it name; \
+         this is a rawr bug"
+    )
+}
+
+/// A generic function's instance entry: it reads the call's arguments
+/// as the tuple of the types they are and writes the result in place.
+pub type Instance = unsafe fn(*mut (), *mut ());
+
+/// The path a generic function's instance is found by: its own, with
+/// the hash of its types' tuple's name, as rawr names the instance
+/// (`package::instances::key`), interned for the program's life.
+pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
+    static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, &'static str, &'static str)>> =
+        ::std::sync::Mutex::new(::std::vec::Vec::new());
+    let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
+    if let Some((_, _, key)) = keys.iter().find(|(known, named, _)| *known == path && *named == name) {
+        return key;
+    }
+    // FNV-1a, as `package::instances::key` hashes it.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    let key: &'static str = ::std::boxed::Box::leak(::std::format!("{path}#{hash:016x}").into_boxed_str());
+    keys.push((path, name, key));
+    key
+}
+
+/// [`keyed`], and the name each impl of a marked trait a boxed
+/// argument is of gives itself (`+Content`), as the resolver compiles
+/// one instance for each impl.
+pub fn keyed_given(path: &'static str, name: &'static str, given: &[&'static str]) -> &'static str {
+    static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, ::std::vec::Vec<&'static str>, &'static str)>> =
+        ::std::sync::Mutex::new(::std::vec::Vec::new());
+    let base = keyed(path, name);
+    let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
+    if let Some((_, _, key)) = keys.iter().find(|(known, names, _)| *known == base && names.as_slice() == given) {
+        return key;
+    }
+    let key: &'static str = ::std::boxed::Box::leak(::std::format!("{base}{}", given.concat()).into_boxed_str());
+    keys.push((base, given.to_vec(), key));
+    key
+}
+
+/// The panic of a failed `reply`: a marked function's panic, which the
+/// runner printed as Rust prints it at its place in the marked file,
+/// unwinds with its message (`2`); rawr's own failure panics with its
+/// message.
+fn failed(reply: &[u8]) -> ! {
+    let message = ::std::string::String::from_utf8_lossy(reply.get(1..).unwrap_or_default()).into_owned();
+    match reply.first() {
+        ::std::option::Option::Some(2) => ::std::panic::resume_unwind(::std::boxed::Box::new(message)),
+        _ => ::std::panic!("{message}"),
+    }
+}
+
+/// The handle of the program value a stand-in holds, let go of when
+/// the stand-in is dropped, and the results of its `&self` calls that
+/// borrow it, as `fn label(&self) -> &str`'s (#1305).
+pub struct Object(u64, ::std::sync::Mutex<::std::vec::Vec<Kept>>);
+
+/// A result an [`Object`] keeps for its borrows, by its own allocation.
+pub struct Kept(*mut (dyn ::std::any::Any + Send));
+
+// SAFETY: what a `Kept` points at is `Send`, and only its `Object`
+// reaches it.
+unsafe impl Send for Kept {}
+
+impl Drop for Kept {
+    fn drop(&mut self) {
+        // SAFETY: `Box::into_raw` made the pointer, and it is turned
+        // back once, here.
+        drop(unsafe { ::std::boxed::Box::from_raw(self.0) });
+    }
+}
+
+impl Object {
+    pub fn new(handle: u64) -> Self {
+        Self(handle, ::std::sync::Mutex::new(::std::vec::Vec::new()))
+    }
+
+    /// `value`, a `&self` call's result that borrows the receiver,
+    /// borrowed for as long as the object is.
+    pub fn keep<T: Send + 'static>(&self, value: T) -> &T {
+        let place = ::std::boxed::Box::into_raw(::std::boxed::Box::new(value));
+        self.1
+            .lock()
+            .unwrap_or_else(::std::sync::PoisonError::into_inner)
+            .push(Kept(place));
+        // SAFETY: the allocation is freed only by `release`, which
+        // takes `&mut self`, or by the object's drop, and neither can
+        // happen while `&self` is borrowed; nothing else reaches or
+        // moves it.
+        unsafe { &*place }
+    }
+
+    /// The `&str` a `&self` call gave back ([`Call::pinned`]): the
+    /// program's own text, which the runner keeps pinned with the
+    /// program value, for as long as the object is borrowed (#1322).
+    pub fn pinned(&self, reply: &mut Reply) -> &str {
+        let (address, length) = reply.read(|input| {
+            input.expect(PINNED, "a pinned `&str`");
+            (input.count(), input.count())
+        });
+        // SAFETY: the runner pinned the text, valid UTF-8, with the
+        // value of this object's handle, and lets it go only when the
+        // value is next taken `&mut` or released, which a `&mut self`
+        // call or the object's drop does, and neither can happen while
+        // `&self` is borrowed. Nothing writes a pinned text in place.
+        unsafe {
+            ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
+                ::std::ptr::with_exposed_provenance::<u8>(address),
+                length,
+            ))
+        }
+    }
+
+    /// The native value a `&self` call gave where the program value
+    /// holds it ([`Call::in_place`]), as `fn state(&self) -> &State {
+    /// &self.state }` gives it (#1442), borrowed for as long as the
+    /// object is.
+    pub fn lent<T: 'static>(&self, reply: &mut Reply) -> &T {
+        let place = reply.read(|input| input.place::<T>());
+        // SAFETY: the runner keeps the value where it is with the
+        // program value's pins, which it lets go only when the value is
+        // next taken `&mut` or released, which a `&mut self` call or
+        // the object's drop does, and neither can happen while `&self`
+        // is borrowed. Nothing writes the value while the pins hold it.
+        unsafe { &*place }
+    }
+
+    /// Let go of the kept results, as a `&mut self` call may once
+    /// rustc has ended every borrow of them.
+    pub fn release(&mut self) {
+        self.1
+            .get_mut()
+            .unwrap_or_else(::std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+impl Drop for Object {
+    fn drop(&mut self) {
+        // SAFETY: as for `register`.
+        unsafe { __rawr_island_release_v1(self.0) }
+    }
+}
+
+// What a stand-in's std trait asks of the program value it holds, by
+// the program's own impl, derived or written (`rawr::island::Op`).
+pub const DEBUG: u8 = 0;
+pub const DISPLAY: u8 = 1;
+const CLONE: u8 = 2;
+const EQUAL: u8 = 3;
+const HASH: u8 = 4;
+const DEFAULT: u8 = 5;
+const PARTIAL_ORDER: u8 = 6;
+const ORDER: u8 = 7;
+
+/// The answer to `op` of the value at `handle` (and `other`), as the
+/// type at `owner` implements it; a failure panics, as a trampoline's.
+fn ask(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8> {
+    // SAFETY: as for `register`.
+    let mut reply = unsafe { __rawr_island_trait_v1(owner, op, handle, other) };
+    match reply.first() {
+        ::std::option::Option::Some(0) => {
+            reply.remove(0);
+            reply
+        }
+        _ => failed(&reply),
+    }
+}
+
+/// The first eight bytes of `reply` as a number.
+fn number(reply: &[u8]) -> u64 {
+    let mut bytes = [0; 8];
+    bytes.copy_from_slice(&reply[..8]);
+    u64::from_le_bytes(bytes)
+}
+
+impl Object {
+    /// The value's `Debug` or `Display` text.
+    pub fn text(&self, owner: &str, op: u8) -> ::std::string::String {
+        ::std::string::String::from_utf8_lossy(&ask(owner, op, self.0, 0)).into_owned()
+    }
+
+    /// A clone of the value, under a handle of its own.
+    pub fn duplicate(&self, owner: &str) -> Self {
+        Self::new(number(&ask(owner, CLONE, self.0, 0)))
+    }
+
+    pub fn equal(&self, other: &Self, owner: &str) -> bool {
+        ask(owner, EQUAL, self.0, other.0) == [1]
+    }
+
+    pub fn hash(&self, owner: &str) -> u64 {
+        number(&ask(owner, HASH, self.0, 0))
+    }
+
+    /// The `Default` of the type at `owner`, under a handle of its own.
+    pub fn default_of(owner: &str) -> Self {
+        Self::new(number(&ask(owner, DEFAULT, 0, 0)))
+    }
+
+    /// `partial_cmp`, or with `total` `cmp`, of the two values.
+    pub fn compare(
+        &self,
+        other: &Self,
+        owner: &str,
+        total: bool,
+    ) -> ::std::option::Option<::std::cmp::Ordering> {
+        let op = if total { ORDER } else { PARTIAL_ORDER };
+        match ask(owner, op, self.0, other.0).as_slice() {
+            [0] => ::std::option::Option::Some(::std::cmp::Ordering::Less),
+            [1] => ::std::option::Option::Some(::std::cmp::Ordering::Equal),
+            [2] => ::std::option::Option::Some(::std::cmp::Ordering::Greater),
+            _ => ::std::option::Option::None,
+        }
+    }
+}
+
+/// Whether `object`, a trait object type's name, is `dyn` of the trait
+/// at `below`, its path below the crate's root.
+pub fn names(object: &str, below: &str) -> bool {
+    let object = object.strip_prefix("dyn ").unwrap_or(object);
+    let object = object.split_once("::").map_or(object, |(_, below)| below);
+    object == below
+}
+
+/// The box of `dyn $object` a maker gives for the handle `$handle`, the
+/// stand-in `$stand` holding it, when `$trait_name` names `$object`'s
+/// trait, with what the box has of [`Traits`].
+#[macro_export]
+macro_rules! object {
+    ($trait_name:expr, $handle:expr, $object:ty, $stand:path) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
+            HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
+            LacksEqual as _, LacksHash as _, LacksOrder as _,
+        };
+        if !$crate::names(::std::any::type_name::<$object>(), $trait_name) {
+            return ::std::option::Option::None;
+        }
+        let value: ::std::boxed::Box<$object> =
+            ::std::boxed::Box::new($stand($crate::Object::new($handle)));
+        let probe = &$crate::probe(&value);
+        let traits = (
+            probe.debug_of(),
+            probe.display_of(),
+            probe.clone_of(),
+            probe.equal_of(),
+            probe.hash_of(),
+            probe.order_of(),
+        );
+        ::std::option::Option::Some((
+            ::std::boxed::Box::new(value) as ::std::boxed::Box<dyn ::std::any::Any>,
+            ::std::any::type_name::<::std::boxed::Box<$object>>(),
+            traits,
+        ))
+    }};
+}
+
+type Any = dyn ::std::any::Any;
+
+/// What a trampoline finds of a value's type, for the runner to keep it
+/// as it keeps a value it made: its `Debug` and `Display` text, its
+/// `Clone`, `PartialEq`, `Hash` and `PartialOrd`, each when the type has
+/// it (`rawr::island::Traits`).
+pub type Traits = (
+    ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::string::String>>,
+    ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::string::String>>,
+    ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::boxed::Box<Any>>>,
+    ::std::option::Option<fn(&Any, &Any) -> ::std::option::Option<bool>>,
+    ::std::option::Option<fn(&Any) -> ::std::option::Option<u64>>,
+    ::std::option::Option<fn(&Any, &Any) -> ::std::option::Option<::std::cmp::Ordering>>,
+);
+
+/// A native value a call gives the interpreter by value, with its
+/// type's name and [`Traits`] (`rawr::island::Given`).
+pub type Given = (::std::boxed::Box<Any>, &'static str, Traits);
+
+/// Finds one of a concrete `T`'s [`Traits`] when `T` has it, and
+/// nothing otherwise, by method resolution.
+pub struct Probe<T>(::std::marker::PhantomData<T>);
+pub fn probe<T>(_: &T) -> Probe<T> {
+    Probe(::std::marker::PhantomData)
+}
+macro_rules! probes {
+    ($($has:ident $lacks:ident $method:ident [$($bound:tt)*] $signature:ty => $found:expr;)*) => {$(
+        pub trait $has {
+            fn $method(&self) -> ::std::option::Option<$signature>;
+        }
+        impl<T: $($bound)* + 'static> $has for Probe<T> {
+            fn $method(&self) -> ::std::option::Option<$signature> {
+                ::std::option::Option::Some($found)
+            }
+        }
+        pub trait $lacks {
+            fn $method(&self) -> ::std::option::Option<$signature>;
+        }
+        impl<T> $lacks for &Probe<T> {
+            fn $method(&self) -> ::std::option::Option<$signature> {
+                ::std::option::Option::None
+            }
+        }
+    )*};
+}
+probes! {
+    HasDebug LacksDebug debug_of [::std::fmt::Debug] fn(&Any) -> ::std::option::Option<::std::string::String>
+        => |value| value.downcast_ref::<T>().map(|value| ::std::format!("{value:?}"));
+    HasDisplay LacksDisplay display_of [::std::fmt::Display] fn(&Any) -> ::std::option::Option<::std::string::String>
+        => |value| value.downcast_ref::<T>().map(::std::string::ToString::to_string);
+    HasClone LacksClone clone_of [::std::clone::Clone] fn(&Any) -> ::std::option::Option<::std::boxed::Box<Any>>
+        => |value| value.downcast_ref::<T>().map(|value| ::std::boxed::Box::new(value.clone()) as ::std::boxed::Box<Any>);
+    HasEqual LacksEqual equal_of [::std::cmp::PartialEq] fn(&Any, &Any) -> ::std::option::Option<bool>
+        => |lhs, rhs| ::std::option::Option::Some(lhs.downcast_ref::<T>()? == rhs.downcast_ref::<T>()?);
+    HasHash LacksHash hash_of [::std::hash::Hash] fn(&Any) -> ::std::option::Option<u64>
+        => |value| {
+            use ::std::hash::{Hash as _, Hasher as _};
+            let mut hasher = ::std::hash::DefaultHasher::new();
+            value.downcast_ref::<T>()?.hash(&mut hasher);
+            ::std::option::Option::Some(hasher.finish())
+        };
+    HasOrder LacksOrder order_of [::std::cmp::PartialOrd] fn(&Any, &Any) -> ::std::option::Option<::std::cmp::Ordering>
+        => |lhs, rhs| lhs.downcast_ref::<T>()?.partial_cmp(rhs.downcast_ref::<T>()?);
+}
+
+/// Give `$value` to the call `$call` by value, with what its concrete
+/// type has of [`Traits`].
+#[macro_export]
+macro_rules! give {
+    ($call:expr, $value:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
+            HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
+            LacksEqual as _, LacksHash as _, LacksOrder as _,
+        };
+        let value = $value;
+        let probe = &$crate::probe(&value);
+        let traits = (
+            probe.debug_of(),
+            probe.display_of(),
+            probe.clone_of(),
+            probe.equal_of(),
+            probe.hash_of(),
+            probe.order_of(),
+        );
+        #[allow(unused_imports)]
+        use $crate::{ByCopy as _, ByGift as _};
+        (&$crate::hand(&value)).hand(&mut $call, value, traits);
+    }};
+}
+
+/// Put `$value`, a `&` of a native part of a marked type's value, as
+/// the `themedef::Theme` of `Theme::Selected(themedef::Theme)`, in
+/// `$out` (#1466): by the wire format when its type crosses by it, as
+/// an alias of `usize` does, and else as a clone the interpreter keeps,
+/// with what its type has of [`Traits`].
+#[macro_export]
+macro_rules! part {
+    ($out:expr, $value:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
+            HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
+            LacksEqual as _, LacksHash as _, LacksOrder as _, PartByClone as _,
+            PartByWire as _, PartUncloned as _,
+        };
+        let value = $value;
+        let probe = &$crate::probe(value);
+        let traits = (
+            probe.debug_of(),
+            probe.display_of(),
+            probe.clone_of(),
+            probe.equal_of(),
+            probe.hash_of(),
+            probe.order_of(),
+        );
+        (&&$crate::Part(value)).put($out, traits);
+    }};
+}
+
+/// A native part of a marked type's value on its way to the
+/// interpreter ([`part!`]): [`PartByWire`] is found first, then
+/// [`PartByClone`], then [`PartUncloned`].
+pub struct Part<'v, T>(pub &'v T);
+pub trait PartByWire {
+    fn put(&self, out: &mut Out, traits: Traits);
+}
+impl<T: Put> PartByWire for &Part<'_, T> {
+    fn put(&self, out: &mut Out, _: Traits) {
+        self.0.put(out);
+    }
+}
+pub trait PartByClone {
+    fn put(&self, out: &mut Out, traits: Traits);
+}
+impl<T: ::std::clone::Clone + 'static> PartByClone for &&Part<'_, T> {
+    fn put(&self, out: &mut Out, traits: Traits) {
+        out.give(self.0.clone(), traits);
+    }
+}
+pub trait PartUncloned {
+    fn put(&self, out: &mut Out, traits: Traits);
+}
+impl<T> PartUncloned for Part<'_, T> {
+    fn put(&self, _: &mut Out, _: Traits) {
+        ::std::panic!(
+            "rawr: native code can't give marked code a copy of its `{}`, which is not `Clone`",
+            ::std::any::type_name::<T>()
+        )
+    }
+}
+
+/// A marked value that holds native parts (#1469), as `enum Theme {
+/// Selected(themedef::Theme) }`, crossing as Rust passes it: a borrow
+/// lends each part where it is ([`lend_part!`]), a value moves each
+/// part, and a `&mut` takes back what the call made of it. Its other
+/// fields cross by the wire format.
+pub trait Parts: Sized {
+    fn lend<'c>(&'c self, call: &mut Call<'c>);
+    fn lend_mut<'c>(&'c mut self, call: &mut Call<'c>);
+    fn give(self, out: &mut Out);
+    fn take_into(&mut self, input: &mut In<'_>);
+}
+
+/// Lend `$value`, a `&$ty` of a native part of a marked value, to the
+/// call `$call` where it is (#1469): by a key of its own, whose
+/// accessor reads its place as `$ty`, or copied by the wire format when
+/// `$ty` crosses by it, as an alias of `usize` does.
+#[macro_export]
+macro_rules! lend_part {
+    ($call:expr, $value:expr, $ty:ty) => {{
+        struct Key;
+        #[inline]
+        fn shared(
+            nonce: u64,
+            visit: &mut dyn FnMut(&$ty),
+        ) -> ::std::result::Result<(), u8> {
+            $crate::reach(nonce, ::std::any::TypeId::of::<Key>(), true, |place| {
+                // SAFETY: `Key`'s lend is this part, a `$ty`, claimed shared.
+                visit(unsafe { &*place.cast_const().cast::<$ty>() })
+            })
+        }
+        const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+        #[allow(unused_imports)]
+        use $crate::{LendByLoan as _, LendByWire as _};
+        let lend = $crate::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED);
+        let value: &$ty = $value;
+        // SAFETY: the lend's accessor reads its key's place as `$ty`.
+        #[allow(unsafe_code)]
+        unsafe {
+            (&$crate::hand(value)).lend_part($call, value, lend, ::std::any::type_name::<$ty>())
+        };
+    }};
+}
+
+/// Lend `$value`, a `&$ty` of a marked value whose `Parts` impl lends
+/// its parts, to the call `$call` whole, where it is (#1484): the value
+/// written next is the one this lend lends, so native code the call
+/// gives it to by reference is given this reference back.
+#[macro_export]
+macro_rules! lend_whole {
+    ($call:expr, $value:expr, $ty:ty) => {{
+        // Not `Key`, which a marked type `$ty` may be named.
+        struct WholeKey;
+        #[inline]
+        fn shared(
+            nonce: u64,
+            visit: &mut dyn FnMut(&$ty),
+        ) -> ::std::result::Result<(), u8> {
+            $crate::reach(nonce, ::std::any::TypeId::of::<WholeKey>(), true, |place| {
+                // SAFETY: `WholeKey`'s lend is this value, a `$ty`, claimed shared.
+                visit(unsafe { &*place.cast_const().cast::<$ty>() })
+            })
+        }
+        const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+        let lend = $crate::Lend::new(
+            ::std::any::TypeId::of::<WholeKey>(),
+            ::std::option::Option::None,
+            &SHARED,
+        );
+        let value: &$ty = $value;
+        // SAFETY: the lend's accessor reads its key's place as `$ty`.
+        #[allow(unsafe_code)]
+        unsafe {
+            $call.lend_whole(::std::ptr::from_ref(value).cast_mut().cast(), lend, ::std::any::type_name::<$ty>())
+        };
+    }};
+}
+
+/// [`lend_part!`] of a `&mut $ty`, lent mutably.
+#[macro_export]
+macro_rules! lend_part_mut {
+    ($call:expr, $value:expr, $ty:ty) => {{
+        struct Key;
+        #[inline]
+        fn mutable(
+            nonce: u64,
+            visit: &mut dyn FnMut(&mut $ty),
+        ) -> ::std::result::Result<(), u8> {
+            $crate::reach(nonce, ::std::any::TypeId::of::<Key>(), false, |place| {
+                // SAFETY: `Key`'s lend is this part, a `&mut $ty`, claimed exclusively.
+                visit(unsafe { &mut *place.cast::<$ty>() })
+            })
+        }
+        #[inline]
+        fn shared(
+            nonce: u64,
+            visit: &mut dyn FnMut(&$ty),
+        ) -> ::std::result::Result<(), u8> {
+            $crate::reach(nonce, ::std::any::TypeId::of::<Key>(), true, |place| {
+                // SAFETY: `Key`'s lend is this part, a `$ty`, claimed shared.
+                visit(unsafe { &*place.cast_const().cast::<$ty>() })
+            })
+        }
+        const MUTABLE: fn(u64, &mut dyn FnMut(&mut $ty)) -> ::std::result::Result<(), u8> = mutable;
+        const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
+        #[allow(unused_imports)]
+        use $crate::{LendByLoan as _, LendByWire as _};
+        let lend = $crate::Lend::new(
+            ::std::any::TypeId::of::<Key>(),
+            ::std::option::Option::Some(&MUTABLE),
+            &SHARED,
+        );
+        let value: &mut $ty = $value;
+        // SAFETY: the lend's accessors read its key's place as `$ty`.
+        #[allow(unsafe_code)]
+        unsafe {
+            (&$crate::hand(&*value)).lend_part_mut($call, value, lend, ::std::any::type_name::<$ty>())
+        };
+    }};
+}
+
+/// The accessors of a lent `T`, keyed by `T`, for a generic marked
+/// type's `Parts` impl, in which no item can name the impl's parameters
+/// as [`lend_part!`]'s do (D869).
+pub struct Accessors<T>(::std::marker::PhantomData<T>);
+
+impl<T: 'static> Accessors<T> {
+    const SHARED: fn(u64, &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8> = Self::shared_of;
+    const MUTABLE: fn(u64, &mut dyn FnMut(&mut T)) -> ::std::result::Result<(), u8> = Self::mutable_of;
+
+    fn key() -> ::std::any::TypeId {
+        ::std::any::TypeId::of::<Self>()
+    }
+
+    #[allow(unsafe_code)]
+    fn shared_of(nonce: u64, visit: &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8> {
+        reach(nonce, Self::key(), true, |place| {
+            // SAFETY: this key's lend is a `T`, claimed shared.
+            visit(unsafe { &*place.cast_const().cast::<T>() })
+        })
+    }
+
+    #[allow(unsafe_code)]
+    fn mutable_of(nonce: u64, visit: &mut dyn FnMut(&mut T)) -> ::std::result::Result<(), u8> {
+        reach(nonce, Self::key(), false, |place| {
+            // SAFETY: this key's lend is a `T`, claimed exclusively.
+            visit(unsafe { &mut *place.cast::<T>() })
+        })
+    }
+
+    /// A shared lend of a `T`.
+    pub fn shared() -> Lend {
+        Lend::new(Self::key(), ::std::option::Option::None, &Self::SHARED)
+    }
+
+    /// A mutable lend of a `T`.
+    pub fn mutable() -> Lend {
+        Lend::new(Self::key(), ::std::option::Option::Some(&Self::MUTABLE), &Self::SHARED)
+    }
+}
+
+/// [`lend_part!`] in a generic marked type's `Parts` impl: `$value`, a
+/// `&` of the part, is lent as a `&$ty`, its type with each lifetime
+/// `'static`, by [`Accessors`].
+#[macro_export]
+macro_rules! lend_part_of {
+    ($call:expr, $value:expr, $ty:ty) => {{
+        #[allow(unused_imports)]
+        use $crate::{LendByLoan as _, LendByWire as _};
+        // SAFETY: only its lifetimes change, which have no layout; the
+        // lend ends before the marked value's borrow does.
+        #[allow(unsafe_code)]
+        let value: &$ty = unsafe { &*::std::ptr::from_ref($value).cast::<$ty>() };
+        let lend = $crate::Accessors::<$ty>::shared();
+        // SAFETY: the lend's accessor reads its key's place as `$ty`.
+        #[allow(unsafe_code)]
+        unsafe {
+            (&$crate::hand(value)).lend_part($call, value, lend, ::std::any::type_name::<$ty>())
+        };
+    }};
+}
+
+/// [`lend_part_of!`] of a `&mut`, lent mutably.
+#[macro_export]
+macro_rules! lend_part_mut_of {
+    ($call:expr, $value:expr, $ty:ty) => {{
+        #[allow(unused_imports)]
+        use $crate::{LendByLoan as _, LendByWire as _};
+        // SAFETY: as `lend_part_of!`'s.
+        #[allow(unsafe_code)]
+        let value: &mut $ty = unsafe { &mut *::std::ptr::from_mut($value).cast::<$ty>() };
+        let lend = $crate::Accessors::<$ty>::mutable();
+        // SAFETY: the lend's accessors read its key's place as `$ty`.
+        #[allow(unsafe_code)]
+        unsafe {
+            (&$crate::hand(&*value)).lend_part_mut($call, value, lend, ::std::any::type_name::<$ty>())
+        };
+    }};
+}
+
+/// [`lend_whole!`] in a generic marked type's `Parts` impl, by
+/// [`Accessors`] of `$ty`, its type with each lifetime `'static`.
+#[macro_export]
+macro_rules! lend_whole_of {
+    ($call:expr, $value:expr, $ty:ty) => {{
+        let lend = $crate::Accessors::<$ty>::shared();
+        // SAFETY: the lend's accessor reads its key's place as `$ty`,
+        // which differs from the value's type only in its lifetimes.
+        #[allow(unsafe_code)]
+        unsafe {
+            $call.lend_whole(::std::ptr::from_ref($value).cast_mut().cast(), lend, ::std::any::type_name::<$ty>())
+        };
+    }};
+}
+
+/// Move `$value`, a native part of a marked value, to the interpreter
+/// by `$out` (#1469): by the wire format when its type crosses by it,
+/// and else as the native value the interpreter keeps, with what its
+/// type has of [`Traits`].
+#[macro_export]
+macro_rules! give_part {
+    ($out:expr, $value:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            GiveByMove as _, GiveByWire as _, HasClone as _, HasDebug as _, HasDisplay as _,
+            HasEqual as _, HasHash as _, HasOrder as _, LacksClone as _, LacksDebug as _,
+            LacksDisplay as _, LacksEqual as _, LacksHash as _, LacksOrder as _,
+        };
+        let value = $value;
+        let probe = &$crate::probe(&value);
+        let traits = (
+            probe.debug_of(),
+            probe.display_of(),
+            probe.clone_of(),
+            probe.equal_of(),
+            probe.hash_of(),
+            probe.order_of(),
+        );
+        (&$crate::hand(&value)).give_part($out, value, traits);
+    }};
+}
+
+/// How [`lend_part!`] lends a part: copied by the wire format when its
+/// type crosses by it ([`LendByWire`], found first), and else where it
+/// is ([`LendByLoan`]).
+pub trait LendByWire<T> {
+    /// # Safety
+    ///
+    /// None needed: the part is copied.
+    unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+    /// # Safety
+    ///
+    /// None needed: the part is copied, and its copy comes back.
+    unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+}
+impl<T: Put> LendByWire<T> for Hand<T> {
+    unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
+        call.part(value);
+    }
+    unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, _: Lend, _: &'static str) {
+        call.part(&*value);
+    }
+}
+pub trait LendByLoan<T> {
+    /// # Safety
+    ///
+    /// As for [`Call::lend_part`].
+    unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+    /// # Safety
+    ///
+    /// As for [`Call::lend_part`].
+    unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+}
+impl<T> LendByLoan<T> for &Hand<T> {
+    unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
+        debug_assert!(lend.mutable.is_none());
+        // SAFETY: as the caller's.
+        unsafe { call.lend_part(::std::ptr::from_ref(value).cast_mut().cast(), lend, name) }
+    }
+    unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str) {
+        debug_assert!(lend.mutable.is_some());
+        // SAFETY: as the caller's.
+        unsafe { call.lend_part(::std::ptr::from_mut(value).cast(), lend, name) }
+    }
+}
+
+/// How [`give_part!`] moves a part: by the wire format when its type
+/// crosses by it ([`GiveByWire`], found first), and else as the native
+/// value the interpreter keeps ([`GiveByMove`]).
+pub trait GiveByWire<T> {
+    fn give_part(&self, out: &mut Out, value: T, traits: Traits);
+}
+impl<T: Put> GiveByWire<T> for Hand<T> {
+    fn give_part(&self, out: &mut Out, value: T, _: Traits) {
+        value.put(out);
+    }
+}
+pub trait GiveByMove<T> {
+    fn give_part(&self, out: &mut Out, value: T, traits: Traits);
+}
+impl<T: 'static> GiveByMove<T> for &Hand<T> {
+    fn give_part(&self, out: &mut Out, value: T, traits: Traits) {
+        out.give(value, traits);
+    }
+}
+
+/// What a crate root's `main` returns, as the exit code it ends with.
+pub trait Exit {
+    fn code(self) -> i32;
+}
+impl Exit for () {
+    fn code(self) -> i32 {
+        0
+    }
+}
+impl<E: ::std::fmt::Debug> Exit for ::std::result::Result<(), E> {
+    fn code(self) -> i32 {
+        match self {
+            Ok(()) => 0,
+            Err(error) => {
+                ::std::eprintln!("Error: {error:?}");
+                1
+            }
+        }
+    }
+}
+
+const UNIT: u8 = 0;
+const FALSE: u8 = 1;
+const TRUE: u8 = 2;
+const INT: u8 = 3;
+const FLOAT: u8 = 4;
+const CHAR: u8 = 5;
+const STR: u8 = 6;
+const ARRAY: u8 = 7;
+const NONE: u8 = 10;
+const SOME: u8 = 11;
+const OK: u8 = 12;
+const ERR: u8 = 13;
+const STRUCT: u8 = 15;
+const ENUM: u8 = 16;
+const LENT: u8 = 20;
+const NATIVE: u8 = 21;
+const HANDLE: u8 = 22;
+const PINNED: u8 = 23;
+const WHOLE: u8 = 24;
+const TEXT_AT: u8 = 25;
+const HASHED_SET: u8 = 26;
+const HASHED_MAP: u8 = 27;
+const KEPT_TEXT: u8 = 28;
+const KEPT: u8 = 29;
+const KEPT_LENT: u8 = 30;
+
+/// A value on its way to the interpreter, the native values it gives
+/// the interpreter, each taken once, and, when a call asks
+/// ([`Call::pinned`]), where each text it copies is, in the order it
+/// writes them.
+pub struct Out(
+    ::std::vec::Vec<u8>,
+    ::std::vec::Vec<::std::option::Option<Given>>,
+    ::std::option::Option<::std::vec::Vec<*const str>>,
+);
+
+impl Out {
+    /// `value`, which the interpreter keeps, with what its type has of
+    /// [`Traits`].
+    pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
+        self.byte(NATIVE);
+        self.count(self.1.len());
+        self.1.push(Some((
+            ::std::boxed::Box::new(value),
+            ::std::any::type_name::<T>(),
+            traits,
+        )));
+    }
+    fn byte(&mut self, byte: u8) {
+        self.0.push(byte);
+    }
+    /// A `&str` native code gives: copied, with where native code's own
+    /// text is ([`Call::kept_text`]).
+    pub fn kept_text(&mut self, text: &str) {
+        self.byte(KEPT_TEXT);
+        self.count(text.as_ptr().expose_provenance());
+        self.count(text.len());
+        text.put(self);
+    }
+    fn count(&mut self, count: usize) {
+        self.0.extend_from_slice(&(count as u64).to_le_bytes());
+    }
+    fn text(&mut self, text: &str) {
+        self.count(text.len());
+        self.0.extend_from_slice(text.as_bytes());
+    }
+    pub fn structure(&mut self, path: &str, fields: usize) {
+        self.byte(STRUCT);
+        self.text(path);
+        self.count(fields);
+    }
+    pub fn variant(&mut self, path: &str, variant: &str, fields: usize) {
+        self.byte(ENUM);
+        self.text(path);
+        self.text(variant);
+        self.count(fields);
+    }
+    /// An `Option`'s `None`.
+    pub fn none(&mut self) {
+        self.byte(NONE);
+    }
+    /// The start of an `Option`'s `Some`, whose value follows.
+    pub fn some(&mut self) {
+        self.byte(SOME);
+    }
+    /// The start of a `Vec` or a tuple of `members`, which follow.
+    pub fn array(&mut self, members: usize) {
+        self.byte(ARRAY);
+        self.count(members);
+    }
+    /// The program value native code held under `handle` ([`Pulled`]),
+    /// given back to the interpreter, which lets go of the handle.
+    pub fn kept(&mut self, handle: u64) {
+        self.byte(KEPT);
+        self.0.extend_from_slice(&handle.to_le_bytes());
+    }
+    /// The program value native code holds under `handle`
+    /// ([`Pulled`]), lent where it is: the call shares it with native
+    /// code, which pulls on from where the call left it.
+    pub fn kept_lent(&mut self, handle: u64) {
+        self.byte(KEPT_LENT);
+        self.0.extend_from_slice(&handle.to_le_bytes());
+    }
+}
+
+/// The program's own iterator, which native code holds as std's `Box<dyn
+/// Iterator<Item = T>>` by the handle the runner keeps it under, as
+/// inboard's `Header` holds the `Box::new(actions.into_iter())` its
+/// marked `new` made (#1600). Each `next` asks the interpreter for one
+/// item, which `item` reads as `T` crosses, so the program's iterator
+/// runs only as far as native code pulls.
+pub struct Pulled<T> {
+    /// `0` once the value went back to the interpreter ([`take_pulled`]).
+    handle: u64,
+    item: fn(&mut In<'_>) -> T,
+}
+
+/// The address of each [`Pulled`], with its handle, by which a `dyn
+/// Iterator` native code lends or gives back is found to be one.
+static PULLED: ::std::sync::Mutex<::std::vec::Vec<(usize, u64)>> =
+    ::std::sync::Mutex::new(::std::vec::Vec::new());
+
+fn pulled_at<R>(change: impl FnOnce(&mut ::std::vec::Vec<(usize, u64)>) -> R) -> R {
+    change(&mut PULLED.lock().unwrap_or_else(::std::sync::PoisonError::into_inner))
+}
+
+impl<T: 'static> Pulled<T> {
+    fn boxed(handle: u64, item: fn(&mut In<'_>) -> T) -> ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>> {
+        let pulled = ::std::boxed::Box::new(Self { handle, item });
+        let at = ::std::ptr::from_ref(&*pulled).addr();
+        pulled_at(|pulled| pulled.push((at, handle)));
+        pulled
+    }
+}
+
+impl<T> ::std::iter::Iterator for Pulled<T> {
+    type Item = T;
+
+    fn next(&mut self) -> ::std::option::Option<T> {
+        let mut natives = ::std::vec::Vec::new();
+        // SAFETY: as for `register`.
+        let reply = unsafe { __rawr_island_next_v1(self.handle, &mut natives) };
+        match reply.first() {
+            Some(0) => {
+                let mut reply = Reply {
+                    bytes: reply,
+                    at: 1,
+                    path: "Iterator::next",
+                    natives: natives.into_iter().map(Some).collect(),
+                    places: ::std::vec::Vec::new(),
+                    texts: ::std::vec::Vec::new(),
+                };
+                let item = self.item;
+                reply.read(|input| input.option(item))
+            }
+            Some(_) => failed(&reply),
+            None => ::std::panic!("rawr: no answer to `Iterator::next`"),
+        }
+    }
+}
+
+impl<T> Drop for Pulled<T> {
+    fn drop(&mut self) {
+        let at = ::std::ptr::from_ref(self).addr();
+        pulled_at(|pulled| pulled.retain(|(known, _)| *known != at));
+        if self.handle != 0 {
+            // SAFETY: as for `register`.
+            unsafe { __rawr_island_release_v1(self.handle) }
+        }
+    }
+}
+
+/// The handle of the program value `object` holds, when it is a
+/// [`Pulled`].
+pub fn pulled_handle<T>(object: &(dyn ::std::iter::Iterator<Item = T> + '_)) -> ::std::option::Option<u64> {
+    let at = ::std::ptr::from_ref(object).cast::<()>().addr();
+    pulled_at(|pulled| pulled.iter().find(|(known, _)| *known == at).map(|(_, handle)| *handle))
+}
+
+/// The handle of the program value `object` holds, when it is a
+/// [`Pulled`], which native code gives back to the interpreter; else
+/// `object` itself, a native value.
+pub fn take_pulled<T: 'static>(
+    object: ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>,
+) -> ::std::result::Result<u64, ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>> {
+    if pulled_handle(&*object).is_none() {
+        return Err(object);
+    }
+    // SAFETY: the box was made by `Pulled::boxed` at this address and
+    // is of std's iterator of `T`, which only a `Pulled<T>` is.
+    let mut pulled = unsafe { ::std::boxed::Box::from_raw(::std::boxed::Box::into_raw(object).cast::<Pulled<T>>()) };
+    Ok(::std::mem::replace(&mut pulled.handle, 0))
+}
+
+/// A value on its way back from the interpreter, and the native values
+/// the interpreter moved for the reply, each taken once.
+pub struct In<'a> {
+    bytes: &'a [u8],
+    path: &'a str,
+    natives: &'a mut [::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>],
+    /// Where each part the call lent is, by its index among the call's
+    /// lends: a part still where it was lent comes back as its index
+    /// (#1475).
+    places: &'a [*mut ()],
+}
+
+impl<'a> In<'a> {
+    fn fail(&self, what: &str) -> ! {
+        ::std::panic!("rawr: the interpreter's answer to `{}` is malformed: {what}", self.path)
+    }
+    fn take(&mut self, length: usize) -> &'a [u8] {
+        if self.bytes.len() < length {
+            self.fail("it ended early");
+        }
+        let (head, tail) = self.bytes.split_at(length);
+        self.bytes = tail;
+        head
+    }
+    fn byte(&mut self) -> u8 {
+        self.take(1)[0]
+    }
+    fn expect(&mut self, tag: u8, what: &str) {
+        if self.byte() != tag {
+            self.fail(&::std::format!("expected {what}"));
+        }
+    }
+    fn eight(&mut self) -> [u8; 8] {
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(self.take(8));
+        bytes
+    }
+    fn count(&mut self) -> usize {
+        u64::from_le_bytes(self.eight()) as usize
+    }
+    /// The `&str` a marked value's field holds: native code's own text
+    /// when the program's is its copy, and else the program's text,
+    /// which rustc lets be only a `'static` one, as a literal is, kept
+    /// once per text for as long as the program runs.
+    pub fn kept_text(&mut self) -> &'static str {
+        if self.bytes.first() == Some(&KEPT_TEXT) {
+            self.byte();
+            let address = self.count();
+            let length = self.count();
+            self.expect(STR, "a string");
+            self.text();
+            let native = ::std::ptr::slice_from_raw_parts(
+                ::std::ptr::with_exposed_provenance::<u8>(address),
+                length,
+            ) as *const str;
+            // SAFETY: native code's own `&str`, which it gave the call
+            // and which outlives what native code takes back holding
+            // it, as the marked type's lifetime says.
+            return unsafe { &*native };
+        }
+        self.expect(STR, "a string");
+        lasting(self.text())
+    }
+    fn text(&mut self) -> &'a str {
+        let length = self.count();
+        match ::std::str::from_utf8(self.take(length)) {
+            Ok(text) => text,
+            Err(_) => self.fail("a string is not UTF-8"),
+        }
+    }
+    pub fn structure(&mut self, path: &str, fields: usize) {
+        self.expect(STRUCT, path);
+        let (found, count) = (self.text(), self.count());
+        if found != path || count != fields {
+            self.fail(&::std::format!(
+                "expected `{path}` with {fields} fields, found `{found}` with {count}; \
+                 restart `rawr run` if the struct changed"
+            ));
+        }
+    }
+    pub fn variant(&mut self, path: &str) -> (&'a str, usize) {
+        self.expect(ENUM, path);
+        let found = self.text();
+        if found != path {
+            self.fail(&::std::format!("expected `{path}`, found `{found}`"));
+        }
+        (self.text(), self.count())
+    }
+    pub fn unknown(&self, path: &str, variant: &str, count: usize) -> ! {
+        self.fail(&::std::format!("`{path}` has no variant `{variant}` with {count} fields"))
+    }
+    /// A `Vec` whose items `item` reads.
+    pub fn vec<T>(&mut self, mut item: impl FnMut(&mut Self) -> T) -> ::std::vec::Vec<T> {
+        self.expect(ARRAY, "a `Vec`");
+        let count = self.count();
+        (0..count).map(|_| item(self)).collect()
+    }
+    /// An `Option` whose value `some` reads.
+    pub fn option<T>(&mut self, some: impl FnOnce(&mut Self) -> T) -> ::std::option::Option<T> {
+        if self.some() {
+            Some(some(self))
+        } else {
+            None
+        }
+    }
+    /// Whether an `Option` is a `Some`, whose value follows.
+    pub fn some(&mut self) -> bool {
+        match self.byte() {
+            NONE => false,
+            SOME => true,
+            _ => self.fail("expected an `Option`"),
+        }
+    }
+    /// Where the first part the next value holds that is still where
+    /// the call lent it is, without reading the value (#1475).
+    fn first_lent(&self) -> ::std::option::Option<usize> {
+        let mut found = None;
+        let mut bytes = self.bytes;
+        scan(&mut bytes, &mut found)?;
+        Some(self.places.get(found?)?.addr())
+    }
+    /// What a call made of a native part it was lent where it is
+    /// (#1469): `None` when the part is still there, and else the whole
+    /// new value it gave the place, `*place = value`.
+    pub fn changed<T: 'static>(&mut self, place: &T) -> ::std::option::Option<T> {
+        match self.bytes.first() {
+            Some(&UNIT) => {
+                self.byte();
+                None
+            }
+            Some(&LENT) => {
+                self.byte();
+                let index = self.count();
+                if self.places.get(index).map(|lent| lent.addr())
+                    != Some(::std::ptr::from_ref(place).addr())
+                {
+                    ::std::panic!(
+                        "rawr: `{}` moved a `{}` native code lent it to another place, \
+                         which can't come back yet",
+                        self.path,
+                        ::std::any::type_name::<T>()
+                    );
+                }
+                None
+            }
+            _ => Some(self.native()),
+        }
+    }
+    /// A `Result`, or an alias of one, whose parts `ok` and `err` read.
+    pub fn result<R: Outcome>(
+        &mut self,
+        ok: impl FnOnce(&mut Self) -> R::Ok,
+        err: impl FnOnce(&mut Self) -> R::Err,
+    ) -> R {
+        match self.byte() {
+            OK => R::ok(ok(self)),
+            ERR => R::err(err(self)),
+            _ => self.fail("expected a `Result`"),
+        }
+    }
+    /// The start of a tuple of `members`, which follow.
+    pub fn tuple(&mut self, members: usize) {
+        self.expect(ARRAY, "a tuple");
+        let count = self.count();
+        if count != members {
+            self.fail(&::std::format!("expected a tuple of {members}, found {count}"));
+        }
+    }
+    /// The value a call gave a lent `&mut T` as a whole, `*place =
+    /// value`; `None` when the place is still the one lent.
+    pub fn replaced<T: 'static>(&mut self) -> ::std::option::Option<T> {
+        if self.bytes.first() == Some(&UNIT) {
+            self.byte();
+            return None;
+        }
+        Some(self.native())
+    }
+    /// That a lent `&mut` of `name`, whose type names a lifetime, was
+    /// not given a whole new value, which can't come back yet.
+    pub fn unreplaced(&mut self, name: &str) {
+        if self.byte() != UNIT {
+            ::std::panic!(
+                "rawr: `{}` gave the `&mut {name}` native code lent it a new value, \
+                 which can't come back yet",
+                self.path
+            );
+        }
+    }
+    /// A static's own value, which the interpreter gave where it is for
+    /// a call that asked for a `&'static` ([`Call::in_place`]).
+    pub fn lasting<T: 'static>(&mut self) -> &'static T {
+        let place = self.place::<T>();
+        // SAFETY: for a call that asks for a `&'static`, the runner
+        // gives only the place of a value that lives as long as the
+        // program, and nothing writes it.
+        unsafe { &*place }
+    }
+    /// A static slice of native values itself, for a call that asked
+    /// for a `&'static [T]` ([`Call::in_place`]).
+    pub fn lasting_slice<T: 'static>(&mut self) -> &'static [T] {
+        self.native()
+    }
+    /// The program's own text, pinned for as long as the runner lives,
+    /// for a call that asked for a `&'static str` ([`Call::in_place`]).
+    pub fn lasting_text(&mut self) -> &'static str {
+        self.native()
+    }
+    /// Where the native value the interpreter lent in place is, as a
+    /// `T`.
+    fn place<T: 'static>(&mut self) -> *const T {
+        let place: *const dyn ::std::any::Any = self.native();
+        // SAFETY: the runner gave the place of a value that lives at
+        // least as long as the call's result borrows it.
+        match unsafe { &*place }.downcast_ref::<T>() {
+            Some(value) => value,
+            None => self.fail(&::std::format!("expected a `{}`", ::std::any::type_name::<T>())),
+        }
+    }
+    /// A `Box<dyn ::std::iter::Iterator<Item = T>>`: the program's own iterator, which
+    /// native code pulls from by its handle ([`Pulled`]), each item read
+    /// by `item`, or a native one the interpreter moved (#1600).
+    pub fn pulled<T: 'static>(
+        &mut self,
+        item: fn(&mut In<'_>) -> T,
+    ) -> ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>> {
+        if self.bytes.first() != Some(&KEPT) {
+            return self.native();
+        }
+        self.byte();
+        let handle = u64::from_le_bytes(self.eight());
+        Pulled::boxed(handle, item)
+    }
+    /// What a call made of the iterator `place` native code lent it:
+    /// the program's iterator it pulled from where it is, a new one,
+    /// or what a native one became ([`In::changed`]).
+    pub fn pulled_into<T: 'static>(
+        &mut self,
+        place: &mut ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>,
+        item: fn(&mut In<'_>) -> T,
+    ) {
+        if self.bytes.first() != Some(&KEPT) {
+            if let Some(new) = self.changed(&*place) {
+                *place = new;
+            }
+            return;
+        }
+        let mut bytes = [0; 8];
+        match self.bytes.get(1..9) {
+            Some(handle) => bytes.copy_from_slice(handle),
+            None => self.fail("it ended early"),
+        }
+        if pulled_handle(&**place) == Some(u64::from_le_bytes(bytes)) {
+            self.take(9);
+            return;
+        }
+        *place = self.pulled(item);
+    }
+    /// A native value the interpreter moved, as the `iced::Error` of an
+    /// `iced::Result`.
+    pub fn native<T: 'static>(&mut self) -> T {
+        let name = ::std::any::type_name::<T>();
+        if self.bytes.first() == Some(&LENT) {
+            ::std::panic!(
+                "rawr: `{}` moved a `{name}` native code lent it to another place, \
+                 which can't come back yet",
+                self.path
+            );
+        }
+        self.expect(NATIVE, &::std::format!("a `{name}`"));
+        let index = self.count();
+        let moved = self.natives.get_mut(index).and_then(::std::option::Option::take);
+        match moved.map(|value| value.downcast::<T>()) {
+            Some(Ok(value)) => *value,
+            _ => self.fail(&::std::format!("expected a `{name}`")),
+        }
+    }
+}
+
+/// A `Result`, or an alias of one such as `iced::Result`, by its parts.
+pub trait Outcome {
+    type Ok;
+    type Err;
+    fn ok(value: Self::Ok) -> Self;
+    fn err(error: Self::Err) -> Self;
+}
+impl<T, E> Outcome for ::std::result::Result<T, E> {
+    type Ok = T;
+    type Err = E;
+    fn ok(value: T) -> Self {
+        Ok(value)
+    }
+    fn err(error: E) -> Self {
+        Err(error)
+    }
+}
+
+/// `text`, kept once per text for as long as the program runs, as a
+/// literal is: a `&'static str` the program gives native code.
+fn lasting(text: &str) -> &'static str {
+    static TEXTS: ::std::sync::Mutex<::std::collections::BTreeSet<&'static str>> =
+        ::std::sync::Mutex::new(::std::collections::BTreeSet::new());
+    let mut texts = TEXTS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
+    match texts.get(text) {
+        Some(kept) => kept,
+        None => {
+            let kept: &'static str = ::std::boxed::Box::leak(text.into());
+            texts.insert(kept);
+            kept
+        }
+    }
+}
+
+/// How a value of `T` comes back: by the wire format when `T` crosses
+/// by it ([`ByWire`], found first), and else as the native value the
+/// interpreter moved ([`ByMove`]).
+pub struct Back<T>(::std::marker::PhantomData<T>);
+impl<T> Back<T> {
+    pub fn new() -> Self {
+        Self(::std::marker::PhantomData)
+    }
+}
+/// `value`, which came back at `'static` (`S`), at the lifetimes the
+/// signature names (`T`), as an invariant `Text<'a>` can't be coerced.
+///
+/// # Safety
+///
+/// `T` is `S` but for its lifetimes, and what `value` borrows lives as
+/// long as `T`'s lifetimes say.
+pub unsafe fn at_lifetimes<S, T>(value: S) -> T {
+    ::std::assert_eq!(::std::mem::size_of::<S>(), ::std::mem::size_of::<T>());
+    let value = ::std::mem::ManuallyDrop::new(value);
+    // SAFETY: as the caller's; `value` is never dropped, so its bytes
+    // are moved into the result once.
+    unsafe { ::std::mem::transmute_copy(&*value) }
+}
+/// A part lent `&mut` takes back its copy, or the whole new value the
+/// call gave its place, if it gave one (#1469).
+pub trait ByWire<T> {
+    fn take(&self, input: &mut In<'_>) -> T;
+    fn take_into(&self, input: &mut In<'_>, place: &mut T);
+}
+impl<T: Take> ByWire<T> for Back<T> {
+    fn take(&self, input: &mut In<'_>) -> T {
+        T::take(input)
+    }
+    fn take_into(&self, input: &mut In<'_>, place: &mut T) {
+        *place = T::take(input);
+    }
+}
+pub trait ByMove<T> {
+    fn take(&self, input: &mut In<'_>) -> T;
+    fn take_into(&self, input: &mut In<'_>, place: &mut T);
+}
+impl<T: 'static> ByMove<T> for &Back<T> {
+    fn take(&self, input: &mut In<'_>) -> T {
+        input.native()
+    }
+    fn take_into(&self, input: &mut In<'_>, place: &mut T) {
+        if let Some(new) = input.changed(&*place) {
+            *place = new;
+        }
+    }
+}
+
+/// Step `bytes` past one value, keeping in `found` the index of the
+/// first lent part it holds; `None` when the value is malformed.
+fn scan(bytes: &mut &[u8], found: &mut ::std::option::Option<usize>) -> ::std::option::Option<()> {
+    fn skip(bytes: &mut &[u8], length: usize) -> ::std::option::Option<()> {
+        *bytes = bytes.get(length..)?;
+        Some(())
+    }
+    fn count(bytes: &mut &[u8]) -> ::std::option::Option<usize> {
+        let head = bytes.get(..8)?;
+        let mut eight = [0; 8];
+        eight.copy_from_slice(head);
+        *bytes = &bytes[8..];
+        usize::try_from(u64::from_le_bytes(eight)).ok()
+    }
+    let (&tag, rest) = bytes.split_first()?;
+    *bytes = rest;
+    match tag {
+        UNIT | FALSE | TRUE | NONE => {}
+        INT | FLOAT | HANDLE | KEPT | KEPT_LENT => skip(bytes, 8)?,
+        CHAR => skip(bytes, 4)?,
+        PINNED => skip(bytes, 16)?,
+        KEPT_TEXT => {
+            skip(bytes, 16)?;
+            scan(bytes, found)?;
+        }
+        STR => {
+            let length = count(bytes)?;
+            skip(bytes, length)?;
+        }
+        LENT => {
+            let index = count(bytes)?;
+            found.get_or_insert(index);
+        }
+        NATIVE => {
+            count(bytes)?;
+        }
+        SOME | OK | ERR => scan(bytes, found)?,
+        ARRAY | STRUCT | ENUM => {
+            // A struct's path, and an enum's path and variant, come
+            // before its members.
+            let names = match tag {
+                STRUCT => 1,
+                ENUM => 2,
+                _ => 0,
+            };
+            for _ in 0..names {
+                let length = count(bytes)?;
+                skip(bytes, length)?;
+            }
+            for _ in 0..count(bytes)? {
+                scan(bytes, found)?;
+            }
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+/// Take back into `place`, a `Vec` whose elements' native parts the
+/// call lent where they are (#1475), the `Vec` the call made of it: an
+/// element that holds a part still where it was lent is that part's
+/// element, taken back into by `into` and moved where the call put it,
+/// and any other element is new, read by `take`. An element the call
+/// dropped drops.
+pub fn vec_into<T>(
+    input: &mut In<'_>,
+    place: &mut ::std::vec::Vec<T>,
+    mut into: impl FnMut(&mut In<'_>, &mut T),
+    mut take: impl FnMut(&mut In<'_>) -> T,
+) {
+    input.expect(ARRAY, "a `Vec`");
+    let count = input.count();
+    let size = ::std::mem::size_of::<T>();
+    let start = place.as_ptr().addr();
+    let mut moved = ::std::vec![false; place.len()];
+    let mut order = ::std::vec::Vec::with_capacity(count);
+    for index in 0..count {
+        let element = input.first_lent().and_then(|lent| {
+            // A part inside an element's own bytes names it; one
+            // elsewhere, as in a `Box`, is the element at its index.
+            let at = match lent.checked_sub(start) {
+                Some(offset) if size > 0 && offset < size * moved.len() => offset / size,
+                _ => index,
+            };
+            (at < moved.len() && !moved[at]).then_some(at)
+        });
+        match element {
+            Some(at) => {
+                moved[at] = true;
+                into(input, &mut place[at]);
+                order.push(Ok(at));
+            }
+            None => order.push(Err(take(input))),
+        }
+    }
+    let mut old = ::std::mem::take(place)
+        .into_iter()
+        .map(Some)
+        .collect::<::std::vec::Vec<_>>();
+    *place = order
+        .into_iter()
+        .map(|element| match element {
+            Ok(at) => match old[at].take() {
+                Some(kept) => kept,
+                None => ::std::unreachable!("each element moves once, as `moved` marks it"),
+            },
+            Err(new) => new,
+        })
+        .collect();
+}
+
+/// How an argument of `T` whose type the marked crate doesn't declare
+/// goes to the interpreter: by the wire format when `T` crosses by it,
+/// as an alias of `usize` does ([`ByCopy`], found first), and else as
+/// the native value the interpreter keeps ([`ByGift`]), or lends for a
+/// borrow ([`ByLoan`]). A `&mut` comes back the same way: its copy, or
+/// the new value the lent place was given. Rustc reads the alias
+/// through to its target, as it does for the checker.
+pub struct Hand<T>(::std::marker::PhantomData<T>);
+pub fn hand<T>(_: &T) -> Hand<T> {
+    Hand(::std::marker::PhantomData)
+}
+pub trait ByCopy<T> {
+    fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits);
+    /// # Safety
+    ///
+    /// None needed: the value is copied.
+    unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+    /// # Safety
+    ///
+    /// None needed: the value is copied, and its copy comes back.
+    unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+    /// The copy of a `&mut` argument [`ByCopy::lend`] copied, back.
+    fn back(&self, reply: &mut Reply, place: &mut T)
+    where
+        T: Take;
+}
+impl<T: Put> ByCopy<T> for Hand<T> {
+    fn hand(&self, call: &mut Call<'_>, value: T, _: Traits) {
+        call.argument(&value);
+    }
+    unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
+        call.argument(value);
+    }
+    unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, _: Lend, _: &'static str) {
+        call.mutable(&*value);
+    }
+    fn back(&self, reply: &mut Reply, place: &mut T)
+    where
+        T: Take,
+    {
+        *place = reply.take();
+    }
+}
+pub trait ByGift<T> {
+    fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits);
+}
+impl<T: 'static> ByGift<T> for &Hand<T> {
+    fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits) {
+        call.give(value, traits);
+    }
+}
+pub trait ByLoan<T> {
+    /// # Safety
+    ///
+    /// As for [`Call::lend_ref`].
+    unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
+    /// # Safety
+    ///
+    /// As for [`Call::lend`].
+    unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
+    /// The whole new value the call gave the place [`ByLoan::lend`]
+    /// lent, `*place = value`, if it gave one (#1139).
+    fn back(&self, reply: &mut Reply, place: &mut T)
+    where
+        T: 'static;
+}
+impl<T> ByLoan<T> for &Hand<T> {
+    unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
+        // SAFETY: as the caller's.
+        unsafe { call.lend_ref(value, lend, name) }
+    }
+    unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str) {
+        // SAFETY: as the caller's.
+        unsafe { call.lend(value, lend, name) }
+    }
+    fn back(&self, reply: &mut Reply, place: &mut T)
+    where
+        T: 'static,
+    {
+        if let Some(new) = reply.read(|input| input.replaced::<T>()) {
+            *place = new;
+        }
+    }
+}
+
+/// A value that goes to the interpreter.
+pub trait Put {
+    fn put(&self, out: &mut Out);
+}
+
+/// A value that comes back from the interpreter.
+pub trait Take: Sized {
+    fn take(input: &mut In<'_>) -> Self;
+}
+
+/// A marked type native code sees, which the runner holds a program
+/// value as where a crate's generic takes one, as `Task<Message>` does
+/// (#1249): a value goes to the interpreter as Rust moves it, its native
+/// parts moved, and comes back by [`Take`].
+pub trait Mirror: Take {
+    fn give(self, out: &mut Out);
+    /// A borrow of the value lent to the interpreter as a marked
+    /// function's `&` argument is (#1583): its native parts and the
+    /// value whole where they are, its other fields by the wire format.
+    fn lend<'c>(&'c self, call: &mut Call<'c>);
+}
+
+/// The mirror of the program value the runner wrote as `bytes`, its
+/// native values moved to `natives` (`rawr::island::mirror_out`), at
+/// `path` from the crate's root.
+pub fn mirrored<T: Mirror>(
+    path: &'static str,
+    bytes: &[u8],
+    natives: ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
+) -> T {
+    let mut natives = natives
+        .into_iter()
+        .map(::std::option::Option::Some)
+        .collect::<::std::vec::Vec<_>>();
+    let mut input = In {
+        bytes,
+        path,
+        natives: &mut natives,
+        places: &[],
+    };
+    T::take(&mut input)
+}
+
+/// A mirror's value on its way to the interpreter: its bytes and the
+/// native values it gives, for the runner to make the program value of
+/// (`rawr::island::mirror_in`).
+pub fn unmirrored<T: Mirror>(
+    value: T,
+) -> (::std::vec::Vec<u8>, ::std::vec::Vec<::std::option::Option<Given>>) {
+    let mut out = Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None);
+    value.give(&mut out);
+    (out.0, out.1)
+}
+
+/// `visit` of a mirror native code lends a program function by `&`,
+/// as a crate calls a style closure with its `&Theme` (#1583): the
+/// value written as a marked function's `&` argument is
+/// ([`Mirror::lend`]), the native values it gives, and what it lends,
+/// for the runner to make the program value of while they are lent
+/// (`rawr::island::mirror_lent`).
+pub fn lent_mirror<T: Mirror, R>(
+    value: &T,
+    visit: impl FnOnce(
+        &[u8],
+        &mut [::std::option::Option<Given>],
+        &[(::std::any::TypeId, &'static str, *mut (), ::std::option::Option<Accessor>, Accessor)],
+    ) -> R,
+) -> R {
+    let mut call = Call::new("", false);
+    value.lend(&mut call);
+    visit(&call.values.0, &mut call.values.1, &call.lent)
+}
+
+impl Put for () {
+    fn put(&self, out: &mut Out) {
+        out.byte(UNIT);
+    }
+}
+impl Take for () {
+    fn take(input: &mut In<'_>) -> Self {
+        input.expect(UNIT, "`()`");
+    }
+}
+impl Put for bool {
+    fn put(&self, out: &mut Out) {
+        out.byte(if *self { TRUE } else { FALSE });
+    }
+}
+impl Take for bool {
+    fn take(input: &mut In<'_>) -> Self {
+        match input.byte() {
+            TRUE => true,
+            FALSE => false,
+            _ => input.fail("expected a `bool`"),
+        }
+    }
+}
+impl Put for char {
+    fn put(&self, out: &mut Out) {
+        out.byte(CHAR);
+        out.0.extend_from_slice(&u32::from(*self).to_le_bytes());
+    }
+}
+impl Take for char {
+    fn take(input: &mut In<'_>) -> Self {
+        input.expect(CHAR, "a `char`");
+        let mut bytes = [0; 4];
+        bytes.copy_from_slice(input.take(4));
+        match char::from_u32(u32::from_le_bytes(bytes)) {
+            Some(character) => character,
+            None => input.fail("not a `char`"),
+        }
+    }
+}
+macro_rules! integers {
+    ($($ty:ty),*) => {$(
+        impl Put for $ty {
+            fn put(&self, out: &mut Out) {
+                match i64::try_from(*self) {
+                    Ok(value) => {
+                        out.byte(INT);
+                        out.0.extend_from_slice(&value.to_le_bytes());
+                    }
+                    Err(_) => ::std::panic!(
+                        "rawr: {} is out of range for the interpreter's integers", self
+                    ),
+                }
+            }
+        }
+        impl Take for $ty {
+            fn take(input: &mut In<'_>) -> Self {
+                input.expect(INT, ::std::stringify!($ty));
+                let value = i64::from_le_bytes(input.eight());
+                match <$ty>::try_from(value) {
+                    Ok(value) => value,
+                    Err(_) => input.fail(&::std::format!(
+                        "{value} is out of range for `{}`", ::std::stringify!($ty)
+                    )),
+                }
+            }
+        }
+    )*};
+}
+integers!(i8, i16, i32, i64, isize, u8, u16, u32);
+// The interpreter keeps a `u64` or a `usize` as the `i64` with the same
+// bits, so one past `i64::MAX` crosses too.
+macro_rules! wide {
+    ($($ty:ty),*) => {$(
+        impl Put for $ty {
+            fn put(&self, out: &mut Out) {
+                out.byte(INT);
+                out.0.extend_from_slice(&(*self as u64 as i64).to_le_bytes());
+            }
+        }
+        impl Take for $ty {
+            fn take(input: &mut In<'_>) -> Self {
+                input.expect(INT, ::std::stringify!($ty));
+                i64::from_le_bytes(input.eight()) as u64 as $ty
+            }
+        }
+    )*};
+}
+wide!(u64, usize);
+impl Put for f64 {
+    fn put(&self, out: &mut Out) {
+        out.byte(FLOAT);
+        out.0.extend_from_slice(&self.to_le_bytes());
+    }
+}
+impl Take for f64 {
+    fn take(input: &mut In<'_>) -> Self {
+        input.expect(FLOAT, "an `f64`");
+        f64::from_le_bytes(input.eight())
+    }
+}
+impl Put for f32 {
+    fn put(&self, out: &mut Out) {
+        f64::from(*self).put(out);
+    }
+}
+impl Take for f32 {
+    fn take(input: &mut In<'_>) -> Self {
+        f64::take(input) as f32
+    }
+}
+impl Put for str {
+    fn put(&self, out: &mut Out) {
+        if let Some(texts) = &mut out.2 {
+            texts.push(::std::ptr::from_ref(self));
+        }
+        out.byte(STR);
+        out.text(self);
+    }
+}
+impl Put for ::std::string::String {
+    fn put(&self, out: &mut Out) {
+        self.as_str().put(out);
+    }
+}
+impl Take for ::std::string::String {
+    fn take(input: &mut In<'_>) -> Self {
+        // A copy of native code's own text is a copy all the same.
+        if input.bytes.first() == Some(&KEPT_TEXT) {
+            input.byte();
+            input.count();
+            input.count();
+        }
+        input.expect(STR, "a string");
+        input.text().to_owned()
+    }
+}
+impl<T: Put> Put for [T] {
+    fn put(&self, out: &mut Out) {
+        out.byte(ARRAY);
+        out.count(self.len());
+        for item in self {
+            item.put(out);
+        }
+    }
+}
+impl<T: Put> Put for ::std::vec::Vec<T> {
+    fn put(&self, out: &mut Out) {
+        self.as_slice().put(out);
+    }
+}
+impl<T: Take> Take for ::std::vec::Vec<T> {
+    fn take(input: &mut In<'_>) -> Self {
+        input.expect(ARRAY, "a `Vec`");
+        let count = input.count();
+        (0..count).map(|_| T::take(input)).collect()
+    }
+}
+impl<T: Put> Put for ::std::option::Option<T> {
+    fn put(&self, out: &mut Out) {
+        match self {
+            None => out.byte(NONE),
+            Some(value) => {
+                out.byte(SOME);
+                value.put(out);
+            }
+        }
+    }
+}
+/// A set's keys or a map's `(key, value)` entries, as an array: in a
+/// B-tree's own order, which is its keys' `Ord`, and for a hashed one
+/// after `hashed`, [`HASHED_SET`] or [`HASHED_MAP`], which the runner
+/// sorts by key, as the interpreter keeps every keyed collection.
+fn put_entries<E: Put>(
+    out: &mut Out,
+    hashed: ::std::option::Option<u8>,
+    entries: impl ExactSizeIterator<Item = E>,
+) {
+    if let Some(hashed) = hashed {
+        out.byte(hashed);
+    }
+    out.array(entries.len());
+    for entry in entries {
+        entry.put(out);
+    }
+}
+/// Each entry a set's or a map's array holds ([`put_entries`]).
+fn take_entries<E: Take, C: ::std::iter::FromIterator<E>>(input: &mut In<'_>) -> C {
+    input.expect(ARRAY, "a set or a map");
+    let count = input.count();
+    (0..count).map(|_| E::take(input)).collect()
+}
+impl<T: Put, S> Put for ::std::collections::HashSet<T, S> {
+    fn put(&self, out: &mut Out) {
+        put_entries(out, Some(HASHED_SET), self.iter());
+    }
+}
+impl<T, S> Take for ::std::collections::HashSet<T, S>
+where
+    T: Take + ::std::cmp::Eq + ::std::hash::Hash,
+    S: ::std::hash::BuildHasher + ::std::default::Default,
+{
+    fn take(input: &mut In<'_>) -> Self {
+        take_entries::<T, Self>(input)
+    }
+}
+impl<T: Put> Put for ::std::collections::BTreeSet<T> {
+    fn put(&self, out: &mut Out) {
+        put_entries(out, None, self.iter());
+    }
+}
+impl<T: Take + ::std::cmp::Ord> Take for ::std::collections::BTreeSet<T> {
+    fn take(input: &mut In<'_>) -> Self {
+        take_entries::<T, Self>(input)
+    }
+}
+impl<K: Put, V: Put, S> Put for ::std::collections::HashMap<K, V, S> {
+    fn put(&self, out: &mut Out) {
+        put_entries(out, Some(HASHED_MAP), self.iter());
+    }
+}
+impl<K, V, S> Take for ::std::collections::HashMap<K, V, S>
+where
+    K: Take + ::std::cmp::Eq + ::std::hash::Hash,
+    V: Take,
+    S: ::std::hash::BuildHasher + ::std::default::Default,
+{
+    fn take(input: &mut In<'_>) -> Self {
+        take_entries::<(K, V), Self>(input)
+    }
+}
+impl<K: Put, V: Put> Put for ::std::collections::BTreeMap<K, V> {
+    fn put(&self, out: &mut Out) {
+        put_entries(out, None, self.iter());
+    }
+}
+impl<K: Take + ::std::cmp::Ord, V: Take> Take for ::std::collections::BTreeMap<K, V> {
+    fn take(input: &mut In<'_>) -> Self {
+        take_entries::<(K, V), Self>(input)
+    }
+}
+impl<T: Take> Take for ::std::option::Option<T> {
+    fn take(input: &mut In<'_>) -> Self {
+        match input.byte() {
+            NONE => None,
+            SOME => Some(T::take(input)),
+            _ => input.fail("expected an `Option`"),
+        }
+    }
+}
+impl<T: Put, E: Put> Put for ::std::result::Result<T, E> {
+    fn put(&self, out: &mut Out) {
+        match self {
+            Ok(value) => {
+                out.byte(OK);
+                value.put(out);
+            }
+            Err(error) => {
+                out.byte(ERR);
+                error.put(out);
+            }
+        }
+    }
+}
+impl<T: Take, E: Take> Take for ::std::result::Result<T, E> {
+    fn take(input: &mut In<'_>) -> Self {
+        match input.byte() {
+            OK => Ok(T::take(input)),
+            ERR => Err(E::take(input)),
+            _ => input.fail("expected a `Result`"),
+        }
+    }
+}
+macro_rules! tuples {
+    ($(($($name:ident),+))*) => {$(
+        impl<$($name: Put),+> Put for ($($name,)+) {
+            #[allow(non_snake_case)]
+            fn put(&self, out: &mut Out) {
+                let ($($name,)+) = self;
+                out.byte(ARRAY);
+                out.count([$(::std::stringify!($name)),+].len());
+                $($name.put(out);)+
+            }
+        }
+        impl<$($name: Take),+> Take for ($($name,)+) {
+            fn take(input: &mut In<'_>) -> Self {
+                input.tuple([$(::std::stringify!($name)),+].len());
+                ($($name::take(input),)+)
+            }
+        }
+    )*};
+}
+tuples! {
+    (A) (A, B) (A, B, C) (A, B, C, D) (A, B, C, D, E) (A, B, C, D, E, F)
+}
+impl<T: Put + ?Sized> Put for &T {
+    fn put(&self, out: &mut Out) {
+        (**self).put(out);
+    }
+}
+
+type Accessor = &'static (dyn ::std::any::Any + Sync);
+
+/// What a trampoline lends one argument by (D558.3): the key its
+/// accessors claim, and the accessors, which the generated runner
+/// reaches the value through. A mutable one only for a `&mut`.
+pub struct Lend {
+    key: ::std::any::TypeId,
+    mutable: ::std::option::Option<Accessor>,
+    shared: Accessor,
+}
+
+impl Lend {
+    pub fn new(
+        key: ::std::any::TypeId,
+        mutable: ::std::option::Option<Accessor>,
+        shared: Accessor,
+    ) -> Self {
+        Self { key, mutable, shared }
+    }
+}
+
+/// Claim the lend `nonce` under `key` (shared, or exclusively) for
+/// `visit`, which receives the lent value's place, and end the claim
+/// however `visit` ends. `Err` holds `rawr::scope::Error`'s code.
+pub fn reach(
+    nonce: u64,
+    key: ::std::any::TypeId,
+    shared: bool,
+    visit: impl FnOnce(*mut ()),
+) -> ::std::result::Result<(), u8> {
+    struct Release(u64, bool);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            // SAFETY: the runner links `rawr`, which defines the
+            // function with this exact signature.
+            unsafe { __rawr_scope_release_v1(self.0, self.1) }
+        }
+    }
+    // SAFETY: as above.
+    let place = unsafe { __rawr_scope_claim_v1(nonce, key, shared) }?;
+    let _release = Release(nonce, shared);
+    visit(place);
+    Ok(())
+}
+
+/// The anchor of `value` (#1473): its address and a hash of its type's
+/// name, which the runner keeps what native code borrows of it by.
+fn anchor_of<T: ?Sized>(value: &T) -> [u64; 2] {
+    use ::std::hash::{Hash as _, Hasher as _};
+    let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
+    ::std::any::type_name::<T>().hash(&mut hasher);
+    [::std::ptr::from_ref(value).cast::<()>().addr() as u64, hasher.finish()]
+}
+
+/// `value` drops, or moves into the interpreter, where it is (#1492):
+/// rustc has ended every borrow of it, so the runner lets go of what
+/// results anchored on it borrowed.
+pub fn ended<T: ?Sized>(value: &T) {
+    let [address, ty] = anchor_of(value);
+    // SAFETY: the runner links `rawr`, which defines the function with
+    // this exact signature.
+    unsafe { __rawr_island_unanchor_v1(address, ty) }
+}
+
+/// One call of a marked function. `'c` is what its lent arguments
+/// borrow: they stay borrowed until the call is sent and answered.
+pub struct Call<'c> {
+    path: &'static str,
+    owned: bool,
+    pinned: bool,
+    in_place: u8,
+    unit: bool,
+    count: u32,
+    mutable: u64,
+    anchor: ::std::option::Option<[u64; 2]>,
+    releases: ::std::vec::Vec<[u64; 2]>,
+    /// The arguments given for the call alone ([`Call::for_call`]).
+    for_call: u64,
+    /// The lends kept with the call's anchor ([`Call::keep_lends`]).
+    kept: u64,
+    values: Out,
+    lent: ::std::vec::Vec<(
+        ::std::any::TypeId,
+        &'static str,
+        *mut (),
+        ::std::option::Option<Accessor>,
+        Accessor,
+    )>,
+    borrows: ::std::marker::PhantomData<&'c mut ()>,
+}
+
+impl<'c> Call<'c> {
+    /// A call of the function at `path` from the crate root; `owned`
+    /// when its last segment is a member of the type before it.
+    pub fn new(path: &'static str, owned: bool) -> Self {
+        Self {
+            path,
+            owned,
+            pinned: false,
+            in_place: 0,
+            unit: false,
+            count: 0,
+            mutable: 0,
+            anchor: ::std::option::Option::None,
+            releases: ::std::vec::Vec::new(),
+            for_call: 0,
+            kept: 0,
+            values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None),
+            lent: ::std::vec::Vec::new(),
+            borrows: ::std::marker::PhantomData,
+        }
+    }
+    /// An argument lent to the interpreter for the call (D558.3), as
+    /// ratatui's `&mut Frame<'_>` is. The call runs on this thread
+    /// while it is lent, so it needn't be `Send`.
+    ///
+    /// # Safety
+    ///
+    /// `lend`'s accessors read its key's place as a `T`, and no other
+    /// lend uses its key. `name` is `T`'s name.
+    pub unsafe fn lend<T>(&mut self, value: &'c mut T, lend: Lend, name: &'static str) {
+        debug_assert!(lend.mutable.is_some());
+        self.lent_value(::std::ptr::from_mut(value).cast(), lend, name);
+    }
+    /// [`Call::lend`] of a shared borrow, which needn't be `Sync`.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Call::lend`], and `lend` has no mutable accessor.
+    pub unsafe fn lend_ref<T>(&mut self, value: &'c T, lend: Lend, name: &'static str) {
+        debug_assert!(lend.mutable.is_none());
+        self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
+    }
+    fn lent_value(&mut self, place: *mut (), lend: Lend, name: &'static str) {
+        // SAFETY: as the callers'.
+        unsafe { self.lend_part(place, lend, name) };
+        self.count += 1;
+    }
+    /// A part of an argument lent for the call where it is, as a
+    /// native part of a marked value is (#1469). The call runs on this
+    /// thread, so the part needn't be `Send` or `Sync`.
+    ///
+    /// # Safety
+    ///
+    /// `place` is borrowed for `'c`, mutably when `lend` has a mutable
+    /// accessor. `lend`'s accessors read its key's place as the type it
+    /// is, and no other lend uses its key. `name` is the type's name.
+    pub unsafe fn lend_part(&mut self, place: *mut (), lend: Lend, name: &'static str) {
+        self.values.byte(LENT);
+        self.values.count(self.lent.len());
+        self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
+    }
+    /// A borrow of a marked value lent whole for the call where it is,
+    /// beside its parts (#1484): the value written next is the one it
+    /// lends.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Call::lend_part`], `lend` having no mutable accessor.
+    pub unsafe fn lend_whole(&mut self, place: *mut (), lend: Lend, name: &'static str) {
+        debug_assert!(lend.mutable.is_none());
+        self.values.byte(WHOLE);
+        self.values.count(self.lent.len());
+        self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
+    }
+    /// A part of an argument copied by the wire format (#1469).
+    pub fn part<T: Put + ?Sized>(&mut self, value: &T) {
+        value.put(&mut self.values);
+    }
+    /// Where an argument's value is written, part by part.
+    pub fn out(&mut self) -> &mut Out {
+        &mut self.values
+    }
+    /// A borrow of a marked value that holds native parts, each lent
+    /// where it is for the call (#1469).
+    pub fn lent<T: Parts>(&mut self, value: &'c T) {
+        value.lend(self);
+        self.count += 1;
+    }
+    /// A `&mut` of a marked value that holds native parts, each lent
+    /// mutably for the call, which comes back after it
+    /// ([`Parts::take_into`]).
+    pub fn lent_mut<T: Parts>(&mut self, value: &'c mut T) {
+        self.release(&*value);
+        self.mutable |= 1 << self.count;
+        value.lend_mut(self);
+        self.count += 1;
+    }
+    /// A marked value that holds native parts, moved to the
+    /// interpreter with them (#1469).
+    pub fn given<T: Parts>(&mut self, value: T) {
+        value.give(&mut self.values);
+        self.count += 1;
+    }
+    /// An argument that holds native parts inside `Option`s, `Vec`s,
+    /// `Box`es and tuples, which `give` writes part by part, each part
+    /// moved to the interpreter (#1224).
+    pub fn give_parts(&mut self, give: impl FnOnce(&mut Out)) {
+        give(&mut self.values);
+        self.count += 1;
+    }
+    /// A `&[T]` argument lent for the call where it is (#1292): the
+    /// lend's place is `value`, the trampoline's own reference.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Call::lend_ref`], `lend`'s accessor reading its key's
+    /// place as a `&[T]`.
+    pub unsafe fn lend_slice<T>(&mut self, value: &'c &'c [T], lend: Lend, name: &'static str) {
+        debug_assert!(lend.mutable.is_none());
+        self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
+    }
+    /// An argument moved to the interpreter, which keeps it: a value of
+    /// a type the marked crate doesn't declare, with what its type has
+    /// of [`Traits`] ([`give!`]).
+    pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
+        self.values.give(value, traits);
+        self.count += 1;
+    }
+    pub fn argument<T: Put + ?Sized>(&mut self, value: &T) {
+        value.put(&mut self.values);
+        self.count += 1;
+    }
+    /// A `&str` argument, as `label` of `subtitle<'a>(label: &'a str)
+    /// -> Text<'a>`: copied, and where native code's own text is, so
+    /// what the call makes that borrows it borrows that text, which
+    /// native code keeps borrowed as long as rustc says.
+    pub fn kept_text(&mut self, value: &'c str) {
+        self.values.kept_text(value);
+        self.count += 1;
+    }
+    /// A stand-in's receiver: the handle of the program value it holds,
+    /// which the call takes as the impl's receiver.
+    pub fn object(&mut self, object: &Object) {
+        self.values.byte(HANDLE);
+        self.values.0.extend_from_slice(&object.0.to_le_bytes());
+        self.count += 1;
+    }
+    /// The call's result is a `&str` that borrows its receiver: a
+    /// stand-in's comes back as the program's own text, pinned with the
+    /// value ([`Object::pinned`]), and a marked value's as text it
+    /// holds ([`Reply::pinned`]), so where each text the call copies
+    /// is gets noted.
+    pub fn pinned(&mut self) {
+        self.pinned = true;
+        self.values.2 = Some(::std::vec::Vec::new());
+    }
+    /// The call's result is a reference to a native value, which
+    /// comes back where the value is: with `lasting`, a `&'static`
+    /// ([`In::lasting`]), and else one its stand-in's receiver holds
+    /// ([`Object::lent`]).
+    pub fn in_place(&mut self, lasting: bool) {
+        self.in_place = 4 | u8::from(lasting) << 3;
+    }
+    /// The call's result borrows `value`, a marked input it borrows
+    /// (#1473): it is made in a region kept with what native code
+    /// borrows of `value`, which the runner lets go of when native code
+    /// next takes `value` `&mut`.
+    pub fn anchor<T: ?Sized>(&mut self, value: &'c T) {
+        self.anchor = ::std::option::Option::Some(anchor_of(value));
+    }
+    /// Native code ended every borrow of `value`, which the call takes
+    /// `&mut` or by value: the runner lets go of what results anchored
+    /// on it borrowed (#1473).
+    pub fn release<T: ?Sized>(&mut self, value: &T) {
+        self.releases.push(anchor_of(value));
+    }
+    /// The next argument is given for the call alone, as a by-value
+    /// `View<'a>` of borrows (#1225): what the call leaves of it drops
+    /// once it returns.
+    pub fn for_call(&mut self) {
+        self.for_call |= 1 << self.count;
+    }
+    /// How many places the call has been lent so far.
+    pub fn lends(&self) -> usize {
+        self.lent.len()
+    }
+    /// Each place lent since there were `from` is kept borrowed as long
+    /// as the call's anchored result (#1413), as `&'a inbox::State` of
+    /// `view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a,
+    /// Message>` is, so the result may borrow it.
+    pub fn keep_lends(&mut self, from: usize) {
+        for index in from..self.lent.len().min(64) {
+            self.kept |= 1 << index;
+        }
+    }
+    /// The function returns `()`, which comes back whatever value its
+    /// body's last statement left.
+    pub fn unit(&mut self) {
+        self.unit = true;
+    }
+    /// An argument the call may change, which comes back after it.
+    pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
+        self.release(value);
+        self.mutable |= 1 << self.count;
+        self.argument(value);
+    }
+    pub fn send(mut self) -> Reply {
+        let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
+        let anchored = u8::from(self.anchor.is_some()) << 5;
+        let releases = u8::from(!self.releases.is_empty()) << 6;
+        let scopes = u8::from(self.for_call != 0 || self.kept != 0) << 7;
+        bytes.push(
+            u8::from(self.owned)
+                | u8::from(self.pinned) << 1
+                | self.in_place
+                | u8::from(self.unit) << 4
+                | anchored
+                | releases
+                | scopes,
+        );
+        bytes.extend_from_slice(&self.count.to_le_bytes());
+        bytes.extend_from_slice(&self.mutable.to_le_bytes());
+        for [address, ty] in self.anchor.iter() {
+            bytes.extend_from_slice(&address.to_le_bytes());
+            bytes.extend_from_slice(&ty.to_le_bytes());
+        }
+        if !self.releases.is_empty() {
+            bytes.extend_from_slice(&(self.releases.len() as u32).to_le_bytes());
+            for [address, ty] in &self.releases {
+                bytes.extend_from_slice(&address.to_le_bytes());
+                bytes.extend_from_slice(&ty.to_le_bytes());
+            }
+        }
+        if scopes != 0 {
+            bytes.extend_from_slice(&self.for_call.to_le_bytes());
+            bytes.extend_from_slice(&self.kept.to_le_bytes());
+        }
+        bytes.extend_from_slice(&self.values.0);
+        // SAFETY: the runner links `rawr`, which defines the function
+        // with this exact signature. Each lent place is borrowed for
+        // `'c`, which outlives this call, and is reached only while the
+        // call runs.
+        let mut natives = ::std::vec::Vec::new();
+        let reply = unsafe {
+            __rawr_island_call_v4(self.path, &bytes, &mut self.values.1, &self.lent, &mut natives)
+        };
+        match reply.first() {
+            Some(0) => Reply {
+                bytes: reply,
+                at: 1,
+                path: self.path,
+                natives: natives.into_iter().map(Some).collect(),
+                places: self.lent.iter().map(|lent| lent.2).collect(),
+                texts: self.values.2.take().unwrap_or_default(),
+            },
+            Some(_) => failed(&reply),
+            None => ::std::panic!("rawr: no answer to `{}`", self.path),
+        }
+    }
+}
+
+/// What a call returned, then each argument it could change, and the
+/// native values the interpreter moved for them.
+pub struct Reply {
+    bytes: ::std::vec::Vec<u8>,
+    at: usize,
+    path: &'static str,
+    natives: ::std::vec::Vec<::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>>,
+    /// Where each part the call lent is ([`In::changed`]).
+    places: ::std::vec::Vec<*mut ()>,
+    /// Where each text the call copied is, in the order it wrote them
+    /// ([`Call::pinned`]).
+    texts: ::std::vec::Vec<*const str>,
+}
+
+impl Reply {
+    pub fn take<T: Take>(&mut self) -> T {
+        self.read(T::take)
+    }
+    /// A `&T` into `receiver`, whose parts the call lent where they
+    /// are, as `fn colors(&self) -> &Colors` gives `&self.0.colors`
+    /// (#1468): the place the runner reached, and the accessor of the
+    /// lend it reached it by, which proves the place a `T`. A place
+    /// outside the receiver, as in a `Box` it owns, can't come back
+    /// yet.
+    ///
+    /// # Safety
+    ///
+    /// The runner gave the place of a value the call reached through
+    /// what it lent.
+    pub unsafe fn lent<'r, T: 'static, R: ?Sized>(&mut self, receiver: &'r R) -> &'r T {
+        type Shared<T> = fn(u64, &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8>;
+        let (place, accessor) = self.read(|input| input.native::<(*const (), Accessor)>());
+        let accessor: &dyn ::std::any::Any = accessor;
+        let start = ::std::ptr::from_ref(receiver).cast::<u8>().addr();
+        let end = start + ::std::mem::size_of_val(receiver);
+        let at = place.addr();
+        if !accessor.is::<Shared<T>>() {
+            ::std::panic!(
+                "rawr: `{}` gave back a reference that is no `&{}`",
+                self.path,
+                ::std::any::type_name::<T>()
+            );
+        }
+        if at < start || at + ::std::mem::size_of::<T>() > end {
+            ::std::panic!(
+                "rawr: `{}` gave back a reference to a `{}` the receiver holds outside \
+                 itself, which can't come back yet",
+                self.path,
+                ::std::any::type_name::<T>()
+            );
+        }
+        // SAFETY: the accessor reads its lend's place as a `T`, and the
+        // place is in `receiver`, which is borrowed for `'r`.
+        unsafe { &*place.cast::<T>() }
+    }
+    /// A `&str` the call's receiver holds (#1468): text in native
+    /// code's own value, in a text the call copied from it, as `&self.0`
+    /// of a marked `Id(String)` is, or the program's own text, pinned
+    /// for as long as the runner lives.
+    ///
+    /// # Safety
+    ///
+    /// The receiver stays borrowed for `'r`, and the call copied its
+    /// texts from it before any other.
+    pub unsafe fn pinned<'r>(&mut self) -> &'r str {
+        let texts = ::std::mem::take(&mut self.texts);
+        let found = self.read(|input| match input.byte() {
+            PINNED => Err((input.count(), input.count())),
+            TEXT_AT => {
+                let (index, start, length) = (input.count(), input.count(), input.count());
+                texts
+                    .get(index)
+                    // SAFETY: the receiver, which holds the text, is
+                    // borrowed for `'r`.
+                    .map(|text| unsafe { &**text })
+                    .and_then(|text| text.get(start..start.checked_add(length)?))
+                    .map(Ok)
+                    .unwrap_or_else(|| input.fail("a text the call didn't copy"))
+            }
+            _ => input.fail("expected a `&str`"),
+        });
+        match found {
+            Ok(text) => text,
+            // SAFETY: the runner gave valid UTF-8 that lives at least as
+            // long as the receiver is borrowed, which is `'r`.
+            Err((address, length)) => unsafe {
+                ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
+                    ::std::ptr::with_exposed_provenance::<u8>(address),
+                    length,
+                ))
+            },
+        }
+    }
+    /// The next value, as `read` reads it.
+    pub fn read<T>(&mut self, read: impl FnOnce(&mut In<'_>) -> T) -> T {
+        let mut input = In {
+            bytes: &self.bytes[self.at..],
+            path: self.path,
+            natives: &mut self.natives,
+            places: &self.places,
+        };
+        let value = read(&mut input);
+        self.at = self.bytes.len() - input.bytes.len();
+        value
+    }
+}
+"#;
+
+/// The part of the island's support that depends on the crate, appended to
+/// its root as [`MODULE`]: the package's items, its stand-ins' makers, its
+/// instance table and its `main`.
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 const SUPPORT: &str = r#"
 /// Generated by Rawr: how the native code of this crate reaches the marked
@@ -5151,55 +7635,24 @@ const SUPPORT: &str = r#"
 #[doc(hidden)]
 #[allow(unsafe_code, dead_code, unused_imports, clippy::all)]
 pub mod __rawr_island {
-    // Defined by the `rawr` crate the runner links.
-    unsafe extern "Rust" {
-        fn __rawr_island_call_v4(
-            path: &str,
-            arguments: &[u8],
-            given: &mut [::std::option::Option<Given>],
-            lent: &[(
-                ::std::any::TypeId,
-                &'static str,
-                *mut (),
-                ::std::option::Option<&'static (dyn ::std::any::Any + Sync)>,
-                &'static (dyn ::std::any::Any + Sync),
-            )],
-            natives: &mut ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
-        ) -> ::std::vec::Vec<u8>;
-        fn __rawr_scope_claim_v1(
-            nonce: u64,
-            key: ::std::any::TypeId,
-            shared: bool,
-        ) -> ::std::result::Result<*mut (), u8>;
-        fn __rawr_scope_release_v1(nonce: u64, shared: bool);
-        fn __rawr_island_start_v1(entry: fn() -> i32);
-        fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]);
-        fn __rawr_island_release_v1(handle: u64);
-        fn __rawr_island_unanchor_v1(address: u64, ty: u64);
-        fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8>;
-        fn __rawr_island_next_v1(
-            handle: u64,
-            natives: &mut ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
-        ) -> ::std::vec::Vec<u8>;
-    }
-
-    /// What makes a native trait's object of a program value: the
-    /// trait's path below the crate's root and the value's handle give a
-    /// box of the stand-in, or `None` for another trait
-    /// (`rawr::island::Maker`).
-    pub type Maker = fn(&str, u64) -> ::std::option::Option<Given>;
+    pub use ::__rawr_island_support::*;
 
     /// Each stand-in's maker, by its type's path from the crate's root.
     static MAKERS: &[(&str, Maker)] = &__MAKER_LIST__;
-
-    /// A generic function's instance entry: it reads the call's arguments
-    /// as the tuple of the types they are and writes the result in place.
-    pub type Instance = unsafe fn(*mut (), *mut ());
 
     /// Each instance native code calls a generic function at, as the
     /// record of the crate's last check found them (D869): the function's
     /// path, the name of the tuple of its types and its entry there.
     static INSTANCES: &[(&str, fn() -> &'static str, Instance)] = &__INSTANCE_LIST__;
+
+    /// The call of the marked function at `path`, the crate's [`MAKERS`]
+    /// registered first, once.
+    #[inline]
+    pub fn call<'c>(path: &'static str, owned: bool) -> Call<'c> {
+        static ONCE: ::std::sync::Once = ::std::sync::Once::new();
+        ONCE.call_once(|| register(MAKERS));
+        Call::new(path, owned)
+    }
 
     /// Run the instance of the generic function at `path` whose types'
     /// tuple is named `name`, with the arguments at `arguments` and the
@@ -5217,2355 +7670,18 @@ pub mod __rawr_island {
             }
         }
         ::std::panic!(
-            "rawr: native code called `{path}` at `{name}`, which the last check didn't see; \
-             this is a rawr bug"
+            "rawr: native code called `{path}` at `{name}`, which the last check didn't see;              this is a rawr bug"
         )
-    }
-
-    /// The path a generic function's instance is found by: its own, with
-    /// the hash of its types' tuple's name, as rawr names the instance
-    /// (`package::instances::key`), interned for the program's life.
-    pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
-        static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, &'static str, &'static str)>> =
-            ::std::sync::Mutex::new(::std::vec::Vec::new());
-        let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-        if let Some((_, _, key)) = keys.iter().find(|(known, named, _)| *known == path && *named == name) {
-            return key;
-        }
-        // FNV-1a, as `package::instances::key` hashes it.
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in name.bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        let key: &'static str = ::std::boxed::Box::leak(::std::format!("{path}#{hash:016x}").into_boxed_str());
-        keys.push((path, name, key));
-        key
-    }
-
-    /// [`keyed`], and the name each impl of a marked trait a boxed
-    /// argument is of gives itself (`+Content`), as the resolver compiles
-    /// one instance for each impl.
-    pub fn keyed_given(path: &'static str, name: &'static str, given: &[&'static str]) -> &'static str {
-        static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, ::std::vec::Vec<&'static str>, &'static str)>> =
-            ::std::sync::Mutex::new(::std::vec::Vec::new());
-        let base = keyed(path, name);
-        let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-        if let Some((_, _, key)) = keys.iter().find(|(known, names, _)| *known == base && names.as_slice() == given) {
-            return key;
-        }
-        let key: &'static str = ::std::boxed::Box::leak(::std::format!("{base}{}", given.concat()).into_boxed_str());
-        keys.push((base, given.to_vec(), key));
-        key
-    }
-
-    /// Register [`MAKERS`] once, before the first call into marked code,
-    /// which is where a program value becomes a trait object.
-    fn register() {
-        static ONCE: ::std::sync::Once = ::std::sync::Once::new();
-        // SAFETY: the runner links `rawr`, which defines the function with
-        // this exact signature.
-        ONCE.call_once(|| unsafe { __rawr_island_objects_v1(MAKERS) });
-    }
-
-    /// The panic of a failed `reply`: a marked function's panic, which the
-    /// runner printed as Rust prints it at its place in the marked file,
-    /// unwinds with its message (`2`); rawr's own failure panics with its
-    /// message.
-    fn failed(reply: &[u8]) -> ! {
-        let message = ::std::string::String::from_utf8_lossy(reply.get(1..).unwrap_or_default()).into_owned();
-        match reply.first() {
-            ::std::option::Option::Some(2) => ::std::panic::resume_unwind(::std::boxed::Box::new(message)),
-            _ => ::std::panic!("{message}"),
-        }
-    }
-
-    /// The handle of the program value a stand-in holds, let go of when
-    /// the stand-in is dropped, and the results of its `&self` calls that
-    /// borrow it, as `fn label(&self) -> &str`'s (#1305).
-    pub struct Object(u64, ::std::sync::Mutex<::std::vec::Vec<Kept>>);
-
-    /// A result an [`Object`] keeps for its borrows, by its own allocation.
-    pub struct Kept(*mut (dyn ::std::any::Any + Send));
-
-    // SAFETY: what a `Kept` points at is `Send`, and only its `Object`
-    // reaches it.
-    unsafe impl Send for Kept {}
-
-    impl Drop for Kept {
-        fn drop(&mut self) {
-            // SAFETY: `Box::into_raw` made the pointer, and it is turned
-            // back once, here.
-            drop(unsafe { ::std::boxed::Box::from_raw(self.0) });
-        }
-    }
-
-    impl Object {
-        pub fn new(handle: u64) -> Self {
-            Self(handle, ::std::sync::Mutex::new(::std::vec::Vec::new()))
-        }
-
-        /// `value`, a `&self` call's result that borrows the receiver,
-        /// borrowed for as long as the object is.
-        pub fn keep<T: Send + 'static>(&self, value: T) -> &T {
-            let place = ::std::boxed::Box::into_raw(::std::boxed::Box::new(value));
-            self.1
-                .lock()
-                .unwrap_or_else(::std::sync::PoisonError::into_inner)
-                .push(Kept(place));
-            // SAFETY: the allocation is freed only by `release`, which
-            // takes `&mut self`, or by the object's drop, and neither can
-            // happen while `&self` is borrowed; nothing else reaches or
-            // moves it.
-            unsafe { &*place }
-        }
-
-        /// The `&str` a `&self` call gave back ([`Call::pinned`]): the
-        /// program's own text, which the runner keeps pinned with the
-        /// program value, for as long as the object is borrowed (#1322).
-        pub fn pinned(&self, reply: &mut Reply) -> &str {
-            let (address, length) = reply.read(|input| {
-                input.expect(PINNED, "a pinned `&str`");
-                (input.count(), input.count())
-            });
-            // SAFETY: the runner pinned the text, valid UTF-8, with the
-            // value of this object's handle, and lets it go only when the
-            // value is next taken `&mut` or released, which a `&mut self`
-            // call or the object's drop does, and neither can happen while
-            // `&self` is borrowed. Nothing writes a pinned text in place.
-            unsafe {
-                ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
-                    ::std::ptr::with_exposed_provenance::<u8>(address),
-                    length,
-                ))
-            }
-        }
-
-        /// The native value a `&self` call gave where the program value
-        /// holds it ([`Call::in_place`]), as `fn state(&self) -> &State {
-        /// &self.state }` gives it (#1442), borrowed for as long as the
-        /// object is.
-        pub fn lent<T: 'static>(&self, reply: &mut Reply) -> &T {
-            let place = reply.read(|input| input.place::<T>());
-            // SAFETY: the runner keeps the value where it is with the
-            // program value's pins, which it lets go only when the value is
-            // next taken `&mut` or released, which a `&mut self` call or
-            // the object's drop does, and neither can happen while `&self`
-            // is borrowed. Nothing writes the value while the pins hold it.
-            unsafe { &*place }
-        }
-
-        /// Let go of the kept results, as a `&mut self` call may once
-        /// rustc has ended every borrow of them.
-        pub fn release(&mut self) {
-            self.1
-                .get_mut()
-                .unwrap_or_else(::std::sync::PoisonError::into_inner)
-                .clear();
-        }
-    }
-
-    impl Drop for Object {
-        fn drop(&mut self) {
-            // SAFETY: as for `register`.
-            unsafe { __rawr_island_release_v1(self.0) }
-        }
-    }
-
-    // What a stand-in's std trait asks of the program value it holds, by
-    // the program's own impl, derived or written (`rawr::island::Op`).
-    pub const DEBUG: u8 = 0;
-    pub const DISPLAY: u8 = 1;
-    const CLONE: u8 = 2;
-    const EQUAL: u8 = 3;
-    const HASH: u8 = 4;
-    const DEFAULT: u8 = 5;
-    const PARTIAL_ORDER: u8 = 6;
-    const ORDER: u8 = 7;
-
-    /// The answer to `op` of the value at `handle` (and `other`), as the
-    /// type at `owner` implements it; a failure panics, as a trampoline's.
-    fn ask(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8> {
-        register();
-        // SAFETY: as for `register`.
-        let mut reply = unsafe { __rawr_island_trait_v1(owner, op, handle, other) };
-        match reply.first() {
-            ::std::option::Option::Some(0) => {
-                reply.remove(0);
-                reply
-            }
-            _ => failed(&reply),
-        }
-    }
-
-    /// The first eight bytes of `reply` as a number.
-    fn number(reply: &[u8]) -> u64 {
-        let mut bytes = [0; 8];
-        bytes.copy_from_slice(&reply[..8]);
-        u64::from_le_bytes(bytes)
-    }
-
-    impl Object {
-        /// The value's `Debug` or `Display` text.
-        pub fn text(&self, owner: &str, op: u8) -> ::std::string::String {
-            ::std::string::String::from_utf8_lossy(&ask(owner, op, self.0, 0)).into_owned()
-        }
-
-        /// A clone of the value, under a handle of its own.
-        pub fn duplicate(&self, owner: &str) -> Self {
-            Self::new(number(&ask(owner, CLONE, self.0, 0)))
-        }
-
-        pub fn equal(&self, other: &Self, owner: &str) -> bool {
-            ask(owner, EQUAL, self.0, other.0) == [1]
-        }
-
-        pub fn hash(&self, owner: &str) -> u64 {
-            number(&ask(owner, HASH, self.0, 0))
-        }
-
-        /// The `Default` of the type at `owner`, under a handle of its own.
-        pub fn default_of(owner: &str) -> Self {
-            Self::new(number(&ask(owner, DEFAULT, 0, 0)))
-        }
-
-        /// `partial_cmp`, or with `total` `cmp`, of the two values.
-        pub fn compare(
-            &self,
-            other: &Self,
-            owner: &str,
-            total: bool,
-        ) -> ::std::option::Option<::std::cmp::Ordering> {
-            let op = if total { ORDER } else { PARTIAL_ORDER };
-            match ask(owner, op, self.0, other.0).as_slice() {
-                [0] => ::std::option::Option::Some(::std::cmp::Ordering::Less),
-                [1] => ::std::option::Option::Some(::std::cmp::Ordering::Equal),
-                [2] => ::std::option::Option::Some(::std::cmp::Ordering::Greater),
-                _ => ::std::option::Option::None,
-            }
-        }
-    }
-
-    /// Whether `object`, a trait object type's name, is `dyn` of the trait
-    /// at `below`, its path below the crate's root.
-    pub fn names(object: &str, below: &str) -> bool {
-        let object = object.strip_prefix("dyn ").unwrap_or(object);
-        let object = object.split_once("::").map_or(object, |(_, below)| below);
-        object == below
-    }
-
-    /// The box of `dyn $object` a maker gives for the handle `$handle`, the
-    /// stand-in `$stand` holding it, when `$trait_name` names `$object`'s
-    /// trait, with what the box has of [`Traits`].
-    macro_rules! object {
-        ($trait_name:expr, $handle:expr, $object:ty, $stand:path) => {{
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{
-                HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
-                HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
-                LacksEqual as _, LacksHash as _, LacksOrder as _,
-            };
-            if !crate::__rawr_island::names(::std::any::type_name::<$object>(), $trait_name) {
-                return ::std::option::Option::None;
-            }
-            let value: ::std::boxed::Box<$object> =
-                ::std::boxed::Box::new($stand(crate::__rawr_island::Object::new($handle)));
-            let probe = &crate::__rawr_island::probe(&value);
-            let traits = (
-                probe.debug_of(),
-                probe.display_of(),
-                probe.clone_of(),
-                probe.equal_of(),
-                probe.hash_of(),
-                probe.order_of(),
-            );
-            ::std::option::Option::Some((
-                ::std::boxed::Box::new(value) as ::std::boxed::Box<dyn ::std::any::Any>,
-                ::std::any::type_name::<::std::boxed::Box<$object>>(),
-                traits,
-            ))
-        }};
-    }
-    pub(crate) use object;
-
-    type Any = dyn ::std::any::Any;
-
-    /// What a trampoline finds of a value's type, for the runner to keep it
-    /// as it keeps a value it made: its `Debug` and `Display` text, its
-    /// `Clone`, `PartialEq`, `Hash` and `PartialOrd`, each when the type has
-    /// it (`rawr::island::Traits`).
-    pub type Traits = (
-        ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::string::String>>,
-        ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::string::String>>,
-        ::std::option::Option<fn(&Any) -> ::std::option::Option<::std::boxed::Box<Any>>>,
-        ::std::option::Option<fn(&Any, &Any) -> ::std::option::Option<bool>>,
-        ::std::option::Option<fn(&Any) -> ::std::option::Option<u64>>,
-        ::std::option::Option<fn(&Any, &Any) -> ::std::option::Option<::std::cmp::Ordering>>,
-    );
-
-    /// A native value a call gives the interpreter by value, with its
-    /// type's name and [`Traits`] (`rawr::island::Given`).
-    pub type Given = (::std::boxed::Box<Any>, &'static str, Traits);
-
-    /// Finds one of a concrete `T`'s [`Traits`] when `T` has it, and
-    /// nothing otherwise, by method resolution.
-    pub struct Probe<T>(::std::marker::PhantomData<T>);
-    pub fn probe<T>(_: &T) -> Probe<T> {
-        Probe(::std::marker::PhantomData)
-    }
-    macro_rules! probes {
-        ($($has:ident $lacks:ident $method:ident [$($bound:tt)*] $signature:ty => $found:expr;)*) => {$(
-            pub trait $has {
-                fn $method(&self) -> ::std::option::Option<$signature>;
-            }
-            impl<T: $($bound)* + 'static> $has for Probe<T> {
-                fn $method(&self) -> ::std::option::Option<$signature> {
-                    ::std::option::Option::Some($found)
-                }
-            }
-            pub trait $lacks {
-                fn $method(&self) -> ::std::option::Option<$signature>;
-            }
-            impl<T> $lacks for &Probe<T> {
-                fn $method(&self) -> ::std::option::Option<$signature> {
-                    ::std::option::Option::None
-                }
-            }
-        )*};
-    }
-    probes! {
-        HasDebug LacksDebug debug_of [::std::fmt::Debug] fn(&Any) -> ::std::option::Option<::std::string::String>
-            => |value| value.downcast_ref::<T>().map(|value| ::std::format!("{value:?}"));
-        HasDisplay LacksDisplay display_of [::std::fmt::Display] fn(&Any) -> ::std::option::Option<::std::string::String>
-            => |value| value.downcast_ref::<T>().map(::std::string::ToString::to_string);
-        HasClone LacksClone clone_of [::std::clone::Clone] fn(&Any) -> ::std::option::Option<::std::boxed::Box<Any>>
-            => |value| value.downcast_ref::<T>().map(|value| ::std::boxed::Box::new(value.clone()) as ::std::boxed::Box<Any>);
-        HasEqual LacksEqual equal_of [::std::cmp::PartialEq] fn(&Any, &Any) -> ::std::option::Option<bool>
-            => |lhs, rhs| ::std::option::Option::Some(lhs.downcast_ref::<T>()? == rhs.downcast_ref::<T>()?);
-        HasHash LacksHash hash_of [::std::hash::Hash] fn(&Any) -> ::std::option::Option<u64>
-            => |value| {
-                use ::std::hash::{Hash as _, Hasher as _};
-                let mut hasher = ::std::hash::DefaultHasher::new();
-                value.downcast_ref::<T>()?.hash(&mut hasher);
-                ::std::option::Option::Some(hasher.finish())
-            };
-        HasOrder LacksOrder order_of [::std::cmp::PartialOrd] fn(&Any, &Any) -> ::std::option::Option<::std::cmp::Ordering>
-            => |lhs, rhs| lhs.downcast_ref::<T>()?.partial_cmp(rhs.downcast_ref::<T>()?);
-    }
-
-    /// Give `$value` to the call `$call` by value, with what its concrete
-    /// type has of [`Traits`].
-    macro_rules! give {
-        ($call:expr, $value:expr) => {{
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{
-                HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
-                HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
-                LacksEqual as _, LacksHash as _, LacksOrder as _,
-            };
-            let value = $value;
-            let probe = &crate::__rawr_island::probe(&value);
-            let traits = (
-                probe.debug_of(),
-                probe.display_of(),
-                probe.clone_of(),
-                probe.equal_of(),
-                probe.hash_of(),
-                probe.order_of(),
-            );
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{ByCopy as _, ByGift as _};
-            (&crate::__rawr_island::hand(&value)).hand(&mut $call, value, traits);
-        }};
-    }
-    pub(crate) use give;
-
-    /// Put `$value`, a `&` of a native part of a marked type's value, as
-    /// the `themedef::Theme` of `Theme::Selected(themedef::Theme)`, in
-    /// `$out` (#1466): by the wire format when its type crosses by it, as
-    /// an alias of `usize` does, and else as a clone the interpreter keeps,
-    /// with what its type has of [`Traits`].
-    macro_rules! part {
-        ($out:expr, $value:expr) => {{
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{
-                HasClone as _, HasDebug as _, HasDisplay as _, HasEqual as _, HasHash as _,
-                HasOrder as _, LacksClone as _, LacksDebug as _, LacksDisplay as _,
-                LacksEqual as _, LacksHash as _, LacksOrder as _, PartByClone as _,
-                PartByWire as _, PartUncloned as _,
-            };
-            let value = $value;
-            let probe = &crate::__rawr_island::probe(value);
-            let traits = (
-                probe.debug_of(),
-                probe.display_of(),
-                probe.clone_of(),
-                probe.equal_of(),
-                probe.hash_of(),
-                probe.order_of(),
-            );
-            (&&crate::__rawr_island::Part(value)).put($out, traits);
-        }};
-    }
-    pub(crate) use part;
-
-    /// A native part of a marked type's value on its way to the
-    /// interpreter ([`part!`]): [`PartByWire`] is found first, then
-    /// [`PartByClone`], then [`PartUncloned`].
-    pub struct Part<'v, T>(pub &'v T);
-    pub trait PartByWire {
-        fn put(&self, out: &mut Out, traits: Traits);
-    }
-    impl<T: Put> PartByWire for &Part<'_, T> {
-        fn put(&self, out: &mut Out, _: Traits) {
-            self.0.put(out);
-        }
-    }
-    pub trait PartByClone {
-        fn put(&self, out: &mut Out, traits: Traits);
-    }
-    impl<T: ::std::clone::Clone + 'static> PartByClone for &&Part<'_, T> {
-        fn put(&self, out: &mut Out, traits: Traits) {
-            out.give(self.0.clone(), traits);
-        }
-    }
-    pub trait PartUncloned {
-        fn put(&self, out: &mut Out, traits: Traits);
-    }
-    impl<T> PartUncloned for Part<'_, T> {
-        fn put(&self, _: &mut Out, _: Traits) {
-            ::std::panic!(
-                "rawr: native code can't give marked code a copy of its `{}`, which is not `Clone`",
-                ::std::any::type_name::<T>()
-            )
-        }
-    }
-
-    /// A marked value that holds native parts (#1469), as `enum Theme {
-    /// Selected(themedef::Theme) }`, crossing as Rust passes it: a borrow
-    /// lends each part where it is ([`lend_part!`]), a value moves each
-    /// part, and a `&mut` takes back what the call made of it. Its other
-    /// fields cross by the wire format.
-    pub trait Parts: Sized {
-        fn lend<'c>(&'c self, call: &mut Call<'c>);
-        fn lend_mut<'c>(&'c mut self, call: &mut Call<'c>);
-        fn give(self, out: &mut Out);
-        fn take_into(&mut self, input: &mut In<'_>);
-    }
-
-    /// Lend `$value`, a `&$ty` of a native part of a marked value, to the
-    /// call `$call` where it is (#1469): by a key of its own, whose
-    /// accessor reads its place as `$ty`, or copied by the wire format when
-    /// `$ty` crosses by it, as an alias of `usize` does.
-    macro_rules! lend_part {
-        ($call:expr, $value:expr, $ty:ty) => {{
-            struct Key;
-            #[inline]
-            fn shared(
-                nonce: u64,
-                visit: &mut dyn FnMut(&$ty),
-            ) -> ::std::result::Result<(), u8> {
-                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<Key>(), true, |place| {
-                    // SAFETY: `Key`'s lend is this part, a `$ty`, claimed shared.
-                    visit(unsafe { &*place.cast_const().cast::<$ty>() })
-                })
-            }
-            const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
-            let lend = crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED);
-            let value: &$ty = $value;
-            // SAFETY: the lend's accessor reads its key's place as `$ty`.
-            #[allow(unsafe_code)]
-            unsafe {
-                (&crate::__rawr_island::hand(value)).lend_part($call, value, lend, ::std::any::type_name::<$ty>())
-            };
-        }};
-    }
-    pub(crate) use lend_part;
-
-    /// Lend `$value`, a `&$ty` of a marked value whose `Parts` impl lends
-    /// its parts, to the call `$call` whole, where it is (#1484): the value
-    /// written next is the one this lend lends, so native code the call
-    /// gives it to by reference is given this reference back.
-    macro_rules! lend_whole {
-        ($call:expr, $value:expr, $ty:ty) => {{
-            // Not `Key`, which a marked type `$ty` may be named.
-            struct WholeKey;
-            #[inline]
-            fn shared(
-                nonce: u64,
-                visit: &mut dyn FnMut(&$ty),
-            ) -> ::std::result::Result<(), u8> {
-                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<WholeKey>(), true, |place| {
-                    // SAFETY: `WholeKey`'s lend is this value, a `$ty`, claimed shared.
-                    visit(unsafe { &*place.cast_const().cast::<$ty>() })
-                })
-            }
-            const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
-            let lend = crate::__rawr_island::Lend::new(
-                ::std::any::TypeId::of::<WholeKey>(),
-                ::std::option::Option::None,
-                &SHARED,
-            );
-            let value: &$ty = $value;
-            // SAFETY: the lend's accessor reads its key's place as `$ty`.
-            #[allow(unsafe_code)]
-            unsafe {
-                $call.lend_whole(::std::ptr::from_ref(value).cast_mut().cast(), lend, ::std::any::type_name::<$ty>())
-            };
-        }};
-    }
-    pub(crate) use lend_whole;
-
-    /// [`lend_part!`] of a `&mut $ty`, lent mutably.
-    macro_rules! lend_part_mut {
-        ($call:expr, $value:expr, $ty:ty) => {{
-            struct Key;
-            #[inline]
-            fn mutable(
-                nonce: u64,
-                visit: &mut dyn FnMut(&mut $ty),
-            ) -> ::std::result::Result<(), u8> {
-                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<Key>(), false, |place| {
-                    // SAFETY: `Key`'s lend is this part, a `&mut $ty`, claimed exclusively.
-                    visit(unsafe { &mut *place.cast::<$ty>() })
-                })
-            }
-            #[inline]
-            fn shared(
-                nonce: u64,
-                visit: &mut dyn FnMut(&$ty),
-            ) -> ::std::result::Result<(), u8> {
-                crate::__rawr_island::reach(nonce, ::std::any::TypeId::of::<Key>(), true, |place| {
-                    // SAFETY: `Key`'s lend is this part, a `$ty`, claimed shared.
-                    visit(unsafe { &*place.cast_const().cast::<$ty>() })
-                })
-            }
-            const MUTABLE: fn(u64, &mut dyn FnMut(&mut $ty)) -> ::std::result::Result<(), u8> = mutable;
-            const SHARED: fn(u64, &mut dyn FnMut(&$ty)) -> ::std::result::Result<(), u8> = shared;
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
-            let lend = crate::__rawr_island::Lend::new(
-                ::std::any::TypeId::of::<Key>(),
-                ::std::option::Option::Some(&MUTABLE),
-                &SHARED,
-            );
-            let value: &mut $ty = $value;
-            // SAFETY: the lend's accessors read its key's place as `$ty`.
-            #[allow(unsafe_code)]
-            unsafe {
-                (&crate::__rawr_island::hand(&*value)).lend_part_mut($call, value, lend, ::std::any::type_name::<$ty>())
-            };
-        }};
-    }
-    pub(crate) use lend_part_mut;
-
-    /// The accessors of a lent `T`, keyed by `T`, for a generic marked
-    /// type's `Parts` impl, in which no item can name the impl's parameters
-    /// as [`lend_part!`]'s do (D869).
-    pub struct Accessors<T>(::std::marker::PhantomData<T>);
-
-    impl<T: 'static> Accessors<T> {
-        const SHARED: fn(u64, &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8> = Self::shared_of;
-        const MUTABLE: fn(u64, &mut dyn FnMut(&mut T)) -> ::std::result::Result<(), u8> = Self::mutable_of;
-
-        fn key() -> ::std::any::TypeId {
-            ::std::any::TypeId::of::<Self>()
-        }
-
-        #[allow(unsafe_code)]
-        fn shared_of(nonce: u64, visit: &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8> {
-            reach(nonce, Self::key(), true, |place| {
-                // SAFETY: this key's lend is a `T`, claimed shared.
-                visit(unsafe { &*place.cast_const().cast::<T>() })
-            })
-        }
-
-        #[allow(unsafe_code)]
-        fn mutable_of(nonce: u64, visit: &mut dyn FnMut(&mut T)) -> ::std::result::Result<(), u8> {
-            reach(nonce, Self::key(), false, |place| {
-                // SAFETY: this key's lend is a `T`, claimed exclusively.
-                visit(unsafe { &mut *place.cast::<T>() })
-            })
-        }
-
-        /// A shared lend of a `T`.
-        pub fn shared() -> Lend {
-            Lend::new(Self::key(), ::std::option::Option::None, &Self::SHARED)
-        }
-
-        /// A mutable lend of a `T`.
-        pub fn mutable() -> Lend {
-            Lend::new(Self::key(), ::std::option::Option::Some(&Self::MUTABLE), &Self::SHARED)
-        }
-    }
-
-    /// [`lend_part!`] in a generic marked type's `Parts` impl: `$value`, a
-    /// `&` of the part, is lent as a `&$ty`, its type with each lifetime
-    /// `'static`, by [`Accessors`].
-    macro_rules! lend_part_of {
-        ($call:expr, $value:expr, $ty:ty) => {{
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
-            // SAFETY: only its lifetimes change, which have no layout; the
-            // lend ends before the marked value's borrow does.
-            #[allow(unsafe_code)]
-            let value: &$ty = unsafe { &*::std::ptr::from_ref($value).cast::<$ty>() };
-            let lend = crate::__rawr_island::Accessors::<$ty>::shared();
-            // SAFETY: the lend's accessor reads its key's place as `$ty`.
-            #[allow(unsafe_code)]
-            unsafe {
-                (&crate::__rawr_island::hand(value)).lend_part($call, value, lend, ::std::any::type_name::<$ty>())
-            };
-        }};
-    }
-    pub(crate) use lend_part_of;
-
-    /// [`lend_part_of!`] of a `&mut`, lent mutably.
-    macro_rules! lend_part_mut_of {
-        ($call:expr, $value:expr, $ty:ty) => {{
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{LendByLoan as _, LendByWire as _};
-            // SAFETY: as `lend_part_of!`'s.
-            #[allow(unsafe_code)]
-            let value: &mut $ty = unsafe { &mut *::std::ptr::from_mut($value).cast::<$ty>() };
-            let lend = crate::__rawr_island::Accessors::<$ty>::mutable();
-            // SAFETY: the lend's accessors read its key's place as `$ty`.
-            #[allow(unsafe_code)]
-            unsafe {
-                (&crate::__rawr_island::hand(&*value)).lend_part_mut($call, value, lend, ::std::any::type_name::<$ty>())
-            };
-        }};
-    }
-    pub(crate) use lend_part_mut_of;
-
-    /// [`lend_whole!`] in a generic marked type's `Parts` impl, by
-    /// [`Accessors`] of `$ty`, its type with each lifetime `'static`.
-    macro_rules! lend_whole_of {
-        ($call:expr, $value:expr, $ty:ty) => {{
-            let lend = crate::__rawr_island::Accessors::<$ty>::shared();
-            // SAFETY: the lend's accessor reads its key's place as `$ty`,
-            // which differs from the value's type only in its lifetimes.
-            #[allow(unsafe_code)]
-            unsafe {
-                $call.lend_whole(::std::ptr::from_ref($value).cast_mut().cast(), lend, ::std::any::type_name::<$ty>())
-            };
-        }};
-    }
-    pub(crate) use lend_whole_of;
-
-    /// Move `$value`, a native part of a marked value, to the interpreter
-    /// by `$out` (#1469): by the wire format when its type crosses by it,
-    /// and else as the native value the interpreter keeps, with what its
-    /// type has of [`Traits`].
-    macro_rules! give_part {
-        ($out:expr, $value:expr) => {{
-            #[allow(unused_imports)]
-            use crate::__rawr_island::{
-                GiveByMove as _, GiveByWire as _, HasClone as _, HasDebug as _, HasDisplay as _,
-                HasEqual as _, HasHash as _, HasOrder as _, LacksClone as _, LacksDebug as _,
-                LacksDisplay as _, LacksEqual as _, LacksHash as _, LacksOrder as _,
-            };
-            let value = $value;
-            let probe = &crate::__rawr_island::probe(&value);
-            let traits = (
-                probe.debug_of(),
-                probe.display_of(),
-                probe.clone_of(),
-                probe.equal_of(),
-                probe.hash_of(),
-                probe.order_of(),
-            );
-            (&crate::__rawr_island::hand(&value)).give_part($out, value, traits);
-        }};
-    }
-    pub(crate) use give_part;
-
-    /// How [`lend_part!`] lends a part: copied by the wire format when its
-    /// type crosses by it ([`LendByWire`], found first), and else where it
-    /// is ([`LendByLoan`]).
-    pub trait LendByWire<T> {
-        /// # Safety
-        ///
-        /// None needed: the part is copied.
-        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
-        /// # Safety
-        ///
-        /// None needed: the part is copied, and its copy comes back.
-        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
-    }
-    impl<T: Put> LendByWire<T> for Hand<T> {
-        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
-            call.part(value);
-        }
-        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, _: Lend, _: &'static str) {
-            call.part(&*value);
-        }
-    }
-    pub trait LendByLoan<T> {
-        /// # Safety
-        ///
-        /// As for [`Call::lend_part`].
-        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
-        /// # Safety
-        ///
-        /// As for [`Call::lend_part`].
-        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
-    }
-    impl<T> LendByLoan<T> for &Hand<T> {
-        unsafe fn lend_part<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
-            debug_assert!(lend.mutable.is_none());
-            // SAFETY: as the caller's.
-            unsafe { call.lend_part(::std::ptr::from_ref(value).cast_mut().cast(), lend, name) }
-        }
-        unsafe fn lend_part_mut<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str) {
-            debug_assert!(lend.mutable.is_some());
-            // SAFETY: as the caller's.
-            unsafe { call.lend_part(::std::ptr::from_mut(value).cast(), lend, name) }
-        }
-    }
-
-    /// How [`give_part!`] moves a part: by the wire format when its type
-    /// crosses by it ([`GiveByWire`], found first), and else as the native
-    /// value the interpreter keeps ([`GiveByMove`]).
-    pub trait GiveByWire<T> {
-        fn give_part(&self, out: &mut Out, value: T, traits: Traits);
-    }
-    impl<T: Put> GiveByWire<T> for Hand<T> {
-        fn give_part(&self, out: &mut Out, value: T, _: Traits) {
-            value.put(out);
-        }
-    }
-    pub trait GiveByMove<T> {
-        fn give_part(&self, out: &mut Out, value: T, traits: Traits);
-    }
-    impl<T: 'static> GiveByMove<T> for &Hand<T> {
-        fn give_part(&self, out: &mut Out, value: T, traits: Traits) {
-            out.give(value, traits);
-        }
     }
 
     /// Start the program: the runner calls the native `main` once this
     /// returns, on a thread of its own.
     pub fn main() {
-        // SAFETY: the runner links `rawr`, which defines the function with
-        // this exact signature.
-        unsafe { __rawr_island_start_v1(entry) }
+        start(entry)
     }
 
     fn entry() -> i32 {
         ENTRY
-    }
-
-    trait Exit {
-        fn code(self) -> i32;
-    }
-    impl Exit for () {
-        fn code(self) -> i32 {
-            0
-        }
-    }
-    impl<E: ::std::fmt::Debug> Exit for ::std::result::Result<(), E> {
-        fn code(self) -> i32 {
-            match self {
-                Ok(()) => 0,
-                Err(error) => {
-                    ::std::eprintln!("Error: {error:?}");
-                    1
-                }
-            }
-        }
-    }
-
-    const UNIT: u8 = 0;
-    const FALSE: u8 = 1;
-    const TRUE: u8 = 2;
-    const INT: u8 = 3;
-    const FLOAT: u8 = 4;
-    const CHAR: u8 = 5;
-    const STR: u8 = 6;
-    const ARRAY: u8 = 7;
-    const NONE: u8 = 10;
-    const SOME: u8 = 11;
-    const OK: u8 = 12;
-    const ERR: u8 = 13;
-    const STRUCT: u8 = 15;
-    const ENUM: u8 = 16;
-    const LENT: u8 = 20;
-    const NATIVE: u8 = 21;
-    const HANDLE: u8 = 22;
-    const PINNED: u8 = 23;
-    const WHOLE: u8 = 24;
-    const TEXT_AT: u8 = 25;
-    const HASHED_SET: u8 = 26;
-    const HASHED_MAP: u8 = 27;
-    const KEPT_TEXT: u8 = 28;
-    const KEPT: u8 = 29;
-    const KEPT_LENT: u8 = 30;
-
-    /// A value on its way to the interpreter, the native values it gives
-    /// the interpreter, each taken once, and, when a call asks
-    /// ([`Call::pinned`]), where each text it copies is, in the order it
-    /// writes them.
-    pub struct Out(
-        ::std::vec::Vec<u8>,
-        ::std::vec::Vec<::std::option::Option<Given>>,
-        ::std::option::Option<::std::vec::Vec<*const str>>,
-    );
-
-    impl Out {
-        /// `value`, which the interpreter keeps, with what its type has of
-        /// [`Traits`].
-        pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
-            self.byte(NATIVE);
-            self.count(self.1.len());
-            self.1.push(Some((
-                ::std::boxed::Box::new(value),
-                ::std::any::type_name::<T>(),
-                traits,
-            )));
-        }
-        fn byte(&mut self, byte: u8) {
-            self.0.push(byte);
-        }
-        /// A `&str` native code gives: copied, with where native code's own
-        /// text is ([`Call::kept_text`]).
-        pub fn kept_text(&mut self, text: &str) {
-            self.byte(KEPT_TEXT);
-            self.count(text.as_ptr().expose_provenance());
-            self.count(text.len());
-            text.put(self);
-        }
-        fn count(&mut self, count: usize) {
-            self.0.extend_from_slice(&(count as u64).to_le_bytes());
-        }
-        fn text(&mut self, text: &str) {
-            self.count(text.len());
-            self.0.extend_from_slice(text.as_bytes());
-        }
-        pub fn structure(&mut self, path: &str, fields: usize) {
-            self.byte(STRUCT);
-            self.text(path);
-            self.count(fields);
-        }
-        pub fn variant(&mut self, path: &str, variant: &str, fields: usize) {
-            self.byte(ENUM);
-            self.text(path);
-            self.text(variant);
-            self.count(fields);
-        }
-        /// An `Option`'s `None`.
-        pub fn none(&mut self) {
-            self.byte(NONE);
-        }
-        /// The start of an `Option`'s `Some`, whose value follows.
-        pub fn some(&mut self) {
-            self.byte(SOME);
-        }
-        /// The start of a `Vec` or a tuple of `members`, which follow.
-        pub fn array(&mut self, members: usize) {
-            self.byte(ARRAY);
-            self.count(members);
-        }
-        /// The program value native code held under `handle` ([`Pulled`]),
-        /// given back to the interpreter, which lets go of the handle.
-        pub fn kept(&mut self, handle: u64) {
-            self.byte(KEPT);
-            self.0.extend_from_slice(&handle.to_le_bytes());
-        }
-        /// The program value native code holds under `handle`
-        /// ([`Pulled`]), lent where it is: the call shares it with native
-        /// code, which pulls on from where the call left it.
-        pub fn kept_lent(&mut self, handle: u64) {
-            self.byte(KEPT_LENT);
-            self.0.extend_from_slice(&handle.to_le_bytes());
-        }
-    }
-
-    /// The program's own iterator, which native code holds as std's `Box<dyn
-    /// Iterator<Item = T>>` by the handle the runner keeps it under, as
-    /// inboard's `Header` holds the `Box::new(actions.into_iter())` its
-    /// marked `new` made (#1600). Each `next` asks the interpreter for one
-    /// item, which `item` reads as `T` crosses, so the program's iterator
-    /// runs only as far as native code pulls.
-    pub struct Pulled<T> {
-        /// `0` once the value went back to the interpreter ([`take_pulled`]).
-        handle: u64,
-        item: fn(&mut In<'_>) -> T,
-    }
-
-    /// The address of each [`Pulled`], with its handle, by which a `dyn
-    /// Iterator` native code lends or gives back is found to be one.
-    static PULLED: ::std::sync::Mutex<::std::vec::Vec<(usize, u64)>> =
-        ::std::sync::Mutex::new(::std::vec::Vec::new());
-
-    fn pulled_at<R>(change: impl FnOnce(&mut ::std::vec::Vec<(usize, u64)>) -> R) -> R {
-        change(&mut PULLED.lock().unwrap_or_else(::std::sync::PoisonError::into_inner))
-    }
-
-    impl<T: 'static> Pulled<T> {
-        fn boxed(handle: u64, item: fn(&mut In<'_>) -> T) -> ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>> {
-            let pulled = ::std::boxed::Box::new(Self { handle, item });
-            let at = ::std::ptr::from_ref(&*pulled).addr();
-            pulled_at(|pulled| pulled.push((at, handle)));
-            pulled
-        }
-    }
-
-    impl<T> ::std::iter::Iterator for Pulled<T> {
-        type Item = T;
-
-        fn next(&mut self) -> ::std::option::Option<T> {
-            register();
-            let mut natives = ::std::vec::Vec::new();
-            // SAFETY: as for `register`.
-            let reply = unsafe { __rawr_island_next_v1(self.handle, &mut natives) };
-            match reply.first() {
-                Some(0) => {
-                    let mut reply = Reply {
-                        bytes: reply,
-                        at: 1,
-                        path: "Iterator::next",
-                        natives: natives.into_iter().map(Some).collect(),
-                        places: ::std::vec::Vec::new(),
-                        texts: ::std::vec::Vec::new(),
-                    };
-                    let item = self.item;
-                    reply.read(|input| input.option(item))
-                }
-                Some(_) => failed(&reply),
-                None => ::std::panic!("rawr: no answer to `Iterator::next`"),
-            }
-        }
-    }
-
-    impl<T> Drop for Pulled<T> {
-        fn drop(&mut self) {
-            let at = ::std::ptr::from_ref(self).addr();
-            pulled_at(|pulled| pulled.retain(|(known, _)| *known != at));
-            if self.handle != 0 {
-                // SAFETY: as for `register`.
-                unsafe { __rawr_island_release_v1(self.handle) }
-            }
-        }
-    }
-
-    /// The handle of the program value `object` holds, when it is a
-    /// [`Pulled`].
-    pub fn pulled_handle<T>(object: &(dyn ::std::iter::Iterator<Item = T> + '_)) -> ::std::option::Option<u64> {
-        let at = ::std::ptr::from_ref(object).cast::<()>().addr();
-        pulled_at(|pulled| pulled.iter().find(|(known, _)| *known == at).map(|(_, handle)| *handle))
-    }
-
-    /// The handle of the program value `object` holds, when it is a
-    /// [`Pulled`], which native code gives back to the interpreter; else
-    /// `object` itself, a native value.
-    pub fn take_pulled<T: 'static>(
-        object: ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>,
-    ) -> ::std::result::Result<u64, ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>> {
-        if pulled_handle(&*object).is_none() {
-            return Err(object);
-        }
-        // SAFETY: the box was made by `Pulled::boxed` at this address and
-        // is of std's iterator of `T`, which only a `Pulled<T>` is.
-        let mut pulled = unsafe { ::std::boxed::Box::from_raw(::std::boxed::Box::into_raw(object).cast::<Pulled<T>>()) };
-        Ok(::std::mem::replace(&mut pulled.handle, 0))
-    }
-
-    /// A value on its way back from the interpreter, and the native values
-    /// the interpreter moved for the reply, each taken once.
-    pub struct In<'a> {
-        bytes: &'a [u8],
-        path: &'a str,
-        natives: &'a mut [::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>],
-        /// Where each part the call lent is, by its index among the call's
-        /// lends: a part still where it was lent comes back as its index
-        /// (#1475).
-        places: &'a [*mut ()],
-    }
-
-    impl<'a> In<'a> {
-        fn fail(&self, what: &str) -> ! {
-            ::std::panic!("rawr: the interpreter's answer to `{}` is malformed: {what}", self.path)
-        }
-        fn take(&mut self, length: usize) -> &'a [u8] {
-            if self.bytes.len() < length {
-                self.fail("it ended early");
-            }
-            let (head, tail) = self.bytes.split_at(length);
-            self.bytes = tail;
-            head
-        }
-        fn byte(&mut self) -> u8 {
-            self.take(1)[0]
-        }
-        fn expect(&mut self, tag: u8, what: &str) {
-            if self.byte() != tag {
-                self.fail(&::std::format!("expected {what}"));
-            }
-        }
-        fn eight(&mut self) -> [u8; 8] {
-            let mut bytes = [0; 8];
-            bytes.copy_from_slice(self.take(8));
-            bytes
-        }
-        fn count(&mut self) -> usize {
-            u64::from_le_bytes(self.eight()) as usize
-        }
-        /// The `&str` a marked value's field holds: native code's own text
-        /// when the program's is its copy, and else the program's text,
-        /// which rustc lets be only a `'static` one, as a literal is, kept
-        /// once per text for as long as the program runs.
-        pub fn kept_text(&mut self) -> &'static str {
-            if self.bytes.first() == Some(&KEPT_TEXT) {
-                self.byte();
-                let address = self.count();
-                let length = self.count();
-                self.expect(STR, "a string");
-                self.text();
-                let native = ::std::ptr::slice_from_raw_parts(
-                    ::std::ptr::with_exposed_provenance::<u8>(address),
-                    length,
-                ) as *const str;
-                // SAFETY: native code's own `&str`, which it gave the call
-                // and which outlives what native code takes back holding
-                // it, as the marked type's lifetime says.
-                return unsafe { &*native };
-            }
-            self.expect(STR, "a string");
-            lasting(self.text())
-        }
-        fn text(&mut self) -> &'a str {
-            let length = self.count();
-            match ::std::str::from_utf8(self.take(length)) {
-                Ok(text) => text,
-                Err(_) => self.fail("a string is not UTF-8"),
-            }
-        }
-        pub fn structure(&mut self, path: &str, fields: usize) {
-            self.expect(STRUCT, path);
-            let (found, count) = (self.text(), self.count());
-            if found != path || count != fields {
-                self.fail(&::std::format!(
-                    "expected `{path}` with {fields} fields, found `{found}` with {count}; \
-                     restart `rawr run` if the struct changed"
-                ));
-            }
-        }
-        pub fn variant(&mut self, path: &str) -> (&'a str, usize) {
-            self.expect(ENUM, path);
-            let found = self.text();
-            if found != path {
-                self.fail(&::std::format!("expected `{path}`, found `{found}`"));
-            }
-            (self.text(), self.count())
-        }
-        pub fn unknown(&self, path: &str, variant: &str, count: usize) -> ! {
-            self.fail(&::std::format!("`{path}` has no variant `{variant}` with {count} fields"))
-        }
-        /// A `Vec` whose items `item` reads.
-        pub fn vec<T>(&mut self, mut item: impl FnMut(&mut Self) -> T) -> ::std::vec::Vec<T> {
-            self.expect(ARRAY, "a `Vec`");
-            let count = self.count();
-            (0..count).map(|_| item(self)).collect()
-        }
-        /// An `Option` whose value `some` reads.
-        pub fn option<T>(&mut self, some: impl FnOnce(&mut Self) -> T) -> ::std::option::Option<T> {
-            if self.some() {
-                Some(some(self))
-            } else {
-                None
-            }
-        }
-        /// Whether an `Option` is a `Some`, whose value follows.
-        pub fn some(&mut self) -> bool {
-            match self.byte() {
-                NONE => false,
-                SOME => true,
-                _ => self.fail("expected an `Option`"),
-            }
-        }
-        /// Where the first part the next value holds that is still where
-        /// the call lent it is, without reading the value (#1475).
-        fn first_lent(&self) -> ::std::option::Option<usize> {
-            let mut found = None;
-            let mut bytes = self.bytes;
-            scan(&mut bytes, &mut found)?;
-            Some(self.places.get(found?)?.addr())
-        }
-        /// What a call made of a native part it was lent where it is
-        /// (#1469): `None` when the part is still there, and else the whole
-        /// new value it gave the place, `*place = value`.
-        pub fn changed<T: 'static>(&mut self, place: &T) -> ::std::option::Option<T> {
-            match self.bytes.first() {
-                Some(&UNIT) => {
-                    self.byte();
-                    None
-                }
-                Some(&LENT) => {
-                    self.byte();
-                    let index = self.count();
-                    if self.places.get(index).map(|lent| lent.addr())
-                        != Some(::std::ptr::from_ref(place).addr())
-                    {
-                        ::std::panic!(
-                            "rawr: `{}` moved a `{}` native code lent it to another place, \
-                             which can't come back yet",
-                            self.path,
-                            ::std::any::type_name::<T>()
-                        );
-                    }
-                    None
-                }
-                _ => Some(self.native()),
-            }
-        }
-        /// A `Result`, or an alias of one, whose parts `ok` and `err` read.
-        pub fn result<R: Outcome>(
-            &mut self,
-            ok: impl FnOnce(&mut Self) -> R::Ok,
-            err: impl FnOnce(&mut Self) -> R::Err,
-        ) -> R {
-            match self.byte() {
-                OK => R::ok(ok(self)),
-                ERR => R::err(err(self)),
-                _ => self.fail("expected a `Result`"),
-            }
-        }
-        /// The start of a tuple of `members`, which follow.
-        pub fn tuple(&mut self, members: usize) {
-            self.expect(ARRAY, "a tuple");
-            let count = self.count();
-            if count != members {
-                self.fail(&::std::format!("expected a tuple of {members}, found {count}"));
-            }
-        }
-        /// The value a call gave a lent `&mut T` as a whole, `*place =
-        /// value`; `None` when the place is still the one lent.
-        pub fn replaced<T: 'static>(&mut self) -> ::std::option::Option<T> {
-            if self.bytes.first() == Some(&UNIT) {
-                self.byte();
-                return None;
-            }
-            Some(self.native())
-        }
-        /// That a lent `&mut` of `name`, whose type names a lifetime, was
-        /// not given a whole new value, which can't come back yet.
-        pub fn unreplaced(&mut self, name: &str) {
-            if self.byte() != UNIT {
-                ::std::panic!(
-                    "rawr: `{}` gave the `&mut {name}` native code lent it a new value, \
-                     which can't come back yet",
-                    self.path
-                );
-            }
-        }
-        /// A static's own value, which the interpreter gave where it is for
-        /// a call that asked for a `&'static` ([`Call::in_place`]).
-        pub fn lasting<T: 'static>(&mut self) -> &'static T {
-            let place = self.place::<T>();
-            // SAFETY: for a call that asks for a `&'static`, the runner
-            // gives only the place of a value that lives as long as the
-            // program, and nothing writes it.
-            unsafe { &*place }
-        }
-        /// A static slice of native values itself, for a call that asked
-        /// for a `&'static [T]` ([`Call::in_place`]).
-        pub fn lasting_slice<T: 'static>(&mut self) -> &'static [T] {
-            self.native()
-        }
-        /// The program's own text, pinned for as long as the runner lives,
-        /// for a call that asked for a `&'static str` ([`Call::in_place`]).
-        pub fn lasting_text(&mut self) -> &'static str {
-            self.native()
-        }
-        /// Where the native value the interpreter lent in place is, as a
-        /// `T`.
-        fn place<T: 'static>(&mut self) -> *const T {
-            let place: *const dyn ::std::any::Any = self.native();
-            // SAFETY: the runner gave the place of a value that lives at
-            // least as long as the call's result borrows it.
-            match unsafe { &*place }.downcast_ref::<T>() {
-                Some(value) => value,
-                None => self.fail(&::std::format!("expected a `{}`", ::std::any::type_name::<T>())),
-            }
-        }
-        /// A `Box<dyn ::std::iter::Iterator<Item = T>>`: the program's own iterator, which
-        /// native code pulls from by its handle ([`Pulled`]), each item read
-        /// by `item`, or a native one the interpreter moved (#1600).
-        pub fn pulled<T: 'static>(
-            &mut self,
-            item: fn(&mut In<'_>) -> T,
-        ) -> ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>> {
-            if self.bytes.first() != Some(&KEPT) {
-                return self.native();
-            }
-            self.byte();
-            let handle = u64::from_le_bytes(self.eight());
-            Pulled::boxed(handle, item)
-        }
-        /// What a call made of the iterator `place` native code lent it:
-        /// the program's iterator it pulled from where it is, a new one,
-        /// or what a native one became ([`In::changed`]).
-        pub fn pulled_into<T: 'static>(
-            &mut self,
-            place: &mut ::std::boxed::Box<dyn ::std::iter::Iterator<Item = T>>,
-            item: fn(&mut In<'_>) -> T,
-        ) {
-            if self.bytes.first() != Some(&KEPT) {
-                if let Some(new) = self.changed(&*place) {
-                    *place = new;
-                }
-                return;
-            }
-            let mut bytes = [0; 8];
-            match self.bytes.get(1..9) {
-                Some(handle) => bytes.copy_from_slice(handle),
-                None => self.fail("it ended early"),
-            }
-            if pulled_handle(&**place) == Some(u64::from_le_bytes(bytes)) {
-                self.take(9);
-                return;
-            }
-            *place = self.pulled(item);
-        }
-        /// A native value the interpreter moved, as the `iced::Error` of an
-        /// `iced::Result`.
-        pub fn native<T: 'static>(&mut self) -> T {
-            let name = ::std::any::type_name::<T>();
-            if self.bytes.first() == Some(&LENT) {
-                ::std::panic!(
-                    "rawr: `{}` moved a `{name}` native code lent it to another place, \
-                     which can't come back yet",
-                    self.path
-                );
-            }
-            self.expect(NATIVE, &::std::format!("a `{name}`"));
-            let index = self.count();
-            let moved = self.natives.get_mut(index).and_then(::std::option::Option::take);
-            match moved.map(|value| value.downcast::<T>()) {
-                Some(Ok(value)) => *value,
-                _ => self.fail(&::std::format!("expected a `{name}`")),
-            }
-        }
-    }
-
-    /// A `Result`, or an alias of one such as `iced::Result`, by its parts.
-    pub trait Outcome {
-        type Ok;
-        type Err;
-        fn ok(value: Self::Ok) -> Self;
-        fn err(error: Self::Err) -> Self;
-    }
-    impl<T, E> Outcome for ::std::result::Result<T, E> {
-        type Ok = T;
-        type Err = E;
-        fn ok(value: T) -> Self {
-            Ok(value)
-        }
-        fn err(error: E) -> Self {
-            Err(error)
-        }
-    }
-
-    /// `text`, kept once per text for as long as the program runs, as a
-    /// literal is: a `&'static str` the program gives native code.
-    fn lasting(text: &str) -> &'static str {
-        static TEXTS: ::std::sync::Mutex<::std::collections::BTreeSet<&'static str>> =
-            ::std::sync::Mutex::new(::std::collections::BTreeSet::new());
-        let mut texts = TEXTS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-        match texts.get(text) {
-            Some(kept) => kept,
-            None => {
-                let kept: &'static str = ::std::boxed::Box::leak(text.into());
-                texts.insert(kept);
-                kept
-            }
-        }
-    }
-
-    /// How a value of `T` comes back: by the wire format when `T` crosses
-    /// by it ([`ByWire`], found first), and else as the native value the
-    /// interpreter moved ([`ByMove`]).
-    pub struct Back<T>(::std::marker::PhantomData<T>);
-    impl<T> Back<T> {
-        pub fn new() -> Self {
-            Self(::std::marker::PhantomData)
-        }
-    }
-    /// `value`, which came back at `'static` (`S`), at the lifetimes the
-    /// signature names (`T`), as an invariant `Text<'a>` can't be coerced.
-    ///
-    /// # Safety
-    ///
-    /// `T` is `S` but for its lifetimes, and what `value` borrows lives as
-    /// long as `T`'s lifetimes say.
-    pub unsafe fn at_lifetimes<S, T>(value: S) -> T {
-        ::std::assert_eq!(::std::mem::size_of::<S>(), ::std::mem::size_of::<T>());
-        let value = ::std::mem::ManuallyDrop::new(value);
-        // SAFETY: as the caller's; `value` is never dropped, so its bytes
-        // are moved into the result once.
-        unsafe { ::std::mem::transmute_copy(&*value) }
-    }
-    /// A part lent `&mut` takes back its copy, or the whole new value the
-    /// call gave its place, if it gave one (#1469).
-    pub trait ByWire<T> {
-        fn take(&self, input: &mut In<'_>) -> T;
-        fn take_into(&self, input: &mut In<'_>, place: &mut T);
-    }
-    impl<T: Take> ByWire<T> for Back<T> {
-        fn take(&self, input: &mut In<'_>) -> T {
-            T::take(input)
-        }
-        fn take_into(&self, input: &mut In<'_>, place: &mut T) {
-            *place = T::take(input);
-        }
-    }
-    pub trait ByMove<T> {
-        fn take(&self, input: &mut In<'_>) -> T;
-        fn take_into(&self, input: &mut In<'_>, place: &mut T);
-    }
-    impl<T: 'static> ByMove<T> for &Back<T> {
-        fn take(&self, input: &mut In<'_>) -> T {
-            input.native()
-        }
-        fn take_into(&self, input: &mut In<'_>, place: &mut T) {
-            if let Some(new) = input.changed(&*place) {
-                *place = new;
-            }
-        }
-    }
-
-    /// Step `bytes` past one value, keeping in `found` the index of the
-    /// first lent part it holds; `None` when the value is malformed.
-    fn scan(bytes: &mut &[u8], found: &mut ::std::option::Option<usize>) -> ::std::option::Option<()> {
-        fn skip(bytes: &mut &[u8], length: usize) -> ::std::option::Option<()> {
-            *bytes = bytes.get(length..)?;
-            Some(())
-        }
-        fn count(bytes: &mut &[u8]) -> ::std::option::Option<usize> {
-            let head = bytes.get(..8)?;
-            let mut eight = [0; 8];
-            eight.copy_from_slice(head);
-            *bytes = &bytes[8..];
-            usize::try_from(u64::from_le_bytes(eight)).ok()
-        }
-        let (&tag, rest) = bytes.split_first()?;
-        *bytes = rest;
-        match tag {
-            UNIT | FALSE | TRUE | NONE => {}
-            INT | FLOAT | HANDLE | KEPT | KEPT_LENT => skip(bytes, 8)?,
-            CHAR => skip(bytes, 4)?,
-            PINNED => skip(bytes, 16)?,
-            KEPT_TEXT => {
-                skip(bytes, 16)?;
-                scan(bytes, found)?;
-            }
-            STR => {
-                let length = count(bytes)?;
-                skip(bytes, length)?;
-            }
-            LENT => {
-                let index = count(bytes)?;
-                found.get_or_insert(index);
-            }
-            NATIVE => {
-                count(bytes)?;
-            }
-            SOME | OK | ERR => scan(bytes, found)?,
-            ARRAY | STRUCT | ENUM => {
-                // A struct's path, and an enum's path and variant, come
-                // before its members.
-                let names = match tag {
-                    STRUCT => 1,
-                    ENUM => 2,
-                    _ => 0,
-                };
-                for _ in 0..names {
-                    let length = count(bytes)?;
-                    skip(bytes, length)?;
-                }
-                for _ in 0..count(bytes)? {
-                    scan(bytes, found)?;
-                }
-            }
-            _ => return None,
-        }
-        Some(())
-    }
-
-    /// Take back into `place`, a `Vec` whose elements' native parts the
-    /// call lent where they are (#1475), the `Vec` the call made of it: an
-    /// element that holds a part still where it was lent is that part's
-    /// element, taken back into by `into` and moved where the call put it,
-    /// and any other element is new, read by `take`. An element the call
-    /// dropped drops.
-    pub fn vec_into<T>(
-        input: &mut In<'_>,
-        place: &mut ::std::vec::Vec<T>,
-        mut into: impl FnMut(&mut In<'_>, &mut T),
-        mut take: impl FnMut(&mut In<'_>) -> T,
-    ) {
-        input.expect(ARRAY, "a `Vec`");
-        let count = input.count();
-        let size = ::std::mem::size_of::<T>();
-        let start = place.as_ptr().addr();
-        let mut moved = ::std::vec![false; place.len()];
-        let mut order = ::std::vec::Vec::with_capacity(count);
-        for index in 0..count {
-            let element = input.first_lent().and_then(|lent| {
-                // A part inside an element's own bytes names it; one
-                // elsewhere, as in a `Box`, is the element at its index.
-                let at = match lent.checked_sub(start) {
-                    Some(offset) if size > 0 && offset < size * moved.len() => offset / size,
-                    _ => index,
-                };
-                (at < moved.len() && !moved[at]).then_some(at)
-            });
-            match element {
-                Some(at) => {
-                    moved[at] = true;
-                    into(input, &mut place[at]);
-                    order.push(Ok(at));
-                }
-                None => order.push(Err(take(input))),
-            }
-        }
-        let mut old = ::std::mem::take(place)
-            .into_iter()
-            .map(Some)
-            .collect::<::std::vec::Vec<_>>();
-        *place = order
-            .into_iter()
-            .map(|element| match element {
-                Ok(at) => match old[at].take() {
-                    Some(kept) => kept,
-                    None => ::std::unreachable!("each element moves once, as `moved` marks it"),
-                },
-                Err(new) => new,
-            })
-            .collect();
-    }
-
-    /// How an argument of `T` whose type the marked crate doesn't declare
-    /// goes to the interpreter: by the wire format when `T` crosses by it,
-    /// as an alias of `usize` does ([`ByCopy`], found first), and else as
-    /// the native value the interpreter keeps ([`ByGift`]), or lends for a
-    /// borrow ([`ByLoan`]). A `&mut` comes back the same way: its copy, or
-    /// the new value the lent place was given. Rustc reads the alias
-    /// through to its target, as it does for the checker.
-    pub struct Hand<T>(::std::marker::PhantomData<T>);
-    pub fn hand<T>(_: &T) -> Hand<T> {
-        Hand(::std::marker::PhantomData)
-    }
-    pub trait ByCopy<T> {
-        fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits);
-        /// # Safety
-        ///
-        /// None needed: the value is copied.
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
-        /// # Safety
-        ///
-        /// None needed: the value is copied, and its copy comes back.
-        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
-        /// The copy of a `&mut` argument [`ByCopy::lend`] copied, back.
-        fn back(&self, reply: &mut Reply, place: &mut T)
-        where
-            T: Take;
-    }
-    impl<T: Put> ByCopy<T> for Hand<T> {
-        fn hand(&self, call: &mut Call<'_>, value: T, _: Traits) {
-            call.argument(&value);
-        }
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, _: Lend, _: &'static str) {
-            call.argument(value);
-        }
-        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, _: Lend, _: &'static str) {
-            call.mutable(&*value);
-        }
-        fn back(&self, reply: &mut Reply, place: &mut T)
-        where
-            T: Take,
-        {
-            *place = reply.take();
-        }
-    }
-    pub trait ByGift<T> {
-        fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits);
-    }
-    impl<T: 'static> ByGift<T> for &Hand<T> {
-        fn hand(&self, call: &mut Call<'_>, value: T, traits: Traits) {
-            call.give(value, traits);
-        }
-    }
-    pub trait ByLoan<T> {
-        /// # Safety
-        ///
-        /// As for [`Call::lend_ref`].
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str);
-        /// # Safety
-        ///
-        /// As for [`Call::lend`].
-        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
-        /// The whole new value the call gave the place [`ByLoan::lend`]
-        /// lent, `*place = value`, if it gave one (#1139).
-        fn back(&self, reply: &mut Reply, place: &mut T)
-        where
-            T: 'static;
-    }
-    impl<T> ByLoan<T> for &Hand<T> {
-        unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
-            // SAFETY: as the caller's.
-            unsafe { call.lend_ref(value, lend, name) }
-        }
-        unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str) {
-            // SAFETY: as the caller's.
-            unsafe { call.lend(value, lend, name) }
-        }
-        fn back(&self, reply: &mut Reply, place: &mut T)
-        where
-            T: 'static,
-        {
-            if let Some(new) = reply.read(|input| input.replaced::<T>()) {
-                *place = new;
-            }
-        }
-    }
-
-    /// A value that goes to the interpreter.
-    pub trait Put {
-        fn put(&self, out: &mut Out);
-    }
-
-    /// A value that comes back from the interpreter.
-    pub trait Take: Sized {
-        fn take(input: &mut In<'_>) -> Self;
-    }
-
-    /// A marked type native code sees, which the runner holds a program
-    /// value as where a crate's generic takes one, as `Task<Message>` does
-    /// (#1249): a value goes to the interpreter as Rust moves it, its native
-    /// parts moved, and comes back by [`Take`].
-    pub trait Mirror: Take {
-        fn give(self, out: &mut Out);
-        /// A borrow of the value lent to the interpreter as a marked
-        /// function's `&` argument is (#1583): its native parts and the
-        /// value whole where they are, its other fields by the wire format.
-        fn lend<'c>(&'c self, call: &mut Call<'c>);
-    }
-
-    /// The mirror of the program value the runner wrote as `bytes`, its
-    /// native values moved to `natives` (`rawr::island::mirror_out`), at
-    /// `path` from the crate's root.
-    pub fn mirrored<T: Mirror>(
-        path: &'static str,
-        bytes: &[u8],
-        natives: ::std::vec::Vec<::std::boxed::Box<dyn ::std::any::Any>>,
-    ) -> T {
-        let mut natives = natives
-            .into_iter()
-            .map(::std::option::Option::Some)
-            .collect::<::std::vec::Vec<_>>();
-        let mut input = In {
-            bytes,
-            path,
-            natives: &mut natives,
-            places: &[],
-        };
-        T::take(&mut input)
-    }
-
-    /// A mirror's value on its way to the interpreter: its bytes and the
-    /// native values it gives, for the runner to make the program value of
-    /// (`rawr::island::mirror_in`).
-    pub fn unmirrored<T: Mirror>(
-        value: T,
-    ) -> (::std::vec::Vec<u8>, ::std::vec::Vec<::std::option::Option<Given>>) {
-        let mut out = Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None);
-        value.give(&mut out);
-        (out.0, out.1)
-    }
-
-    /// `visit` of a mirror native code lends a program function by `&`,
-    /// as a crate calls a style closure with its `&Theme` (#1583): the
-    /// value written as a marked function's `&` argument is
-    /// ([`Mirror::lend`]), the native values it gives, and what it lends,
-    /// for the runner to make the program value of while they are lent
-    /// (`rawr::island::mirror_lent`).
-    pub fn lent_mirror<T: Mirror, R>(
-        value: &T,
-        visit: impl FnOnce(
-            &[u8],
-            &mut [::std::option::Option<Given>],
-            &[(::std::any::TypeId, &'static str, *mut (), ::std::option::Option<Accessor>, Accessor)],
-        ) -> R,
-    ) -> R {
-        let mut call = Call::new("", false);
-        value.lend(&mut call);
-        visit(&call.values.0, &mut call.values.1, &call.lent)
-    }
-
-    impl Put for () {
-        fn put(&self, out: &mut Out) {
-            out.byte(UNIT);
-        }
-    }
-    impl Take for () {
-        fn take(input: &mut In<'_>) -> Self {
-            input.expect(UNIT, "`()`");
-        }
-    }
-    impl Put for bool {
-        fn put(&self, out: &mut Out) {
-            out.byte(if *self { TRUE } else { FALSE });
-        }
-    }
-    impl Take for bool {
-        fn take(input: &mut In<'_>) -> Self {
-            match input.byte() {
-                TRUE => true,
-                FALSE => false,
-                _ => input.fail("expected a `bool`"),
-            }
-        }
-    }
-    impl Put for char {
-        fn put(&self, out: &mut Out) {
-            out.byte(CHAR);
-            out.0.extend_from_slice(&u32::from(*self).to_le_bytes());
-        }
-    }
-    impl Take for char {
-        fn take(input: &mut In<'_>) -> Self {
-            input.expect(CHAR, "a `char`");
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(input.take(4));
-            match char::from_u32(u32::from_le_bytes(bytes)) {
-                Some(character) => character,
-                None => input.fail("not a `char`"),
-            }
-        }
-    }
-    macro_rules! integers {
-        ($($ty:ty),*) => {$(
-            impl Put for $ty {
-                fn put(&self, out: &mut Out) {
-                    match i64::try_from(*self) {
-                        Ok(value) => {
-                            out.byte(INT);
-                            out.0.extend_from_slice(&value.to_le_bytes());
-                        }
-                        Err(_) => ::std::panic!(
-                            "rawr: {} is out of range for the interpreter's integers", self
-                        ),
-                    }
-                }
-            }
-            impl Take for $ty {
-                fn take(input: &mut In<'_>) -> Self {
-                    input.expect(INT, ::std::stringify!($ty));
-                    let value = i64::from_le_bytes(input.eight());
-                    match <$ty>::try_from(value) {
-                        Ok(value) => value,
-                        Err(_) => input.fail(&::std::format!(
-                            "{value} is out of range for `{}`", ::std::stringify!($ty)
-                        )),
-                    }
-                }
-            }
-        )*};
-    }
-    integers!(i8, i16, i32, i64, isize, u8, u16, u32);
-    // The interpreter keeps a `u64` or a `usize` as the `i64` with the same
-    // bits, so one past `i64::MAX` crosses too.
-    macro_rules! wide {
-        ($($ty:ty),*) => {$(
-            impl Put for $ty {
-                fn put(&self, out: &mut Out) {
-                    out.byte(INT);
-                    out.0.extend_from_slice(&(*self as u64 as i64).to_le_bytes());
-                }
-            }
-            impl Take for $ty {
-                fn take(input: &mut In<'_>) -> Self {
-                    input.expect(INT, ::std::stringify!($ty));
-                    i64::from_le_bytes(input.eight()) as u64 as $ty
-                }
-            }
-        )*};
-    }
-    wide!(u64, usize);
-    impl Put for f64 {
-        fn put(&self, out: &mut Out) {
-            out.byte(FLOAT);
-            out.0.extend_from_slice(&self.to_le_bytes());
-        }
-    }
-    impl Take for f64 {
-        fn take(input: &mut In<'_>) -> Self {
-            input.expect(FLOAT, "an `f64`");
-            f64::from_le_bytes(input.eight())
-        }
-    }
-    impl Put for f32 {
-        fn put(&self, out: &mut Out) {
-            f64::from(*self).put(out);
-        }
-    }
-    impl Take for f32 {
-        fn take(input: &mut In<'_>) -> Self {
-            f64::take(input) as f32
-        }
-    }
-    impl Put for str {
-        fn put(&self, out: &mut Out) {
-            if let Some(texts) = &mut out.2 {
-                texts.push(::std::ptr::from_ref(self));
-            }
-            out.byte(STR);
-            out.text(self);
-        }
-    }
-    impl Put for ::std::string::String {
-        fn put(&self, out: &mut Out) {
-            self.as_str().put(out);
-        }
-    }
-    impl Take for ::std::string::String {
-        fn take(input: &mut In<'_>) -> Self {
-            // A copy of native code's own text is a copy all the same.
-            if input.bytes.first() == Some(&KEPT_TEXT) {
-                input.byte();
-                input.count();
-                input.count();
-            }
-            input.expect(STR, "a string");
-            input.text().to_owned()
-        }
-    }
-    impl<T: Put> Put for [T] {
-        fn put(&self, out: &mut Out) {
-            out.byte(ARRAY);
-            out.count(self.len());
-            for item in self {
-                item.put(out);
-            }
-        }
-    }
-    impl<T: Put> Put for ::std::vec::Vec<T> {
-        fn put(&self, out: &mut Out) {
-            self.as_slice().put(out);
-        }
-    }
-    impl<T: Take> Take for ::std::vec::Vec<T> {
-        fn take(input: &mut In<'_>) -> Self {
-            input.expect(ARRAY, "a `Vec`");
-            let count = input.count();
-            (0..count).map(|_| T::take(input)).collect()
-        }
-    }
-    impl<T: Put> Put for ::std::option::Option<T> {
-        fn put(&self, out: &mut Out) {
-            match self {
-                None => out.byte(NONE),
-                Some(value) => {
-                    out.byte(SOME);
-                    value.put(out);
-                }
-            }
-        }
-    }
-    /// A set's keys or a map's `(key, value)` entries, as an array: in a
-    /// B-tree's own order, which is its keys' `Ord`, and for a hashed one
-    /// after `hashed`, [`HASHED_SET`] or [`HASHED_MAP`], which the runner
-    /// sorts by key, as the interpreter keeps every keyed collection.
-    fn put_entries<E: Put>(
-        out: &mut Out,
-        hashed: ::std::option::Option<u8>,
-        entries: impl ExactSizeIterator<Item = E>,
-    ) {
-        if let Some(hashed) = hashed {
-            out.byte(hashed);
-        }
-        out.array(entries.len());
-        for entry in entries {
-            entry.put(out);
-        }
-    }
-    /// Each entry a set's or a map's array holds ([`put_entries`]).
-    fn take_entries<E: Take, C: ::std::iter::FromIterator<E>>(input: &mut In<'_>) -> C {
-        input.expect(ARRAY, "a set or a map");
-        let count = input.count();
-        (0..count).map(|_| E::take(input)).collect()
-    }
-    impl<T: Put, S> Put for ::std::collections::HashSet<T, S> {
-        fn put(&self, out: &mut Out) {
-            put_entries(out, Some(HASHED_SET), self.iter());
-        }
-    }
-    impl<T, S> Take for ::std::collections::HashSet<T, S>
-    where
-        T: Take + ::std::cmp::Eq + ::std::hash::Hash,
-        S: ::std::hash::BuildHasher + ::std::default::Default,
-    {
-        fn take(input: &mut In<'_>) -> Self {
-            take_entries::<T, Self>(input)
-        }
-    }
-    impl<T: Put> Put for ::std::collections::BTreeSet<T> {
-        fn put(&self, out: &mut Out) {
-            put_entries(out, None, self.iter());
-        }
-    }
-    impl<T: Take + ::std::cmp::Ord> Take for ::std::collections::BTreeSet<T> {
-        fn take(input: &mut In<'_>) -> Self {
-            take_entries::<T, Self>(input)
-        }
-    }
-    impl<K: Put, V: Put, S> Put for ::std::collections::HashMap<K, V, S> {
-        fn put(&self, out: &mut Out) {
-            put_entries(out, Some(HASHED_MAP), self.iter());
-        }
-    }
-    impl<K, V, S> Take for ::std::collections::HashMap<K, V, S>
-    where
-        K: Take + ::std::cmp::Eq + ::std::hash::Hash,
-        V: Take,
-        S: ::std::hash::BuildHasher + ::std::default::Default,
-    {
-        fn take(input: &mut In<'_>) -> Self {
-            take_entries::<(K, V), Self>(input)
-        }
-    }
-    impl<K: Put, V: Put> Put for ::std::collections::BTreeMap<K, V> {
-        fn put(&self, out: &mut Out) {
-            put_entries(out, None, self.iter());
-        }
-    }
-    impl<K: Take + ::std::cmp::Ord, V: Take> Take for ::std::collections::BTreeMap<K, V> {
-        fn take(input: &mut In<'_>) -> Self {
-            take_entries::<(K, V), Self>(input)
-        }
-    }
-    impl<T: Take> Take for ::std::option::Option<T> {
-        fn take(input: &mut In<'_>) -> Self {
-            match input.byte() {
-                NONE => None,
-                SOME => Some(T::take(input)),
-                _ => input.fail("expected an `Option`"),
-            }
-        }
-    }
-    impl<T: Put, E: Put> Put for ::std::result::Result<T, E> {
-        fn put(&self, out: &mut Out) {
-            match self {
-                Ok(value) => {
-                    out.byte(OK);
-                    value.put(out);
-                }
-                Err(error) => {
-                    out.byte(ERR);
-                    error.put(out);
-                }
-            }
-        }
-    }
-    impl<T: Take, E: Take> Take for ::std::result::Result<T, E> {
-        fn take(input: &mut In<'_>) -> Self {
-            match input.byte() {
-                OK => Ok(T::take(input)),
-                ERR => Err(E::take(input)),
-                _ => input.fail("expected a `Result`"),
-            }
-        }
-    }
-    macro_rules! tuples {
-        ($(($($name:ident),+))*) => {$(
-            impl<$($name: Put),+> Put for ($($name,)+) {
-                #[allow(non_snake_case)]
-                fn put(&self, out: &mut Out) {
-                    let ($($name,)+) = self;
-                    out.byte(ARRAY);
-                    out.count([$(::std::stringify!($name)),+].len());
-                    $($name.put(out);)+
-                }
-            }
-            impl<$($name: Take),+> Take for ($($name,)+) {
-                fn take(input: &mut In<'_>) -> Self {
-                    input.tuple([$(::std::stringify!($name)),+].len());
-                    ($($name::take(input),)+)
-                }
-            }
-        )*};
-    }
-    tuples! {
-        (A) (A, B) (A, B, C) (A, B, C, D) (A, B, C, D, E) (A, B, C, D, E, F)
-    }
-    impl<T: Put + ?Sized> Put for &T {
-        fn put(&self, out: &mut Out) {
-            (**self).put(out);
-        }
-    }
-
-    type Accessor = &'static (dyn ::std::any::Any + Sync);
-
-    /// What a trampoline lends one argument by (D558.3): the key its
-    /// accessors claim, and the accessors, which the generated runner
-    /// reaches the value through. A mutable one only for a `&mut`.
-    pub struct Lend {
-        key: ::std::any::TypeId,
-        mutable: ::std::option::Option<Accessor>,
-        shared: Accessor,
-    }
-
-    impl Lend {
-        pub fn new(
-            key: ::std::any::TypeId,
-            mutable: ::std::option::Option<Accessor>,
-            shared: Accessor,
-        ) -> Self {
-            Self { key, mutable, shared }
-        }
-    }
-
-    /// Claim the lend `nonce` under `key` (shared, or exclusively) for
-    /// `visit`, which receives the lent value's place, and end the claim
-    /// however `visit` ends. `Err` holds `rawr::scope::Error`'s code.
-    pub fn reach(
-        nonce: u64,
-        key: ::std::any::TypeId,
-        shared: bool,
-        visit: impl FnOnce(*mut ()),
-    ) -> ::std::result::Result<(), u8> {
-        struct Release(u64, bool);
-        impl Drop for Release {
-            fn drop(&mut self) {
-                // SAFETY: the runner links `rawr`, which defines the
-                // function with this exact signature.
-                unsafe { __rawr_scope_release_v1(self.0, self.1) }
-            }
-        }
-        // SAFETY: as above.
-        let place = unsafe { __rawr_scope_claim_v1(nonce, key, shared) }?;
-        let _release = Release(nonce, shared);
-        visit(place);
-        Ok(())
-    }
-
-    /// The anchor of `value` (#1473): its address and a hash of its type's
-    /// name, which the runner keeps what native code borrows of it by.
-    fn anchor_of<T: ?Sized>(value: &T) -> [u64; 2] {
-        use ::std::hash::{Hash as _, Hasher as _};
-        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
-        ::std::any::type_name::<T>().hash(&mut hasher);
-        [::std::ptr::from_ref(value).cast::<()>().addr() as u64, hasher.finish()]
-    }
-
-    /// `value` drops, or moves into the interpreter, where it is (#1492):
-    /// rustc has ended every borrow of it, so the runner lets go of what
-    /// results anchored on it borrowed.
-    pub fn ended<T: ?Sized>(value: &T) {
-        let [address, ty] = anchor_of(value);
-        // SAFETY: the runner links `rawr`, which defines the function with
-        // this exact signature.
-        unsafe { __rawr_island_unanchor_v1(address, ty) }
-    }
-
-    /// One call of a marked function. `'c` is what its lent arguments
-    /// borrow: they stay borrowed until the call is sent and answered.
-    pub struct Call<'c> {
-        path: &'static str,
-        owned: bool,
-        pinned: bool,
-        in_place: u8,
-        unit: bool,
-        count: u32,
-        mutable: u64,
-        anchor: ::std::option::Option<[u64; 2]>,
-        releases: ::std::vec::Vec<[u64; 2]>,
-        /// The arguments given for the call alone ([`Call::for_call`]).
-        for_call: u64,
-        /// The lends kept with the call's anchor ([`Call::keep_lends`]).
-        kept: u64,
-        values: Out,
-        lent: ::std::vec::Vec<(
-            ::std::any::TypeId,
-            &'static str,
-            *mut (),
-            ::std::option::Option<Accessor>,
-            Accessor,
-        )>,
-        borrows: ::std::marker::PhantomData<&'c mut ()>,
-    }
-
-    impl<'c> Call<'c> {
-        /// A call of the function at `path` from the crate root; `owned`
-        /// when its last segment is a member of the type before it.
-        pub fn new(path: &'static str, owned: bool) -> Self {
-            Self {
-                path,
-                owned,
-                pinned: false,
-                in_place: 0,
-                unit: false,
-                count: 0,
-                mutable: 0,
-                anchor: ::std::option::Option::None,
-                releases: ::std::vec::Vec::new(),
-                for_call: 0,
-                kept: 0,
-                values: Out(::std::vec::Vec::new(), ::std::vec::Vec::new(), None),
-                lent: ::std::vec::Vec::new(),
-                borrows: ::std::marker::PhantomData,
-            }
-        }
-        /// An argument lent to the interpreter for the call (D558.3), as
-        /// ratatui's `&mut Frame<'_>` is. The call runs on this thread
-        /// while it is lent, so it needn't be `Send`.
-        ///
-        /// # Safety
-        ///
-        /// `lend`'s accessors read its key's place as a `T`, and no other
-        /// lend uses its key. `name` is `T`'s name.
-        pub unsafe fn lend<T>(&mut self, value: &'c mut T, lend: Lend, name: &'static str) {
-            debug_assert!(lend.mutable.is_some());
-            self.lent_value(::std::ptr::from_mut(value).cast(), lend, name);
-        }
-        /// [`Call::lend`] of a shared borrow, which needn't be `Sync`.
-        ///
-        /// # Safety
-        ///
-        /// As for [`Call::lend`], and `lend` has no mutable accessor.
-        pub unsafe fn lend_ref<T>(&mut self, value: &'c T, lend: Lend, name: &'static str) {
-            debug_assert!(lend.mutable.is_none());
-            self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
-        }
-        fn lent_value(&mut self, place: *mut (), lend: Lend, name: &'static str) {
-            // SAFETY: as the callers'.
-            unsafe { self.lend_part(place, lend, name) };
-            self.count += 1;
-        }
-        /// A part of an argument lent for the call where it is, as a
-        /// native part of a marked value is (#1469). The call runs on this
-        /// thread, so the part needn't be `Send` or `Sync`.
-        ///
-        /// # Safety
-        ///
-        /// `place` is borrowed for `'c`, mutably when `lend` has a mutable
-        /// accessor. `lend`'s accessors read its key's place as the type it
-        /// is, and no other lend uses its key. `name` is the type's name.
-        pub unsafe fn lend_part(&mut self, place: *mut (), lend: Lend, name: &'static str) {
-            self.values.byte(LENT);
-            self.values.count(self.lent.len());
-            self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
-        }
-        /// A borrow of a marked value lent whole for the call where it is,
-        /// beside its parts (#1484): the value written next is the one it
-        /// lends.
-        ///
-        /// # Safety
-        ///
-        /// As for [`Call::lend_part`], `lend` having no mutable accessor.
-        pub unsafe fn lend_whole(&mut self, place: *mut (), lend: Lend, name: &'static str) {
-            debug_assert!(lend.mutable.is_none());
-            self.values.byte(WHOLE);
-            self.values.count(self.lent.len());
-            self.lent.push((lend.key, name, place, lend.mutable, lend.shared));
-        }
-        /// A part of an argument copied by the wire format (#1469).
-        pub fn part<T: Put + ?Sized>(&mut self, value: &T) {
-            value.put(&mut self.values);
-        }
-        /// Where an argument's value is written, part by part.
-        pub fn out(&mut self) -> &mut Out {
-            &mut self.values
-        }
-        /// A borrow of a marked value that holds native parts, each lent
-        /// where it is for the call (#1469).
-        pub fn lent<T: Parts>(&mut self, value: &'c T) {
-            value.lend(self);
-            self.count += 1;
-        }
-        /// A `&mut` of a marked value that holds native parts, each lent
-        /// mutably for the call, which comes back after it
-        /// ([`Parts::take_into`]).
-        pub fn lent_mut<T: Parts>(&mut self, value: &'c mut T) {
-            self.release(&*value);
-            self.mutable |= 1 << self.count;
-            value.lend_mut(self);
-            self.count += 1;
-        }
-        /// A marked value that holds native parts, moved to the
-        /// interpreter with them (#1469).
-        pub fn given<T: Parts>(&mut self, value: T) {
-            value.give(&mut self.values);
-            self.count += 1;
-        }
-        /// An argument that holds native parts inside `Option`s, `Vec`s,
-        /// `Box`es and tuples, which `give` writes part by part, each part
-        /// moved to the interpreter (#1224).
-        pub fn give_parts(&mut self, give: impl FnOnce(&mut Out)) {
-            give(&mut self.values);
-            self.count += 1;
-        }
-        /// A `&[T]` argument lent for the call where it is (#1292): the
-        /// lend's place is `value`, the trampoline's own reference.
-        ///
-        /// # Safety
-        ///
-        /// As for [`Call::lend_ref`], `lend`'s accessor reading its key's
-        /// place as a `&[T]`.
-        pub unsafe fn lend_slice<T>(&mut self, value: &'c &'c [T], lend: Lend, name: &'static str) {
-            debug_assert!(lend.mutable.is_none());
-            self.lent_value(::std::ptr::from_ref(value).cast_mut().cast(), lend, name);
-        }
-        /// An argument moved to the interpreter, which keeps it: a value of
-        /// a type the marked crate doesn't declare, with what its type has
-        /// of [`Traits`] ([`give!`]).
-        pub fn give<T: 'static>(&mut self, value: T, traits: Traits) {
-            self.values.give(value, traits);
-            self.count += 1;
-        }
-        pub fn argument<T: Put + ?Sized>(&mut self, value: &T) {
-            value.put(&mut self.values);
-            self.count += 1;
-        }
-        /// A `&str` argument, as `label` of `subtitle<'a>(label: &'a str)
-        /// -> Text<'a>`: copied, and where native code's own text is, so
-        /// what the call makes that borrows it borrows that text, which
-        /// native code keeps borrowed as long as rustc says.
-        pub fn kept_text(&mut self, value: &'c str) {
-            self.values.kept_text(value);
-            self.count += 1;
-        }
-        /// A stand-in's receiver: the handle of the program value it holds,
-        /// which the call takes as the impl's receiver.
-        pub fn object(&mut self, object: &Object) {
-            self.values.byte(HANDLE);
-            self.values.0.extend_from_slice(&object.0.to_le_bytes());
-            self.count += 1;
-        }
-        /// The call's result is a `&str` that borrows its receiver: a
-        /// stand-in's comes back as the program's own text, pinned with the
-        /// value ([`Object::pinned`]), and a marked value's as text it
-        /// holds ([`Reply::pinned`]), so where each text the call copies
-        /// is gets noted.
-        pub fn pinned(&mut self) {
-            self.pinned = true;
-            self.values.2 = Some(::std::vec::Vec::new());
-        }
-        /// The call's result is a reference to a native value, which
-        /// comes back where the value is: with `lasting`, a `&'static`
-        /// ([`In::lasting`]), and else one its stand-in's receiver holds
-        /// ([`Object::lent`]).
-        pub fn in_place(&mut self, lasting: bool) {
-            self.in_place = 4 | u8::from(lasting) << 3;
-        }
-        /// The call's result borrows `value`, a marked input it borrows
-        /// (#1473): it is made in a region kept with what native code
-        /// borrows of `value`, which the runner lets go of when native code
-        /// next takes `value` `&mut`.
-        pub fn anchor<T: ?Sized>(&mut self, value: &'c T) {
-            self.anchor = ::std::option::Option::Some(anchor_of(value));
-        }
-        /// Native code ended every borrow of `value`, which the call takes
-        /// `&mut` or by value: the runner lets go of what results anchored
-        /// on it borrowed (#1473).
-        pub fn release<T: ?Sized>(&mut self, value: &T) {
-            self.releases.push(anchor_of(value));
-        }
-        /// The next argument is given for the call alone, as a by-value
-        /// `View<'a>` of borrows (#1225): what the call leaves of it drops
-        /// once it returns.
-        pub fn for_call(&mut self) {
-            self.for_call |= 1 << self.count;
-        }
-        /// How many places the call has been lent so far.
-        pub fn lends(&self) -> usize {
-            self.lent.len()
-        }
-        /// Each place lent since there were `from` is kept borrowed as long
-        /// as the call's anchored result (#1413), as `&'a inbox::State` of
-        /// `view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a,
-        /// Message>` is, so the result may borrow it.
-        pub fn keep_lends(&mut self, from: usize) {
-            for index in from..self.lent.len().min(64) {
-                self.kept |= 1 << index;
-            }
-        }
-        /// The function returns `()`, which comes back whatever value its
-        /// body's last statement left.
-        pub fn unit(&mut self) {
-            self.unit = true;
-        }
-        /// An argument the call may change, which comes back after it.
-        pub fn mutable<T: Put + ?Sized>(&mut self, value: &T) {
-            self.release(value);
-            self.mutable |= 1 << self.count;
-            self.argument(value);
-        }
-        pub fn send(mut self) -> Reply {
-            register();
-            let mut bytes = ::std::vec::Vec::with_capacity(13 + self.values.0.len());
-            let anchored = u8::from(self.anchor.is_some()) << 5;
-            let releases = u8::from(!self.releases.is_empty()) << 6;
-            let scopes = u8::from(self.for_call != 0 || self.kept != 0) << 7;
-            bytes.push(
-                u8::from(self.owned)
-                    | u8::from(self.pinned) << 1
-                    | self.in_place
-                    | u8::from(self.unit) << 4
-                    | anchored
-                    | releases
-                    | scopes,
-            );
-            bytes.extend_from_slice(&self.count.to_le_bytes());
-            bytes.extend_from_slice(&self.mutable.to_le_bytes());
-            for [address, ty] in self.anchor.iter() {
-                bytes.extend_from_slice(&address.to_le_bytes());
-                bytes.extend_from_slice(&ty.to_le_bytes());
-            }
-            if !self.releases.is_empty() {
-                bytes.extend_from_slice(&(self.releases.len() as u32).to_le_bytes());
-                for [address, ty] in &self.releases {
-                    bytes.extend_from_slice(&address.to_le_bytes());
-                    bytes.extend_from_slice(&ty.to_le_bytes());
-                }
-            }
-            if scopes != 0 {
-                bytes.extend_from_slice(&self.for_call.to_le_bytes());
-                bytes.extend_from_slice(&self.kept.to_le_bytes());
-            }
-            bytes.extend_from_slice(&self.values.0);
-            // SAFETY: the runner links `rawr`, which defines the function
-            // with this exact signature. Each lent place is borrowed for
-            // `'c`, which outlives this call, and is reached only while the
-            // call runs.
-            let mut natives = ::std::vec::Vec::new();
-            let reply = unsafe {
-                __rawr_island_call_v4(self.path, &bytes, &mut self.values.1, &self.lent, &mut natives)
-            };
-            match reply.first() {
-                Some(0) => Reply {
-                    bytes: reply,
-                    at: 1,
-                    path: self.path,
-                    natives: natives.into_iter().map(Some).collect(),
-                    places: self.lent.iter().map(|lent| lent.2).collect(),
-                    texts: self.values.2.take().unwrap_or_default(),
-                },
-                Some(_) => failed(&reply),
-                None => ::std::panic!("rawr: no answer to `{}`", self.path),
-            }
-        }
-    }
-
-    /// What a call returned, then each argument it could change, and the
-    /// native values the interpreter moved for them.
-    pub struct Reply {
-        bytes: ::std::vec::Vec<u8>,
-        at: usize,
-        path: &'static str,
-        natives: ::std::vec::Vec<::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>>>,
-        /// Where each part the call lent is ([`In::changed`]).
-        places: ::std::vec::Vec<*mut ()>,
-        /// Where each text the call copied is, in the order it wrote them
-        /// ([`Call::pinned`]).
-        texts: ::std::vec::Vec<*const str>,
-    }
-
-    impl Reply {
-        pub fn take<T: Take>(&mut self) -> T {
-            self.read(T::take)
-        }
-        /// A `&T` into `receiver`, whose parts the call lent where they
-        /// are, as `fn colors(&self) -> &Colors` gives `&self.0.colors`
-        /// (#1468): the place the runner reached, and the accessor of the
-        /// lend it reached it by, which proves the place a `T`. A place
-        /// outside the receiver, as in a `Box` it owns, can't come back
-        /// yet.
-        ///
-        /// # Safety
-        ///
-        /// The runner gave the place of a value the call reached through
-        /// what it lent.
-        pub unsafe fn lent<'r, T: 'static, R: ?Sized>(&mut self, receiver: &'r R) -> &'r T {
-            type Shared<T> = fn(u64, &mut dyn FnMut(&T)) -> ::std::result::Result<(), u8>;
-            let (place, accessor) = self.read(|input| input.native::<(*const (), Accessor)>());
-            let accessor: &dyn ::std::any::Any = accessor;
-            let start = ::std::ptr::from_ref(receiver).cast::<u8>().addr();
-            let end = start + ::std::mem::size_of_val(receiver);
-            let at = place.addr();
-            if !accessor.is::<Shared<T>>() {
-                ::std::panic!(
-                    "rawr: `{}` gave back a reference that is no `&{}`",
-                    self.path,
-                    ::std::any::type_name::<T>()
-                );
-            }
-            if at < start || at + ::std::mem::size_of::<T>() > end {
-                ::std::panic!(
-                    "rawr: `{}` gave back a reference to a `{}` the receiver holds outside \
-                     itself, which can't come back yet",
-                    self.path,
-                    ::std::any::type_name::<T>()
-                );
-            }
-            // SAFETY: the accessor reads its lend's place as a `T`, and the
-            // place is in `receiver`, which is borrowed for `'r`.
-            unsafe { &*place.cast::<T>() }
-        }
-        /// A `&str` the call's receiver holds (#1468): text in native
-        /// code's own value, in a text the call copied from it, as `&self.0`
-        /// of a marked `Id(String)` is, or the program's own text, pinned
-        /// for as long as the runner lives.
-        ///
-        /// # Safety
-        ///
-        /// The receiver stays borrowed for `'r`, and the call copied its
-        /// texts from it before any other.
-        pub unsafe fn pinned<'r>(&mut self) -> &'r str {
-            let texts = ::std::mem::take(&mut self.texts);
-            let found = self.read(|input| match input.byte() {
-                PINNED => Err((input.count(), input.count())),
-                TEXT_AT => {
-                    let (index, start, length) = (input.count(), input.count(), input.count());
-                    texts
-                        .get(index)
-                        // SAFETY: the receiver, which holds the text, is
-                        // borrowed for `'r`.
-                        .map(|text| unsafe { &**text })
-                        .and_then(|text| text.get(start..start.checked_add(length)?))
-                        .map(Ok)
-                        .unwrap_or_else(|| input.fail("a text the call didn't copy"))
-                }
-                _ => input.fail("expected a `&str`"),
-            });
-            match found {
-                Ok(text) => text,
-                // SAFETY: the runner gave valid UTF-8 that lives at least as
-                // long as the receiver is borrowed, which is `'r`.
-                Err((address, length)) => unsafe {
-                    ::std::str::from_utf8_unchecked(::std::slice::from_raw_parts(
-                        ::std::ptr::with_exposed_provenance::<u8>(address),
-                        length,
-                    ))
-                },
-            }
-        }
-        /// The next value, as `read` reads it.
-        pub fn read<T>(&mut self, read: impl FnOnce(&mut In<'_>) -> T) -> T {
-            let mut input = In {
-                bytes: &self.bytes[self.at..],
-                path: self.path,
-                natives: &mut self.natives,
-                places: &self.places,
-            };
-            let value = read(&mut input);
-            self.at = self.bytes.len() - input.bytes.len();
-            value
-        }
     }
 }
 "#;
@@ -7575,6 +7691,11 @@ mod tests {
     use super::*;
 
     fn generate(text: &str) -> Shadow {
+        generate_called(text, None)
+    }
+
+    /// [`generate`], with the bodies of the functions `called` names.
+    fn generate_called(text: &str, called: Option<&BTreeSet<String>>) -> Shadow {
         let unit = crate::Engine::new().parse_unit(text).unwrap();
         let modules = [ImmutableString::from("physics")];
         shadow(
@@ -7586,6 +7707,7 @@ mod tests {
                 unit.items(),
             )],
             &[],
+            called,
         )
     }
 
@@ -7636,6 +7758,94 @@ mod tests {
         assert!(!text[..rise].ends_with("#[inline]\n"), "{text}");
     }
 
+    /// A copy's island module holds only what depends on its crate, its
+    /// makers, its instance table and its `main`, over the support package
+    /// it re-exports, which names no crate's items, so one build of the
+    /// package serves every crate and every save (#1808). The package's
+    /// macros are exported, as the copy names them through the module.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    #[test]
+    fn the_island_module_re_exports_a_package_that_names_no_crate() {
+        let objects = [(
+            "page::Page".to_owned(),
+            "crate::page::__rawr_object_0".to_owned(),
+        )];
+        let module = support(true, &objects, &[]);
+        assert!(
+            module.contains("pub use ::__rawr_island_support::*;"),
+            "{module}"
+        );
+        assert!(
+            module.contains("[(\"page::Page\", crate::page::__rawr_object_0 as Maker)]"),
+            "{module}"
+        );
+        assert!(module.contains("Exit::code(super::main())"), "{module}");
+        let [(_, manifest), (_, library)] = package();
+        assert!(
+            manifest.contains("name = \"__rawr_island_support\"\npath = \"src/lib.rs\""),
+            "{manifest}"
+        );
+        for named in [
+            " crate::",
+            "super::",
+            "__MAKER_LIST__",
+            "__INSTANCE_LIST__",
+            "ENTRY",
+        ] {
+            assert!(!library.contains(named), "{named}");
+        }
+        for exported in ["object", "give", "part", "lend_part", "give_part"] {
+            assert!(
+                library.contains(&format!("#[macro_export]\nmacro_rules! {exported} {{")),
+                "{exported}"
+            );
+        }
+    }
+
+    /// With a record of what native code names, only a named function's
+    /// trampoline has its body: every other one is its signature over a
+    /// body that never runs, so native code type-checks as it did, and a
+    /// trait's function, called unnamed, and a generic one, whose instance
+    /// entries the table may name, keep theirs. The shape is the same with
+    /// any record (#1807).
+    #[test]
+    fn only_a_function_native_code_names_has_its_trampoline_s_body() {
+        let text = "// rawr\n#[derive(Clone, Debug)]\npub struct Ball {\n    pub x: f64,\n}\n\
+                    impl Ball {\n    pub fn new(x: f64) -> Ball { Ball { x } }\n    \
+                    pub fn height(&self) -> f64 { self.x }\n}\n\
+                    impl Default for Ball {\n    fn default() -> Ball { Ball { x: 0.0 } }\n}\n\
+                    pub fn fall(ball: &mut Ball) {}\n\
+                    pub fn rise(ball: &mut Ball, by: f64) -> f64 { by }\n\
+                    pub fn generic<T: Into<String>>(value: T) {}\n";
+        let called = ["physics::fall", "physics::Ball::new"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let all = generate(text);
+        let some = generate_called(text, Some(&called));
+        assert!(some.refused.is_empty(), "{:?}", some.refused);
+        assert_eq!(all.shape, some.shape);
+        let [(_, text)] = some.files.as_slice() else {
+            panic!("{:?}", some.files);
+        };
+        for expected in [
+            "pub fn fall(__a0: &mut Ball) {\n    let mut __call = crate::__rawr_island::call(",
+            "pub fn new(__a0: f64) -> Ball {\n        let mut __call = crate::__rawr_island::call(",
+            "#[inline]\npub fn rise(__a0: &mut Ball, __a1: f64) -> f64 {\n    \
+             crate::__rawr_island::uncalled(\"physics::rise\")\n}\n",
+            "    pub fn height(&self) -> f64 {\n        \
+             crate::__rawr_island::uncalled(\"physics::Ball::height\")\n    }\n",
+            "fn default() -> Ball {\n        let mut __call = crate::__rawr_island::call(",
+            "crate::__rawr_island::instance(\n            \"physics::generic\"",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        let [(_, every)] = all.files.as_slice() else {
+            panic!("{:?}", all.files);
+        };
+        assert!(!every.contains("uncalled"), "{every}");
+    }
+
     #[test]
     fn visible_items_get_trampolines_and_private_ones_nothing() {
         let shadow = generate(
@@ -7673,7 +7883,7 @@ mod tests {
         assert!(
             text.contains(
                 "    pub fn advance(&mut self, __a0: (f64, f64)) {\n        \
-                 let mut __call = crate::__rawr_island::Call::new(\"physics::Ball::advance\", true);\n        \
+                 let mut __call = crate::__rawr_island::call(\"physics::Ball::advance\", true);\n        \
                  __call.unit();\n        __call.mutable(&*self);\n        __call.argument(&__a0);\n"
             ),
             "{text}"
@@ -7681,7 +7891,7 @@ mod tests {
         assert!(
             text.contains(
                 "pub fn render(__a0: &Ball, __a1: usize, __a2: &str) -> String {\n    \
-                 let mut __call = crate::__rawr_island::Call::new(\"physics::render\", false);\n    \
+                 let mut __call = crate::__rawr_island::call(\"physics::render\", false);\n    \
                  __call.argument(__a0);\n    __call.argument(&__a1);\n    __call.kept_text(__a2);\n    \
                  let mut __reply = __call.send();\n    let __value: String = __reply.take();\n    __value\n}\n"
             ),
@@ -7690,7 +7900,7 @@ mod tests {
         assert!(
             text.contains(
                 "pub fn scale(__a0: Scale) -> f64 {\n    \
-                 let mut __call = crate::__rawr_island::Call::new(\"physics::scale\", false);\n    \
+                 let mut __call = crate::__rawr_island::call(\"physics::scale\", false);\n    \
                  crate::__rawr_island::give!(__call, __a0);\n"
             ),
             "{text}"
@@ -7780,7 +7990,7 @@ mod tests {
         for expected in [
             "    pub fn new(__a0: impl Into<String>) -> Self {\n        \
              let __a0: String = { let __value = __a0; ::std::convert::Into::<String>::into(__value) };\n        \
-             let mut __call = crate::__rawr_island::Call::new(\"physics::Id::new\", true);\n        \
+             let mut __call = crate::__rawr_island::call(\"physics::Id::new\", true);\n        \
              __call.argument(&__a0);\n",
             "pub fn mark(__a0: impl IntoIterator<Item = Id>, __a1: impl AsRef<str>) {\n    \
              let __a0: ::std::vec::Vec<Id> = { let __value = __a0; \
@@ -7788,7 +7998,7 @@ mod tests {
              ::std::iter::IntoIterator::into_iter(__value)) };\n    \
              let __a1: ::std::string::String = { let __value = __a1; \
              ::std::string::String::from(::std::convert::AsRef::<str>::as_ref(&__value)) };\n    \
-             let mut __call = crate::__rawr_island::Call::new(\"physics::mark\", false);\n",
+             let mut __call = crate::__rawr_island::call(\"physics::mark\", false);\n",
             "can't call `physics::each` yet: parameter `visit`: `impl Fn(i64)` can't cross yet",
             // A named generic hands its call to the instance its types'
             // names select (D869).
@@ -7796,7 +8006,7 @@ mod tests {
              ::std::any::type_name::<(T,)>(),\n",
             "pub(crate) unsafe fn __rawr_instance_generic<T: Into<String>>\
              (__arguments: *mut (), __out: *mut ())\nwhere\n    T: 'static, {\n",
-            "Call::new(crate::__rawr_island::keyed(\"physics::generic\", \
+            "call(crate::__rawr_island::keyed(\"physics::generic\", \
              ::std::any::type_name::<(T,)>()), false);",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
@@ -7842,7 +8052,7 @@ mod tests {
              ::std::iter::IntoIterator::into_iter(__value)) };\n        \
              __call.argument(&__value);\n",
             "pub fn lines(__a0: impl IntoLines) -> Lines {\n    \
-             let mut __call = crate::__rawr_island::Call::new(\"physics::lines\", false);\n    \
+             let mut __call = crate::__rawr_island::call(\"physics::lines\", false);\n    \
              IntoLines::__rawr_give(__a0, &mut __call);\n",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
@@ -8599,7 +8809,7 @@ mod tests {
                 "impl page::Page for crate::physics::__RawrBadge {\n    \
                  #[inline]\n    \
                  fn title(&self) -> String {\n        \
-                 let mut __call = crate::__rawr_island::Call::new(\"physics::Badge::Page::title\", true);\n        \
+                 let mut __call = crate::__rawr_island::call(\"physics::Badge::Page::title\", true);\n        \
                  __call.object(&self.0);\n"
             ),
             "{text}"
@@ -8833,7 +9043,7 @@ mod tests {
                 .find(header)
                 .unwrap_or_else(|| panic!("{header}: {text}"));
             assert!(
-                text[at..].contains(&format!("Call::new({path:?}, true)")),
+                text[at..].contains(&format!("call({path:?}, true)")),
                 "{path}: {text}"
             );
         }
