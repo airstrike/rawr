@@ -180,6 +180,12 @@ pub fn keep_graphs() {
     KEEP.store(true, Ordering::Relaxed);
 }
 
+/// Whether this process keeps what it builds of the API for its next
+/// save ([`keep_graphs`]): the graph, and each fragment's read (#1776).
+pub(crate) fn keeps_graphs() -> bool {
+    KEEP.load(Ordering::Relaxed)
+}
+
 /// The graph of `product`: the captured one, the one this process kept, or
 /// one rebuilt from the stored product. The lock is held while it builds, so
 /// a save waits for a background build instead of repeating it.

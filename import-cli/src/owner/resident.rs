@@ -294,6 +294,18 @@ impl Start {
         }
     }
 
+    /// With `RAWR_VERBOSE`, say each round of the preparation a save took
+    /// since `self`: what each stage read, canonicalized and probed (#1776).
+    pub(super) fn tell_preparation(self) {
+        if !rawr_cli::cells::verbose() {
+            return;
+        }
+        let rounds = rawr_import::progress::rounds();
+        for round in rounds.get(self.rounds..).unwrap_or_default() {
+            eprintln!("rawr-import: a save's round: {round}");
+        }
+    }
+
     /// With `RAWR_VERBOSE`, say what the start since `self` did, and each
     /// of its check's rounds.
     pub(super) fn tell(self) {

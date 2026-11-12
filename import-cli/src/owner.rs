@@ -776,7 +776,10 @@ fn session(
                         continue;
                     }
                 };
-                let prepared = match profile.prepare(&next_target, None, revision, &scope) {
+                let preparation = resident::Start::now();
+                let prepared = profile.prepare(&next_target, None, revision, &scope);
+                preparation.tell_preparation();
+                let prepared = match prepared {
                     Ok(prepared) => prepared,
                     // A newer save; its own attempt follows.
                     Err(crate::Error::Rawr(error)) if error.source_changed() => continue,

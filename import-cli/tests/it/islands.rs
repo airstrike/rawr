@@ -2577,6 +2577,73 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
     );
 }
 
+/// A private field added to a marked pub struct native code holds, as
+/// inboard's `State`, builds native code again. Its preparation probes the
+/// new build once, and canonicalizes only the fragments whose API changed:
+/// none, as the private field is none of the crate's API, and the path
+/// crates `common` and `ui` changed nothing. The field made public changes
+/// the project crate's API, whose fragment alone is read again (#1776).
+#[test]
+fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
+    let root = THEME.project();
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+            ("RAWR_VERBOSE", "1".into()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
+    let home = root.join("src/home.rs");
+    let text = fs::read_to_string(&home).unwrap();
+    let edited = text
+        .replace(
+            "    wizard: Option<wizard::State>,\n}",
+            "    wizard: Option<wizard::State>,\n    seen: u8,\n}",
+        )
+        .replace(
+            "            wizard: None,\n        }",
+            "            wizard: None,\n            seen: 0,\n        }",
+        );
+    assert_ne!(edited, text);
+    fs::write(&home, edited).unwrap();
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 2
+    });
+    edit(&home, "    seen: u8,\n}", "    pub seen: u8,\n}");
+    run.told(&events, |text| {
+        text.matches("{\"event\":\"running\"}").count() >= 3
+    });
+    fs::write(&stop, "").unwrap();
+    let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));
+    run.child.kill().unwrap();
+    run.wait();
+    let seen = run.seen.join("\n");
+    assert!(
+        told.contains("{\"event\":\"ended\",\"status\":0}")
+            && seen.contains("rawr: preparing again: `home::State` changed its fields"),
+        "{told}\n{seen}"
+    );
+    let rounds = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a save's round: "))
+        .collect::<Vec<_>>();
+    // A round for each save. The first probes its build once and takes
+    // every fragment's read as the launch kept it; the second reads the
+    // project crate's again, and takes `common`'s and `ui`'s.
+    assert!(
+        rounds.len() == 2
+            && rounds[0].contains(", probes 1, read 325, canonicalized 0, ")
+            && rounds[1].contains(", canonicalized 1, "),
+        "{rounds:?}\n{seen}"
+    );
+    eprintln!("the saves' rounds:\n{}", rounds.join("\n"));
+}
+
 /// An edit to a function of a path crate of the project changes what
 /// native code is built from: a new native build, and a new runner, whose
 /// start lowers again only the files that name the function, as each

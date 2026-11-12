@@ -449,7 +449,8 @@ pub(crate) fn read(definitions: usize) {
     count_round(|round| &mut round.read, definitions);
 }
 
-/// Count the compiler `sidecars` canonicalized into an API in this round.
+/// Count the compiler `sidecars` canonicalized into an API in this round:
+/// those read anew, as a sidecar whose read the process kept is not (#1776).
 pub(crate) fn canonicalized(sidecars: usize) {
     count_round(|round| &mut round.canonicalized, sidecars);
 }

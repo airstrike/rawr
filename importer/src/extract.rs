@@ -2619,7 +2619,7 @@ fn materialize_document(
         return canonicalize_document_borrowed(document, invocations, policy, context, limits);
     };
     let Invocations {
-        authority: _,
+        authority,
         mut allocation,
     } = invocations;
     allocation.retain(policy.usage)?;
@@ -2630,7 +2630,36 @@ fn materialize_document(
     }
     allocation.sort_keys(current.len());
     current.sort_unstable();
-    stored.replay(context, current, limits, &mut allocation)
+    let graph = stored.replay(context, current, limits, &mut allocation)?;
+    if api::retained::keeps_graphs() {
+        let limits = *limits;
+        std::thread::spawn(move || keep_reads(document.fragments, &authority, &limits));
+    }
+    Ok(graph)
+}
+
+/// Read each fragment of a replayed API for the next canonicalization in
+/// this process to take (#1776). The replay read none, so the save after
+/// a launch that replayed its API would read every crate's fragment again,
+/// though only one crate changed. It runs off the thread that replayed.
+#[cfg(feature = "rustc-driver")]
+fn keep_reads(
+    fragments: Vec<protocol::Fragment>,
+    authority: &InvocationAuthority,
+    limits: &cargo::Limits,
+) {
+    let mut allocation = Allocation::new(limits);
+    let Ok(catalog) = Catalog::from_fragments(&fragments, authority, &mut allocation) else {
+        return;
+    };
+    let Ok((reads, _, kept, _)) =
+        Candidate::read_kept(fragments, &catalog, limits, &mut allocation)
+    else {
+        return;
+    };
+    if reads.iter().all(|read| read.failure.is_none()) {
+        kept.publish();
+    }
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -2787,12 +2816,22 @@ fn canonicalize_fragments(
     allocation: &mut Allocation,
     seal: SealMode<'_>,
 ) -> Result<api::Graph<api::Captured>> {
-    crate::progress::canonicalized(fragments.len());
     let result = (|| {
         allocation.category(EvidenceCategory::Candidate);
         validate_resolution_context(&fragments, context, allocation)?;
         let catalog = Catalog::from_fragments(&fragments, &authority, allocation)?;
-        let candidate = Candidate::from_fragments(fragments, &catalog, limits, allocation)?;
+        // Only a process that canonicalizes again keeps what it read, and
+        // an evidence measurement reads every fragment itself.
+        #[cfg(feature = "rustc-driver")]
+        let kept = matches!(seal, SealMode::Direct) && api::retained::keeps_graphs();
+        #[cfg(not(feature = "rustc-driver"))]
+        let kept = false;
+        let candidate = if kept {
+            Candidate::from_kept_fragments(fragments, &catalog, limits, allocation)?
+        } else {
+            crate::progress::canonicalized(fragments.len());
+            Candidate::from_fragments(fragments, &catalog, limits, allocation)?
+        };
         candidate.finish(policy, context, limits, allocation, seal)
     })();
     result.map_err(|error| allocation.failure(error))
@@ -3452,6 +3491,91 @@ impl Candidate {
             allocation.absorb(worker)?;
         }
         joined
+    }
+
+    /// [`Self::from_fragments`], each fragment whose body the last
+    /// canonicalization in this process read under this catalog and these
+    /// limits taking that read; every other fragment is read anew and
+    /// counted. The reads are kept for the next canonicalization once they
+    /// join: after an edit to one crate, only its fragment is read again
+    /// (#1776).
+    fn from_kept_fragments(
+        fragments: Vec<protocol::Fragment>,
+        catalog: &Catalog,
+        limits: &cargo::Limits,
+        allocation: &mut Allocation,
+    ) -> Result<Self> {
+        let (reads, accounts, next, anew) =
+            Self::read_kept(fragments, catalog, limits, allocation)?;
+        crate::progress::canonicalized(anew);
+        let joined = Self::join(reads, allocation);
+        for worker in accounts {
+            allocation.absorb(worker)?;
+        }
+        if joined.is_ok() {
+            next.publish();
+        }
+        joined
+    }
+
+    /// Each fragment's read: the one the last canonicalization in this
+    /// process kept for its body under this catalog and these limits, or
+    /// one read anew. With each worker's account, the reads to keep, and
+    /// how many fragments were read anew.
+    fn read_kept(
+        fragments: Vec<protocol::Fragment>,
+        catalog: &Catalog,
+        limits: &cargo::Limits,
+        allocation: &mut Allocation,
+    ) -> Result<(Vec<fragment::Read>, Vec<Allocation>, fragment::Kept, usize)> {
+        let workers = crate::parallel::workers();
+        let (keyed, _) = crate::parallel::map_owned_with_on(
+            workers,
+            fragments,
+            || (),
+            |(), fragment| (fragment::key(&fragment), fragment),
+        );
+        let mut kept = fragment::Kept::take(catalog, limits);
+        let fragments = keyed
+            .into_iter()
+            .map(|(key, fragment)| {
+                let body = key.and_then(|key| kept.remove(&key));
+                (fragment, key, body)
+            })
+            .collect::<Vec<_>>();
+        let account = allocation.worker();
+        let (reads, accounts) = crate::parallel::map_owned_with_on(
+            workers,
+            fragments,
+            || account.worker(),
+            |worker, (fragment, key, body)| match body {
+                Some(body) => {
+                    let read = fragment::Read::kept(&fragment, body.clone(), worker);
+                    (key, Some(body), read, false)
+                }
+                None => {
+                    let read = fragment::Read::new(fragment, catalog, limits, worker);
+                    let body = key.and_then(|_| read.body());
+                    (key, body, read, true)
+                }
+            },
+        );
+        // The bodies no fragment took are gone before any is kept again.
+        drop(kept);
+        let mut next = fragment::Kept::empty(catalog, limits);
+        let mut anew = 0_usize;
+        let mut joining = Vec::new();
+        allocation.reserve(&mut joining, reads.len())?;
+        for (key, body, read, read_anew) in reads {
+            if read_anew {
+                anew = anew.saturating_add(1);
+            }
+            if let (Some(key), Some(body)) = (key, body) {
+                next.insert(key, body);
+            }
+            joining.push(read);
+        }
+        Ok((joining, accounts, next, anew))
     }
 
     /// The candidate of `reads`, joined in fragment order.

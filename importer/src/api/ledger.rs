@@ -519,7 +519,7 @@ fn retain_path(path: &[Box<str>], retained: &mut Retained) -> Option<()> {
 /// One edge of a selected crate's name index: `name` is a public child
 /// of the module whose id is `parent`, of compiler `kind`, defining `id` (a
 /// def-path hash). The crate root is the edge with an empty parent and name.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Name {
     parent: Box<str>,
