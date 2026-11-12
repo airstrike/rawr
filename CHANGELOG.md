@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.194 (2026-11-12)
+
+- With `RAWR_VERBOSE`, each runner build says how many units Cargo compiled, which ones, and how long it took. (#1795)
+- A save after one that built native code probes once, and a save that changes no crate's API, such as a private field, reads no definitions again. (#1798; part of #1794, #1786)
+
 ## 0.3.193 (2026-11-12)
 
 - A marked fn can return a crate's opaque widget that borrows what native code lent it through a higher-ranked trait, as iced's `ViewFn` takes `Program::view`; the lent value is borrowed in place, never copied. (#1770; part of #965)

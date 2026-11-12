@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.194",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"With `RAWR_VERBOSE`, each runner build says how many units Cargo compiled, which ones, and how long it took.","issues":[1795]},
+        {"text":"A save after one that built native code probes once, and a save that changes no crate's API, such as a private field, reads no definitions again.","issues":[1798],"refs":[1794,1786]}
+      ]
+    },
+    {
       "version": "0.3.193",
       "date": "2026-11-12",
       "entries": [
