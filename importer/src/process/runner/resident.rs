@@ -28,54 +28,6 @@ impl<B> Candidate<super::Admitted, B> {
         })
     }
 
-    /// The live State as carried bytes for the runner that replaces this one.
-    /// `None` when it holds anything but plain script data, or the
-    /// window has closed.
-    pub fn export_state(&mut self) -> Result<Option<Vec<u8>>, Error> {
-        let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
-        if !inner.started || !matches!(inner.lifecycle, super::Lifecycle::Run) {
-            return Ok(None);
-        }
-        let key = *inner.key.as_bytes();
-        super::guarded(inner, |inner| {
-            super::send_guarded(
-                inner,
-                &protocol::Frame::new(Tag::ExportState, Box::from(key))?,
-            )?;
-            let response = super::receive_reply(inner, None)?;
-            exported_state(&response, &key)
-        })
-        .or_else(|error| match error {
-            Error::WorkPeer {
-                status: Some(0), ..
-            } => Ok(None),
-            error @ Error::WorkPeer { .. } => Err(error),
-            error => Err(super::terminal_owner_loss(inner, error)),
-        })
-    }
-
-    /// Start this admitted, not yet started application from the State a
-    /// previous runner exported. `false` when it booted instead: a
-    /// script type in the State changed, or it no longer fits.
-    pub fn seed_state(&mut self, state: &[u8]) -> Result<bool, Error> {
-        let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
-        if inner.started || !matches!(inner.lifecycle, super::Lifecycle::Run) {
-            return Err(Error::Lifecycle);
-        }
-        let key = *inner.key.as_bytes();
-        let mut payload = Vec::with_capacity(key.len() + state.len());
-        payload.extend_from_slice(&key);
-        payload.extend_from_slice(state);
-        super::guarded(inner, |inner| {
-            super::send_guarded(
-                inner,
-                &protocol::Frame::new(Tag::SeedState, payload.into_boxed_slice())?,
-            )?;
-            let response = super::receive_reply(inner, None)?;
-            flag_status(&response, Tag::StateSeeded, &key)
-        })
-    }
-
     /// Native watch obligations remain those of the owned artifact, even when
     /// its Rawr snapshot changes. The caller joins these with fresh Rawr inputs.
     pub fn native_watch(
@@ -294,18 +246,6 @@ fn refresh_status(response: &protocol::Frame, key: &[u8; 32]) -> Result<bool, Er
     flag_status(response, Tag::RefreshStatus, key)
 }
 
-fn exported_state(response: &protocol::Frame, key: &[u8; 32]) -> Result<Option<Vec<u8>>, Error> {
-    let payload = response.payload();
-    if response.tag() != Tag::StateExported || payload.len() < 33 || payload[..32] != *key {
-        return Err(Error::Stale);
-    }
-    match (payload[32], &payload[33..]) {
-        (0, []) => Ok(None),
-        (1, state) if !state.is_empty() => Ok(Some(state.to_vec())),
-        _ => Err(Error::Stale),
-    }
-}
-
 fn flag_status(response: &protocol::Frame, tag: Tag, key: &[u8; 32]) -> Result<bool, Error> {
     if response.tag() != tag || response.payload().len() != 33 || response.payload()[..32] != *key {
         return Err(Error::Stale);
@@ -320,34 +260,6 @@ fn flag_status(response: &protocol::Frame, tag: Tag, key: &[u8; 32]) -> Result<b
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exported_state_requires_current_key_tag_and_canonical_payload() {
-        let frame = |tag, payload: &[u8]| protocol::Frame::new(tag, Box::from(payload)).unwrap();
-        let key = [7; 32];
-        let mut none = key.to_vec();
-        none.push(0);
-        assert_eq!(
-            exported_state(&frame(Tag::StateExported, &none), &key).unwrap(),
-            None
-        );
-        let mut some = key.to_vec();
-        some.extend_from_slice(&[1, 9, 8]);
-        assert_eq!(
-            exported_state(&frame(Tag::StateExported, &some), &key).unwrap(),
-            Some(vec![9, 8])
-        );
-        for payload in [
-            &key[..],
-            &[&key[..], &[1]].concat(),
-            &[&key[..], &[0, 5]].concat(),
-            &[&key[..], &[2, 5]].concat(),
-        ] {
-            assert!(exported_state(&frame(Tag::StateExported, payload), &key).is_err());
-        }
-        assert!(exported_state(&frame(Tag::StateExported, &some), &[8; 32]).is_err());
-        assert!(exported_state(&frame(Tag::RefreshStatus, &some), &key).is_err());
-    }
 
     #[test]
     fn refresh_status_requires_current_key_tag_and_canonical_flag() {

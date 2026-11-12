@@ -203,9 +203,7 @@ impl<B> Lane<B> {
         observation: &[u8],
         checkpoint: rawr::reload::scheduler::Checkpoint,
     ) -> Result<Watched, Error> {
-        let mut admitted = self.admit_built_observed(built, snapshot, observation)?;
-        // A `.rs` edit's new runner continues from the old one's State.
-        self.slot.carry_state(&mut admitted);
+        let admitted = self.admit_built_observed(built, snapshot, observation)?;
         match adapter.admit_checkpoint(checkpoint, admitted, |candidate| {
             self.slot.install_latest(candidate)
         }) {
@@ -227,9 +225,7 @@ impl<B> Lane<B> {
         observation: &[u8],
         request: rawr::reload::scheduler::Request,
     ) -> Result<Watched, Error> {
-        let mut admitted = self.admit_built_observed(built, snapshot, observation)?;
-        // A `.rs` edit's new runner continues from the old one's State.
-        self.slot.carry_state(&mut admitted);
+        let admitted = self.admit_built_observed(built, snapshot, observation)?;
         match adapter.admit_current(request.complete(admitted), |candidate| {
             self.slot.install_latest(candidate)
         }) {

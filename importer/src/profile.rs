@@ -63,7 +63,6 @@ mod __rawr_profile {
 
     impl Transport {
         pub fn take_refresh(&self) -> bool { false }
-        pub fn export_state(&self) -> Option<Vec<u8>> { None }
         pub fn begin_install(&self) -> Result<PendingInstall, InstallError> { Ok(PendingInstall) }
         pub fn resident_eligible(&self, _pending: &PendingInstall) -> bool { false }
         pub fn request_is_current(&self, _pending: &PendingInstall) -> Result<bool, InstallError> { Ok(true) }
@@ -162,8 +161,6 @@ mod __rawr_profile {
             if self.stage != 3 { return Err("message before admission"); }
             Ok(payload.to_vec())
         }
-
-        pub fn seed_state(&mut self, _state: &[u8]) -> bool { false }
 
         pub fn observe(&mut self, _bytes: &[u8]) -> Result<(), &'static str> {
             if self.stage != 3 { return Err("observe before admission"); }
