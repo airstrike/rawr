@@ -57,6 +57,15 @@ mod compiler;
 )]
 mod record;
 
+/// What native code uses of the marked modules (D935.3), which the
+/// library reads.
+#[path = "uses.rs"]
+#[allow(
+    dead_code,
+    reason = "shared with the library, which reads; this binary only writes"
+)]
+mod uses;
+
 #[path = "driver/wrapper.rs"]
 mod wrapper;
 

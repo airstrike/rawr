@@ -65,17 +65,24 @@ pub(in crate::cargo) fn relocate(
                 copy_tree(&source, &destination.with_file_name(dep_info), from, to)?;
             }
         }
-        // A generated crate's record of native instances is part of its
-        // unit's output, beside its metadata (D866).
+        // A generated crate's records of native instances and of native
+        // code's uses are part of its unit's output, beside its metadata
+        // (D866, D935.3).
         if name.ends_with(".rmeta") {
-            let record = crate::record::Record::beside(Path::new(path));
-            if record.is_file() {
-                copy_tree(
-                    &record,
-                    &crate::record::Record::beside(&destination),
-                    from,
-                    to,
-                )?;
+            let records = [
+                (
+                    crate::record::Record::beside(Path::new(path)),
+                    crate::record::Record::beside(&destination),
+                ),
+                (
+                    crate::uses::Uses::beside(Path::new(path)),
+                    crate::uses::Uses::beside(&destination),
+                ),
+            ];
+            for (record, beside) in records {
+                if record.is_file() {
+                    copy_tree(&record, &beside, from, to)?;
+                }
             }
         }
         Ok(())

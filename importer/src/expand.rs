@@ -244,6 +244,14 @@ impl Basis {
         }
     }
 
+    /// The selected crates' artifacts, beside which each generated crate's
+    /// check keeps its records (`crate::record`, `crate::uses`).
+    pub fn artifacts(&self) -> impl Iterator<Item = &Path> {
+        self.externs
+            .iter()
+            .map(|(_, artifact, _)| Path::new(&**artifact))
+    }
+
     /// The basis of `request`'s resolution, which builds the project's
     /// dependencies with the pinned nightly as the metadata probe does.
     pub fn capture(

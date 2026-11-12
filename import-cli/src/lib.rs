@@ -20,6 +20,7 @@ pub mod plain;
 pub mod project;
 mod release;
 pub mod report;
+mod runner_demand;
 mod signals;
 
 use std::fmt;
@@ -59,6 +60,8 @@ pub struct Prepared {
     manifests: owner::resident::Manifests,
     limits: rawr_import::cargo::Limits,
     settlement: rawr_import::bindings::Settlement,
+    /// The Rust paths its crates' API was resolved for.
+    demand: Box<[Box<str>]>,
 }
 
 impl Prepared {
@@ -82,6 +85,7 @@ impl Prepared {
             manifests: owner::resident::Manifests::from_graph(graph),
             limits,
             settlement: rawr_import::bindings::Settlement::default(),
+            demand: Box::default(),
         }
     }
 
@@ -91,6 +95,28 @@ impl Prepared {
     pub fn with_settlement(mut self, settlement: rawr_import::bindings::Settlement) -> Self {
         self.settlement = settlement;
         self
+    }
+
+    /// This preparation, whose native build's check recorded `uses` of the
+    /// marked modules (D935.3).
+    #[must_use]
+    pub fn with_uses(mut self, uses: Option<rawr_import::uses::Uses>) -> Self {
+        self.manifests = self.manifests.with_uses(uses);
+        self
+    }
+
+    /// This preparation, whose crates' API was resolved for `demand`, the
+    /// Rust paths its runner keeps (#1743).
+    #[must_use]
+    pub fn with_demand(mut self, demand: Box<[Box<str>]>) -> Self {
+        self.demand = demand;
+        self
+    }
+
+    /// The Rust paths this preparation's crates' API was resolved for.
+    #[must_use]
+    pub fn demand(&self) -> &[Box<str>] {
+        &self.demand
     }
 
     /// Take the shared bindings to settle after the runner builds.

@@ -15,13 +15,16 @@ mod tests;
 /// any edit that changes a trampoline, to preparation; a new derive or a
 /// new item native code can see goes to the running program's compile
 /// first, which prepares only for a native use it finds uncovered
-/// (#1737, #1741). The last field is a marked root's async `main` entry
-/// (D513.4).
+/// (#1737, #1741). The third field is a marked root's async `main` entry
+/// (D513.4). The last is what the native code built from them uses of
+/// the marked modules, as its check recorded it: a change to what native
+/// code sees prepares only when it reaches one of these uses (D935.3).
 #[derive(Clone, Eq, PartialEq)]
 pub struct Manifests(
     Box<[(PathBuf, Box<str>)]>,
     Option<rawr::package::Shape>,
     Option<Box<str>>,
+    Option<Arc<rawr_import::uses::Uses>>,
 );
 
 impl Manifests {
@@ -35,7 +38,29 @@ impl Manifests {
                 .collect(),
             graph.island_shape(),
             graph.entry_package().entry().map(Box::from),
+            None,
         )
+    }
+
+    /// These manifests, whose native build's check recorded `uses`.
+    #[must_use]
+    pub fn with_uses(mut self, uses: Option<rawr_import::uses::Uses>) -> Self {
+        self.3 = uses.map(Arc::new);
+        self
+    }
+
+    /// Why native code built against `shape` must be built again for
+    /// `next`, in one line: judged by the uses its check recorded, or, for
+    /// a build with no record of them, by the shape alone.
+    fn native_change(
+        &self,
+        shape: &rawr::package::Shape,
+        next: &rawr::package::Shape,
+    ) -> Option<String> {
+        match &self.3 {
+            Some(uses) => shape.used_change(next, uses),
+            None => shape.change(next),
+        }
     }
 
     /// Whether every save restarts the program: an async `main` runs on
@@ -52,7 +77,7 @@ impl Manifests {
         }
         match (&self.1, &next.1) {
             (Some(shape), Some(next_shape)) => {
-                if let Some(change) = shape.change(next_shape) {
+                if let Some(change) = self.native_change(shape, next_shape) {
                     return Some(change);
                 }
             }
@@ -104,9 +129,11 @@ impl Manifests {
             return Some("`Cargo.toml` changed".to_owned());
         }
         Some(
-            shape
-                .change(next_shape)
+            self.native_change(shape, next_shape)
                 .or_else(native)
+                // A change no recorded use reaches, which the new runner's
+                // build key still holds.
+                .or_else(|| shape.change(next_shape))
                 // A new derive or item needs a new native build only for a
                 // native use of it, as a marked call at a native bound.
                 .or_else(|| shape.derived(next_shape))

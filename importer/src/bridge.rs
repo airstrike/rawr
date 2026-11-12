@@ -190,6 +190,40 @@ impl<B> GenerationRequestKey<B> {
         self.profile.value().application_semantic()
     }
 
+    /// What a project keeps of this request once its runner is built, for
+    /// a later request to take the runner's demand while the runner covers
+    /// its own ([`GenerationRequestKey::keeping`], #1743).
+    ///
+    /// # Errors
+    ///
+    /// The demand can't be encoded.
+    pub fn kept(&self) -> Result<Vec<u8>, crate::surface::Error> {
+        crate::surface::Kept::encode(&self.request, &self.build)
+    }
+
+    /// This request with the demand of the runner `kept` names, when that
+    /// runner covers this request's native items and the widened request
+    /// needs it, which holds that its native inputs, contract and profile
+    /// are this request's (D936); this request otherwise.
+    #[must_use]
+    pub fn keeping(mut self, kept: &crate::surface::Kept) -> Self
+    where
+        B: crate::surface::Runner,
+    {
+        let native = &self.native;
+        let profile = self.profile.value();
+        let own = self.request.fingerprint;
+        self.request = kept.widen(self.request, |request| {
+            build_request_key(request, native, profile).ok()
+        });
+        if self.request.fingerprint != own
+            && let Ok(build) = build_request_key(&self.request, native, profile)
+        {
+            self.build = build;
+        }
+        self
+    }
+
     /// Why the runner this request needs is not `built`, in one line, as
     /// `rawr run` says why it restarts; `None` when it is. Each part of
     /// [`build_request_key`] is named in its order: a native input, the

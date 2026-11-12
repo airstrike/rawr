@@ -18,6 +18,8 @@ pub mod facade;
 pub mod headers;
 pub mod identity;
 pub mod instance;
+#[cfg(not(target_arch = "wasm32"))]
+mod kept;
 pub mod member;
 pub mod object;
 pub mod opaque;
@@ -128,6 +130,9 @@ pub struct SnapshotBuilder {
     item_limit: usize,
     byte_limit: usize,
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use kept::Kept;
 
 /// SHA-256 identity of sorted symbolic bridge entries.
 ///

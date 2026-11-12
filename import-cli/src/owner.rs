@@ -646,7 +646,8 @@ fn session(
                     }
                 };
                 let next_manifests = prepared.manifests.clone();
-                let (request, snapshot, _, inputs) = prepared.into_parts();
+                let demand = prepared.demand().to_vec();
+                let (request, snapshot, project, inputs) = prepared.into_parts();
                 let observation = match inputs.encode_observation() {
                     Ok(observation) => observation,
                     Err(error) => {
@@ -760,6 +761,7 @@ fn session(
                             announced = Some(next_manifests.clone());
                         }
                         let (request, snapshot) = miss.into_parts();
+                        let kept = request.kept().ok();
                         let mut report = |error: &dyn std::fmt::Display, again: bool| {
                             stale |= again;
                             framework(error, source.clone())
@@ -770,6 +772,11 @@ fn session(
                             .and_then(|generated| {
                                 lane.build(generated)
                                     .map_err(|error| report(&error, restarts.again(&error)))
+                            })
+                            .inspect(|_| {
+                                if let Some(kept) = &kept {
+                                    crate::runner_demand::store(&project, kept, &demand);
+                                }
                             })
                             .and_then(|mut built| {
                                 built
@@ -1129,7 +1136,9 @@ fn prepare_on_lane(
         let manifests = prepared.manifests.clone();
         let mut prepared = prepared;
         let settlement = prepared.take_settlement();
-        let (request, snapshot, _, inputs) = prepared.into_parts();
+        let demand = prepared.demand().to_vec();
+        let (request, snapshot, project, inputs) = prepared.into_parts();
+        let kept = request.kept().ok();
         let generated = match request.generate() {
             Ok(generated) => generated,
             Err(error) if restarts.again(&error) => continue,
@@ -1138,7 +1147,12 @@ fn prepare_on_lane(
         // The API phase has ended; hand its freed allocator pages back before the build.
         crate::release::freed_memory();
         let mut built = match lane.build(generated) {
-            Ok(built) => built,
+            Ok(built) => {
+                if let Some(kept) = &kept {
+                    crate::runner_demand::store(&project, kept, &demand);
+                }
+                built
+            }
             Err(error) if restarts.again(&error) => continue,
             Err(error) => {
                 return Err(match settlement.drift_diagnostic() {

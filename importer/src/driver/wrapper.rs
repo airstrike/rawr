@@ -2,10 +2,13 @@
 //! RUSTC ARGUMENTS..`, as Cargo runs a `RUSTC_WRAPPER`. A unit of one of
 //! the generated crates [`record::ROOTS`] names is checked in this process,
 //! and its native instances of marked generics are recorded beside its
-//! artifact ([`walk`]); every other unit, and every query Cargo makes of
+//! artifact ([`walk`]), with what its native code uses of the marked
+//! modules ([`used`]); every other unit, and every query Cargo makes of
 //! rustc, runs rustc itself, so dependencies build exactly as Cargo builds
 //! them and the shared cache is untouched.
 
+#[path = "wrapper/used.rs"]
+mod used;
 #[path = "wrapper/walk.rs"]
 mod walk;
 
@@ -149,5 +152,8 @@ fn write(tcx: TyCtxt<'_>, artifact: &Path) -> Result<(), String> {
     let instances = walk::instances(tcx)?;
     record::Record::new(instances)
         .write(artifact)
-        .map_err(|error| format!("writing the record beside {}: {error}", artifact.display()))
+        .map_err(|error| format!("writing the record beside {}: {error}", artifact.display()))?;
+    used::uses(tcx)
+        .write(artifact)
+        .map_err(|error| format!("writing the uses beside {}: {error}", artifact.display()))
 }

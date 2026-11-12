@@ -95,6 +95,8 @@ pub mod record;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod uses;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
