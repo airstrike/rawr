@@ -56,18 +56,21 @@ fn location(project: &Path) -> (PathBuf, PathBuf) {
 
 /// Keep `kept`, a request's native items whose runner was built, and
 /// `paths`, the Rust paths its API was resolved for, as the project at
-/// `project`'s. What can't be kept leaves nothing, and the next request
-/// needs its own runner.
+/// `project`'s. A file that holds them already is not written again. What
+/// can't be kept leaves nothing, and the next request needs its own runner.
 pub(crate) fn store(project: &Path, kept: &[u8], paths: &[Box<str>]) {
     let (items, resolved) = location(project);
     let text = paths
         .iter()
         .fold(String::new(), |text, path| text + &**path + "\n");
+    let keep = |path: &Path, bytes: &[u8]| {
+        std::fs::read(path).is_ok_and(|held| held == bytes) || std::fs::write(path, bytes).is_ok()
+    };
     let written = items
         .parent()
         .is_some_and(|parent| std::fs::create_dir_all(parent).is_ok())
-        && std::fs::write(&resolved, text).is_ok()
-        && std::fs::write(&items, kept).is_ok();
+        && keep(&resolved, text.as_bytes())
+        && keep(&items, kept);
     if !written {
         let _ = std::fs::remove_file(&items);
         let _ = std::fs::remove_file(&resolved);
