@@ -47,22 +47,26 @@ pub(super) struct Guard {
     token: crate::Shared<()>,
 }
 
+// A cell's value and borrow list are held only for the read or store at
+// hand, never while a script runs, so a conflict is another thread's, and
+// each waits it out (#1823).
 impl Inner {
     fn value(&self) -> Dynamic {
-        crate::func::locked_read(&self.value).map_or(Dynamic::UNIT, |value| value.clone())
+        crate::func::waited_read(&self.value).clone()
     }
 
     fn set(&self, value: Dynamic) -> Dynamic {
-        crate::func::locked_write(&self.value).map_or(Dynamic::UNIT, |mut held| {
-            std::mem::replace(&mut *held, value)
-        })
+        std::mem::replace(&mut *crate::func::waited_write(&self.value), value)
+    }
+
+    /// Hold a borrow under `token`, mutable when `mutable`.
+    fn hold(&self, token: &crate::Shared<()>, mutable: bool) {
+        crate::func::waited_write(&self.borrows).push((crate::Shared::downgrade(token), mutable));
     }
 
     /// Whether a borrow is held, and whether a held one is mutable.
     fn held(&self) -> (bool, bool) {
-        let Some(mut borrows) = crate::func::locked_write(&self.borrows) else {
-            return (false, false);
-        };
+        let mut borrows = crate::func::waited_write(&self.borrows);
         borrows.retain(|(token, _)| token.strong_count() > 0);
         (
             !borrows.is_empty(),
@@ -142,9 +146,7 @@ impl Lockers {
                 .0;
         }
         let token = crate::Shared::new(());
-        if let Some(mut borrows) = crate::func::locked_write(&inner.borrows) {
-            borrows.push((crate::Shared::downgrade(&token), true));
-        }
+        inner.hold(&token, true);
         token
     }
 
@@ -176,9 +178,7 @@ pub(super) fn try_borrow_mut(value: &Dynamic) -> Option<Dynamic> {
         return None;
     }
     let token = crate::Shared::new(());
-    if let Some(mut borrows) = crate::func::locked_write(&inner.borrows) {
-        borrows.push((crate::Shared::downgrade(&token), true));
-    }
+    inner.hold(&token, true);
     Some(Dynamic::from(Guard { cell: inner, token }))
 }
 
@@ -225,9 +225,7 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                 return panic("already mutably borrowed: BorrowError");
             }
             let token = crate::Shared::new(());
-            if let Some(mut borrows) = crate::func::locked_write(&inner.borrows) {
-                borrows.push((crate::Shared::downgrade(&token), mutable));
-            }
+            inner.hold(&token, mutable);
             Ok(Dynamic::from(Guard { cell: inner, token }))
         }
         PreludeOp::CellGet => Ok(inner.value()),
@@ -236,11 +234,10 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
             Ok(Dynamic::UNIT)
         }
         PreludeOp::CellRelease => {
-            if let Some(guard) = args[0].read_lock::<Guard>()
-                && let Some(mut borrows) = crate::func::locked_write(&inner.borrows)
-            {
+            if let Some(guard) = args[0].read_lock::<Guard>() {
                 let held = crate::Shared::as_ptr(&guard.token);
-                borrows.retain(|(token, _)| token.as_ptr() != held);
+                crate::func::waited_write(&inner.borrows)
+                    .retain(|(token, _)| token.as_ptr() != held);
             }
             if let Some(lockers) = &inner.lockers {
                 lockers.release();

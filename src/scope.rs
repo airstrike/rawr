@@ -1970,15 +1970,14 @@ impl Copies {
 
     /// The copies, in the order the call takes them, as the frame ends.
     pub fn set(&self, copies: Vec<crate::Dynamic>) {
-        if let Some(mut held) = crate::func::locked_write(&self.0) {
-            *held = copies;
-        }
+        *crate::func::waited_write(&self.0) = copies;
     }
 
     /// The copy at `index`, or `()` when the frame never ended.
     pub fn get(&self, index: usize) -> crate::Dynamic {
-        crate::func::locked_read(&self.0)
-            .and_then(|held| held.get(index).cloned())
+        crate::func::waited_read(&self.0)
+            .get(index)
+            .cloned()
             .unwrap_or(crate::Dynamic::UNIT)
     }
 }

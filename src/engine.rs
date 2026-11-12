@@ -3,7 +3,7 @@
 use crate::api::default_limits::MAX_STRINGS_INTERNED;
 use crate::api::options::LangOptions;
 use crate::func::native::{
-    locked_write, OnDefVarCallback, OnOutputCallback, OnParseTokenCallback, OnVarCallback,
+    OnDefVarCallback, OnOutputCallback, OnParseTokenCallback, OnVarCallback,
 };
 use crate::packages::{Package, StandardPackage};
 use crate::tokenizer::Token;
@@ -410,10 +410,7 @@ impl Engine {
         string: impl AsRef<str> + Into<ImmutableString>,
     ) -> ImmutableString {
         match self.interned_strings {
-            Some(ref interner) => match locked_write(interner) {
-                Some(mut cache) => cache.get(string),
-                None => string.into(),
-            },
+            Some(ref interner) => crate::func::waited_write(interner).get(string),
             None => string.into(),
         }
     }
@@ -425,12 +422,11 @@ impl Engine {
         text: impl AsRef<str> + Into<ImmutableString>,
     ) -> ImmutableString {
         match self.interned_strings {
-            Some(ref interner) => match locked_write(interner) {
-                Some(mut cache) => {
-                    cache.get_with_mapper(b'g', |s| make_getter(s.as_ref()).into(), text)
-                }
-                None => make_getter(text.as_ref()).into(),
-            },
+            Some(ref interner) => crate::func::waited_write(interner).get_with_mapper(
+                b'g',
+                |s| make_getter(s.as_ref()).into(),
+                text,
+            ),
             None => make_getter(text.as_ref()).into(),
         }
     }
@@ -443,12 +439,11 @@ impl Engine {
         text: impl AsRef<str> + Into<ImmutableString>,
     ) -> ImmutableString {
         match self.interned_strings {
-            Some(ref interner) => match locked_write(interner) {
-                Some(mut cache) => {
-                    cache.get_with_mapper(b's', |s| make_setter(s.as_ref()).into(), text)
-                }
-                None => make_setter(text.as_ref()).into(),
-            },
+            Some(ref interner) => crate::func::waited_write(interner).get_with_mapper(
+                b's',
+                |s| make_setter(s.as_ref()).into(),
+                text,
+            ),
             None => make_setter(text.as_ref()).into(),
         }
     }

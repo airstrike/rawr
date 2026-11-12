@@ -187,7 +187,7 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
             *result += "]";
         }
         Union::Shared(ref v, _, _) => {
-            let value = &*crate::func::locked_read(v).unwrap();
+            let value = &*crate::func::shared_read(v);
             format_dynamic_as_json(result, value)
         }
         _ => write!(result, "{value:?}").unwrap(),

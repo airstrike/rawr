@@ -26,4 +26,5 @@ pub use native::{
     locked_read, locked_write, shared_get_mut, shared_make_mut, shared_take, shared_take_or_clone,
     FnIterator, Locked, NativeCallContext, SendSync, Shared,
 };
+pub(crate) use native::{shared_read, shared_write, waited_read, waited_write};
 pub use register::RawrNativeFunc;

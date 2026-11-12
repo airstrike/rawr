@@ -983,11 +983,7 @@ impl Model {
                     target: identity.clone(),
                 });
             }
-            let guard =
-                crate::func::locked_read(cell).ok_or_else(|| construction::Error::ValueType {
-                    expected: identity_name(identity),
-                    actual: value.type_name().into(),
-                })?;
+            let guard = crate::func::shared_read(cell);
             let result = self.validate_nominal(&guard, identity, definition, shared);
             shared.remove(&address);
             return result;
@@ -1048,12 +1044,7 @@ impl Model {
                 }
                 .into());
             }
-            let guard = crate::func::locked_read(cell).ok_or_else(|| {
-                crate::program::construction::Error::ValueType {
-                    expected: identity_name(identity),
-                    actual: value.type_name().into(),
-                }
-            })?;
+            let guard = crate::func::shared_read(cell);
             let result = self
                 .validate_nominal_exact(&guard, identity, definition, parameters, registry, shared);
             shared.remove(&address);
