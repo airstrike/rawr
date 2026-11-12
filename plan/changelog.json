@@ -4,11 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"After an edit to one crate, a `rawr run` save re-reads only the API of crates whose API changed, and `RAWR_VERBOSE` prints each round of a save's preparation.","issues":[1776]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.192",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"After an edit to one crate, a `rawr run` save re-reads only the API of crates whose API changed, and `RAWR_VERBOSE` prints each round of a save's preparation.","issues":[1776]},
+        {"text":"rawr removes the build units it made that no current build names: in a project's target after each runner build, keeping every unit cargo's own build uses, and in rawr home's shared nightly directory after each extraction build. Incremental directories keep only their last session.","issues":[1783,1771]},
+        {"text":"rawr's generated runner crates compile without debug info, so a save that moves lines no longer recompiles most of the runner's code: 5 and 3 codegen units where it was 47 and 37 on a test project.","issues":[1792],"refs":[1789]}
+      ]
+    },
     {
       "version": "0.3.191",
       "date": "2026-11-12",

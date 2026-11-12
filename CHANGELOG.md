@@ -5,7 +5,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.192 (2026-11-12)
+
 - After an edit to one crate, a `rawr run` save re-reads only the API of crates whose API changed, and `RAWR_VERBOSE` prints each round of a save's preparation. (#1776)
+- rawr removes the build units it made that no current build names: in a project's target after each runner build, keeping every unit cargo's own build uses, and in rawr home's shared nightly directory after each extraction build. Incremental directories keep only their last session. (#1783, #1771)
+- rawr's generated runner crates compile without debug info, so a save that moves lines no longer recompiles most of the runner's code: 5 and 3 codegen units where it was 47 and 37 on a test project. (#1792; part of #1789)
 
 ## 0.3.191 (2026-11-12)
 
