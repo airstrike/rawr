@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.191 (2026-11-12)
+
+- A save that changes a held type in your program rebuilds only rawr's copy of your crate, the runner code that names it, and the runner: 3 units where it was 6 on a test project. (#1775)
+- rawr and `cargo build` share the units of your project's path packages, so neither rebuilds them after the other. (#1777)
+
 ## 0.3.190 (2026-11-12)
 
 - A running owner reuses the Cargo view its last check replayed while no watched file changed, parsing no Cargo metadata and hashing no recorded input again. `RAWR_VERBOSE` says how many Cargo views each round parsed, compared and kept. (#1759)
