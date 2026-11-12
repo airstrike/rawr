@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A save that puts back sources an earlier save prepared reuses that save's native build: no new harness, copy, seal or probe.","issues":[1817],"refs":[1794]}
+    ]
   },
   "releases": [
     {

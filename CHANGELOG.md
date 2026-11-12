@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save that puts back sources an earlier save prepared reuses that save's native build: no new harness, copy, seal or probe. (#1817; part of #1794)
 
 ## 0.3.198 (2026-11-12)
 
