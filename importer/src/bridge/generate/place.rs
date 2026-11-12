@@ -15,24 +15,31 @@ pub(super) fn clear() {
     VECTORS.with_borrow_mut(BTreeMap::clear);
 }
 
-pub(super) fn render(output: &mut Vec<u8>) {
+/// Each descriptor's source.
+pub(super) fn render_policies(output: &mut Vec<u8>) {
     POLICIES.with_borrow(|policies| {
         for (_, source) in policies.values() {
             output.extend_from_slice(source.as_bytes());
         }
     });
-    output.extend_from_slice(b"pub fn register_native_sequences() {\n");
+}
+
+/// What registers each descriptor's type and each sequence's, one
+/// statement or two each: the body of the function the runner calls at its
+/// start, whose crate is the one that names the type (`program`).
+pub(super) fn registrations() -> Vec<String> {
+    let mut registrations = Vec::new();
     POLICIES.with_borrow(|policies| {
         for ty in policies.keys() {
             let rust = concrete_type(ty).expect("a native descriptor has a concrete type");
-            output.extend_from_slice(reading(&rust).as_bytes());
+            registrations.push(reading(&rust));
         }
     });
     VECTORS.with_borrow(|vectors| {
         for (ty, element) in vectors {
             let key = serde_json::to_vec(ty).expect("a concrete conversion type serializes");
             let rust = concrete_type(ty).expect("a native sequence descriptor has a concrete type");
-            output.extend_from_slice(reading(&rust).as_bytes());
+            let mut registration = reading(&rust);
             // A script makes a native vector of builtin values where it is
             // written (D651). One of library values stays a script array
             // until native code takes it: script code still keeps such
@@ -42,16 +49,17 @@ pub(super) fn render(output: &mut Vec<u8>) {
             } else {
                 format!("    __rawr_internal::place::sequence::register::<{element}>(&{key:?}).expect(\"unique generated native sequence descriptor\");\n")
             };
-            output.extend_from_slice(format!(
+            registration.push_str(&format!(
                 "{factory}    __rawr_internal::place::sequence::register_capabilities::<{rust}>(
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_cloning(),
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_copying(),
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_comparing(),
     );\n"
-            ).as_bytes());
+            ));
+            registrations.push(registration);
         }
     });
-    output.extend_from_slice(b"}\n");
+    registrations
 }
 
 fn holds_nominal(ty: &convert::Type) -> bool {

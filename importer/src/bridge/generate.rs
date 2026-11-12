@@ -13,9 +13,11 @@ use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 pub(crate) mod cached;
 mod family;
 mod frame;
+mod item;
 pub(crate) mod member;
 mod object;
 mod place;
+mod program;
 
 const MANIFEST_PATH: &str = "Cargo.toml";
 const LOCK_PATH: &str = "Cargo.lock";
@@ -342,27 +344,6 @@ impl<T> DeferNot<T> for &DeferProbe<T> {
     fn defer(&self, _: fn(T) -> Dynamic) -> Option<__rawr_internal::crossing::Proxy> {
         None
     }
-}
-
-/// The script value `value` holds, given back to script code by an
-/// adapter, whose arena is borrowed. A value made where it is first used
-/// (`Proxy::deferred`) is made here, on the owner thread, with the arena
-/// lent to the script function that makes it, as `Task::map`'s value is
-/// read by `Task::value`. A mirror's native parts go into the arena (#1249).
-#[allow(dead_code)]
-pub fn give_held<T: crate::__RawrHeld>(arena: &mut Arena, value: T) -> Dynamic {
-    lend(arena, || crate::__RawrHeld::into_proxy(value).into_dynamic())
-}
-
-/// The script value of argument `index` as the Rust type `T` the runner
-/// holds it as where native generic code takes one (D594): its proxy, which
-/// shares it when script code shares it, or its mirror, whose native parts
-/// move out of the arena (#1249).
-#[allow(dead_code)]
-pub fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
-    let place = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
-    let proxy = __rawr_internal::crossing::Proxy::from_place(&mut **place);
-    Ok(lend(arguments.arena, || <T as crate::__RawrHeld>::from_proxy(proxy)))
 }
 
 /// A native value out of a call's arena, with what its slot knew of its
@@ -7177,18 +7158,25 @@ fn render<B: crate::surface::Runner>(
         profile,
         request.compile_snapshot(),
         request.facade_plan(),
-        (harness.lock(), &paths, &mut hidden),
+        (harness.manifest(), harness.lock(), &paths, &mut hidden),
         &mut sources,
         &mut spans,
     )?;
-    let lock = member::runner_lock(&runner_lock(harness.lock(), &hidden)?, &members)?;
+    let lock = member::runner_lock(
+        &runner_lock(harness.lock(), &hidden)?,
+        &members.list,
+        &members.exclusions(),
+    )?;
     let (manifest, aliases) = runner_manifest_aliased(harness.manifest(), &hidden, harness.lock())?;
-    let manifest = member::runner_manifest(&manifest, &members)?;
-    for member in &members {
+    let manifest = member::runner_manifest(&manifest, &members.list)?;
+    for member in &members.list {
         let path = format!("{}/{MANIFEST_PATH}", member.directory());
-        sources.push((path.into(), member.manifest(&manifest)?));
+        sources.push((
+            path.into(),
+            member.manifest(&manifest, &members.without(member))?,
+        ));
     }
-    alias_crates(&aliases, &mut sources)?;
+    alias_crates(&aliases, &members, &mut sources)?;
     // In path order, as the sources are framed.
     sources.sort_by(|(left, _), (right, _)| left.cmp(right));
     let source = encode_sources(&sources)?;
@@ -7458,26 +7446,35 @@ fn single_locked(lock: &[u8], name: &str) -> bool {
 /// package.
 fn alias_crates(
     aliases: &[(String, String)],
+    members: &Members,
     sources: &mut [(Box<str>, Vec<u8>)],
 ) -> Result<(), request::Error> {
     if aliases.is_empty() {
         return Ok(());
     }
     let mut lines = Vec::new();
+    // A member that leaves the program's crates out names none of them.
+    let mut kept = Vec::new();
     for (existing, required) in aliases {
-        writeln!(
-            lines,
-            "#[allow(unused_extern_crates)]\nextern crate {existing} as {required};"
-        )
-        .map_err(request::unwritable)?;
+        let line =
+            format!("#[allow(unused_extern_crates)]\nextern crate {existing} as {required};\n");
+        lines.extend_from_slice(line.as_bytes());
+        if !members.names_program_crate(existing) {
+            kept.extend_from_slice(line.as_bytes());
+        }
     }
     // Each crate's root: the runner's and every member's.
     let mut roots = 0_usize;
-    for (_, root) in sources.iter_mut().filter(|(path, _)| is_crate_root(path)) {
+    for (path, root) in sources.iter_mut().filter(|(path, _)| is_crate_root(path)) {
         let first = root
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(0, |at| at + 1);
+        let lines = if members.reaches_program(path) {
+            &lines
+        } else {
+            &kept
+        };
         root.splice(first..first, lines.iter().copied());
         roots += 1;
     }
@@ -7785,8 +7782,20 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
 /// the script's impls. Each imported root's adapters are a crate of their
 /// own on the base, so Cargo compiles them on several cores, and an edit
 /// that changes one root's adapters recompiles that crate and the runner
-/// alone. The runner holds the rest: the adapter table, the bindings it
-/// installs, the per-generation stamps and the protocol.
+/// alone. When the runner depends on the program's crate, what names it is
+/// the program's member's instead (`program`, #1775), so a save to the
+/// program recompiles that member and the runner alone. The runner holds
+/// the rest: the adapter table, the bindings it installs, the
+/// per-generation stamps and the protocol.
+/// The harness the runner is generated from: its manifest and lock, each
+/// path package's name and directory, and the hidden crates found so far.
+type Harness<'a> = (
+    &'a [u8],
+    &'a [u8],
+    &'a [(String, String)],
+    &'a mut Vec<HiddenCrate>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn render_source(
     plans: &[Plan],
@@ -7794,10 +7803,10 @@ fn render_source(
     profile: &crate::profile::Proof,
     compile_snapshot: bool,
     facade_plan: Option<&[u8]>,
-    (lock, paths, hidden): (&[u8], &[(String, String)], &mut Vec<HiddenCrate>),
+    (manifest, lock, paths, hidden): Harness<'_>,
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
-) -> Result<Vec<member::Member>, request::Error> {
+) -> Result<Members, request::Error> {
     let mut main = Vec::new();
     let output = &mut main;
     if !profile.projections().is_empty() && facade_plan.is_none() {
@@ -7998,8 +8007,7 @@ fn render_source(
         .map_err(request::unwritable)?;
     render_profile_projection_bindings(profile, facade.as_ref(), output)?;
     // Each root's crate and its modules, each module's plans in order.
-    let mut units =
-        std::collections::BTreeMap::<String, std::collections::BTreeMap<String, Vec<usize>>>::new();
+    let mut units = Units::new();
     for (index, plan) in plans.iter().enumerate() {
         units
             .entry(adapter_unit(plan, plans)?)
@@ -8008,23 +8016,12 @@ fn render_source(
             .or_default()
             .push(index);
     }
-    let mut members = Vec::new();
-    for unit in units.keys() {
-        members.push(member::Member::Adapters { root: unit.clone() });
-    }
+    // Which crate each module is in is known once every source is
+    // rendered (`program`), so the table's lines go in then.
     output
         .write_all(b"\nstatic ADAPTER_MODULES: &[&[Adapter]] = &[\n")
         .map_err(request::unwritable)?;
-    for (member, modules) in members.iter().zip(units.values()) {
-        for module in modules.keys() {
-            writeln!(
-                output,
-                "    ::{}::__rawr_adapters::{module}::ADAPTERS,",
-                member.key()
-            )
-            .map_err(request::unwritable)?;
-        }
-    }
+    let modules_at = output.len();
     output
         .write_all(
             b"];\n\nfn adapters() -> impl Iterator<Item = &'static Adapter> {\n    ADAPTER_MODULES.iter().flat_map(|rows| rows.iter())\n}\n\n",
@@ -8160,54 +8157,33 @@ fn render_source(
     output
         .write_all(b"\nmod rawr_applications;\n")
         .map_err(request::unwritable)?;
-    sources.push((SOURCE_PATH.into(), ROOT_SOURCE.to_vec()));
-    for (member, modules) in members.iter().zip(units.values()) {
-        let directory = member.directory();
-        let mut table = RUNTIME_IMPORTS.to_vec();
-        for (module, indices) in modules {
-            writeln!(table, "pub mod {module};").map_err(request::unwritable)?;
-            let mut file = Vec::new();
-            file.write_all(b"use super::*;\n")
-                .map_err(request::unwritable)?;
-            file.write_all(TRAIT_IMPORTS).map_err(request::unwritable)?;
-            file.write_all(b"\npub static ADAPTERS: &[Adapter] = &[\n")
-                .map_err(request::unwritable)?;
+    // Each plan's rows, adapter and application helpers, in the order its
+    // crate's files hold them, before the crates are known.
+    let mut rendered = std::iter::repeat_with(Rendered::default)
+        .take(plans.len())
+        .collect::<Vec<_>>();
+    for modules in units.values() {
+        for indices in modules.values() {
             for index in indices {
-                render_rows(&plans[*index], &mut file)?;
+                render_rows(&plans[*index], &mut rendered[*index].rows)?;
             }
-            file.write_all(b"];\n\n").map_err(request::unwritable)?;
-            let path: Box<str> = format!("{directory}/src/{module}.rs").into();
             for index in indices {
                 let plan = &plans[*index];
-                let start = span_offset(&file)?;
-                render_adapter(plan, plans, profile, facade.as_ref(), &mut file)?;
+                let body = &mut rendered[*index].body;
+                render_adapter(plan, plans, profile, facade.as_ref(), body)?;
                 for matcher in matchers(plan) {
-                    render_matcher(plan, matcher, &mut file)?;
+                    render_matcher(plan, matcher, body)?;
                 }
-                render_store(plan, &mut file)?;
-                render_field_lender(plan, &mut file)?;
-                let end = span_offset(&file)?;
-                spans.push((plan.identity(), path.clone(), start..end));
+                render_store(plan, body)?;
+                render_field_lender(plan, body)?;
             }
-            sources.push((path, file));
         }
-        table
-            .write_all(b"mod rawr_applications;\n")
-            .map_err(request::unwritable)?;
-        let mut applications = Vec::new();
-        render_application_helpers(
-            modules.values().flatten().map(|index| &plans[*index]),
-            &mut applications,
-        )?;
-        sources.push((
-            format!("{directory}/src/{APPLICATIONS_FILE}").into(),
-            applications,
-        ));
-        sources.push((format!("{directory}/src/{ADAPTERS_FILE}").into(), table));
-        sources.push((
-            format!("{directory}/{LIBRARY_PATH}").into(),
-            ADAPTERS_ROOT.to_vec(),
-        ));
+        for index in modules.values().flatten() {
+            render_application_helpers(
+                std::iter::once(&plans[*index]),
+                &mut rendered[*index].helpers,
+            )?;
+        }
     }
     let mut applications = Vec::new();
     render_applications(plans, &mut applications)?;
@@ -8216,15 +8192,91 @@ fn render_source(
     // names the proxies take (`family::named`), so they come first.
     let mut impls = Vec::new();
     render_impls(plans, profile, facade.as_ref(), &mut impls)?;
-    place::render(&mut impls);
+    place::render_policies(&mut impls);
+    let registrations = place::registrations();
     let mut families = Vec::new();
     render_families(&mut families)?;
     let mut proxies = Vec::new();
     render_proxies(&mut proxies)?;
+    // Each crate a type is named through (`hidden_spelling`), which the
+    // runner depends on as it does a macro's `$crate`.
+    let texts = [&main, &traits, &impls, &families, &proxies]
+        .into_iter()
+        .chain(rendered.iter().flat_map(Rendered::parts))
+        .chain(
+            sources
+                .iter()
+                .filter(|(path, _)| **path != *BINDINGS_PATH)
+                .map(|(_, source)| source),
+        );
+    for source in texts {
+        for segment in hidden_segments(source) {
+            if !hidden.iter().any(|known| known.segment == segment)
+                && let Some(found) = hidden_crate(lock, paths, &segment)
+            {
+                hidden.push(found);
+            }
+        }
+    }
+    // What names the program's crates is the program's member's (#1775).
+    let script = PROXY_CRATE.with_borrow(Clone::clone);
+    let mut program = script.as_deref().and_then(|script| {
+        let proxies = PROXIES.with_borrow(|proxies| proxies.keys().cloned().collect::<Vec<_>>());
+        program::Program::find(manifest, lock, hidden, script, proxies.into_iter())
+    });
+    let support = Support::split(&families, &impls, &traits, &registrations, program.as_mut())?;
+    let placed = place_adapters(plans, &units, &rendered, program.as_ref())?;
+    let mut members = Vec::new();
+    let mut table = Vec::new();
+    for (root, modules) in &placed.roots {
+        let member = member::Member::Adapters { root: root.clone() };
+        write_adapters(
+            &member, modules, &rendered, plans, false, sources, spans, &mut table,
+        )?;
+        members.push(member);
+    }
+    let Support {
+        base: base_files,
+        program: program_files,
+    } = support;
+    if program.is_some()
+        && let Some(script) = &script
+    {
+        let member = member::Member::Program {
+            library: script.clone(),
+        };
+        write_adapters(
+            &member,
+            &placed.program,
+            &rendered,
+            plans,
+            true,
+            sources,
+            spans,
+            &mut table,
+        )?;
+        write_program(&member, program_files, &proxies, sources)?;
+        members.push(member);
+    }
+    main.splice(modules_at..modules_at, table);
+    // The runner reaches the program's member as it reaches the base.
+    if program.is_some() {
+        main.splice(0..0, PROGRAM_IMPORTS.iter().copied());
+    }
+    let mut root = ROOT_SOURCE.to_vec();
+    if program.is_some() {
+        let at = ROOT_SOURCE
+            .windows(RUNTIME_GLOB.len())
+            .position(|window| window == RUNTIME_GLOB)
+            .map_or(0, |at| at + RUNTIME_GLOB.len());
+        root.splice(at..at, PROGRAM_GLOB.iter().copied());
+    }
+    sources.push((SOURCE_PATH.into(), root));
     let base = member::Member::Base {
-        library: PROXY_CRATE
-            .with_borrow(Clone::clone)
-            .unwrap_or_else(|| member::BASE_KEY.to_owned()),
+        library: match (&program, script) {
+            (None, Some(script)) => script,
+            _ => member::BASE_KEY.to_owned(),
+        },
     };
     let directory = base.directory();
     let mut runtime = b"#[allow(unused_imports)]\nuse rawr_traits::*;\npub mod rawr_traits;\n\
@@ -8232,6 +8284,9 @@ fn render_source(
         .to_vec();
     runtime
         .write_all(RUNTIME_SOURCE)
+        .map_err(request::unwritable)?;
+    runtime
+        .write_all(HELD_RUNTIME)
         .map_err(request::unwritable)?;
     render_macro_exports(&mut runtime)?;
     if !profile.has_generated_projections() {
@@ -8242,6 +8297,11 @@ fn render_source(
     runtime
         .write_all(b"include!(\"rawr_impls.rs\");\n")
         .map_err(request::unwritable)?;
+    let base_proxies = if program.is_some() {
+        HELD_SOURCE.as_bytes().to_vec()
+    } else {
+        proxies
+    };
     sources.push((
         format!("{directory}/{BUILD_PATH}").into(),
         BASE_BUILD_SCRIPT.to_vec(),
@@ -8250,29 +8310,380 @@ fn render_source(
         format!("{directory}/{LIBRARY_PATH}").into(),
         BASE_ROOT.to_vec(),
     ));
-    sources.push((format!("{directory}/src/rawr_families.rs").into(), families));
-    sources.push((format!("{directory}/src/rawr_impls.rs").into(), impls));
-    sources.push((format!("{directory}/src/rawr_proxies.rs").into(), proxies));
+    sources.push((
+        format!("{directory}/src/rawr_families.rs").into(),
+        base_files.families,
+    ));
+    sources.push((
+        format!("{directory}/src/rawr_impls.rs").into(),
+        base_files.impls,
+    ));
+    sources.push((
+        format!("{directory}/src/rawr_proxies.rs").into(),
+        base_proxies,
+    ));
     sources.push((format!("{directory}/src/{RUNNER_FILE}").into(), runtime));
-    sources.push((format!("{directory}/src/rawr_traits.rs").into(), traits));
+    sources.push((
+        format!("{directory}/src/rawr_traits.rs").into(),
+        base_files.traits,
+    ));
     sources.push((RUNNER_PATH.into(), main));
     sources.push((SURFACE_PATH.into(), stamps));
-    // Each crate a type is named through (`hidden_spelling`), which the
-    // runner depends on as it does a macro's `$crate`.
-    for (path, source) in sources.iter() {
-        if **path == *BINDINGS_PATH {
-            continue;
+    members.insert(0, base);
+    Ok(Members {
+        list: members,
+        program: program.map(program::Program::into_crates),
+    })
+}
+
+/// The runner's members, the base first, and the program's crates, which
+/// only the program's member depends on (#1775).
+struct Members {
+    list: Vec<member::Member>,
+    program: Option<program::Crates>,
+}
+
+impl Members {
+    /// Whether `name`, a crate the runner depends on, is one of the
+    /// program's.
+    fn names_program_crate(&self, name: &str) -> bool {
+        self.program
+            .as_ref()
+            .is_some_and(|program| program.names.contains(name))
+    }
+
+    /// Whether the crate whose root is `path` may name the program's crates:
+    /// the runner's, the program member's, or any when there is no program.
+    fn reaches_program(&self, path: &str) -> bool {
+        let program = member::Member::Program {
+            library: String::new(),
+        };
+        self.program.is_none()
+            || path == SOURCE_PATH
+            || path.starts_with(&format!("{}/", program.directory()))
+    }
+
+    /// The packages `member` leaves out.
+    fn without(&self, member: &member::Member) -> std::collections::BTreeSet<String> {
+        match (member, &self.program) {
+            (member::Member::Program { .. }, _) | (_, None) => std::collections::BTreeSet::new(),
+            (_, Some(program)) => program.packages.clone(),
         }
-        for segment in hidden_segments(source) {
-            if !hidden.iter().any(|known| known.segment == segment)
-                && let Some(found) = hidden_crate(lock, paths, &segment)
-            {
-                hidden.push(found);
+    }
+
+    /// The packages each member leaves out, by its package.
+    fn exclusions(&self) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+        self.list
+            .iter()
+            .map(|member| (member.package(), self.without(member)))
+            .filter(|(_, without)| !without.is_empty())
+            .collect()
+    }
+}
+
+/// One plan's rendered parts: its rows in its module's table, its adapter,
+/// matchers, store and lender, and its application helpers.
+#[derive(Default)]
+struct Rendered {
+    rows: Vec<u8>,
+    body: Vec<u8>,
+    helpers: Vec<u8>,
+}
+
+impl Rendered {
+    fn parts(&self) -> [&Vec<u8>; 3] {
+        [&self.rows, &self.body, &self.helpers]
+    }
+
+    /// Whether `program` names any part.
+    fn names(&self, program: &program::Program) -> bool {
+        self.parts()
+            .into_iter()
+            .any(|part| std::str::from_utf8(part).is_ok_and(|text| program.names(text)))
+    }
+}
+
+/// The base's families, impls with its native sequences' registration, and
+/// trait imports, and the program member's.
+struct Support {
+    base: Files,
+    program: Files,
+}
+
+/// One crate's families, impls and trait imports.
+#[derive(Default)]
+struct Files {
+    families: Vec<u8>,
+    impls: Vec<u8>,
+    traits: Vec<u8>,
+}
+
+impl Support {
+    /// `families`, `impls` and `traits`, item by item, and each of
+    /// `registrations`, in the program's member when it names the program,
+    /// else in the base. Without a program, all of them are the base's.
+    fn split(
+        families: &[u8],
+        impls: &[u8],
+        traits: &[u8],
+        registrations: &[String],
+        program: Option<&mut program::Program>,
+    ) -> Result<Self, request::Error> {
+        let families = std::str::from_utf8(families)
+            .map_err(request::misread)?
+            .strip_prefix(FAMILIES_HEADER)
+            .ok_or_else(|| request::drift("the families' header"))?;
+        let impls = std::str::from_utf8(impls).map_err(request::misread)?;
+        let traits = std::str::from_utf8(traits).map_err(request::misread)?;
+        let mut support = Self {
+            base: Files::default(),
+            program: Files::default(),
+        };
+        for files in [&mut support.base, &mut support.program] {
+            files.families.extend_from_slice(FAMILIES_HEADER.as_bytes());
+        }
+        let Some(program) = program else {
+            support.base.families.extend_from_slice(families.as_bytes());
+            support.base.impls.extend_from_slice(impls.as_bytes());
+            support.base.traits.extend_from_slice(traits.as_bytes());
+            write_registrations(REGISTER_BASE, registrations.iter(), &mut support.base.impls)?;
+            return Ok(support);
+        };
+        // An impl goes with the type it is for: items of one name sort as one.
+        let families = item::split(families);
+        let impls = item::split(impls);
+        let mut groups = Vec::<(Option<String>, Vec<&str>)>::new();
+        let mut by_name = std::collections::BTreeMap::<&str, usize>::new();
+        let mut group_of = Vec::new();
+        let mut declared = Vec::new();
+        for found in families.iter().chain(&impls) {
+            match found.name.as_deref().and_then(|name| by_name.get(name)) {
+                Some(&at) => {
+                    groups[at].1.push(found.text);
+                    declared[at] |= found.declares;
+                    group_of.push(at);
+                }
+                None => {
+                    if let Some(name) = found.name.as_deref() {
+                        by_name.insert(name, groups.len());
+                    }
+                    group_of.push(groups.len());
+                    groups.push((found.name.clone(), vec![found.text]));
+                    declared.push(found.declares);
+                }
+            }
+        }
+        // Only a name the runner's sources declare is the program's to
+        // name: an impl for a crate's type names that type.
+        for (group, declared) in groups.iter_mut().zip(&declared) {
+            if !declared {
+                group.0 = None;
+            }
+        }
+        let sorted = program.sort(&groups);
+        for (index, found) in families.iter().enumerate() {
+            let files = support.files(sorted[group_of[index]]);
+            files.families.extend_from_slice(found.text.as_bytes());
+        }
+        for (index, found) in impls.iter().enumerate() {
+            let files = support.files(sorted[group_of[families.len() + index]]);
+            files.impls.extend_from_slice(found.text.as_bytes());
+        }
+        for found in item::split(traits) {
+            let files = support.files(program.names(found.text));
+            files.traits.extend_from_slice(found.text.as_bytes());
+        }
+        let (named, unnamed): (Vec<_>, Vec<_>) = registrations
+            .iter()
+            .partition(|registration| program.names(registration));
+        write_registrations(REGISTER_BASE, unnamed.into_iter(), &mut support.base.impls)?;
+        write_registrations(
+            REGISTER_PROGRAM,
+            named.into_iter(),
+            &mut support.program.impls,
+        )?;
+        Ok(support)
+    }
+
+    fn files(&mut self, program: bool) -> &mut Files {
+        if program {
+            &mut self.program
+        } else {
+            &mut self.base
+        }
+    }
+}
+
+/// `pub fn {name}() { .. }` registering each of `registrations`.
+fn write_registrations<'a>(
+    name: &str,
+    registrations: impl Iterator<Item = &'a String>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(output, "pub fn {name}() {{").map_err(request::unwritable)?;
+    for registration in registrations {
+        output.extend_from_slice(registration.as_bytes());
+    }
+    output.write_all(b"}\n").map_err(request::unwritable)
+}
+
+/// Each root's modules, each module's plans by index.
+type Units = std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<usize>>>;
+
+/// Each crate of adapters' modules and plans: each root's, and the
+/// program's member's.
+struct Placed {
+    roots: Units,
+    program: std::collections::BTreeMap<String, Vec<usize>>,
+}
+
+/// `units`, each root's modules and plans, with the plans that name the
+/// `program` in its member instead. A call that runs what the producer of an
+/// opaque type compiled reaches the producer's module, so a producer and
+/// every call on its values go together.
+fn place_adapters(
+    plans: &[Plan],
+    units: &Units,
+    rendered: &[Rendered],
+    program: Option<&program::Program>,
+) -> Result<Placed, request::Error> {
+    let mut named = vec![false; plans.len()];
+    if let Some(program) = program {
+        let producers = plans
+            .iter()
+            .map(|plan| {
+                let producer = opaque_root(plan, plans)?;
+                Ok(plans
+                    .iter()
+                    .position(|other| std::ptr::eq(other, producer))
+                    .unwrap_or_default())
+            })
+            .collect::<Result<Vec<_>, request::Error>>()?;
+        let mut groups = vec![false; plans.len()];
+        for (index, plan) in plans.iter().enumerate() {
+            if program.is_crate(plan.export().root_alias()) || rendered[index].names(program) {
+                groups[producers[index]] = true;
+            }
+        }
+        for (index, producer) in producers.iter().enumerate() {
+            named[index] = groups[*producer];
+        }
+    }
+    let mut placed = Placed {
+        roots: std::collections::BTreeMap::new(),
+        program: std::collections::BTreeMap::new(),
+    };
+    for (root, modules) in units {
+        for (module, indices) in modules {
+            for index in indices {
+                let crate_modules = if named[*index] {
+                    &mut placed.program
+                } else {
+                    placed.roots.entry(root.clone()).or_default()
+                };
+                crate_modules
+                    .entry(module.clone())
+                    .or_default()
+                    .push(*index);
             }
         }
     }
-    members.insert(0, base);
-    Ok(members)
+    Ok(placed)
+}
+
+/// The files of `member`, a crate of adapters, holding `modules` (each
+/// module's plans, rendered in `rendered`), each module's line of the
+/// runner's adapter table in `table`, and each adapter's span. The
+/// program's member's modules see its runtime and trait imports too.
+#[allow(clippy::too_many_arguments)]
+fn write_adapters(
+    member: &member::Member,
+    modules: &std::collections::BTreeMap<String, Vec<usize>>,
+    rendered: &[Rendered],
+    plans: &[Plan],
+    program: bool,
+    sources: &mut Vec<(Box<str>, Vec<u8>)>,
+    spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
+    table: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let directory = member.directory();
+    let mut declared = RUNTIME_IMPORTS.to_vec();
+    if program {
+        declared.extend_from_slice(PROGRAM_RUNTIME_IMPORTS);
+    }
+    let mut applications = Vec::new();
+    for (module, indices) in modules {
+        writeln!(
+            table,
+            "    ::{}::__rawr_adapters::{module}::ADAPTERS,",
+            member.key()
+        )
+        .map_err(request::unwritable)?;
+        writeln!(declared, "pub mod {module};").map_err(request::unwritable)?;
+        let mut file = Vec::new();
+        file.write_all(b"use super::*;\n")
+            .map_err(request::unwritable)?;
+        file.write_all(TRAIT_IMPORTS).map_err(request::unwritable)?;
+        if program {
+            file.write_all(PROGRAM_TRAIT_IMPORTS)
+                .map_err(request::unwritable)?;
+        }
+        file.write_all(b"\npub static ADAPTERS: &[Adapter] = &[\n")
+            .map_err(request::unwritable)?;
+        for index in indices {
+            file.extend_from_slice(&rendered[*index].rows);
+        }
+        file.write_all(b"];\n\n").map_err(request::unwritable)?;
+        let path: Box<str> = format!("{directory}/src/{module}.rs").into();
+        for index in indices {
+            let start = span_offset(&file)?;
+            file.extend_from_slice(&rendered[*index].body);
+            let end = span_offset(&file)?;
+            spans.push((plans[*index].identity(), path.clone(), start..end));
+            applications.extend_from_slice(&rendered[*index].helpers);
+        }
+        sources.push((path, file));
+    }
+    declared
+        .write_all(b"mod rawr_applications;\n")
+        .map_err(request::unwritable)?;
+    sources.push((
+        format!("{directory}/src/{APPLICATIONS_FILE}").into(),
+        applications,
+    ));
+    sources.push((format!("{directory}/src/{ADAPTERS_FILE}").into(), declared));
+    let root = if program { PROGRAM_ROOT } else { ADAPTERS_ROOT };
+    sources.push((format!("{directory}/{LIBRARY_PATH}").into(), root.to_vec()));
+    Ok(())
+}
+
+/// The program's member's own files besides its adapters: its proxies and
+/// the trait they implement, at its root, and its module of families,
+/// impls, trait imports and the runtime over that trait.
+fn write_program(
+    member: &member::Member,
+    files: Files,
+    proxies: &[u8],
+    sources: &mut Vec<(Box<str>, Vec<u8>)>,
+) -> Result<(), request::Error> {
+    let directory = member.directory();
+    sources.push((
+        format!("{directory}/src/rawr_proxies.rs").into(),
+        proxies.to_vec(),
+    ));
+    let mut module = PROGRAM_MODULE.to_vec();
+    module.extend_from_slice(HELD_RUNTIME);
+    sources.push((format!("{directory}/src/{PROGRAM_FILE}").into(), module));
+    sources.push((
+        format!("{directory}/src/rawr_program_families.rs").into(),
+        files.families,
+    ));
+    sources.push((
+        format!("{directory}/src/rawr_program_traits.rs").into(),
+        files.traits,
+    ));
+    sources.push((format!("{directory}/src/rawr_impls.rs").into(), files.impls));
+    Ok(())
 }
 
 /// The adapter table's rows for `plan`: its own, each variant's matchers,
@@ -8486,6 +8897,14 @@ fn root_segment(root: &str) -> String {
 /// compiled for it (`render_adapter`), that producer's, whose table it
 /// reaches in its module.
 fn adapter_unit(plan: &Plan, cohort: &[Plan]) -> Result<String, request::Error> {
+    Ok(root_segment(
+        opaque_root(plan, cohort)?.export().root_alias(),
+    ))
+}
+
+/// The plan whose module `plan`'s adapter is in: `plan`, or for a call that
+/// runs what the producer of an opaque type compiled for it, that producer.
+fn opaque_root<'p>(plan: &'p Plan, cohort: &'p [Plan]) -> Result<&'p Plan, request::Error> {
     let mut current = plan;
     // Each step goes to another plan, so the walk ends within the cohort.
     for _ in 0..cohort.len() {
@@ -8500,7 +8919,7 @@ fn adapter_unit(plan: &Plan, cohort: &[Plan]) -> Result<String, request::Error> 
             _ => break,
         }
     }
-    Ok(root_segment(current.export().root_alias()))
+    Ok(current)
 }
 
 fn adapter_name(plan: &Plan) -> String {
@@ -8578,6 +8997,93 @@ const BASE_BUILD_SCRIPT: &[u8] = b"fn main() {\n}\n";
 const ADAPTERS_ROOT: &[u8] = b"#![forbid(unsafe_code)]\n\
 #[allow(unused_imports)]\n\
 use ::rawr_generated_runner_base::*;\n\
+#[allow(dead_code)]\n\
+#[path = \"rawr_adapters.rs\"]\n\
+pub mod __rawr_adapters;\n";
+
+/// The runtime's functions over `__RawrHeld` (`HELD_SOURCE`), in the
+/// crate that declares it: the base's runtime, or the program member's
+/// module when its proxies hold mirrors of the program's types, which only
+/// its crate may implement the trait for (#1775).
+const HELD_RUNTIME: &[u8] = br#"
+/// The script value `value` holds, given back to script code by an
+/// adapter, whose arena is borrowed. A value made where it is first used
+/// (`Proxy::deferred`) is made here, on the owner thread, with the arena
+/// lent to the script function that makes it, as `Task::map`'s value is
+/// read by `Task::value`. A mirror's native parts go into the arena (#1249).
+#[allow(dead_code)]
+pub fn give_held<T: crate::__RawrHeld>(arena: &mut Arena, value: T) -> Dynamic {
+    lend(arena, || crate::__RawrHeld::into_proxy(value).into_dynamic())
+}
+
+/// The script value of argument `index` as the Rust type `T` the runner
+/// holds it as where native generic code takes one (D594): its proxy, which
+/// shares it when script code shares it, or its mirror, whose native parts
+/// move out of the arena (#1249).
+#[allow(dead_code)]
+pub fn take_held<T: crate::__RawrHeld>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+    let place = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
+    let proxy = __rawr_internal::crossing::Proxy::from_place(&mut **place);
+    Ok(lend(arguments.arena, || <T as crate::__RawrHeld>::from_proxy(proxy)))
+}
+"#;
+/// What a families file begins with: the base's and the program member's.
+const FAMILIES_HEADER: &str = "#![allow(dead_code, unused_imports)]\nuse super::*;\n\n";
+/// The function that registers the base's native sequences, which the
+/// runner calls.
+const REGISTER_BASE: &str = "register_native_sequences";
+/// The function that registers the program member's.
+const REGISTER_PROGRAM: &str = "register_program_sequences";
+/// The base's glob in the runner's crate root, which the program member's
+/// follows.
+const RUNTIME_GLOB: &[u8] = b"use ::rawr_generated_runner_base::*;\n";
+/// The program member's root in the runner's crate root: its proxies.
+const PROGRAM_GLOB: &[u8] = b"#[allow(unused_imports)]\nuse ::rawr_generated_runner_program::*;\n\
+#[allow(unused_imports)]\nuse ::rawr_generated_runner_program::__RawrHeld;\n";
+/// What the runner's module imports from the program's member, and its
+/// registration of both crates' native sequences.
+const PROGRAM_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_program::__rawr_program::*;\n\
+#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_program::__rawr_program::rawr_program_traits::*;\n\
+#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_program::__rawr_program::{give_held, take_held};\n\
+fn register_native_sequences() {\n\
+    ::rawr_generated_runner_base::__rawr_runner::register_native_sequences();\n\
+    ::rawr_generated_runner_program::__rawr_program::register_program_sequences();\n\
+}\n";
+/// The program member's module of families, impls and traits.
+const PROGRAM_FILE: &str = "rawr_program.rs";
+/// That module: the base's runtime and traits in scope, its own beside them.
+const PROGRAM_MODULE: &[u8] = b"#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::__rawr_runner::*;\n\
+#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::__rawr_runner::rawr_traits::*;\n\
+#[allow(unused_imports)]\n\
+use rawr_program_traits::*;\n\
+pub mod rawr_program_traits;\n\
+#[allow(unused_imports)]\n\
+pub use rawr_program_families::*;\n\
+pub mod rawr_program_families;\n\
+include!(\"rawr_impls.rs\");\n";
+/// What the program member's module of adapters imports besides the
+/// runtime: its own module.
+const PROGRAM_RUNTIME_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
+use crate::__rawr_program::*;\n\
+#[allow(unused_imports)]\n\
+use crate::__rawr_program::{give_held, take_held};\n";
+/// The program member's trait imports, besides the base's.
+const PROGRAM_TRAIT_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
+use crate::__rawr_program::rawr_program_traits::*;\n";
+/// The program member's root: the proxies of script types (D594), its
+/// module, and its adapters.
+const PROGRAM_ROOT: &[u8] = b"#![forbid(unsafe_code)]\n\
+#[allow(unused_imports)]\n\
+use ::rawr_generated_runner_base::*;\n\
+include!(\"rawr_proxies.rs\");\n\
+#[allow(dead_code)]\n\
+#[path = \"rawr_program.rs\"]\n\
+pub mod __rawr_program;\n\
 #[allow(dead_code)]\n\
 #[path = \"rawr_adapters.rs\"]\n\
 pub mod __rawr_adapters;\n";
@@ -23385,12 +23891,7 @@ fn lent_mutably(ty: &convert::Type) -> bool {
 /// The scope families the adapters named, as the `rawr_families` module.
 fn render_families(output: &mut Vec<u8>) -> Result<(), request::Error> {
     output
-        .write_all(
-            b"#![allow(dead_code, unused_imports)]
-use super::*;
-
-",
-        )
+        .write_all(FAMILIES_HEADER.as_bytes())
         .map_err(request::unwritable)?;
     let families = FAMILIES.with_borrow(|families| {
         families

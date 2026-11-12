@@ -3932,3 +3932,75 @@ fn a_marked_module_calls_a_method_with_elided_lifetimes_whose_output_borrows_sel
     assert_eq!(printed, "invited by Ada\ninvited by Someone\n");
     checks_and_prints(&root, &printed);
 }
+
+/// The packages `cargo build` of `root` compiles, by the names its
+/// `Compiling` lines give.
+fn cargo_compiles(root: &Path) -> Vec<String> {
+    let built = std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&built.stderr);
+    assert!(built.status.success(), "{said}");
+    said.lines()
+        .filter_map(|line| line.trim_start().strip_prefix("Compiling "))
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `rawr-import run root`'s count of runner units compiled.
+fn runner_units(root: &Path) -> String {
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env("RAWR_VERBOSE", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{said}");
+    said.lines()
+        .find_map(|line| line.split_once("runner units compiled "))
+        .map(|(_, count)| count.to_owned())
+        .unwrap_or_else(|| panic!("{said}"))
+}
+
+/// A private field on a held `pub struct` rebuilds what names the program
+/// and nothing else, and rawr and `cargo build` share the project's path
+/// packages. The runner's base and its crates of adapters don't depend on
+/// rawr's copy of the program's crate, so the field recompiles that copy,
+/// the program's member and the runner (#1775). rawr's copy names the path
+/// packages through the runner's links, so they are one unit each, which
+/// `cargo build` after a run and a run after `cargo build` find fresh
+/// (#1777).
+#[test]
+fn a_held_type_s_new_field_rebuilds_three_runner_units_and_cargo_shares_the_path_packages() {
+    const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    let root = crate::support::fresh("islands-theme-field-units");
+    copy(Path::new(SOURCE), &root);
+    runner_units(&root);
+    // The project's own crate is all `cargo build` compiles after a run.
+    assert_eq!(cargo_compiles(&root), ["islands-theme"]);
+    assert_eq!(runner_units(&root), "0");
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "    wizard: Option<wizard::State>,\n}",
+        "    wizard: Option<wizard::State>,\n    seen: u32,\n}",
+    );
+    edit(
+        &home,
+        "            wizard: None,\n        }",
+        "            wizard: None,\n            seen: 0,\n        }",
+    );
+    assert_eq!(runner_units(&root), "3");
+    assert_eq!(cargo_compiles(&root), ["islands-theme"]);
+    assert_eq!(runner_units(&root), "0");
+}

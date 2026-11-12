@@ -584,6 +584,14 @@ fn runner_sources<'a, B>(
 ) -> Vec<(&'a str, std::borrow::Cow<'a, [u8]>)> {
     use crate::bridge::generate;
     use std::borrow::Cow;
+    // The packages each member leaves out, which no rewrite changes.
+    let without = generate::member::exclusions(
+        manifest
+            .files
+            .iter()
+            .filter(|file| generate::is_member_manifest(file.path()))
+            .filter_map(|file| std::str::from_utf8(file.bytes()).ok()),
+    );
     let mut sources = manifest
         .files
         .iter()
@@ -612,7 +620,7 @@ fn runner_sources<'a, B>(
                 _ => rewired,
             };
             let rewired = match (path, rewired.as_deref().or(text)) {
-                ("Cargo.lock", Some(text)) => generate::member::lock(text).or(rewired),
+                ("Cargo.lock", Some(text)) => generate::member::lock(text, &without).or(rewired),
                 _ => rewired,
             };
             let bytes = match (rewired, path, mirrored) {

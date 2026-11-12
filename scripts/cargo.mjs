@@ -30,6 +30,15 @@
 //   binary's debug map names stays, and the sets earlier incremental
 //   compiles left go.
 //
+// - Of a unit's incremental sessions, only the one its last compile wrote
+//   stays.
+//
+// - In a target directory rawr also builds into (a `rawr` directory beside
+//   the profile's), rawr's runner units share the profile directory and
+//   crate names with Cargo's (#1778). There a unit goes only when some
+//   wrapped run recorded its hash, and the incremental directories rawr's
+//   runners list are left to rawr.
+//
 // Nothing is removed by age. The prune holds Cargo's locks on the profile
 // directory, and it waits for the last of the wrapped runs going at once:
 // until a run records, it may name anything.
@@ -285,12 +294,22 @@ function prune(state, profile) {
   const kept = changed ? [current.dependencies, seen[0]] : seen;
   fs.writeFileSync(join(records, "dependencies"), JSON.stringify(kept));
 
+  // A target directory rawr builds into (`<target>/rawr` beside the profile)
+  // holds rawr's runner units of the same crates, which no record of this
+  // script's names (#1778). There only units some wrapped run recorded are
+  // ever removed: `recorded` holds every hash a record named, folded in here
+  // before any record goes.
+  const rawr = fs.existsSync(join(profile, "..", "rawr"));
+  const recordedFile = join(records, "recorded");
+  const recorded = new Set(read(recordedFile) ?? []);
+
   const workspace = new Set();
   const dependencies = new Set();
   const crates = new Set();
   const incremental = new Map();
   for (const file of entries(records).filter((path) => path.endsWith(".json"))) {
     const entry = read(file);
+    entry?.units.forEach((unit) => recorded.add(unit));
     if (!entry || !kept.includes(entry.dependencies)) {
       fs.rmSync(file, { force: true });
       continue;
@@ -310,15 +329,20 @@ function prune(state, profile) {
     fs.rmSync(path, { recursive: true, force: true });
     removed += 1;
   };
+  const present = new Set();
   for (const directory of DIRECTORIES) {
     for (const path of entries(join(profile, directory))) {
       const name = basename(path);
       const found = hash(name);
       if (!found) continue;
+      if (rawr && !recorded.has(found)) continue;
       const stale = crates.has(crate(name)) ? !workspace.has(found) : changed && !dependencies.has(found);
       if (stale) remove(path);
+      else present.add(found);
     }
   }
+  // A hash whose unit is gone is never seen again.
+  if (rawr) fs.writeFileSync(recordedFile, JSON.stringify([...recorded].filter((unit) => present.has(unit))));
   // Each incremental compile of a unit leaves a new set of codegen objects
   // beside its output (macOS keeps debug info in them), and the earlier sets
   // stay. The current set is the one the unit's rlib holds or its binary's
@@ -339,8 +363,12 @@ function prune(state, profile) {
   // An incremental directory is `<crate>-<stable crate id>`, which no message
   // names, and each version gives each unit a new one. A crate keeps its
   // newest directories, one for each unit current records give it.
+  // rawr's runner lists the ones its build compiles into (D924); they are its
+  // to prune.
+  const listed = rawr ? rawrIncremental(join(profile, "..", "rawr")) : new Set();
   const directories = new Map();
   for (const path of entries(join(profile, "incremental"))) {
+    if (listed.has(real(path))) continue;
     const name = basename(path).slice(0, basename(path).lastIndexOf("-"));
     directories.set(name, [...(directories.get(name) ?? []), { path, time: fs.statSync(path).mtimeMs }]);
   }
@@ -348,7 +376,55 @@ function prune(state, profile) {
     found.sort((a, b) => b.time - a.time);
     found.slice(incremental.get(name)?.size ?? 0).forEach(({ path }) => remove(path));
   }
+  // Each compile of a unit writes a new `s-<time>-<id>[-<svh>]` session in
+  // its incremental directory, and rustc leaves earlier ones (#1782). The
+  // session the unit's last compile wrote is the newest; the rest go, with
+  // their `.lock`s. No build runs while the prune holds Cargo's locks.
+  for (const directory of entries(join(profile, "incremental"))) {
+    const sessions = entries(directory)
+      .filter((path) => basename(path).startsWith("s-") && !basename(path).endsWith(".lock"))
+      .map((path) => ({ path, time: fs.statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0 }))
+      .sort((a, b) => b.time - a.time);
+    for (const { path } of sessions.slice(1)) {
+      remove(path);
+      const lock = `${join(directory, basename(path).split("-").slice(0, 3).join("-"))}.lock`;
+      if (!sessions[0].path.startsWith(lock.slice(0, -".lock".length))) fs.rmSync(lock, { force: true });
+    }
+  }
   if (removed > 0) console.error(`pruned ${removed} superseded entries from ${profile}`);
+}
+
+const real = (path) => {
+  try {
+    return fs.realpathSync(path);
+  } catch {
+    return path;
+  }
+};
+
+// The directories rawr does not build into, under its own directory.
+const UNLISTED = new Set(["store", "store.parts", "store.sessions", "cache", "cargo", "lowered", "parse", "shared", "crate", "bin", "formats"]);
+
+// The incremental directories each rawr runner under `rawr` lists in its
+// `runner/incremental-directories`: the project's own and each workspace
+// member's under `members/`.
+function rawrIncremental(rawr) {
+  const listed = new Set();
+  const pending = [rawr];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    let text = null;
+    try {
+      text = fs.readFileSync(join(directory, "runner", "incremental-directories"), "utf8");
+    } catch {}
+    text?.split("\n").filter(Boolean).forEach((path) => listed.add(real(path)));
+    for (const child of entries(directory)) {
+      const name = basename(child);
+      if (UNLISTED.has(name) || name === "runner") continue;
+      if (fs.statSync(child, { throwIfNoEntry: false })?.isDirectory()) pending.push(child);
+    }
+  }
+  return listed;
 }
 
 // Read `length` bytes of the open file `fd` at `offset`.

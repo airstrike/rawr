@@ -1,12 +1,16 @@
 //! The runner's library crates (#1670): the base every adapter builds on and
-//! one crate of adapters per imported root. Cargo compiles them on several
-//! cores, and an edit that changes one root's adapters recompiles that
-//! crate and the runner alone.
+//! one crate of adapters per imported root, and the program's member, which
+//! holds what names the program's crates (#1775). Cargo compiles them on
+//! several cores, and an edit that changes one root's adapters recompiles
+//! that crate and the runner alone.
 //!
 //! Each is a member of the runner's workspace with the runner's own
-//! dependencies: its manifest and its lock entry take them from the
-//! runner's, so every step that rewrites the runner's manifest or lock
-//! (the mirror, the shared runtime, a member's version) reaches them too.
+//! dependencies, but the program's crates for all but the program's member:
+//! its manifest and its lock entry take them from the runner's, so every
+//! step that rewrites the runner's manifest or lock (the mirror, the shared
+//! runtime, a member's version) reaches them too.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
@@ -21,6 +25,9 @@ pub(crate) const RUNNER: &str = "rawr-generated-runner";
 
 /// The base's package.
 const BASE_PACKAGE: &str = "rawr-generated-runner-base";
+
+/// The program's member's package.
+const PROGRAM_PACKAGE: &str = "rawr-generated-runner-program";
 
 /// The name the runner's code gives the base, as the crate roots and the
 /// adapters' modules spell it.
@@ -37,13 +44,19 @@ pub(super) enum Member {
     Base { library: String },
     /// The adapters of one imported root, by its name as a module segment.
     Adapters { root: String },
+    /// What names the program's crates (`program`): the proxies, which make
+    /// its library take the script crate's name, the families, places,
+    /// traits and impls that name them, and every adapter that does. Only
+    /// it, of the members, depends on the program's crates (#1775).
+    Program { library: String },
 }
 
 impl Member {
-    fn package(&self) -> String {
+    pub(super) fn package(&self) -> String {
         match self {
             Self::Base { .. } => BASE_PACKAGE.to_owned(),
             Self::Adapters { root } => format!("{RUNNER}-adapters-{root}"),
+            Self::Program { .. } => PROGRAM_PACKAGE.to_owned(),
         }
     }
 
@@ -57,13 +70,18 @@ impl Member {
         match self {
             Self::Base { .. } => format!("{DIRECTORY}/base"),
             Self::Adapters { root } => format!("{DIRECTORY}/adapters-{root}"),
+            Self::Program { .. } => format!("{DIRECTORY}/program"),
         }
     }
 
-    /// Its manifest, with the runner's dependencies from `runner`'s. The
-    /// base has a build script, which the shared runtime's link search
-    /// reaches every member through (D614).
-    pub(super) fn manifest(&self, runner: &[u8]) -> Result<Vec<u8>, request::Error> {
+    /// Its manifest, with the runner's dependencies from `runner`'s but
+    /// the packages of `without`. The base has a build script, which the
+    /// shared runtime's link search reaches every member through (D614).
+    pub(super) fn manifest(
+        &self,
+        runner: &[u8],
+        without: &BTreeSet<String>,
+    ) -> Result<Vec<u8>, request::Error> {
         let mut document = DocumentMut::new();
         let mut package = Table::new();
         package.insert("name", toml_edit::value(self.package()));
@@ -83,7 +101,27 @@ impl Member {
                 );
                 self.key()
             }
+            Self::Program { library } => {
+                dependencies.insert(
+                    BASE_KEY,
+                    Item::Value(path_dependency(BASE_PACKAGE, "../base")),
+                );
+                library.clone()
+            }
         };
+        // The packages it leaves out, which `manifest` reads again after
+        // each rewrite of the runner's.
+        if !without.is_empty() {
+            let mut rawr = Table::new();
+            rawr.insert(
+                "without",
+                toml_edit::value(without.iter().collect::<toml_edit::Array>()),
+            );
+            let mut metadata = Table::new();
+            metadata.set_implicit(true);
+            metadata.insert("rawr", Item::Table(rawr));
+            package.insert("metadata", Item::Table(metadata));
+        }
         document.insert("package", Item::Table(package));
         let mut library = Table::new();
         library.insert("name", toml_edit::value(name));
@@ -127,8 +165,13 @@ pub(super) fn runner_manifest(
 }
 
 /// The runner's `lock` with an entry for each of `members`, whose
-/// dependencies [`lock`] fills in.
-pub(super) fn runner_lock(lock: &[u8], members: &[Member]) -> Result<Vec<u8>, request::Error> {
+/// dependencies [`lock`] fills in, but the packages each leaves out
+/// (`without`, by its package).
+pub(super) fn runner_lock(
+    lock: &[u8],
+    members: &[Member],
+    without: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(lock).map_err(request::misread)?;
     let mut document = text.parse::<DocumentMut>().map_err(request::misread)?;
     let packages = document
@@ -140,7 +183,7 @@ pub(super) fn runner_lock(lock: &[u8], members: &[Member]) -> Result<Vec<u8>, re
         entry.insert("name", toml_edit::value(member.package()));
         entry.insert("version", toml_edit::value("0.0.0"));
         let mut needs = toml_edit::Array::new();
-        if let Member::Adapters { .. } = member {
+        if let Member::Adapters { .. } | Member::Program { .. } = member {
             needs.push(BASE_PACKAGE);
         }
         entry.insert("dependencies", toml_edit::value(needs));
@@ -158,7 +201,7 @@ pub(super) fn runner_lock(lock: &[u8], members: &[Member]) -> Result<Vec<u8>, re
     for member in members {
         dependencies.push(member.package());
     }
-    self::lock(&document.to_string())
+    self::lock(&document.to_string(), without)
         .map(|lock| super::normalize(lock.as_bytes()))
         .ok_or_else(|| request::misread("the runner's lock does not parse"))
 }
@@ -193,13 +236,46 @@ pub(crate) fn file(path: &str) -> Option<&str> {
     Some(file)
 }
 
+/// The packages each member's manifest of `manifests` leaves out, by the
+/// member's package (`Member::manifest`).
+pub(crate) fn exclusions<'a>(
+    manifests: impl Iterator<Item = &'a str>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    manifests
+        .filter_map(|text| {
+            let document = text.parse::<DocumentMut>().ok()?;
+            let name = document.get("package")?.get("name")?.as_str()?.to_owned();
+            Some((name, without(&document)))
+        })
+        .filter(|(_, without)| !without.is_empty())
+        .collect()
+}
+
+/// The packages a member's manifest leaves out.
+fn without(document: &DocumentMut) -> BTreeSet<String> {
+    document
+        .get("package")
+        .and_then(|package| package.get("metadata"))
+        .and_then(|metadata| metadata.get("rawr"))
+        .and_then(|rawr| rawr.get("without"))
+        .and_then(Item::as_array)
+        .map(|packages| {
+            packages
+                .iter()
+                .filter_map(|package| package.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// `member`, a member's manifest, with the dependencies of `runner`, the
-/// runner's: every one but the members, whose relative paths it names from
-/// its own directory, and the runner's version. `None` when either does not
-/// parse.
+/// runner's: every one but the members and the packages the member leaves
+/// out, whose relative paths it names from its own directory, and the
+/// runner's version. `None` when either does not parse.
 pub(crate) fn manifest(runner: &str, member: &str) -> Option<String> {
     let runner = runner.parse::<DocumentMut>().ok()?;
     let mut document = member.parse::<DocumentMut>().ok()?;
+    let without = without(&document);
     let version = runner.get("package")?.get("version")?.clone();
     document
         .get_mut("package")?
@@ -225,7 +301,7 @@ pub(crate) fn manifest(runner: &str, member: &str) -> Option<String> {
         let Some(table) = runner.get(kind).and_then(Item::as_table_like) else {
             continue;
         };
-        document.insert(kind, Item::Table(rebased(table)));
+        document.insert(kind, Item::Table(rebased(table, &without)));
     }
     let dependencies = document
         .entry("dependencies")
@@ -245,7 +321,7 @@ pub(crate) fn manifest(runner: &str, member: &str) -> Option<String> {
             platform_tables.set_implicit(true);
             for kind in DEPENDENCIES {
                 if let Some(table) = tables.get(kind).and_then(Item::as_table_like) {
-                    platform_tables.insert(kind, Item::Table(rebased(table)));
+                    platform_tables.insert(kind, Item::Table(rebased(table, &without)));
                 }
             }
             copied.insert(platform, Item::Table(platform_tables));
@@ -263,12 +339,18 @@ fn names_member(item: &Item) -> bool {
         .is_some_and(|package| package.starts_with(RUNNER))
 }
 
-/// The runner's dependency `table` without its members, with each relative
-/// path named from a member's directory, two below the runner's root.
-fn rebased(table: &dyn TableLike) -> Table {
+/// The runner's dependency `table` without its members and the packages of
+/// `without`, with each relative path named from a member's directory, two
+/// below the runner's root.
+fn rebased(table: &dyn TableLike, without: &BTreeSet<String>) -> Table {
     let mut copied = Table::new();
     for (key, item) in table.iter() {
-        if names_member(item) {
+        let package = item
+            .as_table_like()
+            .and_then(|item| item.get("package"))
+            .and_then(Item::as_str)
+            .unwrap_or(key);
+        if names_member(item) || without.contains(package) {
             continue;
         }
         let mut item = item.clone();
@@ -285,10 +367,11 @@ fn rebased(table: &dyn TableLike) -> Table {
 }
 
 /// `lock` with each member's entry at the runner's version and depending on
-/// what the runner's does, besides the members it depends on itself: the
-/// resolve Cargo makes of the members' manifests, so a `--locked` build
-/// holds. `None` when it does not parse.
-pub(crate) fn lock(lock: &str) -> Option<String> {
+/// what the runner's does but the packages it leaves out (`without`, by its
+/// package), besides the members it depends on itself: the resolve Cargo
+/// makes of the members' manifests, so a `--locked` build holds. `None`
+/// when it does not parse.
+pub(crate) fn lock(lock: &str, without: &BTreeMap<String, BTreeSet<String>>) -> Option<String> {
     let mut document = lock.parse::<DocumentMut>().ok()?;
     let packages = document.get_mut("package")?.as_array_of_tables_mut()?;
     let runner = packages.iter().find(|package| is_runner(package))?;
@@ -318,6 +401,12 @@ pub(crate) fn lock(lock: &str) -> Option<String> {
         .unwrap_or_default();
     for package in packages.iter_mut().filter(|package| is_member(package)) {
         package.insert("version", version.clone());
+        let left = package
+            .get("name")
+            .and_then(Item::as_str)
+            .and_then(|name| without.get(name))
+            .cloned()
+            .unwrap_or_default();
         let mut dependencies = package
             .get("dependencies")
             .and_then(Item::as_array)
@@ -331,7 +420,12 @@ pub(crate) fn lock(lock: &str) -> Option<String> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        dependencies.extend(shared.iter().cloned());
+        dependencies.extend(
+            shared
+                .iter()
+                .filter(|dependency| named(dependency).is_none_or(|name| !left.contains(&name)))
+                .cloned(),
+        );
         dependencies.sort_by_key(|dependency| named(dependency).unwrap_or_default());
         // Cargo writes no list for a package without dependencies.
         if dependencies.is_empty() {
@@ -378,7 +472,7 @@ mod tests {
             root: "iced".to_owned(),
         };
         let manifest = member
-            .manifest(RUNNER_MANIFEST.as_bytes())
+            .manifest(RUNNER_MANIFEST.as_bytes(), &BTreeSet::new())
             .expect("the member manifest renders");
         let text = std::str::from_utf8(&manifest).expect("the manifest is UTF-8");
         let document = text.parse::<DocumentMut>().expect("the manifest parses");
@@ -427,7 +521,8 @@ mod tests {
                 root: "iced".to_owned(),
             },
         ];
-        let locked = runner_lock(lock.as_bytes(), &members).expect("the lock renders");
+        let locked =
+            runner_lock(lock.as_bytes(), &members, &BTreeMap::new()).expect("the lock renders");
         let locked = std::str::from_utf8(&locked).expect("the lock is UTF-8");
         assert_eq!(
             locked,
@@ -442,7 +537,7 @@ mod tests {
             "name = \"rawr-generated-runner\"\nversion = \"0.0.0\"",
             "name = \"rawr-generated-runner\"\nversion = \"0.0.0+ab\"",
         );
-        let relocked = super::lock(&versioned).expect("the lock parses");
+        let relocked = super::lock(&versioned, &BTreeMap::new()).expect("the lock parses");
         assert_eq!(
             relocked.matches("version = \"0.0.0+ab\"").count(),
             3,

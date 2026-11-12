@@ -225,6 +225,13 @@ fn clone(from: &Path, to: &Path) {
             clone(&path, &target);
             continue;
         }
+        // The runner's links to the project's directories stay links, to
+        // what they name (`runner::mirror`).
+        if entry.file_type().unwrap().is_symlink() {
+            let _ = fs::remove_file(&target);
+            std::os::unix::fs::symlink(fs::read_link(&path).unwrap(), &target).unwrap();
+            continue;
+        }
         fs::copy(&path, &target).unwrap();
         // A read-only file's time is set through a handle that reads it.
         let modified = entry.metadata().unwrap().modified().unwrap();
