@@ -255,6 +255,7 @@ fn compile<B>(
     budget: &node::GraphBudget,
     before_cargo: impl FnOnce() -> Result<(), node::Error>,
 ) -> Result<node::Bundled<Product>, node::Error> {
+    let staging = std::time::Instant::now();
     let generated = attempt.generated();
     materialize(manifest, &attempt)?;
     let target = attempt.target();
@@ -366,6 +367,8 @@ fn compile<B>(
                 }
             }
         }
+        // The sources and the carrier.
+        let files = sources.len() + 1;
         crate::bridge::generate::sync_sources(
             &work,
             sources
@@ -373,13 +376,14 @@ fn compile<B>(
                 .map(|(path, bytes)| (*path, bytes.as_ref()))
                 .chain([("rawr-generated-manifest.carrier", carrier.as_ref())]),
         )
+        .map(|written| (written.len(), files))
         .map_err(|source| node::Error::Io {
             operation: "update the stable generated runner sources",
             path: work.clone(),
             source,
         })
     };
-    sync(runtime.as_ref())?;
+    let (written, files) = sync(runtime.as_ref())?;
     if let Some(runtime) = &runtime {
         let sources = sources(Some(runtime));
         let file = |name: &str| {
@@ -399,6 +403,7 @@ fn compile<B>(
     let before = crate::deps::project::Before::take(&build);
     #[cfg(feature = "rustc-driver")]
     let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
+    crate::progress::runner_staged(staging.elapsed(), written, files);
     let began = std::time::Instant::now();
     let mut result = crate::process::project_cargo(&command, context.limits().process_limits())
         .and_then(|output| {

@@ -301,8 +301,12 @@ impl Start {
             return;
         }
         let rounds = rawr_import::progress::rounds();
-        for round in rounds.get(self.rounds..).unwrap_or_default() {
+        for (index, round) in rounds.iter().enumerate().skip(self.rounds) {
             eprintln!("rawr-import: a save's round: {round}");
+            eprintln!(
+                "rawr-import: the round's phases took: {}",
+                rawr_import::progress::phases(index)
+            );
         }
     }
 

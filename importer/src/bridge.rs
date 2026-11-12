@@ -286,15 +286,18 @@ impl<B> GenerationRequestKey<B> {
     {
         // A launch is building its runner from here, a build hit included.
         crate::progress::stage(3);
-        if matches!(&self.profile, profile::Profile::Historical(_)) {
-            return generate::cached::materialize_historical(self);
-        }
-        if self.profile.node_chain().is_some() {
-            return generate::cached::materialize(self);
-        }
-        crate::metrics::executed(crate::metrics::NodeKind::Overlay, || {
-            generate::materialize(self)
-        })
+        let began = std::time::Instant::now();
+        let generated = if matches!(&self.profile, profile::Profile::Historical(_)) {
+            generate::cached::materialize_historical(self)
+        } else if self.profile.node_chain().is_some() {
+            generate::cached::materialize(self)
+        } else {
+            crate::metrics::executed(crate::metrics::NodeKind::Overlay, || {
+                generate::materialize(self)
+            })
+        };
+        crate::progress::runner_generated(began.elapsed());
+        generated
     }
 }
 

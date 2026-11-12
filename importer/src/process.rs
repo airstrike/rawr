@@ -1174,7 +1174,8 @@ fn execute<O: Observation>(
         })
     });
     let status = child.finish();
-    let recorded = observation.record(command, started.elapsed());
+    let took = started.elapsed();
+    let recorded = observation.record(command, took);
     let status = recorded_result(status, recorded)?;
     let stdout = join_reader(stdout_reader, "child stdout");
     let stderr = join_reader(stderr_reader, "child stderr");
@@ -1182,6 +1183,11 @@ fn execute<O: Observation>(
     let stderr = bounded_bytes("child stderr", stderr_limit, stderr?)?;
     match command.kind {
         CommandKind::Cargo(CargoAction::UnitBuild(_)) => crate::progress::plan(&stdout),
+        CommandKind::Cargo(CargoAction::AuthoritativeBuild(_)) => {
+            crate::progress::nightly_checked(&stdout, took);
+        }
+        #[cfg(feature = "rustc-driver")]
+        CommandKind::Probe => crate::progress::probe_ran(took),
         CommandKind::Cargo(CargoAction::RunnerBuild(_)) => crate::progress::stage(4),
         _ => {}
     }
