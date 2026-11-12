@@ -20,9 +20,10 @@ use crate::input::proof::{Entry, TreeFile};
 /// nanoseconds) of one path, or `None` while it is absent or unreadable.
 type Stamp = Option<[i64; 8]>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(in crate::cargo) struct Watched {
-    bundle: PathBuf,
+    /// The tree whose membership is stamped as well, when there is one.
+    bundle: Option<PathBuf>,
     stamps: BTreeMap<PathBuf, Stamp>,
 }
 
@@ -33,6 +34,20 @@ impl Watched {
         entries: &[Entry],
         namespace: Option<&namespace::Retained>,
     ) -> Self {
+        let mut watched = Self::exact(entries, namespace);
+        walk(bundle, &mut watched.stamps);
+        watched.bundle = Some(bundle.to_path_buf());
+        watched
+    }
+
+    /// Stamp every path `entries` read, with no bundle: taken before those
+    /// paths are read again, they prove while they match that the reading
+    /// saw what it sees now.
+    pub(in crate::cargo) fn observe_entries(entries: &[Entry]) -> Self {
+        Self::exact(entries, None)
+    }
+
+    fn exact(entries: &[Entry], namespace: Option<&namespace::Retained>) -> Self {
         let mut exact = Vec::new();
         for entry in entries {
             match entry {
@@ -71,20 +86,19 @@ impl Watched {
             exact.extend(namespace.members.iter().map(|member| member.path.clone()));
         }
         let mut stamps = BTreeMap::new();
-        walk(bundle, &mut stamps);
         for path in exact {
             let stamp = stamp(&path);
             stamps.insert(path, stamp);
         }
         Self {
-            bundle: bundle.to_path_buf(),
+            bundle: None,
             stamps,
         }
     }
 
     /// The bundle root whose tree was stamped.
-    pub(in crate::cargo) fn bundle(&self) -> &Path {
-        &self.bundle
+    pub(in crate::cargo) fn bundle(&self) -> Option<&Path> {
+        self.bundle.as_deref()
     }
 
     /// Whether every stamped path, and the bundle's membership, is unchanged.
@@ -93,7 +107,9 @@ impl Watched {
             return false;
         }
         let mut current = BTreeMap::new();
-        walk(&self.bundle, &mut current);
+        if let Some(bundle) = &self.bundle {
+            walk(bundle, &mut current);
+        }
         current.keys().all(|path| self.stamps.contains_key(path))
             && self.stamps.iter().all(|(path, expected)| {
                 current

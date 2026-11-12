@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -73,11 +74,16 @@ impl File {
         })
     }
 
+    /// Whether the file is as the resolution read it. Its digest is the one
+    /// this process computed for the file's current identity, if any
+    /// (`file_digest`).
     fn current(&self) -> bool {
-        match (fs::read(&self.path), &self.read) {
-            (Ok(bytes), Some((length, digest))) => {
-                bytes.len() == *length
-                    && crate::extract::engine::hex(&Sha256::digest(&bytes)) == *digest
+        match (
+            crate::file_digest::sha256(Path::new(&self.path)),
+            &self.read,
+        ) {
+            (Ok((bytes, digest)), Some((length, expected))) => {
+                bytes == *length as u64 && crate::extract::engine::hex(&digest) == *expected
             }
             (Err(_), None) => true,
             _ => false,
@@ -159,9 +165,9 @@ impl Memo {
 
     /// What the API is built from, read from disk alone.
     pub(super) fn materials(self, rawr: &Path) -> Option<super::Materials> {
-        let document = fs::read(rawr.join(DOCUMENT)).ok()?;
+        let (document, digest) = crate::file_digest::read_sha256(&rawr.join(DOCUMENT)).ok()?;
         (document.len() as u64 == self.document.0
-            && crate::extract::engine::hex(&Sha256::digest(&document)) == self.document.1)
+            && crate::extract::engine::hex(&digest) == self.document.1)
             .then_some(super::Materials {
                 document,
                 external: self.external,
@@ -282,15 +288,99 @@ pub(super) fn recall(
         return None;
     }
     for used in &memo.entries {
-        let inputs = used.inputs.validate(current)?;
+        let witness = used.witness(current)?;
         if crate::extract::engine::home::generation(&used.directory, &used.key).as_ref()
             != Some(&used.generation)
         {
             return None;
         }
-        memo.witnesses.push(inputs.into_filesystem());
+        memo.witnesses.push(witness);
     }
     Some(memo)
+}
+
+/// The last validation of each shared entry's inputs in this process, by
+/// the entry's directory, key and generation.
+static WITNESSED: Mutex<BTreeMap<(PathBuf, String, String), Witnessed>> =
+    Mutex::new(BTreeMap::new());
+
+#[cfg(test)]
+thread_local! {
+    /// Validations this test thread answered from the last one's proof.
+    static WITNESS_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Entries whose validation is remembered; past it, the memo starts over.
+const WITNESSED_ENTRIES: usize = 1 << 14;
+
+/// One validation of an entry's inputs under `current`, and the proof of
+/// the files it read.
+struct Witnessed {
+    inputs: crate::input::bindings::Inputs,
+    current: crate::input::bindings::Current,
+    proof: Proof,
+    /// The stamps of every path `proof` read, taken before it read them,
+    /// once a validation read the same paths as the one before it.
+    watched: Option<super::super::watched::Watched>,
+}
+
+impl Used {
+    /// The current proof of the files this entry's inputs name, or none when
+    /// they don't validate under `current`. While the stamps taken before the
+    /// last validation read them all hold, that validation's proof is the
+    /// answer, with no file read again.
+    fn witness(&self, current: &crate::input::bindings::Current) -> Option<Proof> {
+        let key = (
+            self.directory.clone(),
+            self.key.clone(),
+            self.generation.clone(),
+        );
+        let last = WITNESSED
+            .lock()
+            .ok()?
+            .remove(&key)
+            .filter(|last| last.inputs == self.inputs && last.current == *current);
+        let unchanged = last.as_ref().is_some_and(|last| {
+            last.watched
+                .as_ref()
+                .is_some_and(super::super::watched::Watched::unchanged)
+        });
+        if unchanged && let Some(last) = last {
+            #[cfg(test)]
+            WITNESS_HITS.with(|hits| hits.set(hits.get() + 1));
+            let proof = last.proof.clone();
+            remember_witness(key, last);
+            return Some(proof);
+        }
+        // What the last validation read, stamped before it is read again.
+        let watched = last
+            .as_ref()
+            .map(|last| super::super::watched::Watched::observe_entries(last.proof.entries()));
+        let proof = self.inputs.validate(current)?.into_filesystem();
+        let watched = watched.filter(|_| {
+            last.as_ref()
+                .is_some_and(|last| last.proof.entries() == proof.entries())
+        });
+        remember_witness(
+            key,
+            Witnessed {
+                inputs: self.inputs.clone(),
+                current: current.clone(),
+                proof: proof.clone(),
+                watched,
+            },
+        );
+        Some(proof)
+    }
+}
+
+fn remember_witness(key: (PathBuf, String, String), witnessed: Witnessed) {
+    if let Ok(mut remembered) = WITNESSED.lock() {
+        if remembered.len() >= WITNESSED_ENTRIES {
+            remembered.clear();
+        }
+        remembered.insert(key, witnessed);
+    }
 }
 
 fn unhex(text: &str) -> Option<[u8; 32]> {
@@ -380,6 +470,15 @@ mod tests {
         );
         let memo = recall(&rawr, &request, &attestation, &current).unwrap();
         assert_eq!(memo.identity(), Some([3; 32]));
+        // The next recall stamps what the first read before reading it
+        // again, and the one after reads nothing again while those stamps
+        // hold (#1759).
+        let hits = || super::WITNESS_HITS.with(std::cell::Cell::get);
+        let before = hits();
+        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        assert_eq!(hits(), before);
+        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        assert_eq!(hits(), before + 1);
         let proof = memo.proof().unwrap();
         let watches = proof.watch().collect::<Vec<_>>();
         assert!(watches.contains(&crate::input::proof::Watch::Exact(declared.clone())));

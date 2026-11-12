@@ -26,6 +26,7 @@ impl<B> super::Manifest<super::Generated, B> {
         cache: &crate::cache::Writer,
     ) -> Result<super::Manifest<super::Built, B>, Error> {
         self.build_with_owner(Some(cargo), cache)
+            .inspect(|_| crate::progress::stage(4))
     }
 
     /// Reuse a complete local/shared artifact before acquiring the sole Cargo
@@ -34,7 +35,9 @@ impl<B> super::Manifest<super::Generated, B> {
         self,
         cache: &crate::cache::Writer,
     ) -> Result<super::Manifest<super::Built, B>, Error> {
+        // A launch with its runner built, or found built, is starting it.
         self.build_with_owner(None, cache)
+            .inspect(|_| crate::progress::stage(4))
     }
 
     fn build_with_owner(

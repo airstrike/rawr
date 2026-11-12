@@ -1095,7 +1095,8 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// page native code keeps as a `Box<dyn Page>`, though native code never
 /// names it (#1746): a body edit swaps in and the page keeps its count, but
 /// the type's new field, and its removal, restart the program with their
-/// reason, which says a live value holds it.
+/// reason, which says a live value holds it. Each restart's check in the
+/// same owner takes the Cargo view kept whole, parsing nothing (#1759).
 #[test]
 fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds_it() {
     const OBJECTS: &str = concat!(
@@ -1110,7 +1111,10 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
     let _ = fs::remove_file(&stop);
     copy(Path::new(OBJECTS), &root);
     let badge = root.join("src/component/badge.rs");
-    let mut run = start(&root, &[("ISLANDS_STOP", stop.clone())]);
+    let mut run = start(
+        &root,
+        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
+    );
     // `tick N {word} M`, for the word the page's view says.
     let ticks = |word: &'static str| {
         move |line: &str| -> Option<(usize, usize)> {
@@ -1190,6 +1194,25 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
         "{seen}"
     );
     assert!(!seen.contains("preparing again"), "{seen}");
+    // Each restart's check takes the Cargo view the owner's first check
+    // replayed, kept whole: it parses no metadata and reads and hashes no
+    // recorded input again (#1759).
+    let views = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a start's round: "))
+        .map(|round| round.split_once("Cargo views ").unwrap().1)
+        .collect::<Vec<_>>();
+    assert_eq!(views.len(), 3, "{seen}");
+    assert!(!views[0].starts_with("parsed 0,"), "{seen}");
+    assert_eq!(
+        views[1..],
+        [
+            "parsed 0, compared 0, kept 1",
+            "parsed 0, compared 0, kept 1"
+        ],
+        "{seen}"
+    );
 }
 
 /// A marked leaf writes its page as a native module's enum, whose fields
@@ -1474,14 +1497,14 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     };
     assert!(
         round(1)
-            .ends_with("probes 0, read 0, canonicalized 0, classified 0, generated 0, parsed 0"),
+            .contains("probes 0, read 0, canonicalized 0, classified 0, generated 0, parsed 0,"),
         "{said}"
     );
     for number in 2..=4 {
         let stages = round(number);
         assert!(stages.contains(", probes 1, read "), "{said}");
         assert!(!stages.contains("read 0,"), "{said}");
-        assert!(stages.ends_with(", parsed 0"), "{said}");
+        assert!(stages.contains(", parsed 0, Cargo views "), "{said}");
         if number > 2 {
             assert!(
                 stages.starts_with("harnesses 0, compiled 0, copied 0, sealed 0, probes 1,"),
