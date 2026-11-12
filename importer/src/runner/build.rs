@@ -114,7 +114,7 @@ impl<B> super::Manifest<super::Generated, B> {
 
     fn warm(self, entry: PathBuf) -> Result<super::Manifest<super::Built, B>, Error> {
         validate_carrier(&entry, &self.generated)?;
-        let executable = executable(&entry);
+        let executable = executable(&entry, &self.files);
         let output = entry.join("target");
         let artifact =
             super::artifact::BuiltArtifactProof::seal(&self.generated, &executable, &output, &[])?;
@@ -224,7 +224,7 @@ impl<B> super::Manifest<super::Generated, B> {
         }
         let artifact = super::artifact::BuiltArtifactProof::seal(
             &self.generated,
-            &executable(entry),
+            &executable(entry, &self.files),
             &target,
             &[],
         )?;
@@ -250,12 +250,15 @@ impl<B> super::Manifest<super::Generated, B> {
     }
 }
 
-fn executable(entry: &Path) -> PathBuf {
-    let name = if cfg!(windows) {
-        "rawr-generated-runner.exe"
-    } else {
-        "rawr-generated-runner"
-    };
+/// The runner's executable that Cargo's build of `entry` leaves, by the
+/// name its generated manifest in `files` gives it.
+fn executable(entry: &Path, files: &[super::manifest::File]) -> PathBuf {
+    let manifest = files
+        .iter()
+        .find(|file| file.path() == "Cargo.toml")
+        .and_then(|file| std::str::from_utf8(file.bytes()).ok())
+        .unwrap_or_default();
+    let name = crate::bridge::generate::member::executable(manifest);
     entry.join("target/debug").join(name)
 }
 

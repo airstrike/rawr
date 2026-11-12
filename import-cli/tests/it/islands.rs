@@ -4072,13 +4072,13 @@ fn runner_units(root: &Path) -> String {
 /// A private field on a held `pub struct` rebuilds what names the program
 /// and nothing else, and rawr and `cargo build` share the project's path
 /// packages. The runner's base and its crates of adapters don't depend on
-/// rawr's copy of the program's crate, so the field recompiles that copy,
-/// the program's member and the runner (#1775). rawr's copy names the path
-/// packages through the runner's links, so they are one unit each, which
-/// `cargo build` after a run and a run after `cargo build` find fresh
-/// (#1777).
+/// rawr's copy of the program's crate, so the field recompiles that copy
+/// and the runner's binary, which holds what names the program (#1775,
+/// #1793). rawr's copy names the path packages through the runner's links,
+/// so they are one unit each, which `cargo build` after a run and a run
+/// after `cargo build` find fresh (#1777).
 #[test]
-fn a_held_type_s_new_field_rebuilds_three_runner_units_and_cargo_shares_the_path_packages() {
+fn a_held_type_s_new_field_rebuilds_two_runner_units_and_cargo_shares_the_path_packages() {
     const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     let root = crate::support::fresh("islands-theme-field-units");
     copy(Path::new(SOURCE), &root);
@@ -4097,7 +4097,7 @@ fn a_held_type_s_new_field_rebuilds_three_runner_units_and_cargo_shares_the_path
         "            wizard: None,\n        }",
         "            wizard: None,\n            seen: 0,\n        }",
     );
-    assert_eq!(runner_units(&root), "3");
+    assert_eq!(runner_units(&root), "2");
     assert_eq!(cargo_compiles(&root), ["islands-theme"]);
     assert_eq!(runner_units(&root), "0");
 }
