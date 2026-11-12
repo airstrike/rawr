@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Checking a project from a terminal and then from an editor or script that sets `CARGO_HOME` to its default path no longer rebuilds the dependencies with the nightly every round. An unset `CARGO_HOME` and its default path are the same home, a `CARGO_HOME` reached through a symlink works, and a shared table settled under other inputs costs one build, then replays.","issues":[1754]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.188",
@@ -3843,7 +3848,7 @@
     {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
     {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -4975,7 +4980,7 @@
             {"number":1702,"title":"Canonicalization's join and finish run on one core: the support closure and the raw and selected API encodings","state":"open"},
             {"number":1240,"title":"Keep Cargo's unit-graph answer across processes","state":"open"},
             {"number":1244,"title":"The semantic API encodes each direct dependency's whole surface when the program names nothing in it","state":"open"},
-            {"number":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"open"}
+            {"number":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed"}
           ]
         },
         {

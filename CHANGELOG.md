@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- Checking a project from a terminal and then from an editor or script that sets `CARGO_HOME` to its default path no longer rebuilds the dependencies with the nightly every round. An unset `CARGO_HOME` and its default path are the same home, a `CARGO_HOME` reached through a symlink works, and a shared table settled under other inputs costs one build, then replays. (#1754)
 
 ## 0.3.188 (2026-11-11)
 
