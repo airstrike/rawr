@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.3.195",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"An opaque widget taken through a later `.map(..)` compiles again, so `badge(..).map(..)` inside `column!` runs as cargo runs it.","issues":[1797]},
+        {"text":"A second `rawr run` of an unchanged project writes nothing under `target`, the digest table included.","issues":[1780]}
+      ]
+    },
+    {
       "version": "0.3.194",
       "date": "2026-11-12",
       "entries": [

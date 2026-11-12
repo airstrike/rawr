@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.195 (2026-11-12)
+
+- An opaque widget taken through a later `.map(..)` compiles again, so `badge(..).map(..)` inside `column!` runs as cargo runs it. (#1797)
+- A second `rawr run` of an unchanged project writes nothing under `target`, the digest table included. (#1780)
+
 ## 0.3.194 (2026-11-12)
 
 - With `RAWR_VERBOSE`, each runner build says how many units Cargo compiled, which ones, and how long it took. (#1795)
