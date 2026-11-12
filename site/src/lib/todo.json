@@ -3877,7 +3877,8 @@
     {"issue":1768,"title":"The owner replay still re-observes the bundle and rebuilds the extraction capture on every check","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1769,"title":"A crate generic used only in a returned impl Trait<T> is not inferred from the caller's return type (E0282)","state":"open","category":"Divergences from rustc"},
     {"issue":1770,"title":"A marked fn returning a crate's opaque value through a native HRTB trait panics the runner","state":"open","category":"Divergences from rustc"},
-    {"issue":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1771,"title":"rawr home's shared nightly build directory grows with superseded units and is never pruned","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5048,7 +5049,8 @@
             {"number":1670,"title":"The generated runner is one crate, so rustc's front end compiles all adapters on one core","state":"closed"},
             {"number":1721,"title":"The importer's rustc-driver it suite is stale: the p3 runner fails E0599 and tests read src/main.rs for moved code","state":"closed"},
             {"number":1722,"title":"A runner member's incremental directory stays after its imported root leaves the program","state":"closed"},
-            {"number":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"closed"}
+            {"number":1723,"title":"Runner binary renaming is dead code now that the base library carries the script crate's name","state":"closed"},
+            {"number":1772,"title":"A native rebuild for a one-crate edit takes rawr 177 s where cargo build takes 18-27 s","state":"open"}
           ]
         },
         {
