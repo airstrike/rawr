@@ -3992,7 +3992,9 @@
     {"issue":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
     {"issue":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.198"},
     {"issue":1813,"title":"A marked main keeps taking swaps while its new runner builds","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1815,"title":"The first native save after a start prepares in 205 s where the next takes 66 s, with the same counters","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1816,"title":"About 37 s pass between restarting and the runner build's start with nothing printed","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5191,7 +5193,9 @@
             {"number":1806,"title":"rawr's copy builds its generated glue only where native code or the runner calls it","state":"closed"},
             {"number":1807,"title":"Generate trampoline bodies and glue only for marked items native code uses","state":"open"},
             {"number":1808,"title":"Move the island's fixed support module out of rawr's copy into a package built once","state":"open"},
-            {"number":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open"}
+            {"number":1809,"title":"rawr's copy makes public, and so builds, native items the runner never names","state":"open"},
+            {"number":1815,"title":"The first native save after a start prepares in 205 s where the next takes 66 s, with the same counters","state":"open"},
+            {"number":1816,"title":"About 37 s pass between restarting and the runner build's start with nothing printed","state":"open"}
           ]
         },
         {
