@@ -8,9 +8,14 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::support::{copy, start};
+use crate::support::{copy, start, Started};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands");
+/// The ticking fixture, whose run ends at once when told to stop by a file
+/// that is there.
+static ISLANDS: Started = Started::new("islands", &[("ISLANDS_STOP", "Cargo.toml")]);
+
+/// The theme fixture, whose run prints and ends.
+static THEME: Started = Started::new("islands-theme", &[]);
 
 /// `tick value`, from a line the fixture prints.
 fn parse(line: &str) -> Option<(i64, i64)> {
@@ -35,8 +40,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = crate::support::fresh("islands");
-    copy(Path::new(FIXTURE), &root);
+    let root = ISLANDS.project();
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
 
@@ -88,8 +92,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
 /// and says so (#1737).
 #[test]
 fn a_pub_type_s_new_derives_swap_and_a_native_use_or_lost_derive_builds_again() {
-    let root = crate::support::fresh("islands-pub-derives");
-    copy(Path::new(FIXTURE), &root);
+    let root = ISLANDS.project();
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
     run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
@@ -146,8 +149,7 @@ fn a_pub_type_s_new_derives_swap_and_a_native_use_or_lost_derive_builds_again() 
 /// has them, taking them away builds again and names them (#1741).
 #[test]
 fn a_new_pub_item_swaps_and_a_lost_one_builds_again_naming_it() {
-    let root = crate::support::fresh("islands-pub-items");
-    copy(Path::new(FIXTURE), &root);
+    let root = ISLANDS.project();
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
     run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
@@ -213,11 +215,8 @@ fn a_new_pub_item_swaps_and_a_lost_one_builds_again_naming_it() {
 /// error rustc gives, instead of waiting for that save (#1585).
 #[test]
 fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
-    let root = crate::support::fresh("islands-failed-check");
+    let root = ISLANDS.project();
     let events = root.join("events.jsonl");
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
     edit(
         &root.join("src/physics.rs"),
         "const SCALE: i64 = 1;",
@@ -238,10 +237,9 @@ fn a_wait_ends_with_the_error_when_the_run_fails_its_check() {
 /// run printed, instead of waiting for that save.
 #[test]
 fn a_wait_ends_when_the_program_ends_without_its_line() {
-    let root = crate::support::fresh("islands-ended");
+    let root = ISLANDS.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    copy(Path::new(FIXTURE), &root);
     // The program stops before its first tick.
     fs::write(&stop, "").unwrap();
     let mut run = start(
@@ -265,8 +263,7 @@ fn a_wait_ends_when_the_program_ends_without_its_line() {
 /// and writes under `target` while it runs are no save.
 #[test]
 fn a_save_reaches_a_native_main_beside_a_big_ignored_target() {
-    let root = crate::support::fresh("islands-big-target");
-    copy(Path::new(FIXTURE), &root);
+    let root = ISLANDS.project();
     fs::write(root.join(".gitignore"), "/target\n").unwrap();
     let big = root.join("target/big");
     for directory in 0..200 {
@@ -1189,9 +1186,7 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
 /// `rawr run` prints what `cargo run` prints.
 #[test]
 fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme");
-    copy(Path::new(THEME), &root);
+    let root = THEME.project();
     let native = std::process::Command::new("cargo")
         .args(["run", "--quiet"])
         .current_dir(&root)
@@ -1411,9 +1406,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
 /// build.
 #[test]
 fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-install");
-    copy(Path::new(THEME), &root);
+    let root = THEME.project();
     let check = |host: &str| {
         let checked = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .arg("check")
@@ -1479,9 +1472,9 @@ fn modified(
 /// printed.
 #[test]
 fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
+    const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     let root = crate::support::fresh("islands-theme-warm");
-    copy(Path::new(THEME), &root);
+    copy(Path::new(SOURCE), &root);
     let mut first = start(&root, &[]);
     let status = first.wait();
     assert!(status.success(), "{}", first.seen.join("\n"));
@@ -1544,14 +1537,9 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
 /// (D866, D869), and the edit needs no new native build.
 #[test]
 fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-swap");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     let mut run = start(
         &root,
         &[
@@ -1597,14 +1585,9 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
 /// already covers, whatever the literal's value.
 #[test]
 fn a_save_that_changes_a_literal_a_native_call_takes_swaps_in_place() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-literal-save");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     // inboard's `fn corners(&self) -> Radius { 4.0.into() }`: a float a
     // crate's `From<f32>` converts, given back to the caller.
     let home = root.join("src/home.rs");
@@ -1652,14 +1635,9 @@ fn a_save_that_changes_a_literal_a_native_call_takes_swaps_in_place() {
 /// one path, so a body edit elsewhere in the file swaps in place.
 #[test]
 fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-route-save");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     let theme = root.join("src/theme.rs");
     let text = fs::read_to_string(&theme).unwrap();
     assert!(text.contains("ui::theme::Mode::Light"), "{text}");
@@ -1696,14 +1674,9 @@ fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
 
 #[test]
 fn a_save_parses_only_the_file_it_changed() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-save-work");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     let mut run = start(
         &root,
         &[
@@ -1938,14 +1911,9 @@ fn a_save_parses_only_the_file_it_changed() {
 /// module, which names the sidebar's private items through `super`.
 #[test]
 fn a_save_lowers_only_the_files_that_name_what_it_changed() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-save-names");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     let sidebar = root.join("src/widget/sidebar.rs");
     // The child alone names the sidebar's `Aside` and calls its
     // `aside_rows!`, which textual scope lets into the child, and writes
@@ -2053,16 +2021,14 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
 /// prepares a native build or restarts the program.
 #[test]
 fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     const DERIVED: &str = "#[derive(Debug, Clone, Copy, PartialEq)]\nstruct Corners {\n";
     const INSET: &str = "#[derive(Debug)]\nstruct Inset {\n    width: f32,\n}\n\n\
                          static INSET: Inset = Inset { width: 1.0 };\n\n";
     const GROWN: &str = "#[derive(Debug)]\nstruct Inset {\n    width: f32,\n    \
                          depth: f32,\n}\n\nstatic INSET: Inset = Inset { width: 1.0, depth: 2.0 };\n\n";
-    let root = crate::support::fresh("islands-theme-derives");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    copy(Path::new(THEME), &root);
     let sidebar = root.join("src/widget/sidebar.rs");
     edit(
         &sidebar,
@@ -2182,15 +2148,10 @@ fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {
 /// no marked file that doesn't name it (#1740).
 #[test]
 fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::scratch().join("islands-theme-new-native");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
     let _ = fs::remove_dir_all(root.join("target/rawr/lowered"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     // `home.rs` writes `spare_rows`, a local's name, which no item has yet.
     let home = root.join("src/home.rs");
     let mut text = fs::read_to_string(&home).unwrap();
@@ -2279,24 +2240,23 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// entry of a path crate's facade is a declaration of its own (#1735).
 #[test]
 fn an_edit_to_a_path_crate_s_function_lowers_only_the_files_that_name_it() {
-    // Twice at one path: the second project's copy puts the path crate's
-    // file back with the time it had before the first one's edit, older
-    // than what rawr's home built from the edit, so only the file's
+    // Twice at one path: the project put back the second time puts the
+    // path crate's file back with the time it had before the first edit,
+    // older than what rawr's home built from the edit, so only the file's
     // contents tell that its units must build again (#1750).
-    for _ in 0..2 {
-        edit_a_path_crate_s_function();
-    }
+    let mut root = THEME.project();
+    edit_a_path_crate_s_function(&root);
+    root.again();
+    edit_a_path_crate_s_function(&root);
 }
 
-fn edit_a_path_crate_s_function() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    // A fresh project: the edit below changes the path crate's files.
-    let root = crate::support::fresh("islands-theme-path-edit");
+fn edit_a_path_crate_s_function(root: &Path) {
+    // No kept lowering: the first start lowers every file.
+    let _ = fs::remove_dir_all(root.join("target/rawr/lowered"));
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    copy(Path::new(THEME), &root);
     let mut run = start(
-        &root,
+        root,
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
@@ -2354,14 +2314,11 @@ fn edit_a_path_crate_s_function() {
 /// again and written over (#1638).
 #[test]
 fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-start");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let lowered = root.join("target/rawr/lowered");
-    let _ = fs::remove_dir_all(root.join("src"));
     let _ = fs::remove_dir_all(&lowered);
-    copy(Path::new(THEME), &root);
     // One run to its first tick and its end: what its runner's start
     // parsed, revealed and lowered.
     let started = || {
@@ -2433,14 +2390,9 @@ fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
 /// message, with nothing of rawr's (#1657).
 #[test]
 fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-panic");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     edit(
         &root.join("src/widget/sidebar.rs"),
         "    ui::label(&format!(\"{label} row\"))",
@@ -2509,14 +2461,9 @@ fn a_marked_function_s_panic_in_a_native_call_prints_as_cargo_s_build_prints_it(
 /// build.
 #[test]
 fn a_generic_marked_types_method_native_code_calls_swaps() {
-    const THEME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-method-swap");
+    let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_file(&events);
-    let _ = fs::remove_file(&stop);
-    copy(Path::new(THEME), &root);
     let mut run = start(
         &root,
         &[
