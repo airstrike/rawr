@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save.","issues":[1876]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.210",
@@ -4157,12 +4162,14 @@
     {"issue":1873,"title":"A start that replays shared bindings keeps no record of what native code uses","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1874,"title":"A rustc auto-trait error about a handle-held struct names rawr's hidden marker","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1877,"title":"Splice kept lowerings in as parsed pieces instead of reprinting and reparsing the whole script","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
     {"issue":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
     {"issue":1879,"title":"A vouched respawn walks no read set, unchanged sources aren't re-read, and the runner looks adapters up","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
     {"issue":1880,"title":"A runner is posix_spawned and leaves with _exit when its owner ends it","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
-    {"issue":1881,"title":"A lent &mut of a native type with an elided lifetime builds and takes a new value back","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"}
+    {"issue":1881,"title":"A lent &mut of a native type with an elided lifetime builds and takes a new value back","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
+    {"issue":1882,"title":"Reuse finish_definitions, resolve_methods and Layouts per item across saves","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1883,"title":"The owner's check reuses kept unit resolutions","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5407,7 +5414,9 @@
             {"number":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open"},
             {"number":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open"},
             {"number":1868,"title":"A native pull from a program's kept iterator removes its first item, O(n) per pull","state":"open"},
-            {"number":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open"}
+            {"number":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open"},
+            {"number":1882,"title":"Reuse finish_definitions, resolve_methods and Layouts per item across saves","state":"open"},
+            {"number":1883,"title":"The owner's check reuses kept unit resolutions","state":"open"}
           ]
         },
         {
@@ -5445,7 +5454,7 @@
             {"number":1873,"title":"A start that replays shared bindings keeps no record of what native code uses","state":"open"},
             {"number":1874,"title":"A rustc auto-trait error about a handle-held struct names rawr's hidden marker","state":"open"},
             {"number":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open"},
-            {"number":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"open"},
+            {"number":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"closed"},
             {"number":1877,"title":"Splice kept lowerings in as parsed pieces instead of reprinting and reparsing the whole script","state":"closed"},
             {"number":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"closed"}
           ]

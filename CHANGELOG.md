@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save. (#1876)
 
 ## 0.3.210 (2026-11-13)
 
