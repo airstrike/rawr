@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A native save's store work no longer grows with the whole store: the installation ledger is decoded only when it changes, a reservation reads no index rows and repeats no recovery, an entry takes one full flush instead of four, and a freshly computed node is used as computed instead of being read back.","issues":[1843,1844]}
+    ]
   },
   "releases": [
     {
