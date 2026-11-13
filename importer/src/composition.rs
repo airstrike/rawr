@@ -449,10 +449,12 @@ where
                                 facade,
                             )?;
                             crate::progress::phase("checking");
+                            let checking = std::time::Instant::now();
                             let product =
                                 transform.capture(contract.fingerprint(), snapshot, || {
                                     execute(&contract, &profile, &facade)
                                 });
+                            crate::progress::timed("the program was checked", checking.elapsed());
                             consumed = Some((contract, profile, facade));
                             product
                         })?;

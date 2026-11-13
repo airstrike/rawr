@@ -2140,6 +2140,7 @@ impl Request {
         )?;
         #[cfg(feature = "rustc-driver")]
         let partitioned = self.inventory || self.inputs_only;
+        let capturing = std::time::Instant::now();
         let (input, retained_build) = crate::input::Baseline::capture_retaining(
             complete,
             &self.inputs,
@@ -2159,6 +2160,7 @@ impl Request {
             partitioned,
             limits,
         )?;
+        crate::progress::timed("the build's inputs were captured", capturing.elapsed());
         // The nightly's outputs compare by what its compiles read.
         #[cfg(feature = "rustc-driver")]
         let reads = crate::input::bindings::Reads::of(&input, retained_build.build());

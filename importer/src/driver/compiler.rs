@@ -983,11 +983,16 @@ fn extract_all(
     // its bytes alone: an intrinsic inventory reads every crate of a
     // closure as large as iced's in one run. The counts add up for the
     // report.
-    let start = budget;
+    // The session loaded one set of crates for every selected one: their
+    // sources are canonicalized once, not once for each selected crate
+    // (#1794).
     let mut total = budget;
+    let sources = crate_sources(tcx, &mut total)?;
+    let loaded = loaded_external_crates(tcx, &sources, &mut total)?;
+    let start = budget;
     for invocation in invocations {
         let mut budget = start;
-        let selected = selected_crate(tcx, &invocation.artifact.path, &mut budget)?;
+        let selected = selected_crate(&sources, &invocation.artifact.path, &mut budget)?;
         if let Some(diagnostic) = diagnostic {
             diagnostic.milestone(
                 "compiler",
@@ -998,7 +1003,7 @@ fn extract_all(
         if tcx.crate_name(selected).as_str() != invocation.crate_name {
             return Err("selected rmeta crate name disagrees with Cargo authority".to_owned());
         }
-        let loaded_crates = loaded_external_crates(tcx, &mut budget)?;
+        let loaded_crates = loaded.clone();
         if let Some(diagnostic) = diagnostic.as_mut() {
             diagnostic.milestone(
                 "compiler",
@@ -1052,27 +1057,46 @@ fn extract_all(
     Ok(total)
 }
 
+/// One crate the session loaded, with its sources' canonical paths.
+struct CrateSource {
+    crate_num: CrateNum,
+    paths: Vec<PathBuf>,
+}
+
+/// Each crate the session loaded, its sources canonicalized once.
+fn crate_sources(tcx: TyCtxt<'_>, budget: &mut Budget) -> Result<Vec<CrateSource>, String> {
+    tcx.crates(())
+        .iter()
+        .map(|crate_num| {
+            let paths = tcx
+                .used_crate_source(*crate_num)
+                .paths()
+                .map(|path| canonical_path(path, "compiler crate source", budget))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(CrateSource {
+                crate_num: *crate_num,
+                paths,
+            })
+        })
+        .collect()
+}
+
+/// The loaded crate, of `sources`, whose sources hold `artifact`.
 fn selected_crate(
-    tcx: TyCtxt<'_>,
+    sources: &[CrateSource],
     artifact: &str,
     budget: &mut Budget,
 ) -> Result<CrateNum, String> {
     let artifact = canonical_path(Path::new(artifact), "selected rmeta", budget)?;
-    let mut found = None;
-    for crate_num in tcx.crates(()) {
-        let source = tcx.used_crate_source(*crate_num);
-        let mut matched = false;
-        for path in source.paths() {
-            if canonical_path(path, "compiler crate source", budget)? == artifact {
-                matched = true;
-                break;
-            }
-        }
-        if matched && found.replace(*crate_num).is_some() {
-            return Err("selected rmeta resolved to multiple compiler crates".to_owned());
-        }
+    let mut found = sources
+        .iter()
+        .filter(|source| source.paths.contains(&artifact))
+        .map(|source| source.crate_num);
+    match (found.next(), found.next()) {
+        (Some(crate_num), None) => Ok(crate_num),
+        (Some(_), Some(_)) => Err("selected rmeta resolved to multiple compiler crates".to_owned()),
+        (None, _) => Err("selected rmeta was not force-loaded by the metadata probe".to_owned()),
     }
-    found.ok_or_else(|| "selected rmeta was not force-loaded by the metadata probe".to_owned())
 }
 
 /// `adt` at the instance its path names as a type, as `Rgb` is `Rgb<Srgb,
@@ -1730,19 +1754,19 @@ impl Budget {
 
 fn loaded_external_crates(
     tcx: TyCtxt<'_>,
+    sources: &[CrateSource],
     budget: &mut Budget,
 ) -> Result<Vec<ExternalCrate>, String> {
     let mut loaded = Vec::new();
-    for crate_num in tcx.crates(()) {
+    for CrateSource { crate_num, paths } in sources {
         let source = tcx.used_crate_source(*crate_num);
         let sysroot = tcx.sess.opts.sysroot.path();
         let mut artifacts = Vec::new();
         let mut all_sysroot = true;
-        for path in source.paths() {
+        for (path, canonical) in source.paths().zip(paths) {
             budget.edge(1)?;
             all_sysroot &= path.starts_with(sysroot);
-            let path = canonical_path(path, "loaded artifact", budget)?;
-            let text = path
+            let text = canonical
                 .to_str()
                 .ok_or_else(|| "loaded artifact path is not UTF-8".to_owned())?;
             budget.items(1)?;

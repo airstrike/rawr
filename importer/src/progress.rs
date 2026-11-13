@@ -289,6 +289,19 @@ pub(crate) fn nightly_checked(messages: &[u8], took: Duration) {
     }
 }
 
+/// With `RAWR_VERBOSE`, say how long one step of a round took, `took`:
+/// the steps of a native save's preparation besides its nightly check and
+/// its probe, and the check of the program (#1794).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn timed(step: &str, took: Duration) {
+    if verbose() && !UNCOUNTED.get() {
+        say(&format!(
+            "rawr-import: {step} in {:.1} s",
+            took.as_secs_f64()
+        ));
+    }
+}
+
 /// With `RAWR_VERBOSE`, say how long one run of the probe took, `took`.
 #[cfg(feature = "rustc-driver")]
 pub(crate) fn probe_ran(took: Duration) {

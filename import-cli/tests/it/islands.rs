@@ -2693,16 +2693,20 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     // save kept, and read no definition; the last probes once, reads the
     // project crate's fragment again, and takes `common`'s and `ui`'s. A save back
     // to the first save's sources, the third and the fifth, finds the
-    // harness that save sealed: no harness, copy, seal or probe. The
+    // harness that save sealed: no harness, copy, seal or probe, and its
+    // bundle's Cargo view is the one that save's replay parsed (#1794). The
     // launch's harness is under the launch's demand, so the fourth, back
     // to the launch's sources, builds its own.
     let found = "harnesses 0, compiled 0, copied 0, sealed 0, probes 0, read 0, ";
+    let unparsed = ", Cargo views parsed 0, compared 1, ";
     assert!(
         rounds.len() == 6
             && rounds[0].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
             && rounds[1].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
             && rounds[2].starts_with(found)
+            && rounds[2].contains(unparsed)
             && rounds[4].starts_with(found)
+            && rounds[4].contains(unparsed)
             && rounds[5].contains(", probes 1, ")
             && rounds[5].contains(", canonicalized 1, "),
         "{rounds:?}\n{seen}"

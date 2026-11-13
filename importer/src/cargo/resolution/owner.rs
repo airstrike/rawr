@@ -246,7 +246,7 @@ impl Product {
     }
 }
 
-// Pure owner-replay interpretation this process staged last, for every graph
+// Pure owner-replay interpretations this process staged last, for every graph
 // evaluation it runs (#1759). The first replay charges its authenticated
 // parse; later replays, in this graph or a later one, still run every current
 // check and reuse a value only when that observation's sealed commitment
@@ -254,14 +254,51 @@ impl Product {
 struct Stage {
     lock: Option<(Limits, cargo::universe::Candidate)>,
     receipt: Option<StagedReceipt>,
-    record: Option<StagedRecord>,
+    /// The records of the last few bundles replayed, least recent first: a
+    /// save back to an earlier save's sources, or the launch's, replays
+    /// that bundle again and parses none of it (#1794).
+    records: Vec<StagedRecord>,
 }
+
+/// How many bundles' records the stage keeps: the launch's, and the last
+/// two saves' a save may go back to.
+const STAGED_RECORDS: usize = 3;
 
 const EMPTY: Stage = Stage {
     lock: None,
     receipt: None,
-    record: None,
+    records: Vec::new(),
 };
+
+impl Stage {
+    /// The record staged for `key` at `root`, `target` and `profile`, now
+    /// the most recent.
+    fn record(
+        &mut self,
+        key: &RecordKey,
+        root: &Path,
+        target: &str,
+        profile: &str,
+    ) -> Option<Arc<replay::Decoded>> {
+        let at = self
+            .records
+            .iter()
+            .position(|staged| staged.names(key, root, target, profile))?;
+        let staged = self.records.remove(at);
+        let decoded = Arc::clone(&staged.decoded);
+        self.records.push(staged);
+        Some(decoded)
+    }
+
+    /// Stage `record` as the most recent, past the least recent beyond
+    /// [`STAGED_RECORDS`].
+    fn keep_record(&mut self, record: StagedRecord) {
+        if self.records.len() == STAGED_RECORDS {
+            self.records.remove(0);
+        }
+        self.records.push(record);
+    }
+}
 
 #[cfg(not(test))]
 static STAGE: Mutex<Stage> = Mutex::new(EMPTY);
@@ -882,22 +919,16 @@ impl Evaluation {
             context,
         };
         let kept = staged(|stage| {
-            Ok(
-                match stage.record.as_ref().filter(|staged| {
-                    staged.names(
-                        &key,
-                        paths.root(),
-                        &self.request.target,
-                        &self.request.profile,
-                    )
-                }) {
-                    Some(staged) => {
-                        stage_hit();
-                        Some(Arc::clone(&staged.decoded))
-                    }
-                    None => None,
-                },
-            )
+            let kept = stage.record(
+                &key,
+                paths.root(),
+                &self.request.target,
+                &self.request.profile,
+            );
+            if kept.is_some() {
+                stage_hit();
+            }
+            Ok(kept)
         })?;
         let fresh = match &kept {
             Some(_) => None,
@@ -907,6 +938,7 @@ impl Evaluation {
                 Box::<str>::from(&*self.request.profile),
             )),
         };
+        let replaying = std::time::Instant::now();
         let replay = self
             .request
             .replay_observed_in(
@@ -924,9 +956,10 @@ impl Evaluation {
                 cargo_account,
             )
             .map_err(error)?;
+        crate::progress::timed("the resolution's bundle was replayed", replaying.elapsed());
         if let Some((root, target, profile)) = fresh {
             staged(|stage| {
-                stage.record = Some(StagedRecord {
+                stage.keep_record(StagedRecord {
                     key,
                     root,
                     target,
@@ -999,6 +1032,7 @@ impl Evaluation {
         accounts: &mut Accounts,
         graph: &node::GraphBudget,
     ) -> Result<node::Bundled<Product>, node::Error> {
+        let preparing = std::time::Instant::now();
         let harness = self.request.prepare_harness_in(
             &layout,
             &self.cached,
@@ -1006,6 +1040,7 @@ impl Evaluation {
             &self.limits,
             cargo_account,
         )?;
+        crate::progress::timed("the resolution's harness was prepared", preparing.elapsed());
         // Every selected crate's table in the home: no nightly build and no
         // probe. The attempt is abandoned; the API is read from the tables.
         let final_form = layout.final_form();
@@ -1085,7 +1120,9 @@ impl Evaluation {
             ))?
             .complete()
             .as_bytes();
+        let sealing = std::time::Instant::now();
         let sealed = self.seal_completed(completed, layout, accounts, graph)?;
+        crate::progress::timed("the resolution's bundle was sealed", sealing.elapsed());
         let (stored, pending) = sealed.into_parts();
         let product = Product {
             bundle: stored.encode(),
