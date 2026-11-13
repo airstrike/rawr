@@ -5,7 +5,7 @@ use super::type_ref::Type;
 use super::witness;
 use super::Witness;
 use crate::receiver;
-use crate::{Dynamic, EvalAltResult};
+use crate::{Dynamic, EvalAltResult, Shared};
 use std::fmt;
 
 /// Rust's `PartialEq` of two values as the calling program compares them:
@@ -28,8 +28,8 @@ pub struct Call<'a> {
 
 enum Operation<'a> {
     Item {
-        operands: &'a [Type],
-        output: &'a Type,
+        operands: &'a [Shared<Type>],
+        output: &'a Shared<Type>,
         receiver: Option<receiver::Mode>,
     },
     Projection {
@@ -37,8 +37,8 @@ enum Operation<'a> {
         target: &'a Type,
     },
     Structural {
-        operands: &'a [Type],
-        output: &'a Type,
+        operands: &'a [Shared<Type>],
+        output: &'a Shared<Type>,
         receiver: Option<receiver::Mode>,
     },
 }
@@ -69,8 +69,8 @@ pub enum Error {
 impl<'a> Call<'a> {
     pub(super) const fn item(
         authority: witness::Authority,
-        operands: &'a [Type],
-        output: &'a Type,
+        operands: &'a [Shared<Type>],
+        output: &'a Shared<Type>,
         receiver: Option<receiver::Mode>,
         invocation: Option<&'a invocation::Proof>,
     ) -> Self {
@@ -112,8 +112,8 @@ impl<'a> Call<'a> {
 
     pub(super) const fn structural(
         authority: witness::Authority,
-        operands: &'a [Type],
-        output: &'a Type,
+        operands: &'a [Shared<Type>],
+        output: &'a Shared<Type>,
         receiver: Option<receiver::Mode>,
     ) -> Self {
         Self {
@@ -298,7 +298,10 @@ impl<'a> Call<'a> {
         if !source.matches(self.authority, expected) {
             return Err(Error::ProjectionSourceMismatch);
         }
-        Ok(Witness::issue(self.authority, (*target).clone()))
+        Ok(Witness::issue(
+            self.authority,
+            Shared::new((*target).clone()),
+        ))
     }
 
     /// Borrow the host-private value scoped to this exact mutable receiver.

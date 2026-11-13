@@ -98,9 +98,11 @@ pub static RESTORES: std::sync::Mutex<Vec<(NativeHandle, Box<dyn Any + Send>)>> 
     std::sync::Mutex::new(Vec::new());
 
 thread_local! {
-    /// The handles the protocol gave out: a handle on the wire keeps its
-    /// value alive, as the caller may pass it back (review 5).
-    pub static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
+    /// The handles the protocol gave out, by their slots: a handle on the
+    /// wire keeps its value alive till the caller passes it back, which
+    /// moves its claim back into the program (review 5).
+    pub static EXPORTED: RefCell<std::collections::HashMap<([u8; 32], u32, u64), NativeHandle>> =
+        RefCell::new(std::collections::HashMap::new());
     /// Homes a call borrowed (`PointerLent`), back to their slots the next
     /// time the owner thread has the arena.
     pub static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
@@ -112,13 +114,17 @@ thread_local! {
 }
 
 /// Slots whose last handle was dropped, freed on the owner thread the next
-/// time it has the arena.
-pub static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
+/// time it has the arena: one queue for each arena's epoch, so an arena
+/// takes its own and looks at no other's. Its lock is taken before
+/// [`CALL_EPOCHS`]'s where both are held.
+pub static RELEASES: std::sync::Mutex<std::collections::BTreeMap<[u8; 32], Vec<(u32, u64)>>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// How many entries [`RESTORES`] and [`RELEASES`] hold together, changed
 /// only under the lock of the queue that changes ([`enqueue`],
-/// [`dequeue`]). An arena that finds none, and nothing in this thread's own
-/// [`QUEUED_HERE`], releases nothing and looks at no queue. It is a count,
+/// [`dequeue`], [`take_releases`]). An arena that finds none, and nothing
+/// in this thread's own [`QUEUED_HERE`], releases nothing and looks at no
+/// queue. It is a count,
 /// not a mark the first arena to look clears: the entries another arena
 /// waits for keep it above zero till that arena takes them, so a call
 /// arena on one thread never misses its own releases because an arena on
@@ -150,6 +156,28 @@ pub fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> 
     taken
 }
 
+/// The releases of the arena of `epoch`, taken from [`RELEASES`] and
+/// uncounted in [`PENDING`]. With `past`, those of every arena that is
+/// neither a live call's ([`CALL_EPOCHS`]) nor `epoch`'s are dropped: a past
+/// program's arena is gone.
+pub fn take_releases(epoch: &[u8; 32], past: bool) -> Vec<(u32, u64)> {
+    let mut queues = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let taken = queues.remove(epoch).unwrap_or_default();
+    let mut count = taken.len();
+    if past && !queues.is_empty() {
+        let calls = CALL_EPOCHS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        queues.retain(|queued, queue| {
+            let live = calls.contains(queued);
+            if !live {
+                count += queue.len();
+            }
+            live
+        });
+    }
+    PENDING.fetch_sub(count, std::sync::atomic::Ordering::AcqRel);
+    taken
+}
+
 /// Mark [`QUEUED_HERE`] after an entry joins one of this thread's queues.
 pub fn queued_here() {
     let _ = QUEUED_HERE.try_with(|queued| queued.set(true));
@@ -157,7 +185,11 @@ pub fn queued_here() {
 
 impl Drop for Release {
     fn drop(&mut self) {
-        enqueue(&RELEASES, (self.epoch, self.slot, self.generation));
+        {
+            let mut queues = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            queues.entry(self.epoch).or_default().push((self.slot, self.generation));
+            PENDING.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
         // A handle may be dropped on any thread; the arena is the owner's.
         __rawr_internal::future::on_owner(|| {
             let _ = with_arena(|_| Ok(()));
@@ -1434,7 +1466,7 @@ impl Drop for CallArena {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|live| *live != epoch);
-        dequeue(&RELEASES, |(released, ..)| *released == epoch);
+        take_releases(&epoch, false);
         if let Some(kept) = kept
             && !std::thread::panicking()
         {
@@ -2371,24 +2403,18 @@ impl Arena {
         // Another live arena's releases wait for it: the owner's for the
         // owner, and a call arena's for that call (`CallArena`). Those of a
         // past program's arena are dropped.
-        let live = |epoch: &[u8; 32]| {
-            CALL_EPOCHS
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains(epoch)
-        };
-        let call = live(&self.epoch);
+        let call = CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&self.epoch);
         loop {
-            let batch = dequeue(&RELEASES, |(epoch, ..)| *epoch == self.epoch);
-            if !call {
-                dequeue(&RELEASES, |(epoch, ..)| !live(epoch));
-            }
+            let batch = take_releases(&self.epoch, !call);
             if batch.is_empty() {
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
             let mut homed = Vec::new();
-            for (_, slot, generation) in batch {
+            for (slot, generation) in batch {
                 let Some(entry) = self.slots.get_mut(slot as usize) else {
                     continue;
                 };
@@ -2711,7 +2737,7 @@ pub fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::display::register::<__rawr_internal::scope::Lent>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
     // A new program's arena: the handles the last one gave out are stale.
-    EXPORTED.with_borrow_mut(Vec::clear);
+    EXPORTED.with_borrow_mut(std::collections::HashMap::clear);
 }
 
 pub fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
@@ -3983,32 +4009,78 @@ pub fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bo
 /// as the runner lives: once for each content, however often it is given.
 #[allow(dead_code)]
 pub fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
-    static KEPT: std::sync::Mutex<Vec<&'static [u8]>> = std::sync::Mutex::new(Vec::new());
+    static KEPT: std::sync::Mutex<Option<std::collections::HashSet<&'static [u8]>>> = std::sync::Mutex::new(None);
     let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(found) = kept.iter().find(|kept| ***kept == *bytes) {
+    let kept = kept.get_or_insert_with(std::collections::HashSet::new);
+    if let Some(found) = kept.get(bytes.as_slice()) {
         return found;
     }
     let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-    kept.push(leaked);
+    kept.insert(leaked);
     leaked
 }
 
-/// Scalars a struct's field borrows for its lifetime, as iced's
-/// `LineDash::segments: &'a [f32]`, kept as [`static_bytes`] keeps bytes.
+/// A scalar a slice [`static_slice`] keeps holds: equal slices are those of
+/// the same bits, as a float's `NaN` is the `NaN` it was given.
 #[allow(dead_code)]
-pub fn static_slice<T: PartialEq + Send + Sync + 'static>(values: Vec<T>) -> &'static [T] {
-    static KEPT: std::sync::Mutex<Vec<&'static (dyn std::any::Any + Send + Sync)>> =
-        std::sync::Mutex::new(Vec::new());
+pub trait Scalar: Copy + Send + Sync + 'static {
+    fn bits(self) -> u64;
+}
+
+#[macro_export]
+macro_rules! scalar_bits {
+    ($($ty:ty => $bits:expr),* $(,)?) => {
+        $(impl Scalar for $ty {
+            fn bits(self) -> u64 {
+                let bits: fn($ty) -> u64 = $bits;
+                bits(self)
+            }
+        })*
+    };
+}
+
+scalar_bits! {
+    bool => u64::from,
+    char => |value| u64::from(u32::from(value)),
+    u8 => u64::from,
+    u16 => u64::from,
+    u32 => u64::from,
+    u64 => |value| value,
+    usize => |value| value as u64,
+    i8 => |value| value as u64,
+    i16 => |value| value as u64,
+    i32 => |value| value as u64,
+    i64 => |value| value as u64,
+    isize => |value| value as u64,
+    f32 => |value| u64::from(value.to_bits()),
+    f64 => f64::to_bits,
+}
+
+/// Scalars a struct's field borrows for its lifetime, as iced's
+/// `LineDash::segments: &'a [f32]`, kept as [`static_bytes`] keeps bytes:
+/// by their type and the hash of their bits, so a slice given again is
+/// found without looking at any other.
+#[allow(dead_code)]
+pub fn static_slice<T: Scalar>(values: Vec<T>) -> &'static [T] {
+    type Kept = std::collections::HashMap<(std::any::TypeId, u64), Vec<&'static (dyn std::any::Any + Send + Sync)>>;
+    static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
+    let same = |kept: &[T]| kept.len() == values.len() && kept.iter().zip(&values).all(|(kept, value)| kept.bits() == value.bits());
+    let mut hasher = std::hash::DefaultHasher::new();
+    for value in &values {
+        std::hash::Hasher::write_u64(&mut hasher, value.bits());
+    }
+    let key = (std::any::TypeId::of::<T>(), std::hash::Hasher::finish(&hasher));
     let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(found) = kept
+    let bucket = kept.get_or_insert_with(Kept::new).entry(key).or_default();
+    if let Some(found) = bucket
         .iter()
         .filter_map(|kept| kept.downcast_ref::<&'static [T]>())
-        .find(|kept| ***kept == *values)
+        .find(|kept| same(kept))
     {
-        return *found;
+        return found;
     }
     let leaked: &'static [T] = Box::leak(values.into_boxed_slice());
-    kept.push(Box::leak(Box::new(leaked)));
+    bucket.push(Box::leak(Box::new(leaked)));
     leaked
 }
 
@@ -4091,14 +4163,11 @@ pub fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
             let epoch = take_bytes(input, 32)?.try_into().map_err(|_| Error::Malformed)?;
             let slot = u32::from_le_bytes(take_bytes(input, 4)?.try_into().map_err(|_| Error::Malformed)?);
             let generation = u64::from_le_bytes(take_bytes(input, 8)?.try_into().map_err(|_| Error::Malformed)?);
-            // A handle the protocol gave out shares its claim (review 5).
-            let release = EXPORTED.with_borrow(|exported| {
-                exported
-                    .iter()
-                    .find(|handle| handle.epoch == epoch && handle.slot == slot && handle.generation == generation)
-                    .and_then(|handle| handle.release.clone())
-            });
-            Dynamic::from(NativeHandle { epoch, slot, generation, release })
+            // A handle the protocol gave out comes back with its claim, which
+            // the program then holds as Rust holds a value moved to it: the
+            // value is dropped with the program's last copy (review 5).
+            let given = EXPORTED.with_borrow_mut(|exported| exported.remove(&(epoch, slot, generation)));
+            Dynamic::from(given.unwrap_or(NativeHandle { epoch, slot, generation, release: None }))
         }
         7 => match take_bytes(input, 1)?[0] {
             0 => __rawr_internal::option::none(),
@@ -4146,11 +4215,11 @@ pub fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
         push_bytes(output, value.as_bytes())?;
     } else if value.is::<NativeHandle>() {
         let value = value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
-        EXPORTED.with_borrow_mut(|exported| exported.push(value.clone()));
         output.push(6);
         push_bytes(output, &value.epoch)?;
         push_bytes(output, &value.slot.to_le_bytes())?;
         push_bytes(output, &value.generation.to_le_bytes())?;
+        EXPORTED.with_borrow_mut(|exported| exported.insert((value.epoch, value.slot, value.generation), value));
     } else if __rawr_internal::option::is(&value) {
         let mut value = value;
         match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {
@@ -4284,11 +4353,17 @@ pub fn attest_within(
     let Ok(elements) = value.as_array_ref() else {
         return Ok(());
     };
+    if elements.is_empty() {
+        return Ok(());
+    }
+    // A tuple's members have a witness each; an array's elements share its
+    // argument's, issued once for them all.
+    let first = inner(0);
+    let shared = inner(1).is_none();
     for (index, element) in elements.iter().enumerate() {
-        // A tuple's members have a witness each; an array's elements share
-        // its argument's.
-        if let Some(witness) = inner(index).or_else(|| inner(0)) {
-            attest_within(element, &witness, arena)?;
+        let own = if shared || index == 0 { None } else { inner(index) };
+        if let Some(witness) = own.as_ref().or(first.as_ref()) {
+            attest_within(element, witness, arena)?;
         }
     }
     Ok(())
@@ -4510,13 +4585,30 @@ pub fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering
 /// The runner's own driver, in the final crate beside what only it holds:
 /// the adapter table, the bindings it installs and the programs it compiles.
 const DRIVER_SOURCE: &[u8] = br#"
+/// The adapters of the definition `identity` names, in the table's order:
+/// the table indexed once, so a call finds its adapter without a scan.
+fn adapters_of(identity: &[u8; 32]) -> &'static [&'static Adapter] {
+    type Index = std::collections::HashMap<[u8; 32], Vec<&'static Adapter>>;
+    static INDEX: std::sync::OnceLock<Index> = std::sync::OnceLock::new();
+    INDEX
+        .get_or_init(|| {
+            let mut index = Index::new();
+            for adapter in adapters() {
+                index.entry(adapter.identity).or_default().push(adapter);
+            }
+            index
+        })
+        .get(identity)
+        .map_or(&[], Vec::as_slice)
+}
+
 fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> {
     if payload.len() < 100 || &payload[..32] != key { return Err(Error::Stale); }
     payload = &payload[32..];
     let identity: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
     let signature: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
     let count = u32::from_le_bytes(take_bytes(&mut payload, 4)?.try_into().map_err(|_| Error::Malformed)?);
-    let adapter = adapters().find(|adapter| adapter.identity == identity && adapter.signature == signature).ok_or(Error::MissingAdapter)?;
+    let adapter = adapters_of(&identity).iter().find(|adapter| adapter.signature == signature).ok_or(Error::MissingAdapter)?;
     if count != adapter.arguments { return Err(Error::Cardinality); }
     let count = usize::try_from(count).map_err(|_| Error::Cardinality)?;
     let mut values = Vec::new();
@@ -4583,9 +4675,10 @@ fn imported_runtime(
             builder.bind_imported_application(adapter.identity, move |call, values| runtime_invoke(adapter, call, values))?;
         }
         for proof in native.structural().iter().filter(|proof| proof.root() == definition.root()) {
-            let adapter = adapters()
+            let adapter = adapters_of(proof.identity())
+                .first()
                 .copied()
-                .find(|adapter| &adapter.identity == proof.identity())
+                .copied()
                 .ok_or_else(|| __rawr_internal::host::runtime::Error::profile("generated structural adapter identity"))?;
             builder.bind_imported_structural(proof, move |call, values| runtime_invoke(adapter, call, values))?;
         }
@@ -4881,6 +4974,33 @@ mod native_arena_tests {
             .try_cast::<NativeHandle>()
             .expect("a handle");
         assert_eq!(read(&decoded).expect("alive"), 6);
+    }
+
+    /// A value whose channel closes when its last copy is dropped.
+    #[derive(Clone)]
+    struct Closes(#[allow(dead_code)] std::sync::mpsc::Sender<()>);
+
+    fn clone_closes(value: &dyn Any) -> Option<Box<dyn Any>> {
+        value.downcast_ref::<Closes>().map(|value| Box::new(value.clone()) as Box<dyn Any>)
+    }
+
+    #[test]
+    fn a_handle_the_protocol_took_back_is_the_program_s_alone() {
+        install_arena([23; 32]);
+        let (sender, receiver) = std::sync::mpsc::channel::<()>();
+        let handle = with_arena(|arena| arena.insert_debug(Closes(sender), None, Some(clone_closes))).expect("insert");
+        let mut wire = Vec::new();
+        encode_value(Dynamic::from(handle), &mut wire).expect("encode");
+        let decoded = decode_value(&mut wire.as_slice())
+            .expect("decode")
+            .try_cast::<NativeHandle>()
+            .expect("a handle");
+        // Passed back, the program holds its only claim, so a call that
+        // takes it moves the value out, as Rust moves a value given to it,
+        // and nothing keeps a copy behind.
+        let taken = with_arena(|arena| arena.take::<Closes>(decoded)).expect("taken");
+        drop(taken);
+        assert!(matches!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)));
     }
 
     #[test]

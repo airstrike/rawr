@@ -2109,16 +2109,18 @@ impl Calls {
         // An instance native code calls a generic function at is keyed by
         // its types (D869); a generic rawr compiles once, erased, is the
         // function itself.
-        let path = if self.items.contains_key(&(owned, path.to_owned())) {
-            path
-        } else {
-            path.split_once('#').map_or(path, |(function, _)| function)
-        };
-        let item = self.items.get(&(owned, path.to_owned())).ok_or_else(|| {
+        let mut key = (owned, path.to_owned());
+        if !self.items.contains_key(&key)
+            && let Some((function, _)) = path.split_once('#')
+        {
+            key.1.truncate(function.len());
+        }
+        let path = key.1.as_str();
+        let item = self.items.get(&key).ok_or_else(|| {
             format!("rawr: the running program has no function `{path}`; restart `rawr run`")
         })?;
         let model = call.model;
-        let inputs = self.inputs.get(&(owned, path.to_owned()));
+        let inputs = self.inputs.get(&key);
         let mut values = Vec::with_capacity(count);
         // A stand-in's receiver is its program value, taken for the call
         // (#1264).
