@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A native value the runner protocol handed out is dropped once the program that took it back drops it, not kept until the next program; repeated calls find their adapter, kept slices, releases and pinned strings without a scan, and a crossing call's witnesses no longer copy their types.","issues":[1852]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.208",
+      "date": "2026-11-13",
+      "entries": [
+        {"text":"A native value the runner protocol handed out is dropped once the program that took it back drops it, not kept until the next program; repeated calls find their adapter, kept slices, releases and pinned strings without a scan, and a crossing call's witnesses no longer copy their types.","issues":[1852]}
+      ]
+    },
     {
       "version": "0.3.207",
       "date": "2026-11-13",

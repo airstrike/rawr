@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.208 (2026-11-13)
+
 - A native value the runner protocol handed out is dropped once the program that took it back drops it, not kept until the next program; repeated calls find their adapter, kept slices, releases and pinned strings without a scan, and a crossing call's witnesses no longer copy their types. (#1852)
 
 ## 0.3.207 (2026-11-13)

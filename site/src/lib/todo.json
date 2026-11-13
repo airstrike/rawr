@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-13",
-  "version": "0.3.207",
+  "version": "0.3.208",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A native value the runner protocol handed out is dropped once the program that took it back drops it, not kept until the next program; repeated calls find their adapter, kept slices, releases and pinned strings without a scan, and a crossing call's witnesses no longer copy their types.","issues":[1852]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.208",
+        "date": "2026-11-13",
+        "entries": [
+          {"text":"A native value the runner protocol handed out is dropped once the program that took it back drops it, not kept until the next program; repeated calls find their adapter, kept slices, releases and pinned strings without a scan, and a crossing call's witnesses no longer copy their types.","issues":[1852]}
+        ]
+      },
       {
         "version": "0.3.207",
         "date": "2026-11-13",
@@ -4112,7 +4114,7 @@
     {"issue":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.208"},
     {"issue":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.207"},
     {"issue":1854,"title":"The admitting replay still compares every input the build just captured","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open","category":"Shared dependency cache (D607)"},
