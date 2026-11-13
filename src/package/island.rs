@@ -3064,9 +3064,10 @@ impl<'a> Generator<'a> {
         // A lent `&mut` the function gave a whole new value, `*place =
         // value`, takes it (#1139), and one of a type that crosses by the
         // wire format, as an alias of `usize`, takes its copy (`Hand`,
-        // #1297). One whose type names a lifetime can't take a new value. A
-        // marked value whose parts were lent takes its copied fields and
-        // each part given a whole new value (#1469).
+        // #1297). One whose type names a lifetime was lent as it is, never
+        // copied (`lend`), so it takes a new value as a loan does. A marked
+        // value whose parts were lent takes its copied fields and each part
+        // given a whole new value (#1469).
         for (name, changed) in changed {
             match changed {
                 Changed::Copied => {
@@ -3085,10 +3086,10 @@ impl<'a> Generator<'a> {
                          (&{island}::hand(&*{name})).back(&mut __reply, {name}) }}"
                     );
                 }
-                Changed::Lent(referent) => {
+                Changed::Lent(_) => {
                     let _ = writeln!(
                         text,
-                        "    __reply.read(|input| input.unreplaced(\"{referent}\"));"
+                        "    {island}::ByLoan::back(&&{island}::hand(&*{name}), &mut __reply, {name});"
                     );
                 }
             }
@@ -6499,24 +6500,20 @@ impl<'a> In<'a> {
         }
     }
     /// The value a call gave a lent `&mut T` as a whole, `*place =
-    /// value`; `None` when the place is still the one lent.
-    pub fn replaced<T: 'static>(&mut self) -> ::std::option::Option<T> {
+    /// value`; `None` when the place is still the one lent. The
+    /// interpreter holds a value of a type that names a lifetime at
+    /// `'static`, which comes back at `T`'s.
+    ///
+    /// # Safety
+    ///
+    /// What the value borrows lives as long as `T`'s lifetimes say.
+    pub unsafe fn replaced<T>(&mut self) -> ::std::option::Option<T> {
         if self.bytes.first() == Some(&UNIT) {
             self.byte();
             return None;
         }
-        Some(self.native())
-    }
-    /// That a lent `&mut` of `name`, whose type names a lifetime, was
-    /// not given a whole new value, which can't come back yet.
-    pub fn unreplaced(&mut self, name: &str) {
-        if self.byte() != UNIT {
-            ::std::panic!(
-                "rawr: `{}` gave the `&mut {name}` native code lent it a new value, \
-                 which can't come back yet",
-                self.path
-            );
-        }
+        // SAFETY: as the caller's.
+        Some(unsafe { self.moved() })
     }
     /// A static's own value, which the interpreter gave where it is for
     /// a call that asked for a `&'static` ([`Call::in_place`]).
@@ -6590,6 +6587,16 @@ impl<'a> In<'a> {
     /// A native value the interpreter moved, as the `iced::Error` of an
     /// `iced::Result`.
     pub fn native<T: 'static>(&mut self) -> T {
+        // SAFETY: a `'static` type borrows nothing that ends.
+        unsafe { self.moved() }
+    }
+    /// [`In::native`] of a `T` that may name a lifetime, which the
+    /// interpreter moved at `'static`.
+    ///
+    /// # Safety
+    ///
+    /// What the value borrows lives as long as `T`'s lifetimes say.
+    unsafe fn moved<T>(&mut self) -> T {
         let name = ::std::any::type_name::<T>();
         if self.bytes.first() == Some(&LENT) {
             ::std::panic!(
@@ -6601,11 +6608,39 @@ impl<'a> In<'a> {
         self.expect(NATIVE, &::std::format!("a `{name}`"));
         let index = self.count();
         let moved = self.natives.get_mut(index).and_then(::std::option::Option::take);
-        match moved.map(|value| value.downcast::<T>()) {
-            Some(Ok(value)) => *value,
+        match moved {
+            Some(value) if <dyn ::std::any::Any>::type_id(&*value) == erased_type_id::<T>() => {
+                // SAFETY: the box holds a `T` but for its lifetimes, which
+                // the caller vouches for.
+                *unsafe { ::std::boxed::Box::from_raw(::std::boxed::Box::into_raw(value).cast::<T>()) }
+            }
             _ => self.fail(&::std::format!("expected a `{name}`")),
         }
     }
+}
+
+/// The `TypeId` of `T` but for its lifetimes, which rustc's ids ignore:
+/// a type that names a lifetime has its `'static` instance's.
+fn erased_type_id<T: ?Sized>() -> ::std::any::TypeId {
+    trait Erased {
+        fn id(&self) -> ::std::any::TypeId
+        where
+            Self: 'static;
+    }
+    impl<T: ?Sized> Erased for ::std::marker::PhantomData<T> {
+        fn id(&self) -> ::std::any::TypeId
+        where
+            Self: 'static,
+        {
+            ::std::any::TypeId::of::<T>()
+        }
+    }
+    let phantom = ::std::marker::PhantomData::<T>;
+    let erased: &dyn Erased = &phantom;
+    // SAFETY: a `PhantomData` holds nothing, and a type's id is the same
+    // at each of its lifetimes.
+    let erased = unsafe { ::std::mem::transmute::<&dyn Erased, &(dyn Erased + 'static)>(erased) };
+    erased.id()
 }
 
 /// A `Result`, or an alias of one such as `iced::Result`, by its parts.
@@ -6866,10 +6901,9 @@ pub trait ByLoan<T> {
     /// As for [`Call::lend`].
     unsafe fn lend<'c>(&self, call: &mut Call<'c>, value: &'c mut T, lend: Lend, name: &'static str);
     /// The whole new value the call gave the place [`ByLoan::lend`]
-    /// lent, `*place = value`, if it gave one (#1139).
-    fn back(&self, reply: &mut Reply, place: &mut T)
-    where
-        T: 'static;
+    /// lent, `*place = value`, if it gave one (#1139), of a type that
+    /// names a lifetime too, written or elided as ratatui's `Frame` is.
+    fn back(&self, reply: &mut Reply, place: &mut T);
 }
 impl<T> ByLoan<T> for &Hand<T> {
     unsafe fn lend_ref<'c>(&self, call: &mut Call<'c>, value: &'c T, lend: Lend, name: &'static str) {
@@ -6880,11 +6914,11 @@ impl<T> ByLoan<T> for &Hand<T> {
         // SAFETY: as the caller's.
         unsafe { call.lend(value, lend, name) }
     }
-    fn back(&self, reply: &mut Reply, place: &mut T)
-    where
-        T: 'static,
-    {
-        if let Some(new) = reply.read(|input| input.replaced::<T>()) {
+    fn back(&self, reply: &mut Reply, place: &mut T) {
+        // SAFETY: what the interpreter gives a place native code lent it
+        // borrows nothing shorter than the place's lifetimes, as a
+        // result borrows nothing shorter than its signature's (D867).
+        if let Some(new) = reply.read(|input| unsafe { input.replaced::<T>() }) {
             *place = new;
         }
     }
@@ -8302,6 +8336,10 @@ mod tests {
             "const SHARED: fn(u64, &mut dyn FnMut(&Frame<'_>)) -> ::std::result::Result<(), u8> = shared;",
             "crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), Some(&MUTABLE), &SHARED)",
             "let () = unsafe { __call.lend(__a0, __a0_lend, ::std::any::type_name::<Frame<'_>>()) };",
+            // A new value the call gave it comes back as a loan's does,
+            // never as a copy, which it wasn't.
+            "    crate::__rawr_island::ByLoan::back(&&crate::__rawr_island::hand(&*__a0), \
+             &mut __reply, __a0);\n",
             "    __call.mutable(&*__a1);\n",
             "crate::__rawr_island::Lend::new(::std::any::TypeId::of::<Key>(), None, &SHARED)",
             "let () = unsafe { { use crate::__rawr_island::{ByCopy as _, ByLoan as _}; \
