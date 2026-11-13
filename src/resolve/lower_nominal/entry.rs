@@ -2,7 +2,8 @@
 //! text, with the dispatchers, closures and crate uses it needs.
 
 use super::dispatch::{
-    write_closures, write_default_dispatcher, write_function, write_method, write_trait_dispatchers,
+    write_closures, write_default_dispatcher, write_function, write_method,
+    write_trait_dispatchers, Naming,
 };
 #[cfg(feature = "rust-import")]
 use super::imported::{native_impls, ImportedOutput};
@@ -18,7 +19,7 @@ use super::{
     Parser,
 };
 #[cfg(feature = "rust-import")]
-use super::{kept, ImportedContext};
+use super::{kept, splice, ImportedContext};
 use crate::ast::NominalPattern;
 use crate::resolve::{item, LoweringFailure, Program};
 use crate::tokenizer::Token;
@@ -223,17 +224,34 @@ struct Unit<'a> {
     numbering: ImmutableString,
 }
 
-/// How many ops and patterns a part's bodies lowered so far, which number
-/// the next body's.
-#[derive(Default)]
-struct Counts {
+/// How many ops, patterns and closures a part's bodies lowered so far,
+/// which number the next body's.
+struct Counts<'a> {
     ops: usize,
     patterns: usize,
+    closures: Naming<'a>,
+}
+
+impl<'a> Counts<'a> {
+    /// Nothing lowered yet of `unit`'s part.
+    fn new(unit: &'a Unit<'_>) -> Self {
+        Self {
+            ops: 0,
+            patterns: 0,
+            closures: Naming::new(&unit.numbering),
+        }
+    }
 }
 
 impl Assembly {
     /// Write `lowered`, the lowering of `body`, into the generated text.
-    fn place(&mut self, unit: &Unit<'_>, counts: &mut Counts, body: Body<'_>, lowered: Lowered) {
+    fn place(
+        &mut self,
+        unit: &Unit<'_>,
+        counts: &mut Counts<'_>,
+        body: Body<'_>,
+        lowered: Lowered,
+    ) {
         match body {
             Body::Function(shell, definition) => {
                 let generated_name = function_name(
@@ -275,6 +293,7 @@ impl Assembly {
                     &mut self.generated,
                     &mut self.locations,
                     shell.source,
+                    &mut counts.closures,
                     lowered.closures,
                     &mut self.closures,
                     &mut self.symbol_rewrites,
@@ -298,6 +317,7 @@ impl Assembly {
                     &mut self.generated,
                     &mut self.locations,
                     definition.source(),
+                    &mut counts.closures,
                     lowered.closures,
                     &mut self.closures,
                     &mut self.symbol_rewrites,
@@ -328,7 +348,7 @@ impl Assembly {
     fn number(
         &mut self,
         unit: &Unit<'_>,
-        counts: &mut Counts,
+        counts: &mut Counts<'_>,
         ops: Vec<ExecutableOp>,
         patterns: Vec<NominalPattern>,
     ) {
@@ -355,7 +375,7 @@ fn lower_part(
     #[cfg(feature = "rust-import")] imported: Option<&mut ImportedContext<'_>>,
     #[cfg(feature = "rust-import")] session: Option<(&mut kept::Session<'_>, kept::Part)>,
 ) -> Result<(), LoweringFailure> {
-    let mut counts = Counts::default();
+    let mut counts = Counts::new(unit);
     #[cfg(feature = "rust-import")]
     if let Some(imported) = imported {
         let mut session = session;
@@ -453,7 +473,7 @@ fn lower_part(
 #[cfg_attr(not(feature = "rust-import"), allow(clippy::needless_lifetimes))]
 fn lower_body<'a>(
     unit: &Unit<'_>,
-    counts: &Counts,
+    counts: &Counts<'_>,
     body: Body<'_>,
     text: &'a str,
     #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
@@ -632,6 +652,10 @@ pub(super) fn lower_with_context(
     let mut session = imported
         .as_ref()
         .and_then(|_| kept::Session::open(engine, program, &models, scope, optimization_level));
+    // Where each part's text is: a runner's compile parses again only the
+    // parts whose text changed (#1877).
+    #[cfg(feature = "rust-import")]
+    let mut pieces = splice::Pieces::default();
     // A source's bodies are lowered together, their ops and patterns
     // numbered after the source.
     for group in bodies.chunk_by(|body, next| body.source() == next.source()) {
@@ -662,11 +686,15 @@ pub(super) fn lower_with_context(
                 .as_mut()
                 .map(|session| (session, kept::Part::Bodies)),
         )?;
+        #[cfg(feature = "rust-import")]
+        pieces.written(assembly.generated.len(), Some((source, kept::Part::Bodies)));
     }
 
     let mut dispatch_ops = Vec::new();
     write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops);
     write_default_dispatcher(&mut assembly.generated, program, &models, &mut dispatch_ops);
+    #[cfg(feature = "rust-import")]
+    pieces.written(assembly.generated.len(), None);
 
     let script = program
         .scripts
@@ -692,6 +720,11 @@ pub(super) fn lower_with_context(
             .map(|session| (session, kept::Part::Script)),
     )?;
     #[cfg(feature = "rust-import")]
+    pieces.written(
+        assembly.generated.len(),
+        Some((script.source, kept::Part::Script)),
+    );
+    #[cfg(feature = "rust-import")]
     if let Some(session) = &mut session {
         session.succeeded();
     }
@@ -713,11 +746,22 @@ pub(super) fn lower_with_context(
         .chain(ops)
         .collect::<Vec<_>>();
 
-    let mut ast = match engine.compile_legacy_script_with_scope_raw(
-        scope,
-        generated.as_str(),
-        optimization_level,
-    ) {
+    #[cfg(feature = "rust-import")]
+    let spliced = match &mut session {
+        Some(session) => pieces.parse(engine, scope, &generated, session, optimization_level),
+        None => Ok(None),
+    };
+    #[cfg(not(feature = "rust-import"))]
+    let spliced = Ok(None);
+    let parsed = spliced.and_then(|spliced| match spliced {
+        Some(ast) => Ok(ast),
+        None => engine.compile_legacy_script_with_scope_raw(
+            scope,
+            generated.as_str(),
+            optimization_level,
+        ),
+    });
+    let mut ast = match parsed {
         Ok(ast) => ast,
         Err(error) => {
             return Err(match generated.translate(error.primary_span()) {

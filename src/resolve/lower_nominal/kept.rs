@@ -32,9 +32,10 @@ use super::constant::{included, Place};
 use super::disk::{self, Disk};
 use super::entry::{Body, Lowered};
 use super::imported::ImplUse;
-use super::interface::{framed, Interface, Native, Outlined, Written};
+use super::interface::{framed, Digests, Interface, Native, Outlined, Written};
 use super::models::Models;
 use super::op::ExecutableOp;
+use super::splice::Parsed;
 use super::surface::ImportedUse;
 use super::ty::Ty;
 use crate::program::source;
@@ -134,6 +135,10 @@ pub(super) struct Kept {
     /// Each adapter its ops call, a witnessed op's among them (#1734).
     adapters: Box<[host::structural::Definition]>,
     pub(super) outside: Outside,
+    /// What the compile parsed of the part's text (#1877). A runner's
+    /// file holds none: its first compile parses the text again.
+    #[serde(skip)]
+    parsed: Option<Parsed>,
 }
 
 impl Kept {
@@ -207,6 +212,8 @@ pub(crate) struct Lowerings {
     /// The outlines of the sources the last interface read, by their texts
     /// and bodies (`outlines`).
     outlines: Outlined,
+    /// The digests of the items the last interface read (#1878).
+    digests: Digests,
     /// What the last interface read of the native surface, by how many
     /// facades were registered when it was read: a runner's image doesn't
     /// change while it runs (#1725).
@@ -233,6 +240,7 @@ impl Lowerings {
             kept: BTreeMap::new(),
             scanned: BTreeMap::new(),
             outlines: BTreeMap::new(),
+            digests: Digests::new(),
             native: None,
             lowered: 0,
             revealed: 0,
@@ -613,11 +621,26 @@ impl<'e> Session<'e> {
             dependencies: dependencies.clone(),
             adapters: adapters(lowered),
             outside,
+            parsed: None,
         };
         if let Some(disk) = lock(self.engine).disk.as_mut() {
             disk.write(self.engine, key.entry(), &kept);
         }
         self.kept.insert((source, key.part), kept);
+    }
+
+    /// What a compile parsed of the text of `part` of `source`, which this
+    /// compile reused or kept (#1877).
+    pub(super) fn parsed(&self, source: source::Id, part: Part) -> Option<&Parsed> {
+        self.kept.get(&(source, part))?.parsed.as_ref()
+    }
+
+    /// Keep `parsed`, this compile's parse of the text of `part` of
+    /// `source`, with the part, when this compile reused or kept it.
+    pub(super) fn keep_parsed(&mut self, source: source::Id, part: Part, parsed: Parsed) {
+        if let Some(kept) = self.kept.get_mut(&(source, part)) {
+            kept.parsed = Some(parsed);
+        }
     }
 
     /// The compile succeeded: what the earlier one kept and this one
@@ -825,13 +848,17 @@ fn lock(engine: &Engine) -> std::sync::MutexGuard<'_, Lowerings> {
 /// what they read of its native surface.
 fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Interface> {
     let registered = Engine::registered_facades();
-    let (mut outlined, kept) = {
+    let (mut outlined, mut digests, kept) = {
         let mut lowerings = lock(engine);
         let kept = lowerings
             .native
             .take()
             .filter(|(at, native)| *at == registered && native.is_of(&program.own));
-        (std::mem::take(&mut lowerings.outlines), kept)
+        (
+            std::mem::take(&mut lowerings.outlines),
+            std::mem::replace(&mut lowerings.digests, Digests::new()),
+            kept,
+        )
     };
     let native = kept.map_or_else(
         || crate::Shared::new(Native::new(program, &models.host)),
@@ -840,10 +867,18 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
     // A facade's proof is what every source reads of another crate's
     // facade, and of the program's own, its entries a name reaches.
     let interface = crate::host::facade::Fingerprint::rooted(|| {
-        Interface::new(engine, program, models, &mut outlined, &native)
+        Interface::new(
+            engine,
+            program,
+            models,
+            &mut outlined,
+            &mut digests,
+            &native,
+        )
     });
     let mut lowerings = lock(engine);
     lowerings.outlines = outlined;
+    lowerings.digests = digests;
     lowerings.native = Some((registered, native));
     interface
 }
@@ -922,6 +957,7 @@ mod tests {
             uses: Box::default(),
             dependencies: BTreeSet::new(),
             outside: Outside::new(Vec::new(), Vec::new()),
+            parsed: None,
         }
     }
 

@@ -67,6 +67,8 @@ mod proof;
 mod relocate;
 mod scope;
 mod sequence;
+#[cfg(feature = "rust-import")]
+mod splice;
 use places::PlacePattern;
 mod reborrow;
 mod reverse;

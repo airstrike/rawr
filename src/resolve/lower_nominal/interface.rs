@@ -69,16 +69,18 @@ impl Interface {
 
     /// What each source's lowering reads of `program`; `None` when it
     /// can't be written. `outlined` keeps the outlines of the sources'
-    /// texts from one compile to the next.
+    /// texts, and `digests` the declarations' digests, from one interface
+    /// to the next.
     pub(super) fn new(
         engine: &Engine,
         program: &Program,
         models: &Models,
         outlined: &mut Outlined,
+        digests: &mut Digests,
         native: &Native,
     ) -> Option<Self> {
         let outlines = outlines(engine, program, outlined);
-        let declarations = Declarations::new(program, &outlines, native)?;
+        let declarations = Declarations::new(program, &outlines, native, digests)?;
         let own = own(program)?;
         // A runner's compiler reads the facades registered in the process
         // as its image holds them; a check reads its own registry's alone,
@@ -269,8 +271,14 @@ struct Declaration {
 
 impl<'p> Declarations<'p> {
     /// The program's declarations, whose sources' outlines are `outlines`,
-    /// and the entries of its own facades, `native`'s.
-    fn new(program: &'p Program, outlines: &'p Outlines, native: &'p Native) -> Option<Self> {
+    /// and the entries of its own facades, `native`'s. An item `digests`
+    /// digested as it is now isn't digested again.
+    fn new(
+        program: &'p Program,
+        outlines: &'p Outlines,
+        native: &'p Native,
+        digests: &mut Digests,
+    ) -> Option<Self> {
         let items = program.items.iter().collect::<Vec<_>>();
         // What the program holds of each item beside its shell: its type,
         // the methods its impl or trait declares, its instances.
@@ -389,22 +397,29 @@ impl<'p> Declarations<'p> {
             declaring[number].push(macros + offset);
         }
         let mut declarations = Vec::with_capacity(macros + program.macros.definitions().count());
+        digests.begin();
         for ((index, shell), held) in items.iter().enumerate().zip(&held) {
             let outline = outlines.sources.get(shell.source.index());
-            let places =
-                outline.map(|outline| outline.places.between(shell.span.start(), shell.span.end()));
-            let digest = digest(places.as_ref(), |written| {
-                let kind = outlined(&shell.kind);
-                write!(
-                    written,
-                    "{}|{:?}|{:?}|{:?}|{kind:?}|",
-                    program.source.identity_at(shell.source),
-                    shell.key,
-                    shell.span,
-                    shell.facades,
-                )?;
-                held.iter()
-                    .try_for_each(|held| write!(written, "{held:?}|"))
+            let identity = program.source.identity_at(shell.source);
+            let item = Item {
+                outline: outline.map(|outline| outline.key),
+                identity,
+                shell,
+                held,
+            };
+            let digest = digests.digest(item, || {
+                let places = outline
+                    .map(|outline| outline.places.between(shell.span.start(), shell.span.end()));
+                digest(places.as_ref(), |written| {
+                    let kind = outlined(&shell.kind);
+                    write!(
+                        written,
+                        "{identity}|{:?}|{:?}|{:?}|{kind:?}|",
+                        shell.key, shell.span, shell.facades,
+                    )?;
+                    held.iter()
+                        .try_for_each(|held| write!(written, "{held:?}|"))
+                })
             })?;
             let mut writes = outline
                 .into_iter()
@@ -559,7 +574,6 @@ impl Walk {
 
 /// What the program holds of an item beside its shell.
 #[derive(Clone, Copy, Debug)]
-#[expect(dead_code, reason = "a digest reads each by its `Debug`")]
 enum Held<'p> {
     Type(&'p crate::type_def::Definition),
     Method(&'p crate::method::Definition),
@@ -571,6 +585,146 @@ enum Held<'p> {
     ),
     #[cfg(not(target_arch = "wasm32"))]
     Native(&'p crate::resolve::record::Native),
+}
+
+impl Held<'_> {
+    /// What it holds, as its own.
+    fn owned(self) -> Owned {
+        match self {
+            Self::Type(definition) => Owned::Type(Box::new(definition.clone())),
+            Self::Method(definition) => Owned::Method(Box::new(definition.clone())),
+            Self::Impl(instances) => Owned::Impl(instances.into()),
+            Self::Template(key, instances) => Owned::Template(key.clone(), instances.into()),
+            Self::Instance(key, types) => Owned::Instance(key.clone(), types.into()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Native(native) => Owned::Native(native.clone()),
+        }
+    }
+
+    /// Whether it holds what `owned` holds.
+    fn is(self, owned: &Owned) -> bool {
+        match (self, owned) {
+            (Self::Type(held), Owned::Type(owned)) => *held == **owned,
+            (Self::Method(held), Owned::Method(owned)) => *held == **owned,
+            (Self::Impl(held), Owned::Impl(owned)) => *held == **owned,
+            (Self::Template(key, held), Owned::Template(owned_key, owned)) => {
+                key == owned_key && *held == **owned
+            }
+            (Self::Instance(key, held), Owned::Instance(owned_key, owned)) => {
+                key == owned_key && *held == **owned
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            (Self::Native(held), Owned::Native(owned)) => held == owned,
+            _ => false,
+        }
+    }
+}
+
+/// What a [`Held`] holds, kept with a digest of it (`Digests`).
+enum Owned {
+    Type(Box<crate::type_def::Definition>),
+    Method(Box<crate::method::Definition>),
+    Impl(Box<[crate::resolve::ImplInstance]>),
+    Template(crate::item::Key, Box<[crate::resolve::Instance]>),
+    Instance(
+        crate::item::Key,
+        Box<[(crate::ImmutableString, type_ref::Type)]>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    Native(crate::resolve::record::Native),
+}
+
+/// One item an interface digests, with what its digest is written from
+/// besides: its source's identity and outline, and what the program holds
+/// of it.
+#[derive(Clone, Copy)]
+struct Item<'a> {
+    /// The key of its source's outline (`outlines`), which its places are
+    /// counted in.
+    outline: Option<[u8; 32]>,
+    identity: &'a str,
+    shell: &'a item::Shell,
+    held: &'a [Held<'a>],
+}
+
+/// The digests of the items an interface digested, each with what it was
+/// digested from, so the next interface, a reveal round's or a later
+/// save's, digests again only the items that changed (#1878). An item's
+/// digest is written from its source's identity, its places in its
+/// source's outline, its shell and what the program holds of it: an item
+/// equal in each has the same digest.
+pub(super) struct Digests {
+    /// What the last interface digested, by its source's outline and its
+    /// span.
+    kept: BTreeMap<([u8; 32], Span), Vec<Digested>>,
+    /// What the interface before it digested, which this one reuses.
+    earlier: BTreeMap<([u8; 32], Span), Vec<Digested>>,
+}
+
+/// One item's digest, and what it was digested from.
+struct Digested {
+    identity: Box<str>,
+    shell: item::Shell,
+    held: Box<[Owned]>,
+    digest: [u8; 32],
+}
+
+impl Digested {
+    /// Whether it is the digest of `item`.
+    fn of(&self, item: Item<'_>) -> bool {
+        *self.identity == *item.identity
+            && self.shell == *item.shell
+            && self.held.len() == item.held.len()
+            && item
+                .held
+                .iter()
+                .zip(&self.held)
+                .all(|(held, owned)| held.is(owned))
+    }
+}
+
+impl Digests {
+    /// None digested yet.
+    pub(super) const fn new() -> Self {
+        Self {
+            kept: BTreeMap::new(),
+            earlier: BTreeMap::new(),
+        }
+    }
+
+    /// Begin an interface: it reuses what the last one digested.
+    fn begin(&mut self) {
+        self.earlier = std::mem::take(&mut self.kept);
+    }
+
+    /// The digest of `item`: the last interface's when it digested the
+    /// item as it is, else `digest`'s.
+    fn digest(
+        &mut self,
+        item: Item<'_>,
+        digest: impl FnOnce() -> Option<[u8; 32]>,
+    ) -> Option<[u8; 32]> {
+        let Some(outline) = item.outline else {
+            return digest();
+        };
+        let place = (outline, item.shell.span);
+        let earlier = self.earlier.get_mut(&place).and_then(|earlier| {
+            let at = earlier.iter().position(|digested| digested.of(item))?;
+            Some(earlier.swap_remove(at))
+        });
+        let digested = match earlier {
+            Some(digested) => digested,
+            None => Digested {
+                identity: item.identity.into(),
+                shell: item.shell.clone(),
+                held: item.held.iter().map(|held| held.owned()).collect(),
+                digest: digest()?,
+            },
+        };
+        let found = digested.digest;
+        self.kept.entry(place).or_default().push(digested);
+        Some(found)
+    }
 }
 
 /// The items of each source by where they start, to find the one a place
@@ -837,19 +991,21 @@ impl std::fmt::Write for Written {
 /// declarations its lowering reads (#1718).
 #[derive(Clone)]
 pub(super) struct Outline {
+    /// What it is the outline of: its text and bodies (`outlines`).
+    key: [u8; 32],
     tokens: [u8; 32],
     places: Places,
     /// Each name its tokens write, with where it starts, but the names a
     /// declaration gives (a function, a field, a parameter).
-    identifiers: Box<[(Box<str>, Position)]>,
+    identifiers: crate::Shared<[(Box<str>, Position)]>,
     /// Each name its whole text writes, its bodies' too, once.
-    mentioned: Box<[Box<str>]>,
+    mentioned: crate::Shared<[Box<str>]>,
 }
 
 impl Outline {
     /// The outline of `text`, whose function and method bodies are
-    /// `bodies`, in order.
-    fn new(engine: &Engine, text: &str, bodies: &[Span]) -> Self {
+    /// `bodies`, in order, which `key` digests.
+    fn new(engine: &Engine, text: &str, bodies: &[Span], key: [u8; 32]) -> Self {
         // A body within another body is the outer body's.
         let mut merged = Vec::<(Position, Position)>::with_capacity(bodies.len());
         for (start, end) in bodies
@@ -907,10 +1063,11 @@ impl Outline {
         mentioned.sort_unstable();
         mentioned.dedup();
         Self {
+            key,
             tokens: written.0.finalize().into(),
             places: Places::new(starts),
-            identifiers: identifiers.into_boxed_slice(),
-            mentioned: mentioned.into_boxed_slice(),
+            identifiers: identifiers.into(),
+            mentioned: mentioned.into(),
         }
     }
 
@@ -1007,7 +1164,7 @@ fn outlines(engine: &Engine, program: &Program, outlined: &mut Outlined) -> Outl
         let outline = earlier
             .remove(&key)
             .or_else(|| outlined.get(&key).cloned())
-            .unwrap_or_else(|| Outline::new(engine, text, spans));
+            .unwrap_or_else(|| Outline::new(engine, text, spans, key));
         outlined.insert(key, outline.clone());
         outline
     };
@@ -1035,4 +1192,53 @@ fn outlines(engine: &Engine, program: &Program, outlined: &mut Outlined) -> Outl
 struct Outlines {
     sources: Vec<Outline>,
     scripts: Vec<Outline>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Digests, Interface, Models, Native, Outlined};
+    use crate::program::source;
+    use crate::Engine;
+
+    const SOURCE: &str = "struct State { title: String }\n\
+        impl State { fn title(&self) -> &str { &self.title } }\n\
+        fn main() { let state = State { title: String::new() }; state.title(); }\n";
+
+    /// What the root's lowering reads of `text`'s program, its items'
+    /// digests reused from `digests` where they are as they were.
+    fn read(engine: &Engine, text: &str, digests: &mut Digests) -> [u8; 32] {
+        let program =
+            crate::resolve::resolve(engine.parse_unit(text).unwrap(), &engine.host_registry)
+                .unwrap();
+        let runtime =
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
+        let models = Models::new(&program, runtime, engine.host_registry.share(), engine);
+        let native = Native::new(&program, &models.host);
+        Interface::new(
+            engine,
+            &program,
+            &models,
+            &mut Outlined::new(),
+            digests,
+            &native,
+        )
+        .unwrap()
+        .of(source::Id::from_index(0))
+    }
+
+    /// An item's digest an interface reuses is the one it would write
+    /// again, and one whose item changed is written again (#1878).
+    #[test]
+    fn an_interface_reuses_only_the_digests_of_items_as_they_were() {
+        let engine = Engine::new();
+        let mut digests = Digests::new();
+        let first = read(&engine, SOURCE, &mut digests);
+        assert_eq!(read(&engine, SOURCE, &mut digests), first);
+        let changed = SOURCE.replace("title: String }", "title: String, visits: u32 }");
+        let changed = changed.replace("String::new() }", "String::new(), visits: 0 }");
+        let after = read(&engine, &changed, &mut digests);
+        assert_ne!(after, first);
+        assert_eq!(after, read(&engine, &changed, &mut Digests::new()));
+        assert_eq!(read(&engine, SOURCE, &mut digests), first);
+    }
 }

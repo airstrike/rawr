@@ -11,7 +11,7 @@ use crate::{ImmutableString, Span};
 /// it by, the types its named generic parameters take, as the crate's root
 /// names them, and the key its instance is named by, which native code's
 /// trampoline calls it by.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Native {
     pub(crate) path: ImmutableString,
     pub(crate) types: Box<[super::type_ref::Type]>,

@@ -15,11 +15,38 @@ use crate::{capability, method, ImmutableString, Span};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-/// Write each lifted closure as its own generated function.
+/// The names one part gives its lifted closures' generated functions: its
+/// numbering (`Parser::numbering`) and how many it named before, so a
+/// part's text names none of another part's closures and a kept part's
+/// text stays as it was written (#1877).
+pub(super) struct Naming<'a> {
+    numbering: &'a str,
+    named: usize,
+}
+
+impl<'a> Naming<'a> {
+    /// The names of the part numbered `numbering`, none given yet.
+    pub(super) const fn new(numbering: &'a str) -> Self {
+        Self {
+            numbering,
+            named: 0,
+        }
+    }
+
+    fn next(&mut self) -> String {
+        let name = format!("{CLOSURE_SENTINEL}{}{}", self.numbering, self.named);
+        self.named += 1;
+        name
+    }
+}
+
+/// Write each lifted closure as its own generated function, named by
+/// `naming`.
 pub(super) fn write_closures(
     output: &mut location::Generated,
     retained: &mut Vec<location::Pending>,
     source: crate::program::source::Id,
+    naming: &mut Naming<'_>,
     lifted: Vec<closure::Lifted>,
     closures: &mut Vec<closure::Callable>,
     rewrites: &mut BTreeMap<ImmutableString, ImmutableString>,
@@ -28,7 +55,7 @@ pub(super) fn write_closures(
         let Some(value) = closure.value else {
             continue;
         };
-        let generated = format!("{CLOSURE_SENTINEL}{}", closures.len());
+        let generated = naming.next();
         let dispatch: ImmutableString = format!("\0rawr.closure.{}", closure.key).into();
         output.declaration(
             source,

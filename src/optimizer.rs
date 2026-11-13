@@ -1353,6 +1353,21 @@ impl Engine {
             + AsRef<[crate::Shared<crate::ast::ScriptFuncDef>]>,
         optimization_level: OptimizationLevel,
     ) -> AST {
+        let (statements, lib) =
+            self.optimize_parts(scope, statements, functions, optimization_level);
+        AST::new(statements, lib)
+    }
+
+    /// Optimize a collection of statements and functions: the statements,
+    /// and the functions' module.
+    pub(crate) fn optimize_parts(
+        &self,
+        scope: Option<&Scope>,
+        statements: StmtBlockContainer,
+        functions: impl IntoIterator<Item = crate::Shared<crate::ast::ScriptFuncDef>>
+            + AsRef<[crate::Shared<crate::ast::ScriptFuncDef>]>,
+        optimization_level: OptimizationLevel,
+    ) -> (StmtBlockContainer, crate::SharedModule) {
         let mut statements = statements;
 
         let lib: crate::Shared<_> = if optimization_level == OptimizationLevel::None {
@@ -1381,17 +1396,15 @@ impl Engine {
 
         statements.shrink_to_fit();
 
-        AST::new(
-            match optimization_level {
-                OptimizationLevel::None => statements,
-                OptimizationLevel::Simple | OptimizationLevel::Full => self.optimize_top_level(
-                    statements,
-                    scope,
-                    std::slice::from_ref(&lib),
-                    optimization_level,
-                ),
-            },
-            lib,
-        )
+        let statements = match optimization_level {
+            OptimizationLevel::None => statements,
+            OptimizationLevel::Simple | OptimizationLevel::Full => self.optimize_top_level(
+                statements,
+                scope,
+                std::slice::from_ref(&lib),
+                optimization_level,
+            ),
+        };
+        (statements, lib)
     }
 }
