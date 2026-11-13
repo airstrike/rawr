@@ -109,6 +109,8 @@ mod macro_tests;
 mod placeholder_tests;
 #[cfg(test)]
 mod privacy_tests;
+#[cfg(all(test, feature = "rust-import"))]
+mod reveal_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
 #[cfg(test)]

@@ -894,6 +894,17 @@ pub(super) fn take_instance_calls(
         .collect()
 }
 
+/// Each template whose instances a body's reading read: each one its calls
+/// bind (`bind_instance`), those `take_instance_calls` drops among them.
+#[cfg(feature = "rust-import")]
+pub(super) fn called_templates(parser: &Parser<'_>) -> BTreeSet<crate::item::Key> {
+    parser
+        .instance_calls
+        .iter()
+        .map(|(key, ..)| key.clone())
+        .collect()
+}
+
 /// A use of a script impl of a crate's trait (`Parser::impl_uses`): the
 /// impl item's index, its parameters' types, and the trait's arguments
 /// with its defaults filled in.
@@ -1146,7 +1157,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                     uses: &mut uses,
                     dependencies: &mut dependencies,
                 };
-                let reaches = match *candidate {
+                let (reaches, templates) = match *candidate {
                     Added::Function(index) => {
                         let shell = &program.items[index];
                         let item::Kind::Function(definition) = &shell.kind else {
@@ -1175,7 +1186,8 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                         let _ = parser
                             .expect_output(definition.output.as_ref())
                             .and_then(|()| parser.parse_function_body(definition));
-                        reaches_host(&mut parser)
+                        let templates = called_templates(&parser);
+                        (reaches_host(&mut parser), templates)
                     }
                     Added::Method(index) => {
                         let definition = method_at(program, index);
@@ -1200,14 +1212,16 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                                 let _ = parser
                                     .expect_output(Some(definition.output()))
                                     .and_then(|()| parser.parse_method_body(definition));
-                                reaches_host(&mut parser)
+                                let templates = called_templates(&parser);
+                                (reaches_host(&mut parser), templates)
                             }
-                            Err(_) => false,
+                            Err(_) => (false, BTreeSet::new()),
                         }
                     }
                 };
                 Ok(kept::Found {
                     reaches,
+                    templates,
                     ..kept::Found::default()
                 })
             };
@@ -1531,6 +1545,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                 // A body that fails here fails again where it is lowered.
                 let _ = parser.parse_function_body(definition);
                 let found = kept::Found {
+                    templates: called_templates(&parser),
                     calls: take_instance_calls(&mut parser),
                     impl_uses: take_impl_uses(&mut parser),
                     reaches: false,
@@ -1593,6 +1608,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                     parser.symbolic_only = true;
                     parser.collecting_instances = true;
                     let _ = parser.parse_method_body(definition);
+                    found.templates = called_templates(&parser);
                     found.calls = take_instance_calls(&mut parser);
                     found.impl_uses = take_impl_uses(&mut parser);
                 }

@@ -57,14 +57,31 @@ use std::fmt::Write as _;
 pub(super) struct Interface {
     /// What every source's lowering reads.
     every: [u8; 32],
+    /// What reveal's reading of every body reads.
+    every_revealed: [u8; 32],
     /// What each source's lowering reads, `every` among it.
     sources: BTreeMap<source::Id, [u8; 32]>,
+    /// What reveal's reading of each source's bodies reads, `every` among
+    /// it, but for the instance each body's calls take, which a reading's
+    /// key writes body by body (`Calls`), and the private fields of
+    /// another module's struct, which its bodies can't name
+    /// (`Declaration::outside`).
+    revealed: BTreeMap<source::Id, [u8; 32]>,
 }
 
 impl Interface {
     /// What `source`'s lowering reads of the program.
     pub(super) fn of(&self, source: source::Id) -> [u8; 32] {
         self.sources.get(&source).copied().unwrap_or(self.every)
+    }
+
+    /// What reveal's reading of a body of `source` reads of the program,
+    /// but for the instances its calls take (`Calls`).
+    pub(super) fn revealed(&self, source: source::Id) -> [u8; 32] {
+        self.revealed
+            .get(&source)
+            .copied()
+            .unwrap_or(self.every_revealed)
     }
 
     /// What each source's lowering reads of `program`; `None` when it
@@ -82,6 +99,7 @@ impl Interface {
         let outlines = outlines(engine, program, outlined);
         let declarations = Declarations::new(program, &outlines, native, digests)?;
         let own = own(program)?;
+        let calls = Calls::by_source(program)?;
         // A runner's compiler reads the facades registered in the process
         // as its image holds them; a check reads its own registry's alone,
         // which the facades below write whole, so another engine's
@@ -90,23 +108,28 @@ impl Interface {
             .imported_native
             .is_some()
             .then(Engine::registered_facades);
-        let every = every(
+        let compiler = every(
             program,
             registered,
             models,
             &outlines,
-            &declarations,
-            own.get(&None),
+            [own.get(&None), calls.get(&None)],
             native,
         )?;
+        let every = with(compiler, declarations.everywhere);
+        let every_revealed = with(compiler, declarations.revealed);
+        let namespaces = program
+            .scripts
+            .iter()
+            .map(|script| (script.source, &script.namespace))
+            .collect::<BTreeMap<_, _>>();
         let mut sources = BTreeMap::new();
+        let mut revealed = BTreeMap::new();
         let mut walk = Walk::new(&declarations);
         for (index, outline) in outlines.sources.iter().enumerate() {
             let source = source::Id::from_index(index);
-            let mut written = Written(Sha256::new());
-            written.0.update(every);
-            declarations.reached(&outline.mentioned, &mut walk, &mut written.0);
             // What the program resolved of the source's own names.
+            let mut written = Written(Sha256::new());
             let aliases = program
                 .aliases
                 .range(from(source))
@@ -125,9 +148,137 @@ impl Interface {
                 write!(written, "{at:?}|{name:?}|{path:?}|").ok()?;
             }
             written.0.update(own.get(&Some(source)).unwrap_or(&[0; 32]));
-            sources.insert(source, written.0.finalize().into());
+            let resolved: [u8; 32] = written.0.finalize().into();
+            let mut lowering = Sha256::new();
+            lowering.update(every);
+            declarations.reached(&outline.mentioned, &mut walk, &mut lowering, None);
+            lowering.update(resolved);
+            lowering.update(calls.get(&Some(source)).unwrap_or(&[0; 32]));
+            sources.insert(source, lowering.finalize().into());
+            // Another module's struct as the source's bodies read it: its
+            // private fields aside, unless the source is that module or
+            // below it.
+            let here = namespaces.get(&source);
+            let outside = |declared: source::Id| {
+                declared != source
+                    && !here
+                        .zip(namespaces.get(&declared))
+                        .is_some_and(|(here, declared)| here.sees_private(declared))
+            };
+            let mut reading = Sha256::new();
+            reading.update(every_revealed);
+            declarations.reached(&outline.mentioned, &mut walk, &mut reading, Some(&outside));
+            reading.update(resolved);
+            revealed.insert(source, reading.finalize().into());
         }
-        Some(Self { every, sources })
+        Some(Self {
+            every,
+            every_revealed,
+            sources,
+            revealed,
+        })
+    }
+}
+
+/// What each template's instances are, by the template's key: each
+/// instance's types and its signature, the output a reveal gives it among
+/// it. A reading of a body is reused only while each template its calls
+/// bind is as it was then (#1755).
+pub(super) struct Instances(BTreeMap<crate::item::Key, [u8; 32]>);
+
+impl Instances {
+    /// Each template's instances in `program`.
+    pub(super) fn new(program: &Program) -> Option<Self> {
+        let functions = program
+            .items
+            .iter()
+            .filter_map(|shell| match &shell.kind {
+                item::Kind::Function(definition) => Some((shell.key.as_ref()?, definition)),
+                _ => None,
+            })
+            .filter(|(key, _)| program.instances.types.contains_key(*key))
+            .collect::<BTreeMap<_, _>>();
+        let methods = program
+            .methods
+            .iter()
+            .chain(&program.builtin_methods)
+            .filter(|definition| program.instances.types.contains_key(definition.key()))
+            .map(|definition| (definition.key(), definition))
+            .collect::<BTreeMap<_, _>>();
+        let mut templates = BTreeMap::new();
+        for (template, instances) in &program.instances.templates {
+            let digest = digest(None, |written| {
+                for (names, key) in instances {
+                    write!(written, "{names:?}|{key:?}|")?;
+                    if let Some(definition) = functions.get(key) {
+                        write!(written, "{definition:?}|")?;
+                    }
+                    if let Some(definition) = methods.get(key) {
+                        write!(written, "{definition:?}|")?;
+                    }
+                }
+                Ok(())
+            })?;
+            templates.insert(template.clone(), digest);
+        }
+        Some(Self(templates))
+    }
+
+    /// The digest of the instances of the template `key`; `None` when it
+    /// is none.
+    pub(super) fn of(&self, key: &crate::item::Key) -> Option<[u8; 32]> {
+        self.0.get(key).copied()
+    }
+}
+
+/// The instance each call of a template takes (`Instances::calls`),
+/// digested by the body that makes the call: a body reads only its own
+/// calls' (`Parser::called_instance`), so reveal reads a body again only
+/// when its own calls' change, not another body's (#1755).
+pub(super) struct Calls(BTreeMap<crate::item::Key, [u8; 32]>);
+
+impl Calls {
+    /// Each body's calls in `program`.
+    pub(super) fn new(program: &Program) -> Option<Self> {
+        let mut written = BTreeMap::<&crate::item::Key, Written>::new();
+        for ((caller, span), names) in &program.instances.calls {
+            let written = written
+                .entry(caller)
+                .or_insert_with(|| Written(Sha256::new()));
+            write!(written, "{span:?}|{names:?}|").ok()?;
+        }
+        Some(Self(
+            written
+                .into_iter()
+                .map(|(caller, written)| (caller.clone(), written.0.finalize().into()))
+                .collect(),
+        ))
+    }
+
+    /// The digest of the calls the body `key` makes.
+    pub(super) fn of(&self, key: &crate::item::Key) -> [u8; 32] {
+        self.0.get(key).copied().unwrap_or([0; 32])
+    }
+
+    /// Each source's bodies' calls, by the source of the body that makes
+    /// them; a call whose body isn't one of the program's is every
+    /// source's, under `None`.
+    fn by_source(program: &Program) -> Option<BTreeMap<Option<source::Id>, [u8; 32]>> {
+        let callers = callers(program);
+        let mut written = BTreeMap::<Option<source::Id>, Written>::new();
+        for ((caller, span), names) in &program.instances.calls {
+            write!(
+                of(&mut written, callers.get(caller).copied()),
+                "{caller:?}|{span:?}|{names:?}|"
+            )
+            .ok()?;
+        }
+        Some(
+            written
+                .into_iter()
+                .map(|(source, written)| (source, written.0.finalize().into()))
+                .collect(),
+        )
     }
 }
 
@@ -187,12 +338,11 @@ fn every(
     registered: Option<usize>,
     models: &Models,
     outlines: &Outlines,
-    declarations: &Declarations<'_>,
-    own: Option<&[u8; 32]>,
+    own: [Option<&[u8; 32]>; 2],
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v10");
+    written.0.update(b"rawr.lowering.interface/v11");
     // The compiler: the facades its host registry holds, and its options.
     if let Some(registered) = registered {
         write!(written, "{registered}").ok()?;
@@ -243,9 +393,50 @@ fn every(
     program.macros.write_interface(&mut written).ok()?;
     write!(written, "{:?}", models.index_mut).ok()?;
     // What a call whose body isn't one of the program's resolved.
-    written.0.update(own.unwrap_or(&[0; 32]));
-    written.0.update(declarations.everywhere);
+    for own in own {
+        written.0.update(own.unwrap_or(&[0; 32]));
+    }
     Some(written.0.finalize().into())
+}
+
+/// `compiler`, what every source reads of the compiler and the program, with
+/// `declarations`, what it reads of the declarations no name reaches.
+fn with(compiler: [u8; 32], declarations: [u8; 32]) -> [u8; 32] {
+    let mut written = Sha256::new();
+    written.update(compiler);
+    written.update(declarations);
+    written.finalize().into()
+}
+
+/// Which reader a declaration's digest is written for.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Reader {
+    /// A source's lowering.
+    Lowering,
+    /// Reveal's reading of a body (`Digest::revealed`).
+    Reveal,
+}
+
+/// Write each of `held` into `written`; for reveal, a
+/// template's key alone, its instances aside, and no instance method or
+/// instance's types, which a reading of a body checks against the
+/// templates its own calls bind (`Instances`).
+fn write_held(
+    held: &[Held<'_>],
+    reader: Reader,
+    instances: &crate::resolve::Instances,
+    written: &mut Written,
+) -> std::fmt::Result {
+    for held in held {
+        match held {
+            Held::Template(key, _) if reader == Reader::Reveal => {
+                write!(written, "Template({key:?})|")?;
+            }
+            held if reader == Reader::Reveal && held.instanced(instances) => {}
+            held => write!(written, "{held:?}|")?,
+        }
+    }
+    Ok(())
 }
 
 /// The program's declarations, each digested on its own, by the names that
@@ -259,11 +450,42 @@ struct Declarations<'p> {
     /// What every source reads of them: the impls of a type parameter, and
     /// what the program holds of no item.
     everywhere: [u8; 32],
+    /// What reveal's reading of every body reads of them (`Digest::
+    /// revealed`).
+    revealed: [u8; 32],
+}
+
+/// A declaration's digests: as a source's lowering reads it, and as
+/// reveal's reading of a body reads it (#1755).
+#[derive(Clone, Copy)]
+struct Digest {
+    lowering: [u8; 32],
+    /// As reveal reads it, when that differs: the instances a template
+    /// has aside, and its impl's instance methods, which a reading checks
+    /// against the templates its own calls bind (`Instances`).
+    revealed: Option<[u8; 32]>,
+    /// As reveal reads a struct with a private field in another module,
+    /// whose bodies can't name the field: without it.
+    outside: Option<[u8; 32]>,
+}
+
+impl Digest {
+    /// A declaration reveal reads as a lowering does.
+    const fn plain(lowering: [u8; 32]) -> Self {
+        Self {
+            lowering,
+            revealed: None,
+            outside: None,
+        }
+    }
 }
 
 /// One declaration: an item and what the program resolved of it.
 struct Declaration {
-    digest: [u8; 32],
+    digest: Digest,
+    /// The source that declares it, whose module and those below it see
+    /// its private fields.
+    source: Option<source::Id>,
     /// The numbers of the declared names its declaration writes, which a
     /// source that reaches it reaches too.
     writes: Vec<usize>,
@@ -349,6 +571,7 @@ impl<'p> Declarations<'p> {
         let mut names = HashMap::<&str, usize>::new();
         let mut declaring = Vec::<Vec<usize>>::new();
         let mut everywhere = Written(Sha256::new());
+        let mut revealed = Written(Sha256::new());
         let mut unnamed = Vec::with_capacity(items.len());
         for (index, shell) in items.iter().enumerate() {
             let named = declared_names(&shell.kind);
@@ -407,18 +630,33 @@ impl<'p> Declarations<'p> {
                 shell,
                 held,
             };
-            let digest = digests.digest(item, || {
+            let found = digests.digest(item, || {
                 let places = outline
                     .map(|outline| outline.places.between(shell.span.start(), shell.span.end()));
-                digest(places.as_ref(), |written| {
-                    let kind = outlined(&shell.kind);
-                    write!(
-                        written,
-                        "{identity}|{:?}|{:?}|{:?}|{kind:?}|",
-                        shell.key, shell.span, shell.facades,
-                    )?;
-                    held.iter()
-                        .try_for_each(|held| write!(written, "{held:?}|"))
+                let item_digest = |reader: Reader| {
+                    digest(places.as_ref(), |written| {
+                        let kind = outlined(&shell.kind);
+                        write!(
+                            written,
+                            "{identity}|{:?}|{:?}|{:?}|{kind:?}|",
+                            shell.key, shell.span, shell.facades,
+                        )?;
+                        write_held(held, reader, &program.instances, written)
+                    })
+                };
+                let lowering = item_digest(Reader::Lowering)?;
+                let revealed = match held.iter().any(|held| held.instanced(&program.instances)) {
+                    true => Some(item_digest(Reader::Reveal)?),
+                    false => None,
+                };
+                let outside = match outline {
+                    Some(outline) => outside(item, outline, places.as_ref(), &program.instances)?,
+                    None => None,
+                };
+                Some(Digest {
+                    lowering,
+                    revealed,
+                    outside,
                 })
             })?;
             let mut writes = outline
@@ -429,9 +667,14 @@ impl<'p> Declarations<'p> {
             writes.sort_unstable();
             writes.dedup();
             if unnamed[index] {
-                everywhere.0.update(digest);
+                everywhere.0.update(found.lowering);
+                revealed.0.update(found.revealed.unwrap_or(found.lowering));
             }
-            declarations.push(Declaration { digest, writes });
+            declarations.push(Declaration {
+                digest: found,
+                source: Some(shell.source),
+                writes,
+            });
         }
         for entry in native.entries() {
             let mut writes = entry
@@ -441,13 +684,15 @@ impl<'p> Declarations<'p> {
             writes.sort_unstable();
             writes.dedup();
             declarations.push(Declaration {
-                digest: *entry.digest(),
+                digest: Digest::plain(*entry.digest()),
+                source: None,
                 writes,
             });
         }
         for mirror in &program.mirrors {
             declarations.push(Declaration {
-                digest: digest(None, |written| write!(written, "{mirror:?}"))?,
+                digest: Digest::plain(digest(None, |written| write!(written, "{mirror:?}"))?),
+                source: None,
                 writes: Vec::new(),
             });
         }
@@ -476,27 +721,41 @@ impl<'p> Declarations<'p> {
                 .collect::<Vec<_>>();
             writes.sort_unstable();
             writes.dedup();
-            declarations.push(Declaration { digest, writes });
+            declarations.push(Declaration {
+                digest: Digest::plain(digest),
+                source: Some(definition.source()),
+                writes,
+            });
         }
-        let unheld = digest(None, |written| {
-            unheld
-                .iter()
-                .try_for_each(|held| write!(written, "{held:?}|"))
-        })?;
-        everywhere.0.update(unheld);
+        everywhere.0.update(digest(None, |written| {
+            write_held(&unheld, Reader::Lowering, &program.instances, written)
+        })?);
+        revealed.0.update(digest(None, |written| {
+            write_held(&unheld, Reader::Reveal, &program.instances, written)
+        })?);
         Some(Self {
             names,
             declaring,
             declarations,
             everywhere: everywhere.0.finalize().into(),
+            revealed: revealed.0.finalize().into(),
         })
     }
 
     /// Write into `digest` the declarations a text that writes the names
     /// `mentioned` reaches: how many, and their digests summed lane by
     /// lane, which no order of the walk changes. The walk touches only
-    /// what it reaches, and no digest is digested again (#1850).
-    fn reached(&self, mentioned: &[Box<str>], walk: &mut Walk, digest: &mut Sha256) {
+    /// what it reaches, and no digest is digested again (#1850). Reveal's
+    /// reading of a body reads each as `Digest::revealed`, and a struct a
+    /// source `outside` says the text's module doesn't see the private
+    /// items of as `Digest::outside`.
+    fn reached(
+        &self,
+        mentioned: &[Box<str>],
+        walk: &mut Walk,
+        digest: &mut Sha256,
+        reveal: Option<&dyn Fn(source::Id) -> bool>,
+    ) {
         let mut sum = [0_u64; 4];
         let mut count = 0_u64;
         for name in mentioned {
@@ -511,7 +770,17 @@ impl<'p> Declarations<'p> {
                 }
                 walk.found.push(index);
                 count += 1;
-                let (lanes, _) = self.declarations[index].digest.as_chunks::<8>();
+                let declaration = &self.declarations[index];
+                let found = declaration.digest;
+                let read = match reveal {
+                    None => found.lowering,
+                    Some(outside) => found
+                        .outside
+                        .filter(|_| declaration.source.is_some_and(outside))
+                        .or(found.revealed)
+                        .unwrap_or(found.lowering),
+                };
+                let (lanes, _) = read.as_chunks::<8>();
                 for (lane, bytes) in sum.iter_mut().zip(lanes) {
                     *lane = lane.wrapping_add(u64::from_le_bytes(*bytes));
                 }
@@ -588,6 +857,17 @@ enum Held<'p> {
 }
 
 impl Held<'_> {
+    /// Whether reveal reads it otherwise than a lowering does
+    /// (`write_held`): a template's instances, an instance method, or an
+    /// instance's types.
+    fn instanced(self, instances: &crate::resolve::Instances) -> bool {
+        match self {
+            Self::Template(..) | Self::Instance(..) => true,
+            Self::Method(definition) => instances.types.contains_key(definition.key()),
+            _ => false,
+        }
+    }
+
     /// What it holds, as its own.
     fn owned(self) -> Owned {
         match self {
@@ -618,6 +898,69 @@ impl Held<'_> {
             _ => false,
         }
     }
+}
+
+/// The digest of `item`, a struct with a private field, as another module
+/// reads it: its public fields alone, each written by its own places, so a
+/// private field a save adds before one keeps it the same, and its type
+/// but for its schema, which its private fields write too. `None` for any
+/// other item. Its places are `places`, as its digest's are.
+fn outside(
+    item: Item<'_>,
+    outline: &Outline,
+    places: Option<&Places>,
+    instances: &crate::resolve::Instances,
+) -> Option<Option<[u8; 32]>> {
+    let item::Kind::Struct(declared) = &item.shell.kind else {
+        return Some(None);
+    };
+    let public = |field: &item::Field| {
+        outline
+            .private
+            .binary_search(&field.name.span.start())
+            .is_err()
+    };
+    if declared.form != crate::item::StructForm::Named || declared.fields.iter().all(public) {
+        return Some(None);
+    }
+    let mut bare = declared.clone();
+    bare.fields = Box::default();
+    let kind = outlined(&item::Kind::Struct(bare));
+    let identity = item.identity;
+    let shell = item.shell;
+    let digest = digest(places, |written| {
+        write!(
+            written,
+            "outside|{identity}|{:?}|{:?}|{:?}|{kind:?}|",
+            shell.key,
+            shell.span.start(),
+            shell.facades,
+        )?;
+        for field in declared.fields.iter().filter(|field| public(field)) {
+            let mut field = field.clone();
+            meaningful(&mut field.attributes);
+            outline
+                .places
+                .between(field.span.start(), field.span.end())
+                .writing(|| write!(written, "{field:?}|"))?;
+        }
+        for held in item.held {
+            match held {
+                Held::Type(definition) => {
+                    definition.write_without_schema(written)?;
+                    write!(written, "|")?;
+                }
+                held => write_held(
+                    std::slice::from_ref(held),
+                    Reader::Reveal,
+                    instances,
+                    written,
+                )?,
+            }
+        }
+        Ok(())
+    })?;
+    Some(Some(digest))
 }
 
 /// What a [`Held`] holds, kept with a digest of it (`Digests`).
@@ -666,7 +1009,7 @@ struct Digested {
     identity: Box<str>,
     shell: item::Shell,
     held: Box<[Owned]>,
-    digest: [u8; 32],
+    digest: Digest,
 }
 
 impl Digested {
@@ -702,8 +1045,8 @@ impl Digests {
     fn digest(
         &mut self,
         item: Item<'_>,
-        digest: impl FnOnce() -> Option<[u8; 32]>,
-    ) -> Option<[u8; 32]> {
+        digest: impl FnOnce() -> Option<Digest>,
+    ) -> Option<Digest> {
         let Some(outline) = item.outline else {
             return digest();
         };
@@ -918,20 +1261,11 @@ fn callers(program: &Program) -> BTreeMap<&crate::item::Key, source::Id> {
         .collect()
 }
 
-/// What only one source's bodies read, by the source: the instance each
-/// call of a template takes, by the source of the body that makes it, and
-/// the paths and imports its bodies resolve. A call whose body isn't one
-/// of the program's is every source's, under `None`.
+/// What only one source's bodies read, by the source: the paths and
+/// imports its bodies resolve. The instances their calls take are
+/// `Calls`'.
 fn own(program: &Program) -> Option<BTreeMap<Option<source::Id>, [u8; 32]>> {
-    let callers = callers(program);
     let mut written = BTreeMap::<Option<source::Id>, Written>::new();
-    for ((caller, span), names) in &program.instances.calls {
-        write!(
-            of(&mut written, callers.get(caller).copied()),
-            "{caller:?}|{span:?}|{names:?}|"
-        )
-        .ok()?;
-    }
     for ((source, span), key) in &program.qualified_functions {
         write!(of(&mut written, Some(*source)), "f{span:?}|{key:?}|").ok()?;
     }
@@ -1000,6 +1334,9 @@ pub(super) struct Outline {
     identifiers: crate::Shared<[(Box<str>, Position)]>,
     /// Each name its whole text writes, its bodies' too, once.
     mentioned: crate::Shared<[Box<str>]>,
+    /// Where each name no visibility marks starts, in order: a struct's
+    /// private fields' among them (`outside`).
+    private: crate::Shared<[Position]>,
 }
 
 impl Outline {
@@ -1019,6 +1356,7 @@ impl Outline {
             }
         }
         let tokens = super::lex_rust(engine, text);
+        let private = private_names(&tokens);
         let mut starts = Vec::new();
         let mut identifiers = Vec::new();
         let mut mentioned = Vec::new();
@@ -1068,6 +1406,7 @@ impl Outline {
             places: Places::new(starts),
             identifiers: identifiers.into(),
             mentioned: mentioned.into(),
+            private,
         }
     }
 
@@ -1084,6 +1423,31 @@ impl Outline {
             .iter()
             .map(|(name, _)| name.as_ref())
     }
+}
+
+/// Where each name in `tokens` that no visibility marks and a `:` follows
+/// starts, after a `{`, a `,` or an attribute's `]`: a private field's
+/// among them. A field a macro names (`$name: u32`) isn't, so it is read
+/// as public.
+fn private_names(tokens: &[(Token, Position)]) -> crate::Shared<[Position]> {
+    let mut names = Vec::new();
+    let mut before: Option<&Token> = None;
+    for (index, (token, position)) in tokens.iter().enumerate() {
+        if matches!(token, Token::Comment(_)) {
+            continue;
+        }
+        if matches!(token, Token::Identifier(_))
+            && matches!(
+                before,
+                Some(Token::LeftBrace | Token::Comma | Token::RightBracket)
+            )
+            && matches!(tokens.get(index + 1), Some((Token::Colon, _)))
+        {
+            names.push(*position);
+        }
+        before = Some(token);
+    }
+    names.into()
 }
 
 /// How many tokens the inert attribute `tokens` starts with spans, through
