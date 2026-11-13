@@ -254,6 +254,16 @@ impl Definition {
         &self.schema
     }
 
+    /// Write it as `Debug` does, but for its schema, which each of its
+    /// fields writes, private ones too.
+    pub(crate) fn write_without_schema(&self, written: &mut impl fmt::Write) -> fmt::Result {
+        write!(
+            written,
+            "{:?}|{:?}|{:?}|{}|{:?}|{:?}|{:?}",
+            self.id, self.item, self.key, self.name, self.name_span, self.kind, self.capabilities,
+        )
+    }
+
     pub(crate) const fn capabilities(&self) -> capability::Set {
         self.capabilities
     }

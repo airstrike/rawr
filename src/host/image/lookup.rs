@@ -11,7 +11,7 @@ use rawr_import::surface::facade::image::Kind;
 /// The order of `written`, an image's path below its root, against
 /// `wanted`, a path's segments below its root.
 fn compare(written: &str, wanted: &[ImmutableString]) -> Ordering {
-    let mut written = written.split("::");
+    let mut written = host::path::segments(written);
     let mut wanted = wanted.iter();
     loop {
         match (written.next(), wanted.next()) {
@@ -28,7 +28,7 @@ fn compare(written: &str, wanted: &[ImmutableString]) -> Ordering {
 
 /// Whether `written` is `prefix` or lies below it.
 fn within(written: &str, prefix: &[ImmutableString]) -> bool {
-    let mut written = written.split("::");
+    let mut written = host::path::segments(written);
     prefix
         .iter()
         .all(|segment| written.next() == Some(segment.as_str()))
@@ -36,7 +36,7 @@ fn within(written: &str, prefix: &[ImmutableString]) -> bool {
 
 /// How many segments `written` has.
 fn depth(written: &str) -> usize {
-    written.matches("::").count() + 1
+    host::path::segments(written).count()
 }
 
 /// Where `wanted` is among `count` paths, sorted, `path` giving each.
@@ -230,6 +230,13 @@ impl Held {
     pub(crate) fn type_path(&self, index: usize) -> host::path::Path {
         self.qualified(self.view().type_path(index))
             .expect("a runner image's type paths parse")
+    }
+
+    /// Whether the type at `index` is at the qualified `path`, read from
+    /// the image's own text: no path is built for it.
+    pub(crate) fn type_is_at(&self, index: usize, path: &host::path::Path) -> bool {
+        self.below_root(path)
+            .is_some_and(|wanted| compare(self.view().type_path(index), wanted) == Ordering::Equal)
     }
 
     /// Whether the facade declares a crate type at the qualified `path`.

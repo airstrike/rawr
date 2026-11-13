@@ -19,7 +19,15 @@
 //! lowered again, which prepares it (#1734).
 //!
 //! Reveal's readings of each body for the templates it calls are kept the
-//! same way, under what each pass over the program reads of it.
+//! same way, under what each pass over the program reads of it: the
+//! instances the body's own calls take, not its source's other bodies',
+//! and another module's struct without its private fields, which the
+//! body can't name, so a save that adds one to a screen's state reads
+//! again only the bodies of the module that declares it (#1755). A
+//! template's instances aren't in the key: a reading keeps those of each
+//! template its calls bind and is reused while each is as it was, so an
+//! instance round reads again only the bodies whose calls bind a template
+//! that gained one.
 //!
 //! An owner's check of the program, which checks it again on each save,
 //! keeps the same way what each source's check found: the crates' items
@@ -32,7 +40,7 @@ use super::constant::{included, Place};
 use super::disk::{self, Disk};
 use super::entry::{Body, Lowered};
 use super::imported::ImplUse;
-use super::interface::{framed, Digests, Interface, Native, Outlined, Written};
+use super::interface::{framed, Calls, Digests, Instances, Interface, Native, Outlined, Written};
 use super::models::Models;
 use super::op::ExecutableOp;
 use super::splice::Parsed;
@@ -195,6 +203,9 @@ pub(super) struct Found {
     /// Whether the body, read with its parameters erased, touches a
     /// crate's types (`reaches_host`).
     pub(super) reaches: bool,
+    /// Each template whose instances the reading read: each its calls
+    /// bind, the calls it keeps no record of among them (`called_templates`).
+    pub(super) templates: BTreeSet<crate::item::Key>,
 }
 
 /// What reveal's reading of one body found, kept under its key with what
@@ -203,13 +214,21 @@ pub(super) struct Found {
 struct Scanned {
     found: Found,
     outside: Outside,
+    /// The digest of each of `found`'s templates' instances as the
+    /// reading read them (`Instances`): it is reused only while each is
+    /// the same.
+    instances: Box<[(crate::item::Key, Option<[u8; 32]>)]>,
+    /// Whether this reveal read or reused it: one it didn't is gone once
+    /// it succeeds.
+    #[serde(skip)]
+    used: bool,
 }
 
 /// A compiler's kept lowerings (`Engine::resident_lowerings`).
 pub(crate) struct Lowerings {
     kept: BTreeMap<(source::Id, Part), Kept>,
     /// Reveal's readings, by their keys.
-    scanned: BTreeMap<[u8; 32], Scanned>,
+    scanned: BTreeMap<[u8; 32], Vec<Scanned>>,
     /// The outlines of the sources the last interface read, by their texts
     /// and bodies (`outlines`).
     outlines: Outlined,
@@ -311,8 +330,11 @@ pub(super) struct Readings<'e> {
     engine: &'e Engine,
     /// The pass over the program under way; `None` when nothing is kept.
     pass: Option<Pass>,
-    earlier: BTreeMap<[u8; 32], Scanned>,
-    kept: BTreeMap<[u8; 32], Scanned>,
+    /// The readings under each key, one for each set of instances the
+    /// templates its calls bind had when it was read: a later round, or a
+    /// later save's same round, finds the one it reads again.
+    earlier: BTreeMap<[u8; 32], Vec<Scanned>>,
+    kept: BTreeMap<[u8; 32], Vec<Scanned>>,
     read: BTreeSet<source::Id>,
     /// Whether this is the compiler's first reveal, which reads what an
     /// earlier runner kept on disk (#1638).
@@ -329,6 +351,11 @@ const READINGS: [u8; 32] = [0; 32];
 /// What a reveal's pass over the program reads of it.
 struct Pass {
     interface: Interface,
+    /// The instance each body's calls take, which its reading reads.
+    calls: Calls,
+    /// Each template's instances, which a reading reads of each template
+    /// its calls bind.
+    instances: Instances,
     /// Each source's digest so far: what its bodies' readings read of it.
     sources: BTreeMap<source::Id, [u8; 32]>,
 }
@@ -366,10 +393,15 @@ impl<'e> Readings<'e> {
     /// Begin a pass over `program` as it is now, whose bodies' readings
     /// read `models`.
     pub(super) fn begin(&mut self, program: &Program, models: &Models) {
-        self.pass = interface(self.engine, program, models).map(|interface| Pass {
-            interface,
-            sources: BTreeMap::new(),
-        });
+        self.pass = interface(self.engine, program, models)
+            .zip(Calls::new(program))
+            .zip(Instances::new(program))
+            .map(|((interface, calls), instances)| Pass {
+                interface,
+                calls,
+                instances,
+                sources: BTreeMap::new(),
+            });
     }
 
     /// What reading `body` finds (`read`): what an earlier reading under
@@ -397,18 +429,28 @@ impl<'e> Readings<'e> {
                 .disk
                 .as_mut()
                 .and_then(|disk| disk.read::<Vec<([u8; 32], Scanned)>>(self.engine, entry));
-            self.earlier.extend(stored.into_iter().flatten());
+            for (key, scanned) in stored.into_iter().flatten() {
+                self.earlier.entry(key).or_default().push(scanned);
+            }
         }
         self.keys.entry(body.source).or_default().insert(key);
         if let Some(earlier) = self.earlier.remove(&key) {
             self.kept.entry(key).or_insert(earlier);
         }
-        if let Some(scanned) = self
+        let found = self
             .kept
-            .get(&key)
-            .filter(|scanned| scanned.outside.holds(&models.access))
-        {
+            .get_mut(&key)
+            .into_iter()
+            .flatten()
+            .find(|scanned| {
+                scanned
+                    .instances
+                    .iter()
+                    .all(|(template, instances)| pass.instances.of(template) == *instances)
+            });
+        if let Some(scanned) = found.filter(|scanned| scanned.outside.holds(&models.access)) {
             scanned.outside.charge(allocation)?;
+            scanned.used = true;
             return Ok(scanned.found.clone());
         }
         models.take_reads();
@@ -418,13 +460,25 @@ impl<'e> Readings<'e> {
         };
         let found = read(&mut recording)?;
         self.read.insert(body.source);
-        self.kept.insert(
-            key,
-            Scanned {
-                found: found.clone(),
-                outside: Outside::new(recording.charges, models.take_reads()),
-            },
-        );
+        let instances = found
+            .templates
+            .iter()
+            .map(|template| (template.clone(), pass.instances.of(template)))
+            .collect();
+        let scanned = Scanned {
+            found: found.clone(),
+            outside: Outside::new(recording.charges, models.take_reads()),
+            instances,
+            used: true,
+        };
+        let kept = self.kept.entry(key).or_default();
+        match kept
+            .iter_mut()
+            .find(|kept| kept.instances == scanned.instances)
+        {
+            Some(kept) => *kept = scanned,
+            None => kept.push(scanned),
+        }
         Ok(found)
     }
 
@@ -433,17 +487,24 @@ impl<'e> Readings<'e> {
     /// keeps its readings on disk.
     pub(super) fn succeeded(&mut self, program: &Program) {
         self.earlier.clear();
+        for kept in self.kept.values_mut() {
+            kept.retain(|scanned| scanned.used);
+            for scanned in kept.iter_mut() {
+                scanned.used = false;
+            }
+        }
         let mut lowerings = lock(self.engine);
         let Some(disk) = lowerings.disk.as_mut() else {
             return;
         };
         for source in &self.read {
-            let readings = self
-                .keys
-                .get(source)
-                .into_iter()
-                .flatten()
-                .filter_map(|key| self.kept.get(key).map(|scanned| (key, scanned)));
+            let readings = self.keys.get(source).into_iter().flatten().flat_map(|key| {
+                self.kept
+                    .get(key)
+                    .into_iter()
+                    .flatten()
+                    .map(move |scanned| (key, scanned))
+            });
             let entry = disk::Entry {
                 identity: program.source.identity_at(*source),
                 kind: disk::Kind::Readings,
@@ -476,8 +537,9 @@ pub(super) struct Reading<'a> {
 }
 
 impl Pass {
-    /// The key of `body`'s reading: what it reads of the program, and of
-    /// its source.
+    /// The key of `body`'s reading: what it reads of the program, of its
+    /// source, and the instances its own calls take, so a round that gives
+    /// another body's calls their instances keeps it (#1755).
     fn key(&mut self, body: Reading<'_>) -> [u8; 32] {
         let Reading {
             program,
@@ -488,14 +550,15 @@ impl Pass {
         let interface = &self.interface;
         let of_source = *self.sources.entry(source).or_insert_with(|| {
             let mut digest = Sha256::new();
-            digest.update(b"rawr.reveal.source/v3");
-            digest.update(interface.of(source));
+            digest.update(b"rawr.reveal.source/v4");
+            digest.update(interface.revealed(source));
             digest.update(source.index().to_le_bytes());
             framed(&mut digest, program.source.text_at(source));
             digest.finalize().into()
         });
         let mut written = Written(Sha256::new());
         written.0.update(of_source);
+        written.0.update(self.calls.of(key));
         written.0.update([match purpose {
             Purpose::Calls => 0,
             Purpose::Erased => 1,
