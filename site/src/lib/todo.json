@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A save or round that reads shared bindings no longer reads, hashes and parses every crate's table again: inputs are checked first, and a table replayed for the same demand is kept by the running owner.","issues":[1845]},
-        {"text":"A save no longer reads every file of rawr's copy of the crate to compare it: the owner remembers what it wrote and reads and writes only copies whose text changed. The program the save loaded is checked without loading it again, and the rawr directory is resolved once per run.","issues":[1863],"refs":[1849]}
+        {"text":"A save no longer reads every file of rawr's copy of the crate to compare it: the owner remembers what it wrote and reads and writes only copies whose text changed. The program the save loaded is checked without loading it again, and the rawr directory is resolved once per run.","issues":[1863],"refs":[1849]},
+        {"text":"A native build's input capture indexes the build once for all the crates it extracts: each input file is observed once per build, and once per worker in a round's checks of shared tables, instead of once per crate; artifact joins use sorted lookups, a dependency's closure is walked from one index, and dep-info is parsed once.","issues":[1846]}
       ]
     },
     "releases": [
@@ -4083,7 +4084,7 @@
     {"issue":1843,"title":"The store reads and decodes its whole installation ledger once per read-set entry and three times per lookup","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.204"},
     {"issue":1844,"title":"Publishing a node fsyncs about 14 times, rewrites the ledger 3 times, then reads the payload back and hashes it twice","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.204"},
     {"issue":1845,"title":"Shared binding tables are read, hashed and parsed for every crate before their inputs are checked, then replayed again","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1847,"title":"A Persisted cold resolution reruns cargo metadata and --unit-graph although the remembered output proves them unchanged","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1848,"title":"The nightly check runs with checksum freshness over every unit and its outputs are relocated message by message","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open","category":"Shared dependency cache (D607)"},
@@ -5327,7 +5328,7 @@
             {"number":1843,"title":"The store reads and decodes its whole installation ledger once per read-set entry and three times per lookup","state":"closed"},
             {"number":1844,"title":"Publishing a node fsyncs about 14 times, rewrites the ledger 3 times, then reads the payload back and hashes it twice","state":"closed"},
             {"number":1845,"title":"Shared binding tables are read, hashed and parsed for every crate before their inputs are checked, then replayed again","state":"closed"},
-            {"number":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"open"},
+            {"number":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"closed"},
             {"number":1847,"title":"A Persisted cold resolution reruns cargo metadata and --unit-graph although the remembered output proves them unchanged","state":"open"},
             {"number":1848,"title":"The nightly check runs with checksum freshness over every unit and its outputs are relocated message by message","state":"open"},
             {"number":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open"},
