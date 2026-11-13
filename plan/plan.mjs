@@ -9,8 +9,10 @@
 //
 //   node plan/plan.mjs check [--offline]          report drift; exit 1 if any
 //   node plan/plan.mjs apply <file> [--dry-run]   apply a change file
+//   node plan/plan.mjs release [x.y.z] [--lede t] release Unreleased, offline
 //   node plan/plan.mjs render                     rewrite the outputs from the records
-//   node plan/plan.mjs sync                       set the Project's fields from the records
+//   node plan/plan.mjs sync                       bring GitHub to the records: close
+//                                                 released issues, milestones, Project fields
 //   node plan/plan.mjs setup                      create the labels, the Project and its fields
 //
 // TODO.md is local and untracked: .Codex/TODO.md in the main checkout, which
@@ -513,6 +515,36 @@ function syncItems(plan, items, projectItems) {
   flush();
 }
 
+// The failures a retry can outlast: the network, or GitHub briefly down.
+export const NETWORK = /error connecting|could not resolve|dial tcp|i\/o timeout|timed out|timeout awaiting|connection (reset|refused)|unexpected EOF|TLS handshake|HTTP 50[0234]|was a problem/i;
+
+/**
+ * Brings GitHub up to the records in one batch: closes each issue recorded
+ * closed that is still open (a release closes its issues locally), puts each
+ * shipped issue in its milestone and sets the Project's fields.
+ */
+export function sync(plan) {
+  const { repo } = plan.project;
+  const issues = fetchIssues(repo);
+  let closed = 0, placed = 0;
+  let milestones = null;
+  for (const item of plan.items.items) {
+    const issue = issues.get(item.issue);
+    if (!issue) continue;
+    if (item.state === "closed" && issue.state === "open") {
+      rest("PATCH", `repos/${repo}/issues/${item.issue}`, { state: "closed", state_reason: "completed" });
+      closed++;
+    }
+    if (item.release && issue.milestone !== milestoneOf(item.release)) {
+      milestones ??= fetchMilestones(repo);
+      setMilestone(repo, milestones, item.issue, milestoneOf(item.release));
+      placed++;
+    }
+  }
+  if (plan.project.project.id) syncItems(plan, plan.items.items, fetchProjectItems(plan.project));
+  console.log(`sync: closed ${closed} issues, put ${placed} in their milestones, set the Project's fields of ${plan.items.items.length} items`);
+}
+
 // ---------------------------------------------------------------- outputs
 
 const entryLine = (e) => {
@@ -584,9 +616,12 @@ function render(plan, todo, before) {
     writeAtomic(FILES.changelogMd, md);
   }
   if (todo.text != null) {
+    // A live Todo reads the file on each `parsed`, so read it once here and
+    // touch it again only for the lines that change.
+    const lines = todo.parsed.items;
     for (const item of plan.items.items) {
-      const line = todo.parsed.items.get(item.t);
-      if (line && line.issue !== item.issue) todo.set({ ...line, issue: item.issue });
+      const line = lines.get(item.t);
+      if (line && line.issue !== item.issue) todo.set({ ...todo.parsed.items.get(item.t), issue: item.issue });
     }
   }
   return md;
@@ -698,6 +733,10 @@ export function drift(plan, todo, issues, projectItems) {
   const site = existsSync(FILES.site) ? readFileSync(FILES.site, "utf8") : "";
   if (site !== format(siteData(plan)) + "\n") say("site/src/lib/todo.json differs from the records; run render");
 
+  // A release is local, and `sync` brings GitHub to it later. Until then its
+  // issues may be open, outside their milestone or behind in the Project:
+  // that is a note, not drift.
+  const unsynced = new Set();
   if (issues) {
     const mine = new Set(labels);
     for (const item of items) {
@@ -705,14 +744,15 @@ export function drift(plan, todo, issues, projectItems) {
       if (!issue) { say(`#${item.issue} (${item.t}) doesn't exist on GitHub`); continue; }
       if (issue.title !== item.title) say(`#${item.issue}: GitHub's title is "${issue.title}", recorded "${item.title}"`);
       const state = issueState(issue);
-      if (state !== item.state) {
+      if (item.release && item.state === "closed" && state === "open") unsynced.add(item.issue);
+      else if (state !== item.state) {
         const github = state === "retired" ? `closed as ${issue.state_reason.replace("_", " ")}` : state;
         say(`#${item.issue} (${item.t}) is ${github} on GitHub, recorded ${item.state}`);
       }
       const have = issue.labels.filter((l) => mine.has(l)).sort().join(", ");
       if (have !== [...item.labels].sort().join(", ")) say(`#${item.issue}: GitHub's labels are [${have}], recorded [${[...item.labels].sort().join(", ")}]`);
       const milestone = item.release ? milestoneOf(item.release) : null;
-      if (milestone && issue.milestone !== milestone) say(`#${item.issue} (${item.t}) shipped in ${item.release} but its milestone is ${issue.milestone ?? "none"}; run milestones`);
+      if (milestone && issue.milestone !== milestone) unsynced.add(item.issue);
     }
     for (const issue of issues.values()) {
       const t = /^(T\d{3,}): /.exec(issue.title)?.[1];
@@ -723,8 +763,14 @@ export function drift(plan, todo, issues, projectItems) {
     for (const item of items) {
       const entry = projectItems.get(item.issue);
       if (!entry) { say(`#${item.issue} (${item.t}) isn't in the Project; run sync`); continue; }
-      if (fieldMutations(plan, item, entry.id, entry.values, "").length) say(`#${item.issue} (${item.t}): the Project's fields differ; run sync`);
+      if (!fieldMutations(plan, item, entry.id, entry.values, "").length) continue;
+      if (item.release) unsynced.add(item.issue);
+      else say(`#${item.issue} (${item.t}): the Project's fields differ; run sync`);
     }
+  }
+  if (unsynced.size) {
+    const list = [...unsynced].sort((a, b) => a - b).map((n) => `#${n}`).join(", ");
+    warnings.push(`${unsynced.size} released issues wait for GitHub (${list}); run sync`);
   }
   return { problems, warnings };
 }
@@ -735,10 +781,15 @@ const fail = (message) => {
   throw new Error(message);
 };
 
+// `loadIssues` reads GitHub's issues the first time an op needs them, so a
+// change that only touches local records (a release) never goes online.
 class Context {
-  constructor(plan, todo, issues, dry, saveChange) {
-    Object.assign(this, { plan, todo, issues, dry, saveChange, fake: 900000, synced: new Set() });
+  constructor(plan, todo, loadIssues, dry, saveChange) {
+    Object.assign(this, { plan, todo, loadIssues, dry, saveChange, fake: 900000, synced: new Set() });
     this.projectItems = null;
+  }
+  get issues() {
+    return (this._issues ??= this.loadIssues());
   }
   get repo() {
     return this.plan.project.repo;
@@ -763,12 +814,6 @@ class Context {
   }
   comment(number, body) {
     if (!this.dry) rest("POST", `repos/${this.repo}/issues/${number}/comments`, { body });
-  }
-  milestone(number, title) {
-    if (this.dry) return;
-    this.milestones ??= fetchMilestones(this.repo);
-    setMilestone(this.repo, this.milestones, number, title);
-    this.issues.get(number).milestone = title;
   }
   close(number) {
     if (this.dry) return;
@@ -927,7 +972,6 @@ function addItem(ctx, op, { category, text, title, labels, decisions, gantt, rel
     const said = commits.length ? `Done in ${commits.join(" and ")}.` : "Done. The description says how it was settled.";
     ctx.comment(number, said);
     ctx.close(number);
-    if (release) ctx.milestone(number, milestoneOf(release));
   }
   const item = {
     t, issue: number, title: fullTitle, state: done ? "closed" : "open", category, labels,
@@ -1178,17 +1222,16 @@ const OPS = {
     if (!ctx.dry && op.bump !== false) {
       execFileSync(join(ROOT, "scripts/bump-version.sh"), [version], { cwd: ROOT, stdio: "inherit" });
     }
+    // Local only. GitHub's side (closing, milestones, the Project's fields)
+    // waits for `sync`, which reads it from the records.
     for (const n of new Set(entries.flatMap((e) => e.issues))) {
       const item = byIssue(ctx.plan, n);
-      ctx.milestone(n, milestoneOf(version));
       if (item.state === "open") {
-        ctx.close(n);
         const line = ctx.todo.parsed.items.get(item.t);
         if (line) ctx.todo.set({ ...line, done: true, text: `Done in ${version}. ${line.text}` });
         item.state = "closed";
       }
       item.release = version;
-      ctx.sync(item);
     }
     c.releases.unshift({ version, date, ...(op.lede ? { lede: op.lede } : {}), entries });
     c.unreleased.entries = [];
@@ -1197,8 +1240,9 @@ const OPS = {
   },
 };
 
-function apply(file, dry) {
-  const change = readJson(file);
+// Applies a change file. `change` is the file's contents; `saveChange` writes
+// it back, so a rerun skips what was applied.
+export function applyChange(change, dry, saveChange = () => {}) {
   const errors = check("change", change);
   if (errors.length) return { errors };
   const { plan, errors: planErrors } = load();
@@ -1208,10 +1252,11 @@ function apply(file, dry) {
   if (existsSync(FILES.changelogMd) && readFileSync(FILES.changelogMd, "utf8") !== changelogMarkdown(plan.changelog)) {
     return { errors: ["CHANGELOG.md has edits plan/changelog.json lacks; move them into the JSON with a change file first"] };
   }
-  const issues = fetchIssues(plan.project.repo);
+  let issues = null;
+  const loadIssues = () => (issues ??= fetchIssues(plan.project.repo));
 
   // A dry run first, on copies, so a bad change stops before anything is written.
-  const dryCtx = new Context(structuredClone(plan), new Todo(todoPath(), true), structuredClone(issues), true, () => {});
+  const dryCtx = new Context(structuredClone(plan), new Todo(todoPath(), true), () => structuredClone(loadIssues()), true, () => {});
   const dryOps = structuredClone(pending);
   for (const [i, op] of dryOps.entries()) {
     try {
@@ -1223,8 +1268,7 @@ function apply(file, dry) {
   if (dry) return { errors: [] };
 
   const todo = new Todo(todoPath());
-  const saveChange = () => writeJson(file, change);
-  const ctx = new Context(plan, todo, issues, false, saveChange);
+  const ctx = new Context(plan, todo, loadIssues, false, saveChange);
   let before = changelogMarkdown(plan.changelog);
   for (const op of pending) {
     console.log(OPS[op.op](ctx, op));
@@ -1304,9 +1348,24 @@ function main([command, ...args]) {
   const offline = args.includes("--offline");
   if (command === "setup") return setup();
   if (command === "apply") {
-    const file = args.find((a) => !a.startsWith("--")) ?? fail("apply needs a change file");
-    const { errors } = apply(resolve(file), args.includes("--dry-run"));
+    const file = resolve(args.find((a) => !a.startsWith("--")) ?? fail("apply needs a change file"));
+    const change = readJson(file);
+    const { errors } = applyChange(change, args.includes("--dry-run"), () => writeJson(file, change));
     for (const e of errors) console.error(`error: ${e}`);
+    return errors.length ? 1 : 0;
+  }
+  if (command === "release") {
+    // A release op without a change file: `release [x.y.z] [--lede <text>]`.
+    const op = { op: "release" };
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--lede") op.lede = args[++i] ?? fail("--lede needs a paragraph");
+      else if (args[i] === "--date") op.date = args[++i] ?? fail("--date needs a date");
+      else if (/^\d+\.\d+\.\d+$/.test(args[i])) op.version = args[i];
+      else fail(`release takes [x.y.z] [--lede <text>] [--date <yyyy-mm-dd>], not ${args[i]}`);
+    }
+    const { errors } = applyChange({ changes: [op] }, false);
+    for (const e of errors) console.error(`error: ${e}`);
+    if (!errors.length) console.log("release: local records written; start a background agent on the sync skill for GitHub's side");
     return errors.length ? 1 : 0;
   }
   const { plan, errors } = load();
@@ -1320,22 +1379,20 @@ function main([command, ...args]) {
     console.log("render: wrote site/src/lib/todo.json, CHANGELOG.md and TODO.md's issue numbers");
     return 0;
   }
-  if (command === "milestones") {
-    const issues = fetchIssues(plan.project.repo);
-    const milestones = fetchMilestones(plan.project.repo);
-    let n = 0;
-    for (const item of plan.items.items) {
-      if (!item.release || issues.get(item.issue)?.milestone === milestoneOf(item.release)) continue;
-      setMilestone(plan.project.repo, milestones, item.issue, milestoneOf(item.release));
-      n++;
-    }
-    console.log(`milestones: put ${n} shipped issues in their milestones`);
-    return 0;
-  }
   if (command === "sync") {
-    syncItems(plan, plan.items.items, fetchProjectItems(plan.project));
-    console.log(`sync: ${plan.items.items.length} items`);
-    return 0;
+    // Each pass reads GitHub afresh and does only what is still missing, so a
+    // pass a network failure cut short is simply run again.
+    const waits = [10, 20, 40, 80];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        sync(plan);
+        return 0;
+      } catch (error) {
+        if (attempt >= waits.length || !NETWORK.test(error.message)) throw error;
+        console.error(`sync: ${error.message.split("\n")[0]}; trying again in ${waits[attempt]} s`);
+        sleep(waits[attempt] * 1000);
+      }
+    }
   }
   if (command === "check") {
     const issues = offline ? null : fetchIssues(plan.project.repo);
@@ -1350,7 +1407,7 @@ function main([command, ...args]) {
     console.log(problems.length ? `check: ${problems.length} problems; ${summary}` : `check: no drift; ${summary}`);
     return problems.length ? 1 : 0;
   }
-  console.error("usage: node plan/plan.mjs check [--offline] | apply <change.json> [--dry-run] | render | sync | milestones | setup");
+  console.error("usage: node plan/plan.mjs check [--offline] | apply <change.json> [--dry-run] | release [x.y.z] [--lede <text>] | render | sync | setup");
   return 2;
 }
 
