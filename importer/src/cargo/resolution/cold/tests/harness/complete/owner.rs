@@ -611,9 +611,7 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
     let hits = || owner::STAGE_HITS.with(std::cell::Cell::get);
     owner::REPLAYS.with(|replays| replays.set(0));
     let before = hits();
-    let prepared = node::Chain::validated(context.clone(), cold.node())
-        .prepare_read_set()
-        .unwrap();
+    let prepared = consume(&context, cold.node()).unwrap();
     assert_eq!(validates(), 0, "an unchanged consumer does not replay");
     assert_eq!(hits(), before);
     drop(prepared);
@@ -627,9 +625,7 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
     let frozen = fs::metadata(&lock).unwrap().permissions();
     // Same bytes, new status-change time: the next consumer replays in full.
     fs::set_permissions(&lock, frozen.clone()).unwrap();
-    let prepared = node::Chain::validated(context.clone(), cold.node())
-        .prepare_read_set()
-        .unwrap();
+    let prepared = consume(&context, cold.node()).unwrap();
     assert_eq!(validates(), 1, "a changed stamp replays once");
     assert_eq!(
         hits() - before,
@@ -643,8 +639,7 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
     fs::write(&lock, drifted).unwrap();
     fs::set_permissions(&lock, frozen).unwrap();
     let before = hits();
-    let refused = node::Chain::validated(context.clone(), cold.node())
-        .prepare_read_set()
+    let refused = consume(&context, cold.node())
         .err()
         .expect("a staged parse never certifies a drifted bundle lock");
     // Current control hashing classifies the changed member as positive bundle
@@ -661,6 +656,17 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
 
 fn validates() -> usize {
     owner::REPLAYS.with(Cell::get)
+}
+
+/// Seal the owner's read set and walk it whole, as an admission does once
+/// its Prepared pin is held: sealing alone walks nothing (#1760).
+fn consume<K: node::Value>(
+    context: &crate::context::Context,
+    owner: &node::Validated<K>,
+) -> std::result::Result<node::read_set::Prepared, node::Error> {
+    let prepared = node::Chain::validated(context.clone(), owner).prepare_read_set()?;
+    prepared.revalidate_complete()?;
+    Ok(prepared)
 }
 
 /// A stored resolution whose recorded inputs changed misses and is
@@ -763,9 +769,7 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
         .unwrap();
     let cold_validates = validates();
     let before = hits();
-    let prepared = node::Chain::validated(context.clone(), cold.node())
-        .prepare_read_set()
-        .unwrap();
+    let prepared = consume(&context, cold.node()).unwrap();
     assert_eq!(
         validates(),
         cold_validates,
@@ -778,9 +782,7 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
         .record()
         .to_path_buf();
     fs::set_permissions(&record, fs::metadata(&record).unwrap().permissions()).unwrap();
-    let prepared = node::Chain::validated(context.clone(), cold.node())
-        .prepare_read_set()
-        .unwrap();
+    let prepared = consume(&context, cold.node()).unwrap();
     assert_eq!(
         hits() - before,
         3,
@@ -897,9 +899,7 @@ fn staged_owner_record_refuses_record_drift_between_replays() {
             owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
                 .unwrap();
         let before = hits();
-        let prepared = node::Chain::validated(context.clone(), cold.node())
-            .prepare_read_set()
-            .unwrap();
+        let prepared = consume(&context, cold.node()).unwrap();
         assert_eq!(
             hits(),
             before,
@@ -921,12 +921,9 @@ fn staged_owner_record_refuses_record_drift_between_replays() {
         fs::write(&record, &drifted).unwrap();
         fs::set_permissions(&record, frozen).unwrap();
         let before = hits();
-        let refused = node::Chain::validated(context.clone(), cold.node())
-            .prepare_read_set()
-            .err()
-            .unwrap_or_else(|| {
-                panic!("{name}: a staged interpretation never certifies a drifted record")
-            });
+        let refused = consume(&context, cold.node()).err().unwrap_or_else(|| {
+            panic!("{name}: a staged interpretation never certifies a drifted record")
+        });
         assert!(
             matches!(refused, node::Error::CandidateCorrupt(_)),
             "{name}: {refused:?}"
