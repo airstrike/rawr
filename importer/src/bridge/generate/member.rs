@@ -69,7 +69,7 @@ impl Member {
     /// shared runtime's link search reaches every member through (D614).
     pub(super) fn manifest(
         &self,
-        runner: &[u8],
+        runner: &DocumentMut,
         without: &BTreeSet<String>,
     ) -> Result<Vec<u8>, request::Error> {
         let mut document = DocumentMut::new();
@@ -111,10 +111,15 @@ impl Member {
         library.insert("path", toml_edit::value("src/lib.rs"));
         document.insert("lib", Item::Table(library));
         document.insert("dependencies", Item::Table(dependencies));
-        let runner = std::str::from_utf8(runner).map_err(request::misread)?;
-        manifest(runner, &document.to_string())
-            .map(String::into_bytes)
-            .ok_or_else(|| request::misread("the runner's manifest does not parse"))
+        // Framed as a member's manifest is read back, so it matches what
+        // `rebase` makes of it again after each rewrite of the runner's.
+        let mut document = document
+            .to_string()
+            .parse::<DocumentMut>()
+            .map_err(request::misread)?;
+        rebase(runner, &mut document)
+            .map(|()| document.to_string().into_bytes())
+            .ok_or_else(|| request::misread("the runner's manifest has no version"))
     }
 }
 
@@ -244,9 +249,9 @@ pub(super) fn runner_lock(
     for member in members {
         dependencies.push(member.package());
     }
-    self::lock(&document.to_string(), without)
-        .map(|lock| super::normalize(lock.as_bytes()))
-        .ok_or_else(|| request::misread("the runner's lock does not parse"))
+    fill_lock(&mut document, without)
+        .map(|()| super::normalize(document.to_string().as_bytes()))
+        .ok_or_else(|| request::misread("the runner's lock has no version"))
 }
 
 /// Whether a lock entry is the runner's own package.
@@ -293,13 +298,12 @@ pub(crate) fn file(path: &str) -> Option<&str> {
 /// The packages each member's manifest of `manifests` leaves out, by the
 /// member's package (`Member::manifest`).
 pub(crate) fn exclusions<'a>(
-    manifests: impl Iterator<Item = &'a str>,
+    manifests: impl Iterator<Item = &'a DocumentMut>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     manifests
-        .filter_map(|text| {
-            let document = text.parse::<DocumentMut>().ok()?;
+        .filter_map(|document| {
             let name = document.get("package")?.get("name")?.as_str()?.to_owned();
-            Some((name, without(&document)))
+            Some((name, without(document)))
         })
         .filter(|(_, without)| !without.is_empty())
         .collect()
@@ -322,14 +326,22 @@ fn without(document: &DocumentMut) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-/// `member`, a member's manifest, with the dependencies of `runner`, the
-/// runner's: every one but the members and the packages the member leaves
-/// out, whose relative paths it names from its own directory, and the
-/// runner's version. `None` when either does not parse.
-pub(crate) fn manifest(runner: &str, member: &str) -> Option<String> {
+/// [`rebase`] on the manifests' texts. `None` when either does not parse.
+#[cfg(test)]
+fn manifest(runner: &str, member: &str) -> Option<String> {
     let runner = runner.parse::<DocumentMut>().ok()?;
     let mut document = member.parse::<DocumentMut>().ok()?;
-    let without = without(&document);
+    rebase(&runner, &mut document)?;
+    Some(document.to_string())
+}
+
+/// `document`, a member's manifest, with the dependencies of `runner`, the
+/// runner's: every one but the members and the packages the member leaves
+/// out, whose relative paths it names from its own directory, and the
+/// runner's version. `None` when the runner has no version or the member
+/// no package, and then `document` may be partly rewritten.
+pub(crate) fn rebase(runner: &DocumentMut, document: &mut DocumentMut) -> Option<()> {
+    let without = without(document);
     let version = runner.get("package")?.get("version")?.clone();
     document
         .get_mut("package")?
@@ -382,7 +394,7 @@ pub(crate) fn manifest(runner: &str, member: &str) -> Option<String> {
         }
         document.insert("target", Item::Table(copied));
     }
-    Some(document.to_string())
+    Some(())
 }
 
 /// Whether a dependency names one of the runner's members.
@@ -420,13 +432,24 @@ fn rebased(table: &dyn TableLike, without: &BTreeSet<String>) -> Table {
     copied
 }
 
-/// `lock` with each member's entry at the runner's version and depending on
-/// what the runner's does but the packages it leaves out (`without`, by its
-/// package), besides the members it depends on itself: the resolve Cargo
-/// makes of the members' manifests, so a `--locked` build holds. `None`
-/// when it does not parse.
-pub(crate) fn lock(lock: &str, without: &BTreeMap<String, BTreeSet<String>>) -> Option<String> {
+/// [`fill_lock`] on the lock's text. `None` when it does not parse.
+#[cfg(test)]
+fn lock(lock: &str, without: &BTreeMap<String, BTreeSet<String>>) -> Option<String> {
     let mut document = lock.parse::<DocumentMut>().ok()?;
+    fill_lock(&mut document, without)?;
+    Some(document.to_string())
+}
+
+/// The lock `document` with each member's entry at the runner's version and
+/// depending on what the runner's does but the packages it leaves out
+/// (`without`, by its package), besides the members it depends on itself:
+/// the resolve Cargo makes of the members' manifests, so a `--locked` build
+/// holds. `None`, with `document` as it was, when it has no runner or the
+/// runner no version.
+pub(crate) fn fill_lock(
+    document: &mut DocumentMut,
+    without: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<()> {
     let packages = document.get_mut("package")?.as_array_of_tables_mut()?;
     let runner = packages.iter().find(|package| is_runner(package))?;
     let version = runner.get("version")?.clone();
@@ -497,7 +520,7 @@ pub(crate) fn lock(lock: &str, without: &BTreeMap<String, BTreeSet<String>>) -> 
         sorted.sort_by_key(|dependency| named(dependency).unwrap_or_default());
         *dependencies = listed(sorted);
     }
-    Some(document.to_string())
+    Some(())
 }
 
 /// `dependencies` as Cargo writes a lock entry's: one to a line.
@@ -526,7 +549,7 @@ mod tests {
             root: "iced".to_owned(),
         };
         let manifest = member
-            .manifest(RUNNER_MANIFEST.as_bytes(), &BTreeSet::new())
+            .manifest(&RUNNER_MANIFEST.parse().unwrap(), &BTreeSet::new())
             .expect("the member manifest renders");
         let text = std::str::from_utf8(&manifest).expect("the manifest is UTF-8");
         let document = text.parse::<DocumentMut>().expect("the manifest parses");

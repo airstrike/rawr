@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.207 (2026-11-13)
+
+- A save does less repeated work in the runner build and the generator: the runner executable is hashed once, Cargo.lock and each manifest are parsed once, Cargo's messages are decoded once, and each plan's signature and opaque facts are computed once. (#1853)
+- A kept overlay of runner sources no longer re-hashes every generated file on a hit. (#1831)
+
 ## 0.3.206 (2026-11-12)
 
 - A start whose API is current reads it, its classification and its facade once: identities share their unit, each definition is digested once, and stored bytes are trusted by their digest instead of being encoded again to check them. (#1866; part of #1851)

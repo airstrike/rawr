@@ -664,6 +664,12 @@ impl Output {
         &self.stdout
     }
 
+    /// Whether the program exited successfully.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) const fn success(&self) -> bool {
+        self.success
+    }
+
     pub(crate) fn checked(self, program: Program) -> Result<Box<[u8]>> {
         if self.success {
             return Ok(self.stdout);

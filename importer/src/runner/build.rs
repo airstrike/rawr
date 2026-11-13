@@ -152,6 +152,9 @@ impl<B> super::Manifest<super::Generated, B> {
             .find(|file| file.path() == "Cargo.toml")
             .and_then(|file| std::str::from_utf8(file.bytes()).ok())
             .map(|text| crate::host::relocated(text).unwrap_or_else(|| text.to_owned()));
+        let parsed = runner
+            .as_deref()
+            .and_then(|runner| runner.parse::<toml_edit::DocumentMut>().ok());
         for file in &self.files {
             let path = entry.join(file.path());
             if let Some(parent) = path.parent() {
@@ -163,13 +166,14 @@ impl<B> super::Manifest<super::Generated, B> {
             }
             let relocated = match file.path() {
                 "Cargo.toml" => runner.clone(),
-                path if generate::is_member_manifest(path) => {
-                    runner.as_deref().and_then(|runner| {
-                        std::str::from_utf8(file.bytes())
-                            .ok()
-                            .and_then(|member| generate::member::manifest(runner, member))
-                    })
-                }
+                path if generate::is_member_manifest(path) => parsed.as_ref().and_then(|runner| {
+                    let mut member = std::str::from_utf8(file.bytes())
+                        .ok()?
+                        .parse::<toml_edit::DocumentMut>()
+                        .ok()?;
+                    generate::member::rebase(runner, &mut member)?;
+                    Some(member.to_string())
+                }),
                 _ => None,
             };
             let bytes = relocated.as_deref().map_or(file.bytes(), str::as_bytes);
