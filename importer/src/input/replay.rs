@@ -53,6 +53,18 @@ pub(super) fn dep_info_entry(
         package_root,
         allocation,
     )?;
+    dep_info_entry_of(&dependency, package_id, path, out_directories, allocation)
+}
+
+/// [`dep_info_entry`] of a dep-info file `dependency` already parsed, as a
+/// capture that reads it for its own recipes has (#1846).
+pub(super) fn dep_info_entry_of(
+    dependency: &super::dependency::Dependency,
+    package_id: &str,
+    path: &Path,
+    out_directories: &[PathBuf],
+    allocation: &mut Allocation,
+) -> Result<Entry> {
     for (key, value) in &dependency.environment {
         if key.as_ref() == "OUT_DIR" {
             let value = value.as_deref().ok_or_else(|| {

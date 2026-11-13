@@ -360,6 +360,8 @@ fn package_inventory_interleaves_files_and_scalars_and_preserves_the_next_recipe
                 environment: Box::default(),
             },
             package_files: BTreeMap::new(),
+            #[cfg(feature = "rustc-driver")]
+            closure: None,
         },
     };
     let metadata = unit::Metadata::fixture_packages(current);

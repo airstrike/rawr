@@ -98,6 +98,8 @@ fn retained(root: &Path, out: &Path) -> build::Retained {
                 environment: Box::from([]),
             },
             package_files: BTreeMap::new(),
+            #[cfg(feature = "rustc-driver")]
+            closure: None,
         },
     }
 }

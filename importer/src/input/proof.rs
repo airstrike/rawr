@@ -1,5 +1,6 @@
 //! Canonical content proof and bounded filesystem evaluation.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -1217,151 +1218,67 @@ pub(super) fn evaluate(
     limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Proof> {
+    evaluate_known(recipes, BTreeMap::new(), limits, allocation)
+}
+
+/// [`evaluate`], taking the entry `known` holds for a recipe at its
+/// position instead of observing that recipe again: a capture that parsed
+/// a dep-info file for its own recipes gives its entry (#1846).
+pub(super) fn evaluate_known(
+    recipes: &[Recipe],
+    mut known: BTreeMap<usize, Entry>,
+    limits: &cargo::Limits,
+    allocation: &mut Allocation,
+) -> Result<Proof> {
     let mut entries = Vec::new();
-    for recipe in recipes {
+    for (index, recipe) in recipes.iter().enumerate() {
         allocation.items(1)?;
         entries.try_reserve(1).map_err(|error| Error::Input {
             code: "input-proof-allocation",
             reason: error.to_string().into_boxed_str(),
         })?;
-        let entry = match recipe.view() {
-            View::Workspace { roots } => {
-                let Recipe::Workspace { .. } = recipe else {
-                    return Err(super::input(
-                        "workspace-recipe",
-                        "missing original graph account",
-                    ));
-                };
-                super::workspace::observe(
-                    roots,
-                    &mut super::workspace::Account::borrow(allocation, limits),
-                )?
-            }
-            View::File {
-                role,
-                package_id,
-                path,
-            } => file_entry(role, package_id, path, allocation)?,
-            View::Path {
-                role,
-                package_id,
-                path,
-            } => path_entry(role, package_id, path, allocation, limits)?,
-            View::Directory {
-                role,
-                package_id,
-                path,
-            } => directory_entry(role, package_id, path, allocation, limits)?,
-            View::DepInfo {
-                package_id,
-                path,
-                package_root,
-                out_directories,
-            } => super::replay::dep_info_entry(
-                package_id,
-                path,
-                package_root,
-                out_directories,
-                allocation,
-            )?,
-            View::SavedOutput {
-                package_id,
-                out_dir,
-            } => super::replay::saved_output_entry(package_id, out_dir, allocation)?,
-            View::Package(set) => set.entry(allocation, limits)?,
-            View::Environment {
-                package_id,
-                execution,
-                key,
-                value,
-            } => {
-                allocation.string(package_id)?;
-                allocation.string(execution)?;
-                allocation.string(key)?;
-                if let Some(value) = value {
-                    allocation.string(value)?;
-                }
-                Entry::Environment {
-                    package_id: package_id.into(),
-                    execution: execution.into(),
-                    key: key.into(),
-                    value: value.map(Box::from),
-                }
-            }
-            View::EnvironmentProjection { schema, key, value } => {
-                allocation.string(key)?;
-                if let Some(value) = value {
-                    allocation.string(value)?;
-                }
-                Entry::EnvironmentProjection {
-                    schema,
-                    key: key.into(),
-                    value: value.map(Box::from),
-                }
-            }
-            View::Fact {
-                role,
-                package_id,
-                name,
-                value,
-            } => {
-                if let Some(package_id) = package_id {
-                    allocation.string(package_id)?;
-                }
-                allocation.string(name)?;
-                allocation.string(value)?;
-                Entry::Fact {
-                    role,
-                    package_id: package_id.map(Box::from),
-                    name: name.into(),
-                    value: value.into(),
-                }
-            }
-            View::BuildMessage {
-                package_id,
-                execution,
-                name,
-                value,
-            } => {
-                allocation.string(package_id)?;
-                allocation.string(execution)?;
-                allocation.string(name)?;
-                allocation.string(value)?;
-                Entry::BuildMessage {
-                    package_id: package_id.into(),
-                    execution: execution.into(),
-                    name: name.into(),
-                    source: None,
-                    value: value.into(),
-                }
-            }
-            View::Directive {
-                package_id,
-                execution,
-                index,
-                value,
-            } => {
-                allocation.string(package_id)?;
-                allocation.string(execution)?;
-                allocation.string(value)?;
-                Entry::Directive {
-                    package_id: package_id.into(),
-                    execution: execution.into(),
-                    index,
-                    value: value.into(),
-                }
-            }
+        let entry = match known.remove(&index) {
+            Some(entry) => entry,
+            None => entry(recipe, limits, allocation)?,
         };
         entries.push(entry);
     }
+    seal(entries, allocation)
+}
+
+/// The proof of exactly `entries`, each once and in order: what
+/// [`evaluate`] gives the recipes that observed them.
+pub(super) fn seal(mut entries: Vec<Entry>, allocation: &mut Allocation) -> Result<Proof> {
     entries.sort_unstable();
     entries.dedup();
+    let fingerprint = digest(&entries, allocation)?;
+    Ok(Proof {
+        schema: SCHEMA,
+        entries: entries.into_boxed_slice(),
+        fingerprint,
+        native: None,
+    })
+}
+
+/// The fingerprint a proof of exactly `entries` has: each entry once, in
+/// order, as [`evaluate`] seals them. A caller that already holds each
+/// entry's evaluation folds it here without observing any input again.
+pub(super) fn fingerprint(
+    entries: &mut Vec<&Entry>,
+    allocation: &mut Allocation,
+) -> Result<Fingerprint> {
+    entries.sort_unstable();
+    entries.dedup();
+    digest(entries, allocation)
+}
+
+fn digest(entries: &[impl Serialize], allocation: &mut Allocation) -> Result<Fingerprint> {
     let mut canonical = Hashing {
         hasher: Sha256::new(),
         bytes: 0,
         overflow: false,
     };
-    let result = serde_json::to_writer(&mut canonical, &(SCHEMA, &entries));
+    let result = serde_json::to_writer(&mut canonical, &(SCHEMA, entries));
     if canonical.overflow {
         return Err(allocation.overflow("input proof canonical bytes"));
     }
@@ -1369,11 +1286,142 @@ pub(super) fn evaluate(
         code: "input-encoding",
         reason: error.to_string().into_boxed_str(),
     })?;
-    Ok(Proof {
-        schema: SCHEMA,
-        entries: entries.into_boxed_slice(),
-        fingerprint: Fingerprint::from_bytes(canonical.hasher.finalize().into()),
-        native: None,
+    Ok(Fingerprint::from_bytes(canonical.hasher.finalize().into()))
+}
+
+/// What one recipe observes now: the entry a proof of it holds.
+pub(super) fn entry(
+    recipe: &Recipe,
+    limits: &cargo::Limits,
+    allocation: &mut Allocation,
+) -> Result<Entry> {
+    Ok(match recipe.view() {
+        View::Workspace { roots } => {
+            let Recipe::Workspace { .. } = recipe else {
+                return Err(super::input(
+                    "workspace-recipe",
+                    "missing original graph account",
+                ));
+            };
+            super::workspace::observe(
+                roots,
+                &mut super::workspace::Account::borrow(allocation, limits),
+            )?
+        }
+        View::File {
+            role,
+            package_id,
+            path,
+        } => file_entry(role, package_id, path, allocation)?,
+        View::Path {
+            role,
+            package_id,
+            path,
+        } => path_entry(role, package_id, path, allocation, limits)?,
+        View::Directory {
+            role,
+            package_id,
+            path,
+        } => directory_entry(role, package_id, path, allocation, limits)?,
+        View::DepInfo {
+            package_id,
+            path,
+            package_root,
+            out_directories,
+        } => super::replay::dep_info_entry(
+            package_id,
+            path,
+            package_root,
+            out_directories,
+            allocation,
+        )?,
+        View::SavedOutput {
+            package_id,
+            out_dir,
+        } => super::replay::saved_output_entry(package_id, out_dir, allocation)?,
+        View::Package(set) => set.entry(allocation, limits)?,
+        View::Environment {
+            package_id,
+            execution,
+            key,
+            value,
+        } => {
+            allocation.string(package_id)?;
+            allocation.string(execution)?;
+            allocation.string(key)?;
+            if let Some(value) = value {
+                allocation.string(value)?;
+            }
+            Entry::Environment {
+                package_id: package_id.into(),
+                execution: execution.into(),
+                key: key.into(),
+                value: value.map(Box::from),
+            }
+        }
+        View::EnvironmentProjection { schema, key, value } => {
+            allocation.string(key)?;
+            if let Some(value) = value {
+                allocation.string(value)?;
+            }
+            Entry::EnvironmentProjection {
+                schema,
+                key: key.into(),
+                value: value.map(Box::from),
+            }
+        }
+        View::Fact {
+            role,
+            package_id,
+            name,
+            value,
+        } => {
+            if let Some(package_id) = package_id {
+                allocation.string(package_id)?;
+            }
+            allocation.string(name)?;
+            allocation.string(value)?;
+            Entry::Fact {
+                role,
+                package_id: package_id.map(Box::from),
+                name: name.into(),
+                value: value.into(),
+            }
+        }
+        View::BuildMessage {
+            package_id,
+            execution,
+            name,
+            value,
+        } => {
+            allocation.string(package_id)?;
+            allocation.string(execution)?;
+            allocation.string(name)?;
+            allocation.string(value)?;
+            Entry::BuildMessage {
+                package_id: package_id.into(),
+                execution: execution.into(),
+                name: name.into(),
+                source: None,
+                value: value.into(),
+            }
+        }
+        View::Directive {
+            package_id,
+            execution,
+            index,
+            value,
+        } => {
+            allocation.string(package_id)?;
+            allocation.string(execution)?;
+            allocation.string(value)?;
+            Entry::Directive {
+                package_id: package_id.into(),
+                execution: execution.into(),
+                index,
+                value: value.into(),
+            }
+        }
     })
 }
 

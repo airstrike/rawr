@@ -148,34 +148,58 @@ pub(crate) struct Reads(BTreeMap<String, BTreeSet<String>>);
 
 #[cfg(feature = "rustc-driver")]
 impl Reads {
-    /// What `build`'s compiles read, by the recipes of its `baseline`.
+    /// What `build`'s compiles read, by the recipes of its `baseline`: each
+    /// file or path a recipe names under the `OUT_DIR` of a build script
+    /// whose package's dep-info names that `OUT_DIR`.
     pub(crate) fn of(baseline: &Baseline, build: &build::Build) -> Self {
-        let mut reads = BTreeMap::<String, BTreeSet<String>>::new();
-        for script in &build.evidence.scripts {
-            let compiled = baseline.recipes.iter().any(|recipe| {
-                matches!(recipe, proof::Recipe::DepInfo {
-                    package_id,
-                    out_directories,
-                    ..
-                } if *package_id == script.package_id
-                    && out_directories.contains(&script.out_dir))
-            });
-            if !compiled {
-                continue;
+        let mut compiled = BTreeSet::<(&str, &Path)>::new();
+        for recipe in &baseline.recipes {
+            if let proof::Recipe::DepInfo {
+                package_id,
+                out_directories,
+                ..
+            } = recipe
+            {
+                for out_dir in out_directories {
+                    compiled.insert((package_id, out_dir));
+                }
             }
-            let read = reads.entry(script.package_id.to_string()).or_default();
-            for recipe in &baseline.recipes {
-                let (proof::Recipe::File { path, .. } | proof::Recipe::Path { path, .. }) = recipe
-                else {
+        }
+        let mut reads = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut under = BTreeMap::<&Path, Vec<&str>>::new();
+        for script in &build.evidence.scripts {
+            if compiled.contains(&(script.package_id.as_ref(), script.out_dir.as_path())) {
+                reads.entry(script.package_id.to_string()).or_default();
+                under
+                    .entry(script.out_dir.as_path())
+                    .or_default()
+                    .push(&script.package_id);
+            }
+        }
+        if under.is_empty() {
+            return Self(reads);
+        }
+        for recipe in &baseline.recipes {
+            let (proof::Recipe::File { path, .. } | proof::Recipe::Path { path, .. }) = recipe
+            else {
+                continue;
+            };
+            for out_dir in path.ancestors().skip(1) {
+                let Some(packages) = under.get(out_dir) else {
                     continue;
                 };
-                if let Some(relative) = path
-                    .strip_prefix(&script.out_dir)
+                let Some(relative) = path
+                    .strip_prefix(out_dir)
                     .ok()
                     .and_then(Path::to_str)
                     .filter(|relative| !relative.is_empty())
-                {
-                    read.insert(relative.to_owned());
+                else {
+                    continue;
+                };
+                for package in packages {
+                    if let Some(read) = reads.get_mut(*package) {
+                        read.insert(relative.to_owned());
+                    }
                 }
             }
         }
@@ -216,38 +240,106 @@ impl Validated<'_> {
     }
 }
 
-impl Inputs {
+/// One build's baseline indexed by package, built once for every table
+/// the build extracted: each table's capture reads only its own packages'
+/// recipes and entries, and each input path is observed once however many
+/// tables' closures reach it (#1846).
+pub(crate) struct Capture<'build> {
+    baseline: &'build Baseline,
+    build: &'build build::Build,
+    current: &'build Current,
+    /// The positions in the baseline of each package's file, path and
+    /// environment recipes.
+    recipes: BTreeMap<&'build str, Vec<usize>>,
+    /// The positions in the baseline's proof of each package's registry
+    /// marker and package-source tree.
+    entries: BTreeMap<&'build str, Vec<usize>>,
+    /// Each package's build-script executions.
+    scripts: BTreeMap<&'build str, Vec<&'build build::Script>>,
+    /// Every build script's `OUT_DIR`.
+    out_directories: BTreeSet<&'build Path>,
+    /// Each input path's entry as this capture observed it.
+    observed: Observed,
+}
+
+impl<'build> Capture<'build> {
+    pub(crate) fn new(
+        baseline: &'build Baseline,
+        build: &'build build::Build,
+        current: &'build Current,
+    ) -> Self {
+        let mut recipes = BTreeMap::<&str, Vec<usize>>::new();
+        for (index, recipe) in baseline.recipes.iter().enumerate() {
+            let package = match recipe {
+                proof::Recipe::File {
+                    package_id: Some(package),
+                    ..
+                }
+                | proof::Recipe::Path {
+                    package_id: Some(package),
+                    ..
+                }
+                | proof::Recipe::Environment {
+                    package_id: package,
+                    ..
+                } => package,
+                _ => continue,
+            };
+            recipes.entry(package).or_default().push(index);
+        }
+        let mut entries = BTreeMap::<&str, Vec<usize>>::new();
+        for (index, entry) in baseline.proof.stored_parts().1.iter().enumerate() {
+            let package = match entry {
+                proof::Entry::Registry { package_id, .. }
+                | proof::Entry::Directory {
+                    role: proof::Role::DefaultPackageSource,
+                    package_id: Some(package_id),
+                    ..
+                } => package_id,
+                _ => continue,
+            };
+            entries.entry(package).or_default().push(index);
+        }
+        let mut scripts = BTreeMap::<&str, Vec<&build::Script>>::new();
+        let mut out_directories = BTreeSet::new();
+        for script in &build.evidence.scripts {
+            scripts.entry(&script.package_id).or_default().push(script);
+            out_directories.insert(script.out_dir.as_path());
+        }
+        Self {
+            baseline,
+            build,
+            current,
+            recipes,
+            entries,
+            scripts,
+            out_directories,
+            observed: Observed::default(),
+        }
+    }
+
     /// Retain only inputs belonging to the selected immutable crate closure.
     /// A project source or ambiguous generated environment cannot become a
     /// shared proof. Its table remains usable by the normal local owner.
-    pub(crate) fn capture(
-        baseline: &Baseline,
-        build: &build::Build,
-        packages: &[String],
-        current: &Current,
-    ) -> Result<Self, Unshared> {
-        Self::capture_within(baseline, build, packages, current, false)
+    pub(crate) fn inputs(&mut self, packages: &[String]) -> Result<Inputs, Unshared> {
+        self.within(packages, Sources::Shared)
     }
 
     /// The inputs of a table only this project replays (`bindings::stage`):
     /// its own sources may be among them, and their contents are checked
     /// before each replay as any input's are.
-    pub(crate) fn capture_staged(
-        baseline: &Baseline,
-        build: &build::Build,
-        packages: &[String],
-        current: &Current,
-    ) -> Option<Self> {
-        Self::capture_within(baseline, build, packages, current, true).ok()
+    pub(crate) fn staged(&mut self, packages: &[String]) -> Option<Inputs> {
+        self.within(packages, Sources::Project).ok()
     }
 
-    fn capture_within(
-        baseline: &Baseline,
-        build: &build::Build,
-        packages: &[String],
-        current: &Current,
-        project: bool,
-    ) -> Result<Self, Unshared> {
+    /// Whether `path` lies in some build script's `OUT_DIR`.
+    fn generated(&self, path: &Path) -> bool {
+        path.ancestors()
+            .any(|ancestor| self.out_directories.contains(ancestor))
+    }
+
+    fn within(&mut self, packages: &[String], sources: Sources) -> Result<Inputs, Unshared> {
+        let (baseline, build, current) = (self.baseline, self.build, self.current);
         let selected = packages.iter().map(String::as_str).collect::<BTreeSet<_>>();
         if selected.is_empty() {
             return Err(Unshared::Unrecorded);
@@ -260,9 +352,11 @@ impl Inputs {
         }) {
             return Err(Unshared::Source((*id).to_owned()));
         }
+        let shared = sources == Sources::Shared;
         let mut paths = BTreeSet::new();
         let mut environment = BTreeMap::new();
-        for recipe in &baseline.recipes {
+        for index in positions(&self.recipes, &selected) {
+            let recipe = &baseline.recipes[index];
             match recipe {
                 proof::Recipe::File {
                     package_id: Some(package),
@@ -273,16 +367,11 @@ impl Inputs {
                     package_id: Some(package),
                     path,
                     ..
-                } if selected.contains(package.as_ref()) => {
-                    let generated = build
-                        .evidence
-                        .scripts
-                        .iter()
-                        .any(|script| path.starts_with(&script.out_dir));
-                    if generated {
+                } => {
+                    if self.generated(path) {
                         continue;
                     }
-                    if !project && path.starts_with(&current.project) {
+                    if shared && path.starts_with(&current.project) {
                         return Err(Unshared::Project);
                     }
                     paths.insert(File {
@@ -300,11 +389,13 @@ impl Inputs {
                     execution,
                     key,
                     value,
-                } if selected.contains(package_id.as_ref()) => {
-                    let declaration = build.evidence.scripts.iter().any(|script| {
-                        script.package_id == *package_id
-                            && script.out_dir.as_os_str()
-                                == Path::new(execution.as_ref()).as_os_str()
+                } => {
+                    let scripts = self
+                        .scripts
+                        .get(package_id.as_ref())
+                        .map_or(&[][..], Vec::as_slice);
+                    let declaration = scripts.iter().any(|script| {
+                        script.out_dir.as_os_str() == Path::new(execution.as_ref()).as_os_str()
                     });
                     // Compiler environment supplied by Cargo or the package's
                     // build script is an output, bound by its immutable package
@@ -312,11 +403,10 @@ impl Inputs {
                     // always an input, even if it has the same variable name.
                     let generated = !declaration
                         && (cargo_environment(key)
-                            || build.evidence.scripts.iter().any(|script| {
-                                script.package_id == *package_id
-                                    && script.environment.iter().any(|(name, output)| {
-                                        name == key && Some(output.as_ref()) == value.as_deref()
-                                    })
+                            || scripts.iter().any(|script| {
+                                script.environment.iter().any(|(name, output)| {
+                                    name == key && Some(output.as_ref()) == value.as_deref()
+                                })
                             }));
                     // The roots rawr's wrapper records (D866) are rawr's own
                     // variable, set for every check of this request: they
@@ -339,33 +429,31 @@ impl Inputs {
                         return Err(Unshared::Environment(key.to_string()));
                     }
                 }
-                _ => {}
+                _ => unreachable!("the index holds only file, path and environment recipes"),
             }
         }
         // A build script without `rerun-if` inputs reruns when its package
         // changes. Registry extraction is immutable and witnessed by its
         // marker; a path or Git package is walked again as a whole, so an
         // added file invalidates it as a changed one does.
-        for entry in baseline.proof.stored_parts().1 {
-            let (package, path, read) = match entry {
+        let stored = baseline.proof.stored_parts().1;
+        for index in positions(&self.entries, &selected) {
+            let (package, path, read) = match &stored[index] {
                 proof::Entry::Registry {
                     package_id, root, ..
-                } if selected.contains(package_id.as_ref()) => (
+                } => (
                     package_id,
                     Path::new(root.as_ref()).join(".cargo-ok"),
                     Read::File,
                 ),
                 proof::Entry::Directory {
-                    role: proof::Role::DefaultPackageSource,
                     package_id: Some(package_id),
                     path,
                     ..
-                } if selected.contains(package_id.as_ref()) => {
-                    (package_id, PathBuf::from(path.as_ref()), Read::Package)
-                }
-                _ => continue,
+                } => (package_id, PathBuf::from(path.as_ref()), Read::Package),
+                _ => unreachable!("the index holds only registry and package-source entries"),
             };
-            if !project && path.starts_with(&current.project) {
+            if shared && path.starts_with(&current.project) {
                 return Err(Unshared::Project);
             }
             paths.insert(File {
@@ -375,8 +463,8 @@ impl Inputs {
             });
         }
         let paths = paths.into_iter().collect::<Vec<_>>();
-        let fingerprint = fingerprint(&paths, &current.limits).ok_or(Unshared::Unreadable)?;
-        Ok(Self {
+        let fingerprint = self.fingerprint(&paths).ok_or(Unshared::Unreadable)?;
+        Ok(Inputs {
             schema: SCHEMA,
             compiler: current.compiler.clone(),
             config: current.config,
@@ -387,9 +475,99 @@ impl Inputs {
         })
     }
 
+    /// The fingerprint [`evaluate`] gives `paths`, from each path's entry
+    /// as this capture first observed it.
+    fn fingerprint(&mut self, paths: &[File]) -> Option<[u8; 32]> {
+        let limits = &self.current.limits;
+        let mut entries = self.observed.entries(paths, limits)?;
+        let mut allocation = Allocation::for_replay(limits);
+        let fingerprint = proof::fingerprint(&mut entries, &mut allocation).ok()?;
+        Some(*fingerprint.as_bytes())
+    }
+}
+
+/// Each input path's entry as one pass observed it, `None` when it could
+/// not be. A pass over many tables, a build's captures or a round's checks,
+/// observes a file their inputs share once, not once per table (#1846).
+#[derive(Default)]
+pub(crate) struct Observed(BTreeMap<File, Option<proof::Entry>>);
+
+impl Observed {
+    /// The entry of each of `paths`, observed now unless this pass already
+    /// did; `None` when one could not be.
+    fn entries(&mut self, paths: &[File], limits: &cargo::Limits) -> Option<Vec<&proof::Entry>> {
+        for file in paths {
+            if !self.0.contains_key(file) {
+                let mut allocation = Allocation::for_replay(limits);
+                let entry = proof::entry(&file.recipe(), limits, &mut allocation).ok();
+                self.0.insert(file.clone(), entry);
+            }
+        }
+        paths.iter().map(|file| self.0[file].as_ref()).collect()
+    }
+}
+
+/// Whether a capture's inputs may lie in the project.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Sources {
+    /// A shared table's: none may.
+    Shared,
+    /// A staged table's, which only this project replays: they may.
+    Project,
+}
+
+/// The positions of `selected`'s `indexed` items, in baseline order, so a
+/// closure's capture meets them as a walk of the whole baseline would.
+fn positions(indexed: &BTreeMap<&str, Vec<usize>>, selected: &BTreeSet<&str>) -> Vec<usize> {
+    let mut positions: Vec<usize> = selected
+        .iter()
+        .filter_map(|package| indexed.get(package))
+        .flatten()
+        .copied()
+        .collect();
+    positions.sort_unstable();
+    positions
+}
+
+impl File {
+    /// The recipe that observes this path as its baseline read it.
+    fn recipe(&self) -> proof::Recipe {
+        let package_id = Some(self.package.as_str().into());
+        let path = self.path.clone();
+        match self.read {
+            Read::File => proof::Recipe::File {
+                role: proof::Role::DependencySource,
+                package_id,
+                path,
+            },
+            Read::Tree => proof::Recipe::Path {
+                role: proof::Role::DeclaredInput,
+                package_id,
+                path,
+            },
+            Read::Package => proof::Recipe::Directory {
+                role: proof::Role::DefaultPackageSource,
+                package_id,
+                path,
+            },
+        }
+    }
+}
+
+impl Inputs {
     pub(crate) fn validate<'inputs>(
         &'inputs self,
         current: &Current,
+    ) -> Option<Validated<'inputs>> {
+        self.validate_observed(current, &mut Observed::default())
+    }
+
+    /// [`Inputs::validate`], taking the entry of each path `observed`
+    /// holds instead of observing it again.
+    pub(crate) fn validate_observed<'inputs>(
+        &'inputs self,
+        current: &Current,
+        observed: &mut Observed,
     ) -> Option<Validated<'inputs>> {
         if self.schema != SCHEMA
             || self.compiler != current.compiler
@@ -401,7 +579,13 @@ impl Inputs {
         {
             return None;
         }
-        let filesystem = evaluate(&self.paths, &current.limits)?;
+        let limits = &current.limits;
+        let entries = observed
+            .entries(&self.paths, limits)?
+            .into_iter()
+            .cloned()
+            .collect();
+        let filesystem = proof::seal(entries, &mut Allocation::for_replay(limits)).ok()?;
         (*filesystem.fingerprint().as_bytes() == self.fingerprint).then_some(Validated {
             inputs: self,
             filesystem,
@@ -440,35 +624,14 @@ impl Inputs {
     }
 }
 
+#[cfg(test)]
 fn fingerprint(paths: &[File], limits: &cargo::Limits) -> Option<[u8; 32]> {
     Some(*evaluate(paths, limits)?.fingerprint().as_bytes())
 }
 
+#[cfg(test)]
 fn evaluate(paths: &[File], limits: &cargo::Limits) -> Option<proof::Proof> {
-    let recipes = paths
-        .iter()
-        .map(|file| {
-            let package_id = Some(file.package.as_str().into());
-            let path = file.path.clone();
-            match file.read {
-                Read::File => proof::Recipe::File {
-                    role: proof::Role::DependencySource,
-                    package_id,
-                    path,
-                },
-                Read::Tree => proof::Recipe::Path {
-                    role: proof::Role::DeclaredInput,
-                    package_id,
-                    path,
-                },
-                Read::Package => proof::Recipe::Directory {
-                    role: proof::Role::DefaultPackageSource,
-                    package_id,
-                    path,
-                },
-            }
-        })
-        .collect::<Vec<_>>();
+    let recipes = paths.iter().map(File::recipe).collect::<Vec<_>>();
     let mut allocation = Allocation::for_replay(limits);
     proof::evaluate(&recipes, limits, &mut allocation).ok()
 }
@@ -508,7 +671,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{build, proof, Allocation, Baseline, Current, Inputs, Unshared};
+    use super::{build, proof, Allocation, Baseline, Capture, Current, Unshared};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     const PACKAGE: &str = "registry+https://example.invalid/index#demo@1.0.0";
@@ -600,6 +763,8 @@ mod tests {
                 environment: Box::default(),
             },
             package_files: BTreeMap::new(),
+            #[cfg(feature = "rustc-driver")]
+            closure: None,
         };
         (root, baseline, build, current)
     }
@@ -643,10 +808,47 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// One capture serves every table of a build, and one pass of checks
+    /// every table of a round: a table captured or checked after another
+    /// that shares its files gets what it would alone, its fingerprint
+    /// the one its paths evaluate to (#1846).
+    #[test]
+    fn a_shared_capture_and_check_give_each_table_what_it_would_alone() {
+        let (root, baseline, build, current) = fixture();
+        let packages = [PACKAGE.to_owned()];
+        let alone = Capture::new(&baseline, &build, &current)
+            .inputs(&packages)
+            .unwrap();
+        let mut capture = Capture::new(&baseline, &build, &current);
+        let first = capture.inputs(&packages).unwrap();
+        let staged = capture.staged(&packages).unwrap();
+        assert_eq!(first, alone);
+        assert_eq!(staged, alone);
+        assert_eq!(
+            super::fingerprint(&alone.paths, &current.limits),
+            Some(alone.fingerprint)
+        );
+        let mut observed = super::Observed::default();
+        let checked = alone
+            .validate_observed(&current, &mut observed)
+            .unwrap()
+            .into_filesystem();
+        let again = first
+            .validate_observed(&current, &mut observed)
+            .unwrap()
+            .into_filesystem();
+        let fresh = alone.validate(&current).unwrap().into_filesystem();
+        assert!(checked.fingerprint() == fresh.fingerprint());
+        assert!(again.entries() == fresh.entries());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn declared_inputs_are_rechecked_before_api_replay_across_projects() {
         let (root, baseline, build, mut current) = fixture();
-        let inputs = Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        let inputs = Capture::new(&baseline, &build, &current)
+            .inputs(&[PACKAGE.to_owned()])
+            .unwrap();
         assert!(inputs.validate(&current).is_some());
         // Relocating the consuming project or removing the publisher's build
         // products does not change the crate's input proof.
@@ -674,13 +876,16 @@ mod tests {
         let (root, mut baseline, build, mut current) = fixture();
         current.project = root.clone();
         assert_eq!(
-            Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap_err(),
+            Capture::new(&baseline, &build, &current)
+                .inputs(&[PACKAGE.to_owned()])
+                .unwrap_err(),
             Unshared::Project
         );
         // A table only the project replays may name its sources: their
         // contents are checked before each replay.
-        let staged =
-            Inputs::capture_staged(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        let staged = Capture::new(&baseline, &build, &current)
+            .staged(&[PACKAGE.to_owned()])
+            .unwrap();
         assert!(staged.validate(&current).is_some());
         current.project = root.join("project");
         let proof::Recipe::Environment { key, .. } = &mut baseline.recipes[4] else {
@@ -688,7 +893,9 @@ mod tests {
         };
         *key = "UNEXPLAINED_OUTPUT".into();
         assert_eq!(
-            Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap_err(),
+            Capture::new(&baseline, &build, &current)
+                .inputs(&[PACKAGE.to_owned()])
+                .unwrap_err(),
             Unshared::Environment("UNEXPLAINED_OUTPUT".to_owned())
         );
         fs::remove_dir_all(root).unwrap();
@@ -710,8 +917,9 @@ mod tests {
         });
         baseline.recipes = recipes.into_boxed_slice();
         assert!(!current.environment.contains_key(crate::record::ROOTS));
-        let staged =
-            Inputs::capture_staged(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        let staged = Capture::new(&baseline, &build, &current)
+            .staged(&[PACKAGE.to_owned()])
+            .unwrap();
         assert!(!staged.environment.contains_key(crate::record::ROOTS));
         assert!(staged.validate(&current).is_some());
         fs::remove_dir_all(root).unwrap();
@@ -724,11 +932,15 @@ mod tests {
             panic!("fixture declared path");
         };
         *path = root.join("missing");
-        let inputs = Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        let inputs = Capture::new(&baseline, &build, &current)
+            .inputs(&[PACKAGE.to_owned()])
+            .unwrap();
         assert!(inputs.validate(&current).is_some());
         fs::create_dir(root.join("missing")).unwrap();
         assert!(inputs.validate(&current).is_none());
-        let inputs = Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        let inputs = Capture::new(&baseline, &build, &current)
+            .inputs(&[PACKAGE.to_owned()])
+            .unwrap();
         fs::write(root.join("missing/new.txt"), "new").unwrap();
         assert!(inputs.validate(&current).is_none());
         fs::remove_dir_all(root).unwrap();
@@ -749,7 +961,9 @@ mod tests {
         let mut allocation = Allocation::for_replay(&current.limits);
         baseline.proof = proof::evaluate(&recipes, &current.limits, &mut allocation).unwrap();
         baseline.recipes = recipes.into_boxed_slice();
-        let inputs = Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        let inputs = Capture::new(&baseline, &build, &current)
+            .inputs(&[PACKAGE.to_owned()])
+            .unwrap();
         assert!(inputs.validate(&current).is_some());
         fs::write(root.join("source/added.rs"), "").unwrap();
         assert!(inputs.validate(&current).is_none());
@@ -763,7 +977,7 @@ mod tests {
         let file = root.join("declared.txt");
         let missing = root.join("not-created");
         let tree = root.join("source");
-        let inputs = Inputs::fixture_paths(
+        let inputs = super::Inputs::fixture_paths(
             std::slice::from_ref(&file),
             &[missing.clone(), tree.clone()],
         );

@@ -178,6 +178,8 @@ fn cold_and_replay_rederive_the_same_mapping_from_current_edges() {
             environment: Box::default(),
         },
         package_files: std::collections::BTreeMap::new(),
+        #[cfg(feature = "rustc-driver")]
+        closure: None,
     };
     let complete = build
         .correlate(&graph, &limits, &work, Path::new(ROOT), TARGET)
