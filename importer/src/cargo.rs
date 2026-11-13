@@ -419,6 +419,10 @@ struct CompletedHarness {
     internal: internal::Recipe,
     observations: Option<Retained>,
     universe: Option<universe::Proof>,
+    /// The evidence `universe` completed, with the receipt it wrote: what
+    /// a replay of the sealed bundle completes again (#1836).
+    #[cfg(feature = "rustc-driver")]
+    replayed: Option<universe::Pending>,
     #[cfg(feature = "rustc-driver")]
     capture: Option<crate::extract::plan::Capture>,
     /// The shared tables this extraction leaves to publish.
@@ -2250,30 +2254,31 @@ impl Request {
                 crate::bindings::stage(staged, &keys, &entries);
             }
         }
-        let universe = universe
-            .map(|pending| {
-                pending.complete(
+        let (universe, replayed) = match universe {
+            Some(pending) => {
+                let completion = pending.complete(
                     manifest,
                     source,
                     metadata.digest(),
                     build_unit.digest(),
                     &input,
                     limits,
-                )
-            })
-            .transpose();
-        let universe = universe?;
-
-        let universe = if let Some(completion) = universe {
-            let proof = completion.proof();
-            if let Some(receipt) = completion.receipt() {
-                let receipt = receipt.encode()?;
-                write_atomic(receipt_path, &receipt)?;
+                )?;
+                let proof = completion.proof();
+                let replayed = match completion.receipt() {
+                    Some(receipt) => {
+                        write_atomic(receipt_path, &receipt.encode()?)?;
+                        pending.with_receipt(receipt)
+                    }
+                    None => pending,
+                };
+                (Some(proof), Some(replayed))
             }
-            Some(proof)
-        } else {
-            None
+            None => (None, None),
         };
+        // Only an owner replays the bundle it seals.
+        #[cfg(not(feature = "rustc-driver"))]
+        drop(replayed);
         // A capture of intrinsic facts keeps what the nightly's build
         // scripts gave, for its entries to be compared with the project's.
         #[cfg(feature = "rustc-driver")]
@@ -2304,6 +2309,8 @@ impl Request {
             internal,
             observations,
             universe,
+            #[cfg(feature = "rustc-driver")]
+            replayed,
             #[cfg(feature = "rustc-driver")]
             capture,
             #[cfg(feature = "rustc-driver")]

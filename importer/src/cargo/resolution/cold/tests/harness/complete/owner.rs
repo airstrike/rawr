@@ -865,6 +865,72 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
     fs::remove_dir_all(root).unwrap();
 }
 
+/// The replay that admits the bundle an evaluation just built interprets
+/// its record from what the build bound of the same bytes: it parses no
+/// Cargo document again, only compares the inputs. A process that staged
+/// nothing decodes the same record to the same interpretation (#1836).
+#[cfg(unix)]
+#[test]
+fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
+    let Fixture {
+        root,
+        request,
+        context,
+        store,
+    } = api_continuation_fixture(&Limits::standard());
+    let limits = Limits::standard();
+    let universe = request.universe.clone();
+    let cached = cargo::CachedToolchain {
+        context: context.clone(),
+        attestation: context.cached_toolchain().unwrap(),
+    };
+    let views = || crate::cargo::resolution::replay::VIEWS.with(Cell::get);
+    let since = |before: [usize; 3]| {
+        let after = views();
+        [0, 1, 2].map(|view| after[view] - before[view])
+    };
+    let before = views();
+    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
+        .unwrap();
+    assert_eq!(since(before), [0, 1, 0], "parsed, compared, kept");
+
+    owner::unstage();
+    let mut request = Fixture::request(&root, context.environment().clone());
+    request.universe = universe;
+    let fresh = crate::context::Context::capture_config(
+        context.project(),
+        &request.config,
+        context.target(),
+        &limits,
+    )
+    .unwrap();
+    cargo::toolchain::Attestation::fixture_replay(&fresh);
+    let cached = cargo::CachedToolchain {
+        attestation: fresh.cached_toolchain().unwrap(),
+        context: fresh.clone(),
+    };
+    let before = views();
+    let decoded =
+        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
+            .unwrap();
+    assert_eq!(since(before)[0], 1, "nothing staged: the record is decoded");
+    assert_eq!(
+        cold.node().receipt().action(),
+        decoded.node().receipt().action(),
+        "the same bundle"
+    );
+    assert!(
+        cold.decoded().same(decoded.decoded()),
+        "the build's interpretation is the decode's"
+    );
+    drop(decoded);
+    drop(cold);
+    drop(fresh);
+    drop(context);
+    store.retire_fixture().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Record drift between replays, whether a same-length change, a
 /// truncation or an extension, is refused at the next consumer as positive
 /// bundle corruption before any staged interpretation could be consulted.

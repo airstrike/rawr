@@ -1879,6 +1879,20 @@ impl ArtifactProfile {
 }
 
 impl BuildGraph {
+    /// Whether `other` holds the same units, whatever account each was
+    /// parsed or bound under.
+    #[cfg(test)]
+    pub(crate) fn same_units(&self, other: &Self) -> bool {
+        #[cfg(feature = "rustc-driver")]
+        let extraction = self.extraction == other.extraction;
+        #[cfg(not(feature = "rustc-driver"))]
+        let extraction = true;
+        self.canonical == other.canonical
+            && self.artifacts == other.artifacts
+            && self.scripts == other.scripts
+            && extraction
+    }
+
     /// Rebind transient reachability work to every proof retained after this
     /// graph was parsed, without retaining an independently spendable epoch.
     pub(crate) fn bind_reachability(&mut self, epoch: &Allocation, limits: &Limits) -> Result<()> {
