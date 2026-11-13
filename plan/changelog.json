@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A start whose API is current reads it, its classification and its facade once: identities share their unit, each definition is digested once, and stored bytes are trusted by their digest instead of being encoded again to check them.","issues":[1866],"refs":[1851]}
+    ]
   },
   "releases": [
     {
