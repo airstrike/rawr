@@ -12,6 +12,8 @@ use crate::contract::{self, Classified, Contract};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod kept;
 pub mod representability;
 pub mod std_binding;
 
@@ -248,10 +250,12 @@ struct StoredImplementation {
 }
 
 pub(crate) struct ClassifiedParts {
-    definitions: Box<[DefinitionPlan]>,
-    outcomes: Box<[OutcomeRecord]>,
-    support: SupportLedger,
-    canonical: Box<[u8]>,
+    // Shared, never copied: an owner keeps a classification between saves
+    // and hands each save's contract the same parts.
+    definitions: std::sync::Arc<[DefinitionPlan]>,
+    outcomes: std::sync::Arc<[OutcomeRecord]>,
+    support: std::sync::Arc<SupportLedger>,
+    canonical: std::sync::Arc<[u8]>,
     pub(crate) fingerprint: contract::fingerprint::Fingerprint,
     allocation: contract::Usage,
 }
@@ -4324,10 +4328,10 @@ impl<P: api::Phase> api::Graph<P> {
         let scratch_bytes = context.scratch_bytes.get();
         Ok((
             ClassifiedParts {
-                definitions,
-                outcomes,
-                support,
-                canonical,
+                definitions: definitions.into(),
+                outcomes: outcomes.into(),
+                support: support.into(),
+                canonical: canonical.into(),
                 fingerprint,
                 allocation,
             },
@@ -4417,10 +4421,10 @@ impl ClassifiedParts {
                 usize::MAX,
             )?;
             Ok(Self {
-                definitions,
-                outcomes,
-                support,
-                canonical: rebuilt.into_boxed_slice(),
+                definitions: definitions.into(),
+                outcomes: outcomes.into(),
+                support: support.into(),
+                canonical: rebuilt.into(),
                 fingerprint: contract::fingerprint::Fingerprint(Sha256::digest(bytes).into()),
                 allocation,
             })

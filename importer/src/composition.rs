@@ -55,6 +55,7 @@ where
         snapshot,
         limits,
         false,
+        None,
         execute,
     )
 }
@@ -83,6 +84,7 @@ where
         snapshot,
         limits,
         false,
+        None,
         execute,
     )
 }
@@ -112,6 +114,7 @@ where
         snapshot,
         limits,
         false,
+        None,
         execute,
     )
 }
@@ -143,6 +146,7 @@ where
         snapshot,
         limits,
         true,
+        None,
         execute,
     )
 }
@@ -174,6 +178,7 @@ where
         snapshot,
         limits,
         true,
+        None,
         execute,
     )
 }
@@ -185,6 +190,7 @@ where
 #[cfg(feature = "rustc-driver")]
 pub fn evaluate_api_semantic<B, C, E, T>(
     graph: crate::api::Continuation,
+    kept: Option<&mut crate::api::Kept>,
     adapter: &crate::profile::trusted::Adapter<T>,
     policy: &crate::classify::Policy,
     snapshot: crate::surface::Snapshot,
@@ -206,10 +212,15 @@ where
         snapshot,
         limits,
         true,
+        kept.map(crate::api::Kept::classification),
         execute,
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one evaluation joins the API, the profile and classification policy, the source and what an owner keeps"
+)]
 fn evaluate_with<B, C, E, T, O: checked::retained::Output, S: source::Source>(
     graph: S,
     adapter: &crate::profile::trusted::Adapter<T>,
@@ -217,6 +228,7 @@ fn evaluate_with<B, C, E, T, O: checked::retained::Output, S: source::Source>(
     snapshot: crate::surface::Snapshot,
     limits: &crate::cargo::Limits,
     semantic_source: bool,
+    mut classification: Option<&mut crate::classify::kept::Kept>,
     execute: impl FnOnce(
         &crate::Contract<crate::Classified>,
         &crate::profile::Contract,
@@ -259,10 +271,13 @@ where
     // fabricate a sibling dependency or prevent an already usable facade hit.
     let facade = match &generic {
         Outcome::Hit(generic) => {
-            let parts = generic
-                .value()
-                .replay(graph.graph(), policy)
-                .map_err(|error| cache(failure(error)))?;
+            let parts = replay(
+                classification.as_deref_mut(),
+                generic,
+                graph.graph(),
+                policy,
+            )
+            .map_err(|error| cache(failure(error)))?;
             let recipe = Recipe::<Facade>::from_inputs(
                 context,
                 &[generic.input()],
@@ -355,9 +370,7 @@ where
                 let (facade_recipe, facade_outcome, parts) = match facade {
                     Some(prepared) => prepared,
                     None => {
-                        let parts = generic
-                            .value()
-                            .replay(graph.graph(), policy)
+                        let parts = replay(classification, &generic, graph.graph(), policy)
                             .map_err(failure)?;
                         let recipe = Recipe::<Facade>::from_inputs(
                             context,
@@ -514,6 +527,23 @@ fn acquire<K: node::Value>(
     match outcome {
         Outcome::Hit(value) => batch.carry_owned(value),
         Outcome::Miss(miss) => recipe.resume(batch, miss, execute).map(Owned::Staged),
+    }
+}
+
+/// The parts of the stored classification `generic` for `graph`: those
+/// an owner kept for the same classification and API, when it keeps them.
+fn replay(
+    kept: Option<&mut crate::classify::kept::Kept>,
+    generic: &Owned<Generic>,
+    graph: &crate::api::Graph<impl crate::api::Phase>,
+    policy: &crate::classify::Policy,
+) -> Result<crate::classify::ClassifiedParts, crate::classify::Error> {
+    match kept {
+        Some(kept) => kept.replay(generic.value(), generic.identity().1, graph, policy),
+        None => {
+            crate::progress::replayed_classification();
+            generic.value().replay(graph, policy)
+        }
     }
 }
 

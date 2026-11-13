@@ -713,6 +713,7 @@ fn prepare_resolving(
                 };
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
+                    kept.as_deref_mut(),
                     adapter,
                     &policy,
                     expected,

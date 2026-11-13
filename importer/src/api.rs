@@ -12,6 +12,7 @@ use crate::cargo::{self, unit};
 use crate::{Error, Result};
 
 pub(crate) mod decode;
+pub(crate) mod frame;
 pub mod identity;
 pub mod ledger;
 pub mod model;
@@ -112,6 +113,9 @@ pub struct Graph<P: Phase> {
     canonical: Arc<[u8]>,
     fingerprint: Fingerprint,
     semantic_fingerprint: Fingerprint,
+    /// Where `canonical`'s body begins after its context and invocations,
+    /// when known: a graph with one can be framed by another build's.
+    head: Option<frame::Head>,
     stored: Option<StoredGraph>,
     universe: Option<[u8; 32]>,
     transaction: Usage,
@@ -334,6 +338,7 @@ pub(crate) struct Raw {
     canonical: Vec<u8>,
     semantic: Vec<u8>,
     universe: Option<[u8; 32]>,
+    head: Option<frame::Head>,
 }
 
 /// Capability-free graph bytes retained by the content store.
@@ -849,6 +854,7 @@ impl Graph<Captured> {
             canonical: Arc::clone(&self.canonical),
             fingerprint: self.fingerprint,
             semantic_fingerprint: self.semantic_fingerprint,
+            head: self.head,
             stored: self.stored.as_ref().map(StoredGraph::duplicate),
             universe: self.universe,
             transaction: self.transaction,
@@ -864,18 +870,24 @@ impl Graph<Captured> {
             semantic: canonical.clone(),
             canonical,
             universe,
+            head: None,
         }
     }
 
+    /// The raw and semantic encodings of one graph, each a head that names
+    /// its context and invocations, of `head` bytes in `canonical`,
+    /// followed by the same body.
     pub(crate) const fn raw_pair(
         canonical: Vec<u8>,
         semantic: Vec<u8>,
         universe: Option<[u8; 32]>,
+        head: Option<frame::Head>,
     ) -> Raw {
         Raw {
             canonical,
             semantic,
             universe,
+            head,
         }
     }
 
@@ -944,8 +956,9 @@ impl Graph<Captured> {
                     reason: "current API universe differs".into(),
                 });
             }
-            let canonical =
+            let (canonical, schema) =
                 semantic::current(&stored.canonical, context, &invocations, allocation)?;
+            let head = frame::Head::of(&canonical, schema, context, &invocations);
             let graph = Self::seal_canonical(
                 invocations,
                 selected.definitions.into_vec(),
@@ -958,6 +971,7 @@ impl Graph<Captured> {
                 canonical,
                 Semantic::Replayed(Fingerprint(Sha256::digest(&stored.canonical).into())),
                 selected.universe,
+                head,
                 allocation,
             )?;
             if graph.selected_usage()? != stored.selected_usage {
@@ -1039,6 +1053,7 @@ impl Graph<Captured> {
                 reason: "canonical graph changed between measurement and encoding".into(),
             });
         }
+        let head = frame::Head::of(&canonical, None, context, &invocations);
         let semantic = semantic::encode(
             &Canonical {
                 context: semantic::Context(context),
@@ -1064,6 +1079,7 @@ impl Graph<Captured> {
             canonical,
             Semantic::Captured(semantic),
             context.resolution_universe(),
+            head,
             allocation,
         )
     }
@@ -1088,6 +1104,7 @@ impl Graph<Captured> {
             canonical,
             semantic,
             universe,
+            head,
         } = raw;
         Self::seal_canonical(
             invocations,
@@ -1101,6 +1118,7 @@ impl Graph<Captured> {
             canonical,
             Semantic::Captured(semantic),
             universe,
+            head,
             allocation,
         )
     }
@@ -1118,6 +1136,7 @@ impl Graph<Captured> {
         canonical: Vec<u8>,
         semantic: Semantic,
         universe: Option<[u8; 32]>,
+        head: Option<frame::Head>,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Self> {
         let semantic_fingerprint = match &semantic {
@@ -1137,6 +1156,7 @@ impl Graph<Captured> {
             canonical: canonical.into(),
             fingerprint,
             semantic_fingerprint,
+            head,
             stored: None,
             universe,
             transaction: Usage { items: 0, bytes: 0 },
@@ -1206,6 +1226,7 @@ impl Graph<Captured> {
             canonical: self.canonical,
             fingerprint: self.fingerprint,
             semantic_fingerprint: self.semantic_fingerprint,
+            head: self.head,
             stored: self.stored,
             universe: self.universe,
             transaction: self.transaction,
@@ -2013,6 +2034,52 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&graph.canonical, &shared.canonical));
         assert!(std::sync::Arc::ptr_eq(&graph.lookup, &shared.lookup));
         assert_eq!(shared.fingerprint(), graph.fingerprint());
+    }
+
+    /// A new build of the same API, as after a private field, frames the
+    /// kept graph: the graph that build seals, sharing the kept ledgers.
+    /// A build whose API differs is not framed (#1786).
+    #[test]
+    fn a_kept_graph_framed_by_a_build_of_the_same_api_is_the_graph_it_seals() {
+        let rebuilt = |unit_key: &str| {
+            let mut invocation = invocation(unit_key);
+            invocation.artifact.digest = "33".repeat(32).into_boxed_str();
+            invocation.artifact.crate_hash = "another-crate-hash".into();
+            invocation
+        };
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
+        let kept = seal(&mut allocation).expect("graph seals");
+        let invocations = vec![rebuilt("unit-a"), rebuilt("unit-b")];
+        let sealed = Graph::seal(
+            &Context::fixture(),
+            invocations.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &mut Allocation::with_limits(usize::MAX, usize::MAX),
+        )
+        .expect("the new build's graph seals");
+        let framed = kept
+            .framed(&Context::fixture(), invocations, &mut allocation)
+            .expect("framing fits")
+            .expect("the same API frames");
+        assert_ne!(framed.fingerprint(), kept.fingerprint());
+        assert_eq!(framed.fingerprint(), sealed.fingerprint());
+        assert_eq!(framed.canonical_bytes(), sealed.canonical_bytes());
+        assert_eq!(framed.semantic_fingerprint(), kept.semantic_fingerprint());
+        assert!(std::sync::Arc::ptr_eq(
+            &framed.definitions,
+            &kept.definitions
+        ));
+        assert!(std::sync::Arc::ptr_eq(&framed.lookup, &kept.lookup));
+        let other = vec![invocation("unit-a"), invocation("unit-c")];
+        assert!(kept
+            .framed(&Context::fixture(), other, &mut allocation)
+            .expect("framing fits")
+            .is_none());
     }
 
     #[test]

@@ -2600,7 +2600,10 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// copy and its harness, the first after the start too (#1815), and each
 /// restart writes only the runner sources the edit changed (#1816). A
 /// private field's restart renders none of them: it takes the sources a
-/// rendering of the same inputs kept, the launch's too (#1821).
+/// rendering of the same inputs kept, the launch's too (#1821). A save
+/// whose API has the last save's content frames the graph that save kept
+/// and takes its classification: it builds no graph from the store and
+/// decodes no classification (#1786).
 #[test]
 fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let root = THEME.project();
@@ -2696,11 +2699,15 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     // harness that save sealed: no harness, copy, seal or probe. The
     // launch's harness is under the launch's demand, so the fourth, back
     // to the launch's sources, builds its own.
+    // The second's API has the first's content under a new build: it frames
+    // the graph the first kept, decoding and sealing none, and takes the
+    // classification the first replayed (#1786).
     let found = "harnesses 0, compiled 0, copied 0, sealed 0, probes 0, read 0, ";
     assert!(
         rounds.len() == 6
             && rounds[0].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
             && rounds[1].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
+            && rounds[1].ends_with(", API graphs rebuilt 0, framed 1, classifications replayed 0")
             && rounds[2].starts_with(found)
             && rounds[4].starts_with(found)
             && rounds[5].contains(", probes 1, ")
@@ -2708,6 +2715,12 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         "{rounds:?}\n{seen}"
     );
     eprintln!("the saves' rounds:\n{}", rounds.join("\n"));
+    let phases = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the round's phases took: "))
+        .collect::<Vec<_>>();
+    eprintln!("the saves' phases:\n{}", phases.join("\n"));
     // Each of the four saves' nightly checks, the undo's too, goes on from
     // the last one: it compiles the project's copy and the harness, the
     // first after the start too (#1815).

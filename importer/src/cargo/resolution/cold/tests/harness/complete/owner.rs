@@ -465,6 +465,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     let scope = recorder.scope().unwrap();
     let completed = crate::composition::evaluate_api_semantic(
         repaired_api,
+        None,
         &adapter,
         &crate::classify::Policy::standard(),
         source,
@@ -1271,6 +1272,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
     let adapter = api_adapter();
     let completed = crate::composition::evaluate_api_semantic(
         api,
+        None,
         &adapter,
         &crate::classify::Policy::standard(),
         source,
@@ -1309,6 +1311,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
         assert!(matches!(&warm.product, node::staging::Owned::Current(_)));
         let warm = crate::composition::evaluate_api_semantic(
             warm,
+            None,
             &adapter,
             &crate::classify::Policy::standard(),
             source,
@@ -1385,6 +1388,7 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
         checked,
     } = crate::composition::evaluate_api_semantic(
         api,
+        None,
         &adapter,
         &policy,
         source,
