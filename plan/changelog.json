@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A cold `rawr run` on a large program no longer stalls in reveal: each instance round digests again only the instances it added or revealed, not every instance signature with its facades' whole proofs.","issues":[1887],"refs":[1755]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.212",
+      "date": "2026-11-13",
+      "entries": [
+        {"text":"A cold `rawr run` on a large program no longer stalls in reveal: each instance round digests again only the instances it added or revealed, not every instance signature with its facades' whole proofs.","issues":[1887],"refs":[1755]}
+      ]
+    },
     {
       "version": "0.3.211",
       "date": "2026-11-13",

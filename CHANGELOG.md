@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.212 (2026-11-13)
+
 - A cold `rawr run` on a large program no longer stalls in reveal: each instance round digests again only the instances it added or revealed, not every instance signature with its facades' whole proofs. (#1887; part of #1755)
 
 ## 0.3.211 (2026-11-13)

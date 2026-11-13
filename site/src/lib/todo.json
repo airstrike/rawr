@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-13",
-  "version": "0.3.211",
+  "version": "0.3.212",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A cold `rawr run` on a large program no longer stalls in reveal: each instance round digests again only the instances it added or revealed, not every instance signature with its facades' whole proofs.","issues":[1887],"refs":[1755]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.212",
+        "date": "2026-11-13",
+        "entries": [
+          {"text":"A cold `rawr run` on a large program no longer stalls in reveal: each instance round digests again only the instances it added or revealed, not every instance signature with its facades' whole proofs.","issues":[1887],"refs":[1755]}
+        ]
+      },
       {
         "version": "0.3.211",
         "date": "2026-11-13",
@@ -4182,7 +4184,7 @@
     {"issue":1884,"title":"A save reveals again only the bodies whose own reads changed","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"},
     {"issue":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"},
-    {"issue":1887,"title":"A cold rawr run on a large program no longer stalls in reveal's instance digests","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1887,"title":"A cold rawr run on a large program no longer stalls in reveal's instance digests","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.212"},
     {"issue":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
