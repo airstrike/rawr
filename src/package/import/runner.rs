@@ -496,13 +496,19 @@ fn authenticate_structural(
     adapters
         .try_reserve_exact(rows.len())
         .map_err(|_| Error::Allocation)?;
+    if !carrier.contains_all(
+        rows.iter()
+            .map(|row| (&row.identity, &row.signature, row.arguments)),
+    ) {
+        panic!("each structural adapter is in the runner's manifest");
+    }
+    let facades = definitions
+        .iter()
+        .map(|definition| (definition.root(), definition))
+        .collect::<std::collections::HashMap<_, _>>();
     for row in rows {
-        if !carrier.contains(&row.identity, &row.signature, row.arguments) {
-            panic!("each structural adapter is in the runner's manifest");
-        }
-        let facade = definitions
-            .iter()
-            .find(|definition| definition.root() == row.root)
+        let facade = *facades
+            .get(row.root)
             .expect("each structural adapter names installed bindings");
         let (path, kind) = structural_path(facade, row);
         if kind != row.kind {
@@ -544,13 +550,14 @@ fn authenticate_structural(
             },
         )
         .with_instance(row.instance);
-        if adapters
-            .iter()
-            .any(|adapter: &host::runtime::StructuralAdapter| adapter.definition == definition)
-        {
-            panic!("each structural adapter is generated once");
-        }
         adapters.push(host::runtime::StructuralAdapter::transform(definition));
+    }
+    let mut generated = std::collections::HashSet::with_capacity(adapters.len());
+    if !adapters
+        .iter()
+        .all(|adapter: &host::runtime::StructuralAdapter| generated.insert(&adapter.definition))
+    {
+        panic!("each structural adapter is generated once");
     }
     Ok(adapters.into_boxed_slice())
 }
