@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -114,6 +115,42 @@ pub(crate) struct Record {
     charge: Charge,
     /// Sealed logical geometry; `None` only for typed records.
     geometry: Option<[u8; 32]>,
+}
+
+/// The installation ledger a thread read or wrote last, with the identity
+/// its file had then ([`Ledger::current`]).
+struct Kept {
+    root: PathBuf,
+    metadata: fs::Metadata,
+    ledger: Arc<Ledger>,
+}
+
+impl Kept {
+    /// Whether this is `root`'s ledger while its file is `current`.
+    fn holds(&self, root: &Path, current: &fs::Metadata) -> bool {
+        self.root == root && super::recovery::same_installation(&self.metadata, current)
+    }
+}
+
+thread_local! {
+    static KEPT: std::cell::RefCell<Option<Kept>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keep `ledger` as `root`'s, whose file is `metadata`.
+fn keep(root: &Path, metadata: fs::Metadata, ledger: Arc<Ledger>) {
+    KEPT.set(Some(Kept {
+        root: root.to_path_buf(),
+        metadata,
+        ledger,
+    }));
+}
+
+/// Keep `ledger`, just written to `root`'s file under the publication
+/// lease, so that no other writer came between, as the file's contents.
+fn written(root: &Path, ledger: Ledger) -> Result<Arc<Ledger>, Error> {
+    let ledger = Arc::new(ledger);
+    keep(root, recovery_metadata(root)?, Arc::clone(&ledger));
+    Ok(ledger)
 }
 
 #[derive(Clone)]
@@ -273,7 +310,9 @@ impl Capacity<'_> {
             &self.root,
             &target,
             &bytes,
+            super::entry::Durability::Ordered,
         )?;
+        written(&self.root, self.ledger)?;
         Ok(Reservation {
             key,
             charge,
@@ -396,6 +435,11 @@ impl Record {
             geometry: None,
         };
         Ok((record.encode(), record))
+    }
+
+    /// The SHA-256 of the payload this record seals.
+    pub(crate) const fn sha256(&self) -> [u8; 32] {
+        self.digest
     }
 
     /// Seal a schema-5 bundle record: the charge, its counts and the
@@ -707,28 +751,53 @@ impl Ledger {
         }
     }
 
-    fn read(root: &Path) -> Result<Self, Error> {
-        Self::read_with_recovery(root)
+    /// The installation ledger as its file holds it now. The thread keeps
+    /// the last one it read or wrote with the file's identity, and a read
+    /// of the same file takes it again and decodes nothing: a publication
+    /// replaces the file whole, so a changed ledger is a new identity
+    /// (#1843).
+    fn current(root: &Path) -> Result<Arc<Self>, Error> {
+        let before = recovery_metadata(root)?;
+        let kept = KEPT.with_borrow(|kept| {
+            kept.as_ref()
+                .filter(|kept| kept.holds(root, &before))
+                .map(|kept| Arc::clone(&kept.ledger))
+        });
+        if let Some(ledger) = kept {
+            return Ok(ledger);
+        }
+        let ledger = Arc::new(Self::read_with_recovery(root)?);
+        let after = recovery_metadata(root)?;
+        if super::recovery::same_installation(&before, &after) {
+            keep(root, after, Arc::clone(&ledger));
+        }
+        Ok(ledger)
     }
 
-    fn read_budgeted(root: &Path) -> Result<Self, Error> {
-        let path = ledger_path(root);
-        let bytes = super::entry::read_file_budgeted(&path, MAX_LEDGER_BYTES)?;
-        Self::decode(&bytes).map_err(|_| Error::Corrupt {
-            path,
-            reason: "installation ledger decoding failed",
-        })
+    /// [`Self::current`] to change: the thread's kept ledger is taken, not
+    /// copied, when nothing else holds it.
+    fn owned(root: &Path) -> Result<Self, Error> {
+        let before = recovery_metadata(root)?;
+        let kept = KEPT.with_borrow_mut(|kept| {
+            kept.take_if(|kept| kept.holds(root, &before))
+                .map(|kept| kept.ledger)
+        });
+        let ledger = match kept {
+            Some(ledger) => ledger,
+            None => Self::current(root)?,
+        };
+        Ok(Arc::try_unwrap(ledger).unwrap_or_else(|shared| (*shared).clone()))
     }
 
     fn read_recovery(
         root: &Path,
         budget: &mut super::recovery::Budget,
-    ) -> Result<std::sync::Arc<Self>, Error> {
+    ) -> Result<Arc<Self>, Error> {
         let before = recovery_metadata(root)?;
         if let Some(ledger) = budget.installation(root, &before) {
             return Ok(ledger);
         }
-        let ledger = std::sync::Arc::new(Self::read_with_recovery(root)?);
+        let ledger = Self::current(root)?;
         let after = recovery_metadata(root)?;
         if !super::recovery::same_installation(&before, &after) {
             return Err(Error::CleanupRequired(
@@ -1170,6 +1239,7 @@ impl Ledger {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        crate::progress::store(crate::progress::Store::LedgerDecode, 1);
         if bytes.len() < LEDGER_HEADER_BYTES
             || &bytes[..8] != LEDGER_MAGIC
             || u16_at(bytes, 8)? != LEDGER_SCHEMA
@@ -1392,7 +1462,7 @@ pub(crate) fn initialize(
     let path = ledger_path(root);
     match fs::symlink_metadata(&path) {
         Ok(_) => {
-            Ledger::read(root)?;
+            Ledger::current(root)?;
             Ok(())
         }
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
@@ -1405,8 +1475,15 @@ pub(crate) fn initialize(
             }
             let plan = super::control::Plan::replacement(&path, bytes.len());
             let admitted = super::control::Admitted::seal(publication, root, plan)?;
-            super::entry::replace_admitted_file(admitted, publication, root, &path, &bytes)?;
-            let ledger = Ledger::read(root)?;
+            super::entry::replace_admitted_file(
+                admitted,
+                publication,
+                root,
+                &path,
+                &bytes,
+                super::entry::Durability::Lasting,
+            )?;
+            let ledger = Ledger::current(root)?;
             physical(root, &ledger).map(|_| ())
         }
         Err(source) => Err(Error::Io {
@@ -1423,9 +1500,9 @@ pub(crate) fn reserve(
     key: LeaseKey,
     charge: Charge,
 ) -> Result<Reservation, Error> {
-    let mut ledger = Ledger::read(root)?;
+    let mut ledger = Ledger::owned(root)?;
     ledger.insert_reservation(key, charge)?;
-    save(publication, root, &ledger)?;
+    save(publication, root, ledger, super::entry::Durability::Ordered)?;
     Ok(Reservation {
         key,
         charge,
@@ -1443,7 +1520,7 @@ pub(crate) fn available<'lease>(
             "typed store capacity authority changed its canonical root",
         ));
     }
-    let ledger = Ledger::read(root)?;
+    let ledger = Ledger::owned(root)?;
     let next_ledger_length = ledger
         .encode()?
         .len()
@@ -1465,7 +1542,7 @@ pub(crate) fn available<'lease>(
 }
 
 pub(crate) fn bundle_count(root: &Path) -> Result<usize, Error> {
-    Ok(Ledger::read(root)?
+    Ok(Ledger::current(root)?
         .allocations
         .iter()
         .filter(|allocation| allocation.allocation.class == Class::Bundle)
@@ -1475,11 +1552,25 @@ pub(crate) fn bundle_count(root: &Path) -> Result<usize, Error> {
 pub(super) fn registrations_recovery(
     root: &Path,
     budget: &mut super::recovery::Budget,
-) -> Result<Box<[Registered]>, Error> {
-    Ok(Ledger::read_recovery(root, budget)?
-        .allocations
-        .clone()
-        .into_boxed_slice())
+) -> Result<Registrations, Error> {
+    Ledger::read_recovery(root, budget).map(Registrations)
+}
+
+/// The installation's registered allocations as its ledger holds them now.
+pub(super) fn registered(root: &Path) -> Result<Registrations, Error> {
+    Ledger::current(root).map(Registrations)
+}
+
+/// The installation's registered allocations, in its ledger's order: the
+/// ledger this thread keeps, shared, not copied (#1843).
+pub(super) struct Registrations(Arc<Ledger>);
+
+impl std::ops::Deref for Registrations {
+    type Target = [Registered];
+
+    fn deref(&self) -> &[Registered] {
+        &self.0.allocations
+    }
 }
 
 pub(super) fn garbage_recovery(
@@ -1519,8 +1610,15 @@ pub(super) fn begin_repair_eviction(
     let target = ledger_path(root);
     let plan = super::control::Plan::replacement(&target, bytes.len());
     let admitted = admit_repair_control_with(publication, root, &ledger, plan, repair)?;
-    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes)?;
-    budget.retain_installation(root, std::sync::Arc::new(ledger), recovery_metadata(root)?);
+    super::entry::replace_admitted_file(
+        admitted,
+        publication,
+        root,
+        &target,
+        &bytes,
+        super::entry::Durability::Lasting,
+    )?;
+    budget.retain_installation(root, written(root, ledger)?, recovery_metadata(root)?);
     Ok(())
 }
 
@@ -1581,9 +1679,9 @@ pub(crate) fn cancel(
     root: &Path,
     reservation: &Reservation,
 ) -> Result<(), Error> {
-    let mut ledger = Ledger::read(root)?;
+    let mut ledger = Ledger::owned(root)?;
     ledger.cancel(reservation)?;
-    save(publication, root, &ledger)
+    save(publication, root, ledger, super::entry::Durability::Ordered).map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1621,7 +1719,7 @@ pub(crate) fn plan(
             }
         }
     }
-    let mut ledger = Ledger::read(root)?;
+    let mut ledger = Ledger::owned(root)?;
     ledger.plan(
         reservation,
         Plan {
@@ -1632,7 +1730,7 @@ pub(crate) fn plan(
             bundle,
         },
     )?;
-    save_reserved(publication, root, &ledger, reservation)
+    save_reserved(publication, root, ledger, reservation)
 }
 
 pub(crate) fn commit(
@@ -1641,9 +1739,9 @@ pub(crate) fn commit(
     reservation: &Reservation,
     records: &[Record],
 ) -> Result<(), Error> {
-    let mut ledger = Ledger::read(root)?;
+    let mut ledger = Ledger::owned(root)?;
     ledger.commit(reservation, records)?;
-    save(publication, root, &ledger)
+    save(publication, root, ledger, super::entry::Durability::Lasting).map(|_| ())
 }
 
 pub(crate) fn registered_with_budget(
@@ -1651,11 +1749,8 @@ pub(crate) fn registered_with_budget(
     record: &Record,
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<(), Error> {
-    let ledger = match budget {
-        Some(_) => Ledger::read_budgeted(root)?,
-        None => Ledger::read(root)?,
-    };
-    registered_in(root, &ledger, record)
+    let _ = budget;
+    registered_in(root, &*Ledger::current(root)?, record)
 }
 
 fn registered_in(root: &Path, ledger: &Ledger, record: &Record) -> Result<(), Error> {
@@ -1696,8 +1791,7 @@ pub(crate) fn references(
             actual: entries.len(),
         });
     }
-    let ledger = Ledger::read(root)?;
-    references_with(&ledger, entries)
+    references_with(&*Ledger::current(root)?, entries)
 }
 
 pub(super) fn references_recovery(
@@ -1801,11 +1895,8 @@ pub(crate) fn action_is_bundled_with_budget(
     content: Digest,
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<bool, Error> {
-    let ledger = match budget {
-        Some(_) => Ledger::read_budgeted(root)?,
-        None => Ledger::read(root)?,
-    };
-    action_is_bundled_in(&ledger, kind, schema, action, content)
+    let _ = budget;
+    action_is_bundled_in(&*Ledger::current(root)?, kind, schema, action, content)
 }
 
 /// Check both held seals and their bundle ownership in one current registry read.
@@ -1814,7 +1905,7 @@ pub(super) fn registered_action(
     action: &Record,
     content: &Record,
 ) -> Result<bool, Error> {
-    let ledger = Ledger::read_budgeted(root)?;
+    let ledger = Ledger::current(root)?;
     registered_in(root, &ledger, action)?;
     registered_in(root, &ledger, content)?;
     action_is_bundled_in(
@@ -1863,8 +1954,7 @@ fn action_is_bundled_in(
 }
 
 pub(crate) fn validate_references(root: &Path, references: &[Reference]) -> Result<(), Error> {
-    let ledger = Ledger::read(root)?;
-    validate_reference_set(&ledger.allocations, references)
+    validate_reference_set(&Ledger::current(root)?.allocations, references)
 }
 
 pub(super) fn validate_reference_set(
@@ -2072,15 +2162,16 @@ pub(super) fn reservation_keys_header_recovery(root: &Path) -> Result<Box<[Lease
 
 #[cfg(test)]
 pub(crate) fn usage(root: &Path) -> Result<(Charge, usize), Error> {
-    let ledger = Ledger::read(root)?;
+    let ledger = Ledger::current(root)?;
     Ok((ledger.used, ledger.reservations.len()))
 }
 
 fn save(
     publication: &super::lease::Publication<'_>,
     root: &Path,
-    ledger: &Ledger,
-) -> Result<(), Error> {
+    ledger: Ledger,
+    durability: super::entry::Durability,
+) -> Result<Arc<Ledger>, Error> {
     let bytes = ledger.encode()?;
     if publication.root() != root {
         return Err(Error::State(
@@ -2092,7 +2183,8 @@ fn save(
     // A ledger write is admitted by what it changes; the whole-store
     // shape walk stays with bootstrap, garbage recovery and repair.
     let admitted = super::control::Admitted::seal(publication, root, plan)?;
-    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes)
+    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes, durability)?;
+    written(root, ledger)
 }
 
 fn recovery_metadata(root: &Path) -> Result<fs::Metadata, Error> {
@@ -2114,15 +2206,15 @@ fn save_recovery(
     ledger: Ledger,
     budget: &mut super::recovery::Budget,
 ) -> Result<(), Error> {
-    save(publication, root, &ledger)?;
-    budget.retain_installation(root, std::sync::Arc::new(ledger), recovery_metadata(root)?);
+    let ledger = save(publication, root, ledger, super::entry::Durability::Lasting)?;
+    budget.retain_installation(root, ledger, recovery_metadata(root)?);
     Ok(())
 }
 
 fn save_reserved(
     publication: &super::lease::Publication<'_>,
     root: &Path,
-    ledger: &Ledger,
+    ledger: Ledger,
     reservation: &Reservation,
 ) -> Result<(), Error> {
     if !ledger
@@ -2145,7 +2237,15 @@ fn save_reserved(
     // A ledger write is admitted by what it changes; the whole-store
     // shape walk stays with bootstrap, garbage recovery and repair.
     let admitted = super::control::Admitted::seal(publication, root, plan)?;
-    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes)
+    super::entry::replace_admitted_file(
+        admitted,
+        publication,
+        root,
+        &target,
+        &bytes,
+        super::entry::Durability::Ordered,
+    )?;
+    written(root, ledger).map(|_| ())
 }
 
 pub(super) fn admit_control<'lease>(
@@ -2153,7 +2253,7 @@ pub(super) fn admit_control<'lease>(
     root: &Path,
     plan: super::control::Plan,
 ) -> Result<super::control::Admitted<'lease>, Error> {
-    admit_control_with(publication, root, &Ledger::read(root)?, plan)
+    admit_control_with(publication, root, &*Ledger::current(root)?, plan)
 }
 
 pub(super) fn admit_control_recovery<'lease>(
@@ -2192,7 +2292,7 @@ fn physical(root: &Path, ledger: &Ledger) -> Result<Charge, Error> {
 
 #[cfg(test)]
 pub(super) fn physical_usage(root: &Path) -> Result<(Charge, Charge), Error> {
-    let ledger = Ledger::read(root)?;
+    let ledger = Ledger::current(root)?;
     let control = super::control::inventory(
         root,
         &ledger.allocations,
@@ -2288,7 +2388,7 @@ fn recover_planned(
         path: temporary.clone(),
         source,
     })?;
-    super::entry::sync_directory(temporary.parent().ok_or(Error::State(
+    super::entry::push_directory(temporary.parent().ok_or(Error::State(
         "typed store recovery allocation has no temporary parent",
     ))?)
 }
@@ -2344,7 +2444,7 @@ fn ledger_path(root: &Path) -> PathBuf {
 /// triggers, never refusals: room for one more bundle is made before a write.
 pub(super) fn over_cap(root: &Path, additional: Charge) -> Result<bool, Error> {
     // Committed allocations only: a pending reservation is not yet a size.
-    let ledger = Ledger::read(root)?;
+    let ledger = Ledger::current(root)?;
     let charge = ledger.used.checked_add(additional)?;
     let bundles = ledger
         .allocations
@@ -2705,7 +2805,7 @@ mod tests {
             super::super::entry::ensure_admitted_directory(
                 publication,
                 &root,
-                Path::new("actions/toolchain/0003"),
+                &Path::new("actions/toolchain").join(crate::node::STORAGE_DIRECTORY),
             )?;
             super::super::entry::ensure_admitted_directory(
                 publication,
@@ -2987,7 +3087,7 @@ mod tests {
             published(&root, |publication| {
                 recover_key(publication, &root, abandoned, &mut budget)
             });
-            let current = Ledger::read(&root).expect("current ledger");
+            let current = Ledger::current(&root).expect("current ledger");
             assert_eq!(
                 current.allocations.len(),
                 2,
@@ -3196,7 +3296,7 @@ mod tests {
         published(&root, |publication| {
             commit(publication, &root, &first, &[content_record, action_record])
         });
-        let sealed = Ledger::read(&root).expect("the sequenced ledger reads");
+        let sealed = Ledger::current(&root).expect("the sequenced ledger reads");
         assert_eq!(sealed.next_sequence, 2);
         assert!(sealed.allocations.iter().all(|registered| {
             registered.sequence == 1 && registered.publisher == Digest::from_bytes([9; 32])
@@ -3305,7 +3405,7 @@ mod tests {
             super::super::entry::ensure_admitted_directory(
                 publication,
                 &root,
-                Path::new("actions/runner/0003"),
+                &Path::new("actions/runner").join(crate::node::STORAGE_DIRECTORY),
             )?;
             super::super::entry::ensure_admitted_directory(
                 publication,

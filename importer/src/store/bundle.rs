@@ -2117,7 +2117,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         path: path.to_path_buf(),
         source,
     })?;
-    output.sync_all().map_err(|source| Error::Io {
+    super::entry::sync_file(&output).map_err(|source| Error::Io {
         operation: "sync runner bundle control file",
         path: path.to_path_buf(),
         source,

@@ -249,6 +249,13 @@ pub struct Store {
     _session: std::sync::Arc<session::Session>,
 }
 
+/// What one publication wrote: its content's digest and stored length.
+#[derive(Clone, Copy)]
+pub(crate) struct Published {
+    pub(crate) content: Digest,
+    pub(crate) length: usize,
+}
+
 // A reservation is matched at once; boxing Publish would allocate on every publication.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Reserved<K, T> {
@@ -662,7 +669,8 @@ impl Store {
         payload: Payload,
         reservation: &accounting::Reservation,
         mut bundle: Option<&mut bundle::Pending>,
-    ) -> Result<Box<[accounting::Record]>, Error> {
+    ) -> Result<(Box<[accounting::Record]>, Published), Error> {
+        crate::progress::store(crate::progress::Store::Publication, 1);
         let bytes = payload.stored(&parts::directory(&self.root))?;
         let bytes = &*bytes;
         let digest = content_digest::<K>(bytes);
@@ -725,6 +733,22 @@ impl Store {
             |metadata| {
                 let (encoded, record) =
                     accounting::Record::seal(content_identity, bytes, metadata)?;
+                // Both digests of the payload are known: a later lookup or
+                // read-set walk of it hashes nothing (#1844).
+                let identity = crate::file_digest::Identity::of(metadata);
+                crate::file_digest::insert(
+                    identity,
+                    crate::file_digest::Domain::Sha256,
+                    record.sha256(),
+                );
+                crate::file_digest::insert(
+                    identity,
+                    crate::file_digest::Domain::Content {
+                        kind: K::KIND as u8,
+                        schema: K::SCHEMA,
+                    },
+                    digest.as_bytes(),
+                );
                 Ok((encoded, record))
             },
         )?;
@@ -784,7 +808,13 @@ impl Store {
                 records.push(published_action.ok_or(Error::State(
                     "published action omitted its allocation charge",
                 ))?);
-                Ok(records.into_boxed_slice())
+                Ok((
+                    records.into_boxed_slice(),
+                    Published {
+                        content: digest,
+                        length: bytes.len(),
+                    },
+                ))
             }
             entry::Publication::Existing => Err(Error::Corrupt {
                 path: action_target,
@@ -799,7 +829,7 @@ impl Store {
         recipe: &Direct<K>,
         in_flight: Option<&crate::node::ReadSetProof>,
         evaluate: impl FnOnce() -> Result<Reserved<K, T>, Error>,
-    ) -> Result<T, Error> {
+    ) -> Result<(T, Option<Published>), Error> {
         self.with_node_reservation(
             ownership,
             accounting::LeaseKey::Action(recipe.action()),
@@ -815,7 +845,7 @@ impl Store {
         recipe: &Direct<K>,
         retention: &crate::node::read_set::Retention,
         evaluate: impl FnOnce() -> Result<Reserved<K, T>, Error>,
-        after_publish: impl FnOnce(T) -> Result<U, Error>,
+        after_publish: impl FnOnce(T, Option<Published>) -> Result<U, Error>,
     ) -> Result<U, Error> {
         ownership.require(&self.root, self.project)?;
         retention.require_parents(recipe.parents())?;
@@ -915,6 +945,7 @@ impl Store {
             in_flight.map(InFlight::Current),
             evaluate,
         )
+        .map(|(value, _)| value)
     }
 
     #[cfg(test)]
@@ -1029,7 +1060,7 @@ impl Store {
                             ));
                         };
                         lease::with_publication(&self.root, |publication| {
-                            let records = self.publish_reserved(
+                            let (records, _) = self.publish_reserved(
                                 publication,
                                 &recipe,
                                 payload,
@@ -1065,10 +1096,17 @@ impl Store {
         parent_count: usize,
         in_flight: Option<InFlight<'_>>,
         evaluate: impl FnOnce() -> Result<Reserved<K, T>, Error>,
-    ) -> Result<T, Error> {
+    ) -> Result<(T, Option<Published>), Error> {
         ownership.require(&self.root, self.project)?;
         lease::with_project(&self.root, self.project, || {
-            self.with_node_reservation_locked(ownership, key, parent_count, in_flight, evaluate, Ok)
+            self.with_node_reservation_locked(
+                ownership,
+                key,
+                parent_count,
+                in_flight,
+                evaluate,
+                |value, published| Ok((value, published)),
+            )
         })
     }
 
@@ -1080,7 +1118,7 @@ impl Store {
         parent_count: usize,
         in_flight: Option<InFlight<'_>>,
         evaluate: impl FnOnce() -> Result<Reserved<K, T>, Error>,
-        after_publish: impl FnOnce(T) -> Result<U, Error>,
+        after_publish: impl FnOnce(T, Option<Published>) -> Result<U, Error>,
     ) -> Result<U, Error> {
         let mut recovery = recovery::Budget::new();
         let in_flight_guard = self.acquire_in_flight(ownership, in_flight, &mut recovery)?;
@@ -1094,7 +1132,7 @@ impl Store {
                     lease::with_publication(&self.root, |publication| {
                         self.cancel_node(publication, &project, &reservation)
                     })?;
-                    Ok(result)
+                    Ok((result, None))
                 }
                 Ok(Reserved::Publish {
                     result,
@@ -1102,8 +1140,8 @@ impl Store {
                     payload,
                     mut bundle,
                 }) => {
-                    lease::with_publication(&self.root, |publication| {
-                        let records = self.publish_reserved(
+                    let published = lease::with_publication(&self.root, |publication| {
+                        let (records, published) = self.publish_reserved(
                             publication,
                             &recipe,
                             payload,
@@ -1115,9 +1153,9 @@ impl Store {
                             bundle.retain();
                         }
                         pins::cancel(publication, &self.root, self.project, &project)?;
-                        Ok(())
+                        Ok(published)
                     })?;
-                    Ok(result)
+                    Ok((result, Some(published)))
                 }
                 Err(failure) => {
                     match lease::with_publication(&self.root, |publication| {
@@ -1132,7 +1170,7 @@ impl Store {
                 }
             }
         })();
-        let result = result.and_then(after_publish);
+        let result = result.and_then(|(value, published)| after_publish(value, published));
         self.finish_in_flight(ownership, in_flight, in_flight_guard, result)
     }
 
@@ -1915,6 +1953,7 @@ impl Store {
         expected: Entry,
         budget: &crate::node::GraphBudget,
     ) -> Result<(), Error> {
+        crate::progress::store(crate::progress::Store::EntryWalked, 1);
         let gone = || Error::StaleReadSet {
             action: expected.action,
         };

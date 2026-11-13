@@ -747,12 +747,9 @@ fn clone_file_exact(
             path: destination.to_path_buf(),
             source,
         })?;
+    // No sync: the restored file is a copy of a sealed bundle member in
+    // Cargo's own build directory, which Cargo never syncs either (#1844).
     set_mode(&file, expected_mode, destination)?;
-    file.sync_all().map_err(|source| node::Error::Io {
-        operation: "sync restored authoritative build file",
-        path: destination.to_path_buf(),
-        source,
-    })?;
     let metadata = fs::symlink_metadata(destination).map_err(|source| node::Error::Io {
         operation: "inspect cloned authoritative build file mode",
         path: destination.to_path_buf(),

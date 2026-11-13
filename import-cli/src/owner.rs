@@ -795,6 +795,7 @@ fn session(
                     }
                 };
                 let preparation = resident::Start::now();
+                let store_work = rawr_import::progress::store_work();
                 let prepared =
                     profile.prepare(&next_target, None, revision, &scope, Some(&mut *kept));
                 preparation.tell_preparation();
@@ -1020,6 +1021,14 @@ fn session(
                             })
                     }
                 };
+                // What the save's store work came to, each cost that grows
+                // with the whole store (#1843, #1844).
+                if rawr_cli::cells::verbose() {
+                    eprintln!(
+                        "rawr-import: a save's store work: {}",
+                        rawr_import::progress::store_work().since(store_work)
+                    );
+                }
                 match admitted {
                     Ok(crate::native::Watched::Installed) => {
                         // The runner admits the generation at
