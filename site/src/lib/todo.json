@@ -4104,7 +4104,8 @@
     {"issue":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1863,"title":"The owner remembers the copies it wrote and hands its loaded program to the preparation","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.205"},
-    {"issue":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5379,7 +5380,8 @@
             {"number":1811,"title":"Keep a window's position and size across restarts when the program asked for the same frame","state":"closed"},
             {"number":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"closed"},
             {"number":1813,"title":"A marked main keeps taking swaps while its new runner builds","state":"open"},
-            {"number":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open"}
+            {"number":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open"},
+            {"number":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"open"}
           ]
         },
         {
