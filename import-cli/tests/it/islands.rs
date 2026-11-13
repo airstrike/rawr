@@ -1361,6 +1361,26 @@ fn a_held_struct_native_code_never_opens_restarts_on_a_new_field_without_a_nativ
     assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
 }
 
+/// Native code that reads the layout of a type holding the marked screen,
+/// as `size_of::<Workspace>()` does, opens the screen (D961): the check
+/// records it, and rawr's copy keeps its real layout, so the run prints the
+/// size `cargo run` prints.
+#[test]
+fn a_held_struct_whose_layout_native_code_reads_keeps_its_real_layout() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held-layout");
+    copy(Path::new(HELD), &root);
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"{}\", workspace.home.title());\n",
+        "    println!(\"{}\", workspace.home.title());\n    \
+         println!(\"size {}\", std::mem::size_of::<Workspace>());\n",
+    );
+    let printed = cargo_prints(&root);
+    assert!(printed.contains("\nsize "), "{printed}");
+    checks_and_prints(&root, &printed);
+}
+
 /// A save whose code panics on the running program's state, as a
 /// framework's own check of its hooks can, restarts the program with the
 /// save (D553.6). It needs no native build: a new process of the running

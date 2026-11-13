@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// The record's layout. A record of another is read as none.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// The extension of a record beside its unit's `.rmeta`.
 const EXTENSION: &str = "rawr-uses";
@@ -38,6 +38,12 @@ pub struct Uses {
     /// held type or a named function's signature reaches: native code is
     /// built against their fields, their drop and their trait impls.
     held: BTreeSet<String>,
+    /// The marked types native code opens: it reads or borrows a field,
+    /// builds or matches a value by its fields, or reads its layout, by
+    /// `size_of`, `align_of`, `transmute` or `offset_of!`, its own or a
+    /// type's that holds it. Native code that holds a type it never opens
+    /// can hold it by the handle of the program value (D961).
+    opened: BTreeSet<String>,
     /// Each member name native code looked up on a marked type, by a method
     /// call or a type-relative path, as `physics::Counter::describe`,
     /// whatever it found: a new member of that name may be found instead.
@@ -103,6 +109,11 @@ impl Recorder {
         self.uses.held.insert(path)
     }
 
+    /// Native code opens the marked type at `path` ([`Uses::opens`]).
+    pub fn open(&mut self, path: String) {
+        self.uses.opened.insert(path);
+    }
+
     /// Native code looked up `member` on the marked type at `owner`.
     pub fn probe(&mut self, owner: &str, member: &str) {
         self.uses.probed.insert(format!("{owner}::{member}"));
@@ -166,12 +177,19 @@ impl Uses {
         self.held.contains(path)
     }
 
-    /// The marked types native code holds, which rawr's copy of the crate
-    /// may declare as the handle of the program value when native code
-    /// can't open them (D961).
+    /// Whether native code opens the marked type at `path`: reads its
+    /// fields or its layout, or builds or matches it by its fields.
+    #[must_use]
+    pub fn opens(&self, path: &str) -> bool {
+        self.opened.contains(path)
+    }
+
+    /// The marked types native code holds but never opens, which rawr's
+    /// copy of the crate may declare as the handle of the program value
+    /// (D961).
     #[must_use]
     pub fn opaque(&self) -> BTreeSet<String> {
-        self.held.clone()
+        self.held.difference(&self.opened).cloned().collect()
     }
 
     /// The held type that `path` is a member of (`physics::Counter` of
@@ -230,6 +248,7 @@ impl Uses {
         self.schema = SCHEMA;
         self.named.extend(other.named);
         self.held.extend(other.held);
+        self.opened.extend(other.opened);
         self.probed.extend(other.probed);
         self.scoped.extend(other.scoped);
         self.objects.extend(other.objects);
@@ -320,6 +339,8 @@ mod tests {
         let mut recorder = Recorder::default();
         recorder.name("physics::label".to_owned());
         recorder.hold("physics::Counter".to_owned());
+        recorder.hold("physics::Ball".to_owned());
+        recorder.open("physics::Ball".to_owned());
         recorder.probe("physics::Counter", "step");
         recorder.scope("physics", "Result");
         recorder.object("Page".to_owned());
@@ -334,6 +355,7 @@ mod tests {
             Some("physics::Counter")
         );
         assert_eq!(uses.holder("physics::Counters"), None);
+        assert!(uses.opens("physics::Ball") && !uses.opens("physics::Counter"));
         assert!(uses.probes("physics::Counter", "step"));
         assert!(uses.scopes("physics::Result"));
         assert!(uses.globs("physics"));
@@ -346,13 +368,15 @@ mod tests {
 
     /// A crate written with every body is written again for its first
     /// record, and one written with named bodies only for a name it lacks
-    /// or for a change to the types native code holds.
+    /// or for a change to the types native code holds but never opens.
     #[test]
     fn bodies_are_written_again_only_for_a_name_they_lack() {
         use super::Bodies;
         let mut recorder = Recorder::default();
         recorder.name("physics::label".to_owned());
         recorder.hold("physics::Counter".to_owned());
+        recorder.hold("physics::Ball".to_owned());
+        recorder.open("physics::Ball".to_owned());
         let uses = recorder.finish();
         let paths = |paths: &[&str]| paths.iter().map(|path| (*path).to_owned()).collect();
         let named = |names: &[&str]| Bodies::Named {
