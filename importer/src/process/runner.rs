@@ -619,7 +619,13 @@ impl<B> Candidate<Admitted, B> {
     }
 
     /// Establish child observation before final parent validation and startup.
-    pub fn observe_initial(&mut self, bytes: &[u8]) -> Result<(), Error> {
+    /// `current` says what proves the runner's read set current once it
+    /// observes: a walk of it now, or the caller's watcher (#1755).
+    pub fn observe_initial(
+        &mut self,
+        bytes: &[u8],
+        current: crate::supervisor::bootstrap::Current,
+    ) -> Result<(), Error> {
         let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
         if inner.started
             || inner.observed
@@ -639,8 +645,12 @@ impl<B> Candidate<Admitted, B> {
         inner.observed = true;
         // The child request is already captured and its observer can revoke it
         // throughout this full validation and the remaining startup/pin work:
-        // this is the start's one walk of its closure (#1760).
-        inner.manifest().revalidate_complete()?;
+        // this is the start's one walk of its closure (#1760). A new process
+        // of a runner whose inputs the caller watched since an earlier
+        // process's walk, and saw none change, needs none (#1755).
+        if current == crate::supervisor::bootstrap::Current::Walked {
+            inner.manifest().revalidate_complete()?;
+        }
         Ok(())
     }
 

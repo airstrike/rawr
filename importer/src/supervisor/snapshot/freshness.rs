@@ -83,6 +83,14 @@ impl Source {
         if !same(&before, &opened) {
             return Err(drift(&self.path));
         }
+        // A file this process hashed at this very identity holds the same
+        // bytes: only a file written since is read again (#1755).
+        let identity = crate::file_digest::Identity::of(&opened);
+        if crate::file_digest::get(identity, crate::file_digest::Domain::Sha256)
+            .is_some_and(|digest| digest == self.digest)
+        {
+            return Ok(());
+        }
         let mut digest = Sha256::new();
         let mut buffer = [0_u8; 16 * 1024];
         let mut remaining = self.bytes;
@@ -103,6 +111,7 @@ impl Source {
         {
             return Err(drift(&self.path));
         }
+        crate::file_digest::insert(identity, crate::file_digest::Domain::Sha256, self.digest);
         Ok(())
     }
 }

@@ -633,7 +633,13 @@ fn session(
                     if !refresh_required && adapter.resident_eligible(&native_baseline) =>
                 {
                     if let Some(save) = swap.take()
-                        && respawned(&mut lane, save, &reason, reload)
+                        && respawned(
+                            &mut lane,
+                            save,
+                            adapter.unchanged(&native_baseline),
+                            &reason,
+                            reload,
+                        )
                     {
                         swapped_marked = false;
                         continue;
@@ -774,7 +780,13 @@ fn session(
                         // builds below while the program keeps running.
                         if !adapter.resident_eligible(&native_baseline) {
                             Some(staged)
-                        } else if !respawned(&mut lane, save, &reason, reload) {
+                        } else if !respawned(
+                            &mut lane,
+                            save,
+                            adapter.unchanged(&native_baseline),
+                            &reason,
+                            reload,
+                        ) {
                             return Ok(Ended::Restart(reason.into(), None));
                         } else {
                             swapped_marked = false;
@@ -865,10 +877,15 @@ fn session(
                                 resident::Respawn::new(snapshot, observation.into())
                             });
                             let staged = match save {
-                                Some(save) => adapter
-                                    .prepare_inputs(inputs)
-                                    .ok()
-                                    .filter(|_| respawned(&mut lane, save, &reason, reload)),
+                                Some(save) => adapter.prepare_inputs(inputs).ok().filter(|_| {
+                                    respawned(
+                                        &mut lane,
+                                        save,
+                                        adapter.unchanged(&next_native_baseline),
+                                        &reason,
+                                        reload,
+                                    )
+                                }),
                                 None => None,
                             };
                             let Some(staged) = staged else {
@@ -1171,11 +1188,13 @@ fn admits(program: bool, manifests: &resident::Manifests) -> bool {
 }
 
 /// Restart the program for `reason` in a new process of its runner, from
-/// `save`, with no check and no native build (D553.6). `false` when it
-/// didn't start, and no runner runs: the program takes the full start.
+/// `save`, with no check and no native build (D553.6), and with
+/// `unchanged`, no walk of its read set (#1755). `false` when it didn't
+/// start, and no runner runs: the program takes the full start.
 fn respawned(
     lane: &mut Lane,
     save: resident::Respawn,
+    unchanged: Option<rawr_watch::native::Unchanged>,
     reason: &str,
     reload: Option<&rawr_cli::events::reload::Stream>,
 ) -> bool {
@@ -1183,7 +1202,7 @@ fn respawned(
         reload.starting(Some(reason));
     }
     let walks = rawr_import::progress::read_set_walks();
-    match save.start(lane) {
+    match save.start(lane, unchanged) {
         Ok(_) => {
             if rawr_cli::cells::verbose() {
                 eprintln!(

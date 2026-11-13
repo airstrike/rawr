@@ -449,6 +449,28 @@ impl Carrier {
                 && entry.arguments() == arguments
         })
     }
+
+    /// Prove that the manifest contains each of `rows`, exact generated
+    /// adapter rows, as [`Self::contains`] proves one, with one pass over
+    /// its entries for them all.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn contains_all<'r>(
+        &self,
+        rows: impl IntoIterator<Item = (&'r [u8; 32], &'r [u8; 32], u32)>,
+    ) -> bool {
+        // Each identity is one entry's (`repeats_identity`).
+        let entries = self
+            .entries
+            .iter()
+            .map(|entry| (entry.identity(), entry))
+            .collect::<std::collections::HashMap<_, _>>();
+        rows.into_iter().all(|(identity, signature, arguments)| {
+            entries.get(identity).is_some_and(|entry| {
+                entry.signature() == signature && entry.arguments() == arguments
+            })
+        })
+    }
 }
 
 /// Deterministic generated-manifest drift.

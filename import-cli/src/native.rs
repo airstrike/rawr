@@ -193,9 +193,10 @@ impl<B> Lane<B> {
         built: rawr_import::runner::Manifest<rawr_import::runner::Built, B>,
         snapshot: rawr_import::supervisor::snapshot::Bytes,
         observation: &[u8],
+        current: rawr_import::supervisor::bootstrap::Current,
     ) -> Result<rawr_import::process::Candidate<rawr_import::process::Admitted, B>, Error> {
         self.supervisor
-            .bootstrap_observed(built, snapshot, &self.process, observation)
+            .bootstrap_observed(built, snapshot, &self.process, observation, current)
             .map_err(|error| match error {
                 // The runner's own failures, the walk of its read set as it
                 // observes among them, are a running runner's.
@@ -214,7 +215,12 @@ impl<B> Lane<B> {
         observation: &[u8],
         checkpoint: rawr::reload::scheduler::Checkpoint,
     ) -> Result<Watched, Error> {
-        let admitted = self.admit_built_observed(built, snapshot, observation)?;
+        let admitted = self.admit_built_observed(
+            built,
+            snapshot,
+            observation,
+            rawr_import::supervisor::bootstrap::Current::Walked,
+        )?;
         match adapter.admit_checkpoint(checkpoint, admitted, |candidate| {
             self.slot.install_latest(candidate)
         }) {
@@ -237,7 +243,12 @@ impl<B> Lane<B> {
         request: rawr::reload::scheduler::Request,
         handover: Handover,
     ) -> Result<Watched, Error> {
-        let admitted = self.admit_built_observed(built, snapshot, observation)?;
+        let admitted = self.admit_built_observed(
+            built,
+            snapshot,
+            observation,
+            rawr_import::supervisor::bootstrap::Current::Walked,
+        )?;
         match adapter.admit_current(request.complete(admitted), |candidate| {
             self.slot.install_latest(candidate)
         }) {
@@ -258,19 +269,26 @@ impl<B> Lane<B> {
     /// new `main` runs. Nothing of it carries over: the new program starts
     /// with fresh memory, statics and `main`. Its build, its store pins and
     /// the watcher stay. On an error no runner runs, and the program takes
-    /// the full start.
+    /// the full start. With the watcher's word that no native input changed
+    /// since the running runner was checked, the new process doesn't walk
+    /// its read set again (#1755).
     pub(crate) fn respawn(
         &mut self,
         snapshot: rawr_import::supervisor::snapshot::Bytes,
         observation: &[u8],
+        unchanged: Option<rawr_watch::native::Unchanged>,
     ) -> Result<rawr_import::supervisor::GenerationKey, Error> {
+        let walk = match unchanged {
+            Some(_) => rawr_import::supervisor::bootstrap::Current::Watched,
+            None => rawr_import::supervisor::bootstrap::Current::Walked,
+        };
         let current = self
             .slot
             .take()
             .ok_or(Error::State("before it restarted"))?;
         let mut built = current.retire_keeping_manifest()?;
         built.rebind_startup(&snapshot).map_err(Error::Node)?;
-        let admitted = self.admit_built_observed(built, snapshot, observation)?;
+        let admitted = self.admit_built_observed(built, snapshot, observation, walk)?;
         if let Some(previous) = self.slot.install(admitted) {
             previous.shutdown()?;
         }

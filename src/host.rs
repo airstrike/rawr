@@ -844,7 +844,26 @@ impl Registry {
     /// Whether the runner admitted the adapter `definition`.
     #[cfg(feature = "rust-import")]
     pub(crate) fn admits_structural(&self, definition: &structural::Definition) -> bool {
-        self.structural.contains(definition)
+        // Sorted by this key, which admits each once (`admit_structural`).
+        let key = (
+            definition.owner(),
+            definition.path(),
+            definition.selector(),
+            definition.kind(),
+            definition.instance(),
+        );
+        self.structural
+            .binary_search_by(|candidate| {
+                (
+                    candidate.owner(),
+                    candidate.path(),
+                    candidate.selector(),
+                    candidate.kind(),
+                    candidate.instance(),
+                )
+                    .cmp(&key)
+            })
+            .is_ok_and(|index| self.structural[index] == *definition)
     }
 
     #[cfg(feature = "rust-import")]
