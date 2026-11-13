@@ -6,6 +6,10 @@
 //! the key it was made at. A file another build of rawr wrote, a file
 //! whose key isn't the one asked for, and a file that doesn't decode are
 //! each a miss: the part is made again and its file written over.
+//!
+//! The outline of the image's own facades (`host::image::Outline`) has one
+//! file too, at the key of its facades' digests, so a respawned runner of
+//! the same image reads it rather than decoding every body again (#1755).
 
 use crate::stored::Known;
 use crate::Engine;
@@ -36,6 +40,8 @@ pub(super) enum Kind {
     Part(super::kept::Part),
     /// Reveal's readings of its bodies.
     Readings,
+    /// The outline of the image's own facades, one for the runner.
+    Outline,
 }
 
 /// One source's file of one kind, at the key it is made at.
@@ -141,6 +147,7 @@ impl Disk {
             Kind::Part(super::kept::Part::Bodies) => ".bodies",
             Kind::Part(super::kept::Part::Script) => ".script",
             Kind::Readings => ".readings",
+            Kind::Outline => ".outline",
         });
         self.directory.join(name)
     }

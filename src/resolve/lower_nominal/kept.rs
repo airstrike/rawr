@@ -958,7 +958,11 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         )
     };
     let native = kept.map_or_else(
-        || crate::Shared::new(Native::new(program, &models.host)),
+        || {
+            crate::Shared::new(Native::outlined(program, &models.host, |held| {
+                outline(engine, held)
+            }))
+        },
         |(_, native)| native,
     );
     // A facade's proof is what every source reads of another crate's
@@ -978,6 +982,28 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
     lowerings.digests = digests;
     lowerings.native = Some((registered, native));
     interface
+}
+
+/// The outline of `held`: the one an earlier runner of the same image
+/// kept on disk at its key, or one made and kept there (#1755).
+fn outline(engine: &Engine, held: &[&host::image::Held]) -> host::image::Outline {
+    let key = host::image::outline::Key::of(held);
+    let entry = disk::Entry {
+        identity: "",
+        kind: disk::Kind::Outline,
+        key: key.as_bytes(),
+    };
+    let kept = lock(engine)
+        .disk
+        .as_mut()
+        .and_then(|disk| disk.read::<host::image::Outline>(engine, entry));
+    kept.unwrap_or_else(|| {
+        let outline = host::image::Outline::new(held);
+        if let Some(disk) = lock(engine).disk.as_mut() {
+            disk.write(engine, entry, &outline);
+        }
+        outline
+    })
 }
 
 impl ExecutableOp {
