@@ -289,17 +289,20 @@ impl Request {
             self.profile.as_bytes(),
         ]);
         // With the internal recipe the provisional metadata sealed, so that
-        // is not observed again (#1837).
-        let reuse = matches!(placement.state, cargo::PlacementState::Fresh)
-            .then(|| {
-                let outputs = super::remembered::lookup(
-                    &remembered_base,
-                    layout.root(),
-                    cached.context.rawr(),
-                )?;
-                Some((self.internal.recall(&outputs.internal)?, outputs))
-            })
-            .flatten();
+        // is not observed again (#1837). A persisted placement takes them
+        // while they hold its own lock: Cargo resolves nothing anew under
+        // `--locked`, and reads what it read for them (#1847).
+        let reuse = (|| {
+            let outputs =
+                super::remembered::lookup(&remembered_base, layout.root(), cached.context.rawr())?;
+            let recalled = self.internal.recall(&outputs.internal)?;
+            match &placement.state {
+                cargo::PlacementState::Persisted { lock, .. } if *outputs.lock != *lock.bytes() => {
+                    None
+                }
+                _ => Some((recalled, outputs)),
+            }
+        })();
         let (recalled, reuse) = match reuse {
             Some((recalled, outputs)) => (Some(recalled), Some(outputs)),
             None => (None, None),
@@ -385,8 +388,15 @@ impl Request {
                 cargo::write_atomic(paths.manifest(), &manifest)?;
                 cargo::write_atomic(paths.source(), &source)?;
                 cargo::write_atomic(paths.lock(), &locked)?;
-                crate::progress::resolved();
-                let bytes = metadata(&native, self, layout, true, limits)?;
+                let bytes = match &reuse {
+                    Some(reuse) => reuse.candidate.clone(),
+                    None => {
+                        crate::progress::resolved();
+                        let bytes = metadata(&native, self, layout, true, limits)?;
+                        produced = Some(bytes.clone());
+                        bytes
+                    }
+                };
                 self.revalidate(limits, "reserved locked persisted metadata")?;
                 cargo::require_exact_file(
                     "reserved persisted lock after metadata",
