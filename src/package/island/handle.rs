@@ -13,7 +13,9 @@
 //! fields, none visible to native code; it is neither generic nor `Copy`,
 //! has no `repr`, derives only `Debug`, `Clone` and `Default`, which the
 //! handle implements by asking the interpreter, and no other marked type
-//! holds it, as such a type's value crosses whole.
+//! holds it, as such a type's value crosses whole, nor does a marked
+//! function take `&mut` of it beside a receiver, which crosses as a copy
+//! taken back.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -46,6 +48,13 @@ impl Generator<'_> {
                 );
             }
         }
+        // And each a marked function takes `&mut` of beside its receiver,
+        // alone or inside another type, which crosses as a copy taken back,
+        // as a handle can't yet: native code calls it, so its trampoline
+        // must cross.
+        for source in sources {
+            held.extend(self.lent_mutably(source));
+        }
         let mut handled = BTreeSet::new();
         for source in sources {
             for item in source.items {
@@ -64,6 +73,56 @@ impl Generator<'_> {
             }
         }
         handled
+    }
+
+    /// The marked types a function of `source` native code can call takes
+    /// `&mut` of outside its receiver, as a free `update(state: &mut
+    /// State, ..)` does, by their paths: the referent's own and each one it
+    /// names, `Self` as its impl's type.
+    fn lent_mutably(&self, source: &Source<'_>) -> BTreeSet<String> {
+        let mut functions = Vec::new();
+        for item in source.items {
+            match item {
+                item::Parsed::Function(declared) if declared.header.visibility.is_some() => {
+                    functions.push((declared, None));
+                }
+                item::Parsed::Impl(declared) => {
+                    let owner = match &declared.owner {
+                        type_ref::Type::Path(owner) => self.marked(source, owner),
+                        _ => None,
+                    };
+                    for function in &declared.functions {
+                        if declared.trait_.is_some() || function.header.visibility.is_some() {
+                            functions.push((function, owner));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut lent = BTreeSet::new();
+        for (function, owner) in functions {
+            for parameter in &function.parameters {
+                let type_ref::Type::Reference {
+                    mutable: true,
+                    target,
+                    ..
+                } = &parameter.ty
+                else {
+                    continue;
+                };
+                let mut paths = Vec::new();
+                paths_in(target, &mut paths);
+                for path in paths {
+                    let named = match &path.segments[..] {
+                        [only] if only.name.text == "Self" => owner,
+                        _ => self.marked(source, path),
+                    };
+                    lent.extend(named.map(str::to_owned));
+                }
+            }
+        }
+        lent
     }
 
     /// The struct `declared` at `path`, held by its handle, as rawr's copy
