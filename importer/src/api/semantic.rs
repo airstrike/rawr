@@ -246,22 +246,15 @@ fn require(expected: &[u8], value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-/// Encode one semantic API document, whatever its size: a large program's
-/// API is never refused (no resource gating). `allocation.bytes` records
-/// the encoded size.
+/// Encode one semantic API document, whatever its size, in one pass: a
+/// large program's API is never refused (no resource gating).
+/// `allocation.bytes` records the encoded size.
 pub(crate) fn encode(
     value: &impl Serialize,
     allocation: &mut crate::extract::Allocation,
 ) -> Result<Vec<u8>> {
-    let length = measure(value, allocation)?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(length).map_err(|source| {
-        allocation.failure(Error::Allocation {
-            operation: "semantic API encoding",
-            source,
-        })
-    })?;
-    append(value, length, &mut output)?;
+    let output = encode_once(value, allocation)?;
+    admit(output.len(), allocation)?;
     Ok(output)
 }
 
@@ -315,38 +308,6 @@ impl std::io::Write for Fallible {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-}
-
-/// Measure one semantic API document and record it on the canonical account.
-pub(crate) fn measure(
-    value: &impl Serialize,
-    allocation: &mut crate::extract::Allocation,
-) -> Result<usize> {
-    let mut measured = super::Measured { bytes: 0 };
-    let result = serde_json::to_writer(&mut measured, value);
-    result.map_err(|error| Error::Extraction {
-        code: "semantic-api-encoding",
-        reason: error.to_string().into_boxed_str(),
-    })?;
-    allocation.items(1)?;
-    allocation.bytes(measured.bytes)?;
-    Ok(measured.bytes)
-}
-
-/// Append one measured document to `output`, which already has room for it.
-pub(crate) fn append(value: &impl Serialize, length: usize, output: &mut Vec<u8>) -> Result<()> {
-    let start = output.len();
-    serde_json::to_writer(&mut *output, value).map_err(|error| Error::Extraction {
-        code: "semantic-api-encoding",
-        reason: error.to_string().into_boxed_str(),
-    })?;
-    if output.len() - start != length {
-        return Err(Error::Extraction {
-            code: "semantic-api-size",
-            reason: "semantic API encoding changed length".into(),
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

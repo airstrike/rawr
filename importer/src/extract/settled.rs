@@ -10,7 +10,7 @@
 //! under a new build's invocations, and its canonicalization frames the
 //! kept settlement with them.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::api;
 use crate::api::ledger;
@@ -21,17 +21,19 @@ use crate::Result;
 use super::{raw_pair, Allocation, Catalog, EvidenceCategory, SealMode};
 
 /// What a candidate's graph holds beside its invocations, and the encoding
-/// of its raw body, which the context and the invocations frame.
+/// of its raw body, which the context and the invocations frame. Its parts
+/// are shared: the settlement kept for the next canonicalization and the
+/// graph sealed from it hold the same ones.
 #[derive(Clone)]
 pub(super) struct Settled {
-    pub(super) body: Vec<u8>,
-    pub(super) definitions: Vec<model::Definition>,
-    pub(super) paths: Vec<ledger::Path>,
-    pub(super) implementations: Vec<model::Implementation>,
-    pub(super) scalar_predicate_proofs: Vec<model::ScalarPredicateProof>,
-    pub(super) support: Vec<ledger::Support>,
-    pub(super) anonymous: Vec<ledger::AnonymousImport>,
-    pub(super) index: Vec<ledger::Index>,
+    pub(super) body: Arc<[u8]>,
+    pub(super) definitions: Arc<[model::Definition]>,
+    pub(super) paths: Arc<[ledger::Path]>,
+    pub(super) implementations: Arc<[model::Implementation]>,
+    pub(super) scalar_predicate_proofs: Arc<[model::ScalarPredicateProof]>,
+    pub(super) support: Arc<[ledger::Support]>,
+    pub(super) anonymous: Arc<[ledger::AnonymousImport]>,
+    pub(super) index: Arc<[ledger::Index]>,
 }
 
 impl Settled {

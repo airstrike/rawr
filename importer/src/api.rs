@@ -1,6 +1,5 @@
 //! Phase-indexed canonical normal-build Rust API evidence.
 
-use std::io::{self, Write};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -30,7 +29,7 @@ pub use retained::Continuation;
 #[cfg(feature = "rustc-driver")]
 pub use retained::{Deferred, Kept};
 
-const CANONICALIZER_VERSION: u32 = 18;
+const CANONICALIZER_VERSION: u32 = 19;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -121,9 +120,18 @@ pub struct Graph<P: Phase> {
     transaction: Usage,
     retained: Usage,
     evidence: P::Evidence,
-    /// Definitions and implementations by their identity's hash, built at
-    /// the first lookup, and shared with the graph's copies.
-    lookup: Arc<std::sync::OnceLock<Lookup>>,
+    /// What the graph's ledgers give at the first ask, shared with the
+    /// graph's copies.
+    lookup: Arc<Memo>,
+}
+
+/// What a graph reads from its ledgers once, at the first ask.
+#[derive(Default)]
+struct Memo {
+    /// Definitions and implementations by their identity's hash.
+    lookup: std::sync::OnceLock<Lookup>,
+    /// Each definition's semantic identity, by its index.
+    surface: std::sync::OnceLock<Box<[crate::surface::identity::Definition]>>,
 }
 
 /// Indexes of a graph's definitions and implementations keyed by rustc's
@@ -580,6 +588,7 @@ impl std::io::Write for ExactCanonical<'_> {
 }
 
 /// Counts the bytes of an encoding without keeping them.
+#[cfg(any(test, feature = "test-fixtures"))]
 struct Measured {
     bytes: usize,
 }
@@ -930,26 +939,14 @@ impl Graph<Captured> {
             allocation.admit_decode()?;
             allocation.items(decode.items)?;
             allocation.bytes(decode.bytes)?;
+            // The stored ledger is content-addressed and was encoded
+            // canonically when captured: it is decoded once, never encoded
+            // again to prove it.
             let selected: StoredSelected = crate::extract::sidecar::read(&stored.selected)
                 .map_err(|error| Error::Extraction {
                     code: "stored-selected-schema",
                     reason: error.to_string().into_boxed_str(),
                 })?;
-            let mut exact = ExactCanonical {
-                expected: &stored.selected,
-                offset: 0,
-                matches: true,
-            };
-            serde_json::to_writer(&mut exact, &selected).map_err(|error| Error::Extraction {
-                code: "stored-selected-encoding",
-                reason: error.to_string().into_boxed_str(),
-            })?;
-            if !exact.matches || exact.offset != stored.selected.len() {
-                return Err(Error::Extraction {
-                    code: "stored-selected-noncanonical",
-                    reason: "stored selected graph encoding differs".into(),
-                });
-            }
             if selected.universe != context.resolution_universe() {
                 return Err(Error::Extraction {
                     code: "stored-api-universe",
@@ -961,13 +958,13 @@ impl Graph<Captured> {
             let head = frame::Head::of(&canonical, schema, context, &invocations);
             let graph = Self::seal_canonical(
                 invocations,
-                selected.definitions.into_vec(),
-                selected.exports.into_vec(),
-                selected.implementations.into_vec(),
-                selected.scalar_predicate_proofs.into_vec(),
-                selected.support.into_vec(),
-                selected.anonymous.into_vec(),
-                selected.index.into_vec(),
+                selected.definitions.into(),
+                selected.exports.into(),
+                selected.implementations.into(),
+                selected.scalar_predicate_proofs.into(),
+                selected.support.into(),
+                selected.anonymous.into(),
+                selected.index.into(),
                 canonical,
                 Semantic::Replayed(Fingerprint(Sha256::digest(&stored.canonical).into())),
                 selected.universe,
@@ -1069,13 +1066,13 @@ impl Graph<Captured> {
         )?;
         Self::seal_canonical(
             invocations,
-            definitions,
-            exports,
-            implementations,
-            scalar_predicate_proofs,
-            support,
-            anonymous,
-            Vec::new(),
+            definitions.into(),
+            exports.into(),
+            implementations.into(),
+            scalar_predicate_proofs.into(),
+            support.into(),
+            anonymous.into(),
+            Arc::default(),
             canonical,
             Semantic::Captured(semantic),
             context.resolution_universe(),
@@ -1084,19 +1081,21 @@ impl Graph<Captured> {
         )
     }
 
+    /// The graph of the selected ledgers, shared, never copied: a kept
+    /// settlement hands each save the same ones.
     #[allow(
         clippy::too_many_arguments,
         reason = "sealing transforms the selected ledgers with their independent raw proof"
     )]
     pub(crate) fn seal_with_raw(
         invocations: Vec<Invocation>,
-        definitions: Vec<model::Definition>,
-        exports: Vec<ledger::Path>,
-        implementations: Vec<model::Implementation>,
-        scalar_predicate_proofs: Vec<model::ScalarPredicateProof>,
-        support: Vec<ledger::Support>,
-        anonymous: Vec<ledger::AnonymousImport>,
-        index: Vec<ledger::Index>,
+        definitions: Arc<[model::Definition]>,
+        exports: Arc<[ledger::Path]>,
+        implementations: Arc<[model::Implementation]>,
+        scalar_predicate_proofs: Arc<[model::ScalarPredicateProof]>,
+        support: Arc<[ledger::Support]>,
+        anonymous: Arc<[ledger::AnonymousImport]>,
+        index: Arc<[ledger::Index]>,
         raw: Raw,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Self> {
@@ -1126,13 +1125,13 @@ impl Graph<Captured> {
     #[allow(clippy::too_many_arguments)]
     fn seal_canonical(
         invocations: Vec<Invocation>,
-        definitions: Vec<model::Definition>,
-        exports: Vec<ledger::Path>,
-        implementations: Vec<model::Implementation>,
-        scalar_predicate_proofs: Vec<model::ScalarPredicateProof>,
-        support: Vec<ledger::Support>,
-        anonymous: Vec<ledger::AnonymousImport>,
-        index: Vec<ledger::Index>,
+        definitions: Arc<[model::Definition]>,
+        exports: Arc<[ledger::Path]>,
+        implementations: Arc<[model::Implementation]>,
+        scalar_predicate_proofs: Arc<[model::ScalarPredicateProof]>,
+        support: Arc<[ledger::Support]>,
+        anonymous: Arc<[ledger::AnonymousImport]>,
+        index: Arc<[ledger::Index]>,
         canonical: Vec<u8>,
         semantic: Semantic,
         universe: Option<[u8; 32]>,
@@ -1146,13 +1145,13 @@ impl Graph<Captured> {
         let fingerprint = Fingerprint(Sha256::digest(&canonical).into());
         let mut graph = Self {
             invocations: invocations.into(),
-            definitions: definitions.into(),
-            exports: exports.into(),
-            implementations: implementations.into(),
-            scalar_predicate_proofs: scalar_predicate_proofs.into(),
-            support: support.into(),
-            anonymous: anonymous.into(),
-            index: index.into(),
+            definitions,
+            exports,
+            implementations,
+            scalar_predicate_proofs,
+            support,
+            anonymous,
+            index,
             canonical: canonical.into(),
             fingerprint,
             semantic_fingerprint,
@@ -1571,8 +1570,30 @@ impl<P: Phase> Graph<P> {
             .filter(move |implementation| implementation.relevance().any(|actual| actual == id))
     }
 
+    /// Each definition's semantic identity, by its index, digested once for
+    /// the graph and its copies.
+    pub(crate) fn surface_definitions(&self) -> &[crate::surface::identity::Definition] {
+        self.lookup.surface.get_or_init(|| {
+            self.definitions
+                .iter()
+                .map(|definition| crate::surface::identity::Definition::of(definition.id()))
+                .collect()
+        })
+    }
+
+    /// The semantic identity of `id`: the one digested for the graph when
+    /// the graph defines it.
+    pub(crate) fn surface_definition(
+        &self,
+        id: &identity::Definition,
+    ) -> crate::surface::identity::Definition {
+        self.definition_index(id)
+            .and_then(|index| self.surface_definitions().get(index).copied())
+            .unwrap_or_else(|| crate::surface::identity::Definition::of(id))
+    }
+
     fn lookup(&self) -> &Lookup {
-        self.lookup.get_or_init(|| {
+        self.lookup.lookup.get_or_init(|| {
             let mut lookup = Lookup::default();
             for (index, definition) in self.definitions.iter().enumerate() {
                 lookup
@@ -1664,13 +1685,14 @@ fn nominal_self_of(implementation: &model::Implementation) -> Option<&identity::
     }
 }
 
-impl Write for Measured {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+#[cfg(any(test, feature = "test-fixtures"))]
+impl std::io::Write for Measured {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         self.bytes = self.bytes.saturating_add(buffer.len());
         Ok(buffer.len())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
@@ -2119,13 +2141,13 @@ mod tests {
         let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
         let captured = Graph::seal_with_raw(
             vec![invocation("unit-a"), invocation("unit-b")],
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
             raw,
             &mut allocation,
         )

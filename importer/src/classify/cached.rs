@@ -90,7 +90,16 @@ pub(crate) fn authority(policy: &Policy) -> Result<Vec<u8>, Error> {
 
 /// Owned canonical classification, without a current contract or node chain.
 pub(crate) struct Product {
-    canonical: Box<[u8]>,
+    canonical: std::sync::Arc<[u8]>,
+    /// The parts a capture classified, for the API it classified: a replay
+    /// of the same API shares them instead of decoding the bytes again.
+    captured: Option<Captured>,
+}
+
+struct Captured {
+    semantic: api::Fingerprint,
+    seed: api::Usage,
+    parts: ClassifiedParts,
 }
 
 impl Product {
@@ -100,8 +109,14 @@ impl Product {
         limits: &crate::limits::Limits,
     ) -> Result<Self, Error> {
         let (parts, _) = graph.classify_parts(policy, Authority::production(limits))?;
+        let seed = graph.allocation();
         Ok(Self {
-            canonical: Box::from(&*parts.canonical),
+            canonical: std::sync::Arc::clone(&parts.canonical),
+            captured: Some(Captured {
+                semantic: graph.semantic_fingerprint(),
+                seed,
+                parts,
+            }),
         })
     }
 
@@ -110,7 +125,12 @@ impl Product {
         graph: &api::Graph<impl api::Phase>,
         policy: &Policy,
     ) -> Result<ClassifiedParts, Error> {
-        ClassifiedParts::decode(&self.canonical, graph, policy)
+        match &self.captured {
+            Some(captured) if captured.semantic == graph.semantic_fingerprint() => {
+                captured.parts.share(captured.seed, graph.allocation())
+            }
+            _ => ClassifiedParts::decode(&self.canonical, graph, policy),
+        }
     }
 }
 
@@ -130,14 +150,11 @@ impl node::Value for Product {
         if self.canonical.is_empty() {
             return Err(node::Error::Codec("cached generic contract is empty"));
         }
-        Ok(self.canonical.clone())
+        Ok(Box::from(&*self.canonical))
     }
 
     fn into_encoded(self) -> Result<Box<[u8]>, node::Error> {
-        if self.canonical.is_empty() {
-            return Err(node::Error::Codec("cached generic contract is empty"));
-        }
-        Ok(self.canonical)
+        self.encode()
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, node::Error> {
@@ -148,7 +165,10 @@ impl node::Value for Product {
         if canonical.is_empty() {
             return Err(node::Error::Codec("cached generic contract is empty"));
         }
-        Ok(Self { canonical })
+        Ok(Self {
+            canonical: canonical.into(),
+            captured: None,
+        })
     }
 }
 
@@ -299,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_product_replays_the_exact_contract_and_rejects_noncanonical_bytes() {
+    fn generic_product_replays_the_exact_contract_and_rejects_truncated_bytes() {
         let limits = crate::limits::Limits::standard();
         let policy = Policy::standard();
         let graph = crate::test_fixture::support_outcomes();
@@ -308,7 +328,8 @@ mod tests {
             .expect("the source classification completes");
         let expected = Box::<[u8]>::from(&*parts.canonical);
         let product = Product {
-            canonical: expected.clone(),
+            canonical: expected.clone().into(),
+            captured: None,
         };
         let bytes = product.encode().expect("the generic product encodes");
         let decoded = Product::decode(&bytes).expect("the generic product decodes");
@@ -320,9 +341,30 @@ mod tests {
         assert_eq!(contract.fingerprint().as_bytes(), &expected_fingerprint);
 
         let graph = crate::test_fixture::support_outcomes();
-        let mut trailing = bytes.into_vec();
-        trailing.push(b' ');
-        assert!(ClassifiedParts::decode(&trailing, &graph, &policy).is_err());
+        let truncated = std::sync::Arc::<[u8]>::from(&bytes[..bytes.len() - 1]);
+        assert!(ClassifiedParts::decode(&truncated, &graph, &policy).is_err());
+    }
+
+    /// A replay of the API a capture classified shares the captured parts,
+    /// which are the ones the stored bytes decode to.
+    #[test]
+    fn a_captured_product_replays_its_own_parts() {
+        let limits = crate::limits::Limits::standard();
+        let policy = Policy::standard();
+        let graph = crate::test_fixture::support_outcomes();
+        let product = Product::capture(&graph, &policy, &limits).expect("classify the graph");
+        let shared = product.replay(&graph, &policy).expect("replay the capture");
+        let decoded = Product::decode(&product.encode().expect("encode the product"))
+            .expect("decode the product")
+            .replay(&graph, &policy)
+            .expect("replay the stored bytes");
+        assert!(std::sync::Arc::ptr_eq(
+            &shared.canonical,
+            &product.captured.as_ref().expect("captured").parts.canonical
+        ));
+        assert_eq!(shared.canonical, decoded.canonical);
+        assert_eq!(shared.fingerprint, decoded.fingerprint);
+        assert_eq!(shared.allocation, decoded.allocation);
     }
 
     #[test]

@@ -375,6 +375,12 @@ struct Shared<'graph> {
     /// Each type whose only name is a passing alias, with that alias, by
     /// definition index (`sole_passing_aliases`).
     sole_aliases: std::sync::OnceLock<Box<[(usize, usize)]>>,
+    /// The definitions some import exports, by the root that exports them
+    /// (`exported_by_root`).
+    exported: std::sync::OnceLock<Exported<'graph>>,
+    /// Each type whose only name is a passing alias, with its root and
+    /// that alias (`sole_passing_aliases`).
+    passing: std::sync::OnceLock<Box<[Passing<'graph>]>>,
     /// The implementations of each `core` trait, by the trait's name, in
     /// graph order (`core_implementations`).
     core_traits: std::sync::OnceLock<HashMap<&'graph str, Box<[usize]>>>,
@@ -385,7 +391,7 @@ struct Shared<'graph> {
     projection_cases: std::sync::OnceLock<Box<[std::sync::OnceLock<Box<ProjectionCases>>]>>,
     /// Each definition's semantic identity, by its index, digested at the
     /// first ask (`surface_definition`).
-    surface_definitions: std::sync::OnceLock<SurfaceDefinitions>,
+    surface_definitions: std::sync::OnceLock<SurfaceDefinitions<'graph>>,
     /// The positions of the captures each opaque type a function gives
     /// leaves out, by the opaque type's definition: those the function's
     /// own output leaves out where its classification converts it
@@ -429,19 +435,29 @@ impl ProjectionCases {
     }
 }
 
-/// Each graph definition's semantic identity, by its index, and the
-/// indices sorted by identity.
-struct SurfaceDefinitions {
-    by_index: Box<[crate::surface::identity::Definition]>,
+/// The definitions some import exports, by the root alias that exports
+/// them.
+type Exported<'graph> =
+    BTreeMap<&'graph str, std::collections::BTreeSet<crate::surface::identity::Definition>>;
+
+/// A type whose only name is a passing alias: the root, the alias and the
+/// type.
+type Passing<'graph> = (
+    &'graph str,
+    &'graph model::Definition,
+    &'graph model::Definition,
+);
+
+/// Each graph definition's semantic identity, by its index, as the graph
+/// digested them, and the indices sorted by identity.
+struct SurfaceDefinitions<'graph> {
+    by_index: &'graph [crate::surface::identity::Definition],
     sorted: Box<[u32]>,
 }
 
-impl SurfaceDefinitions {
-    fn new(graph: &api::Graph<impl api::Phase>) -> Self {
-        let by_index = graph
-            .definitions()
-            .map(|definition| crate::surface::identity::Definition::of(definition.id()))
-            .collect::<Box<[_]>>();
+impl<'graph> SurfaceDefinitions<'graph> {
+    fn new(graph: &'graph api::Graph<impl api::Phase>) -> Self {
+        let by_index = graph.surface_definitions();
         let mut sorted = (0..by_index.len() as u32).collect::<Box<[_]>>();
         // Stable, so of two definitions with one identity the first is found.
         sorted.sort_by_key(|index| by_index[*index as usize]);
@@ -921,7 +937,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 (
                     *index,
                     DefinitionPlan {
-                        definition: crate::surface::identity::Definition::of(definition.id()),
+                        definition: self.graph.surface_definition(definition.id()),
                         representability,
                     },
                 )
@@ -1393,7 +1409,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 }
                 predicates.push(representability::predicate::Bound::new(
                     *index,
-                    crate::surface::identity::Definition::of(trait_id),
+                    self.graph.surface_definition(trait_id),
                 ));
             }
             return Ok(FunctionParameters {
@@ -2761,7 +2777,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             relations.push(if rest.is_empty() {
                 self.retain_str(&first.name)?;
                 relation.of_associated(representability::signature::Associated::new(
-                    *crate::surface::identity::Definition::of(&first.trait_id).as_bytes(),
+                    *self.graph.surface_definition(&first.trait_id).as_bytes(),
                     first.name.as_str().into(),
                 ))
             } else {
@@ -3281,7 +3297,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             self.retain_array::<Case>(cases.len())?;
             relations.push(
                 Relation::new(*index, converted, cases.into_boxed_slice())
-                    .of_trait(*crate::surface::identity::Definition::of(trait_id).as_bytes())
+                    .of_trait(*self.graph.surface_definition(trait_id).as_bytes())
                     .of_std(self.std_trait_path(trait_id)),
             );
         }
@@ -3440,7 +3456,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         self.surface_definitions().by_index.get(index).copied()
     }
 
-    fn surface_definitions(&self) -> &SurfaceDefinitions {
+    fn surface_definitions(&self) -> &SurfaceDefinitions<'graph> {
         self.shared
             .surface_definitions
             .get_or_init(|| SurfaceDefinitions::new(self.graph))
@@ -4254,7 +4270,7 @@ impl<P: api::Phase> api::Graph<P> {
                 return Err(Error::Cardinality);
             }
             definitions.sort_unstable();
-            drop_unnameable_fields(self, &mut definitions);
+            drop_unnameable_fields(&context, &mut definitions);
             let exports = self.exports().collect::<Vec<_>>();
             let seed = context.seed();
             let (outcomes, workers_done) = crate::parallel::try_map_with_on(
@@ -4364,17 +4380,19 @@ impl ClassifiedParts {
         )
     }
 
+    /// The parts the canonical `bytes` hold, for `graph`. The bytes are
+    /// content-addressed, read back under their digest, and were encoded
+    /// canonically when captured, so they are trusted as they are: they are
+    /// decoded once, never encoded again to prove them canonical.
     pub(super) fn decode(
-        bytes: &[u8],
+        bytes: &std::sync::Arc<[u8]>,
         graph: &api::Graph<impl api::Phase>,
         policy: &Policy,
     ) -> Result<Self, Error> {
         (|| {
             let stored: StoredCanonical =
                 serde_json::from_slice(bytes).map_err(|_| Error::Canonical)?;
-            let exact = serde_json::to_vec(&stored).map_err(|_| Error::Encoding)?;
-            if exact.as_slice() != bytes
-                || stored.semantic_api != *graph.semantic_fingerprint().as_bytes()
+            if stored.semantic_api != *graph.semantic_fingerprint().as_bytes()
                 || stored.schema != policy.schema
                 || stored.classifier != policy.classifier
                 || stored.compiler_abi != policy.compiler_abi
@@ -4394,19 +4412,6 @@ impl ClassifiedParts {
             }
             let outcomes = outcomes.into_boxed_slice();
             let support = SupportLedger::decode(stored.support, graph)?;
-            let rebuilt = serde_json::to_vec(&Canonical {
-                semantic_api: graph.semantic_fingerprint().as_bytes(),
-                schema: policy.schema,
-                classifier: policy.classifier,
-                compiler_abi: policy.compiler_abi,
-                support: CanonicalSupport(&support),
-                definitions: &definitions,
-                outcomes: &outcomes,
-            })
-            .map_err(|_| Error::Encoding)?;
-            if rebuilt.as_slice() != bytes {
-                return Err(Error::Canonical);
-            }
             let retained =
                 recount_retained_usage(graph, &definitions, &outcomes, &support, bytes.len())
                     .ok_or(Error::Cardinality)?;
@@ -4424,7 +4429,7 @@ impl ClassifiedParts {
                 definitions: definitions.into(),
                 outcomes: outcomes.into(),
                 support: support.into(),
-                canonical: rebuilt.into(),
+                canonical: std::sync::Arc::clone(bytes),
                 fingerprint: contract::fingerprint::Fingerprint(Sha256::digest(bytes).into()),
                 allocation,
             })
@@ -4503,20 +4508,25 @@ impl SupportLedger {
         groups
             .try_reserve_exact(group_count)
             .map_err(|_| Error::Allocation)?;
-        groups.extend(graph.definitions().map(|definition| SupportGroup {
-            provenance: SupportProvenance::Definition(crate::surface::identity::Definition::of(
-                definition.id(),
-            )),
+        groups.extend(
+            graph
+                .surface_definitions()
+                .iter()
+                .map(|definition| SupportGroup {
+                    provenance: SupportProvenance::Definition(*definition),
+                    count: 0,
+                }),
+        );
+        // Each implementation's identity, digested once for its group and
+        // for every support edge it is the provenance of.
+        let implementations = graph
+            .implementations()
+            .map(crate::surface::identity::Implementation::of)
+            .collect::<Result<Vec<_>, _>>()?;
+        groups.extend(implementations.iter().map(|implementation| SupportGroup {
+            provenance: SupportProvenance::Implementation(*implementation),
             count: 0,
         }));
-        for implementation in graph.implementations() {
-            groups.push(SupportGroup {
-                provenance: SupportProvenance::Implementation(
-                    crate::surface::identity::Implementation::of(implementation)?,
-                ),
-                count: 0,
-            });
-        }
         groups.sort_unstable_by_key(|group| group.provenance);
         if groups.len() != group_count
             || groups
@@ -4532,20 +4542,18 @@ impl SupportLedger {
             .try_reserve_exact(stored.len())
             .map_err(|_| Error::Allocation)?;
         for (outcome, expected) in stored.into_vec().into_iter().zip(graph.support()) {
-            let expected_definition = crate::surface::identity::Definition::of(expected.id());
+            let expected_definition = graph.surface_definition(expected.id());
             let expected_provenance = match expected.role() {
-                ledger::SupportRole::Definition => SupportProvenance::Definition(
-                    crate::surface::identity::Definition::of(expected.provenance()),
-                ),
+                ledger::SupportRole::Definition => {
+                    SupportProvenance::Definition(graph.surface_definition(expected.provenance()))
+                }
                 ledger::SupportRole::Implementation => {
                     let index = graph
                         .implementation_index(expected.provenance())
                         .ok_or(Error::Canonical)?;
-                    let implementation =
-                        graph.implementations().nth(index).ok_or(Error::Canonical)?;
-                    SupportProvenance::Implementation(crate::surface::identity::Implementation::of(
-                        implementation,
-                    )?)
+                    SupportProvenance::Implementation(
+                        *implementations.get(index).ok_or(Error::Canonical)?,
+                    )
                 }
             };
             let (definition, provenance, rejection) = match (outcome, expected) {
@@ -4693,19 +4701,24 @@ struct Names<'graph> {
     opaque: std::collections::BTreeSet<[u8; 32]>,
 }
 
-impl<'graph> Names<'graph> {
-    fn new(graph: &'graph api::Graph<impl api::Phase>, plans: &'graph [DefinitionPlan]) -> Self {
+impl<'names> Names<'names> {
+    fn new<'graph: 'names>(
+        context: &Context<'graph, impl api::Phase>,
+        plans: &'names [DefinitionPlan],
+    ) -> Self {
+        let graph: &'names api::Graph<_> = context.graph;
         let models = graph
             .definitions()
-            .map(|model| (crate::surface::identity::Definition::of(model.id()), model))
+            .zip(graph.surface_definitions())
+            .map(|(model, definition)| (*definition, model))
             .collect();
-        let mut exported = exported_by_root(graph);
+        let mut exported = context.exported().clone();
         // A type whose only name is a passing alias is named through it.
-        for (root, _, target) in sole_passing_aliases(graph) {
+        for (root, _, target) in context.passing() {
             exported
-                .entry(root)
+                .entry(*root)
                 .or_default()
-                .insert(crate::surface::identity::Definition::of(target.id()));
+                .insert(graph.surface_definition(target.id()));
         }
         Self {
             plans,
@@ -4724,20 +4737,22 @@ impl<'graph> Names<'graph> {
 /// struct or enum stays, and a struct or variant that lost a field cannot be
 /// built. A field's type is nameable when every definition in it is an
 /// exported struct or enum, so the verdict does not lean on fields.
-fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [DefinitionPlan]) {
+fn drop_unnameable_fields(context: &Context<'_, impl api::Phase>, plans: &mut [DefinitionPlan]) {
+    let graph = context.graph;
     use representability::Representability as R;
     let mut exported = std::collections::BTreeSet::new();
     for path in graph.exports() {
         if let ledger::Path::Imported(export) = path {
-            exported.insert(crate::surface::identity::Definition::of(export.target()));
+            exported.insert(graph.surface_definition(export.target()));
         }
     }
-    for (_, _, target) in sole_passing_aliases(graph) {
-        exported.insert(crate::surface::identity::Definition::of(target.id()));
+    for (_, _, target) in context.passing() {
+        exported.insert(graph.surface_definition(target.id()));
     }
     let nominal = graph
         .definitions()
-        .map(|model| (crate::surface::identity::Definition::of(model.id()), model))
+        .zip(graph.surface_definitions())
+        .map(|(model, definition)| (*definition, model))
         .filter(|(definition, model)| {
             exported.contains(definition)
                 && model.display_path().all(facade_segment_nameable)
@@ -4750,7 +4765,8 @@ fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [Defi
         .collect::<std::collections::BTreeSet<_>>();
     let models = graph
         .definitions()
-        .map(|model| (crate::surface::identity::Definition::of(model.id()), model))
+        .zip(graph.surface_definitions())
+        .map(|(model, definition)| (*definition, model))
         .collect::<std::collections::BTreeMap<_, _>>();
     for plan in plans {
         let keep =
@@ -5029,7 +5045,7 @@ fn enforce_nameability(
     outcomes: &mut [OutcomeRecord],
 ) -> Result<(), Error> {
     context.scratch_arrays::<crate::surface::identity::Definition>(plans.len(), 2)?;
-    let mut names = Names::new(context.graph, plans);
+    let mut names = Names::new(context, plans);
     names
         .visiting
         .try_reserve_exact(plans.len())
@@ -5321,7 +5337,7 @@ impl OutcomeRecord {
     }
 }
 
-impl<P: api::Phase> Context<'_, P> {
+impl<'graph, P: api::Phase> Context<'graph, P> {
     fn classify(
         &self,
         path: &ledger::Path,
@@ -5518,12 +5534,28 @@ impl<P: api::Phase> Context<'_, P> {
             .then_some(target)
     }
 
+    /// The definitions some import exports, by root (`exported_by_root`),
+    /// read once for the classification.
+    fn exported(&self) -> &Exported<'graph> {
+        self.shared
+            .exported
+            .get_or_init(|| exported_by_root(self.graph))
+    }
+
+    /// `sole_passing_aliases`, read once for the classification.
+    fn passing(&self) -> &[Passing<'graph>] {
+        self.shared
+            .passing
+            .get_or_init(|| sole_passing_aliases(self.graph, self.exported()).into())
+    }
+
     /// Each type whose only name is a passing alias, with that alias, by
     /// definition index (`sole_passing_aliases`).
     fn sole_aliases(&self) -> &[(usize, usize)] {
         self.shared.sole_aliases.get_or_init(|| {
-            let mut found = sole_passing_aliases(self.graph)
-                .into_iter()
+            let mut found = self
+                .passing()
+                .iter()
                 .filter_map(|(_, alias, target)| {
                     Some((
                         self.graph.definition_index(target.id())?,
@@ -5755,7 +5787,7 @@ impl<P: api::Phase> Context<'_, P> {
                     implementations,
                     variant: None,
                     member: trait_member(implementation, definition)
-                        .then(|| crate::surface::identity::Definition::of(definition.id())),
+                        .then(|| self.graph.surface_definition(definition.id())),
                 });
             }
             self.retain_span(implementation.span())?;
@@ -6278,7 +6310,7 @@ impl<P: api::Phase> Context<'_, P> {
         self.retain_span(definition.span())?;
         Ok(vec![ImplementationRecord {
             identity: crate::surface::identity::Implementation::self_members(
-                &crate::surface::identity::Definition::of(definition.id()),
+                &self.graph.surface_definition(definition.id()),
             ),
             span: definition.span().clone(),
             associated: outcomes.into_boxed_slice(),
@@ -6417,7 +6449,7 @@ impl<P: api::Phase> Context<'_, P> {
         self.retain_span(definition.span())?;
         Ok(vec![ImplementationRecord {
             identity: crate::surface::identity::Implementation::object_members(
-                &crate::surface::identity::Definition::of(trait_id),
+                &self.graph.surface_definition(trait_id),
             ),
             span: definition.span().clone(),
             associated: outcomes.into_boxed_slice(),
@@ -6444,12 +6476,12 @@ impl<P: api::Phase> Context<'_, P> {
             };
             let object = representability::convert::Type::Object(Box::new(object::Object::new(
                 object::Pointer::Shared,
-                crate::surface::identity::Definition::of(trait_id),
+                self.graph.surface_definition(trait_id),
                 Box::default(),
                 Vec::new(),
             )));
             let through = representability::convert::Type::Nominal {
-                definition: crate::surface::identity::Definition::of(trait_id),
+                definition: self.graph.surface_definition(trait_id),
                 arguments: Box::default(),
             };
             Ok(Representability::FunctionItem(
@@ -6607,7 +6639,7 @@ impl<P: api::Phase> Context<'_, P> {
         let generics = model::Generics::new(Box::default(), Box::default());
         let converted = match self.function(&signature, &generics) {
             Ok(plan) => {
-                let own = crate::surface::identity::Definition::of(id);
+                let own = self.graph.surface_definition(id);
                 let gives_own = matches!(&plan, representability::Representability::Function(function)
                     if matches!(function.signature().output(),
                         representability::convert::Type::Nominal { definition, .. }
@@ -6692,7 +6724,7 @@ impl<P: api::Phase> Context<'_, P> {
             _ => (None, Box::default()),
         };
         let id = api::identity::Definition::new(
-            id.unit().clone(),
+            std::sync::Arc::clone(id.shared_unit()),
             format!("{}::{}", id.def_path_hash(), associated.def_path_hash()).into(),
             api::identity::Namespace::Type,
         );
@@ -7323,7 +7355,7 @@ impl<P: api::Phase> Context<'_, P> {
                     })
                     .collect::<Result<Box<[_]>, _>>()?;
                 Some(representability::convert::Type::Nominal {
-                    definition: crate::surface::identity::Definition::of(id),
+                    definition: self.graph.surface_definition(id),
                     arguments,
                 })
             } else {
@@ -7497,7 +7529,7 @@ impl<P: api::Phase> Context<'_, P> {
             })
             .collect::<Option<Box<[_]>>>()?;
         Some(representability::convert::Type::Nominal {
-            definition: crate::surface::identity::Definition::of(id),
+            definition: self.graph.surface_definition(id),
             arguments,
         })
     }
@@ -7894,9 +7926,9 @@ impl<P: api::Phase> Context<'_, P> {
             .try_reserve_exact(group_count)
             .map_err(|_| Error::Allocation)?;
         groups.extend(self.graph.definitions().map(|definition| SupportGroup {
-            provenance: SupportProvenance::Definition(crate::surface::identity::Definition::of(
-                definition.id(),
-            )),
+            provenance: SupportProvenance::Definition(
+                self.graph.surface_definition(definition.id()),
+            ),
             count: 0,
         }));
         for implementation in self.graph.implementations() {
@@ -7926,7 +7958,7 @@ impl<P: api::Phase> Context<'_, P> {
         for outcome in self.graph.support() {
             let provenance = match outcome.role() {
                 ledger::SupportRole::Definition => SupportProvenance::Definition(
-                    crate::surface::identity::Definition::of(outcome.provenance()),
+                    self.graph.surface_definition(outcome.provenance()),
                 ),
                 ledger::SupportRole::Implementation => {
                     let index = self
@@ -7954,7 +7986,7 @@ impl<P: api::Phase> Context<'_, P> {
             let group = u32::try_from(group).map_err(|_| Error::IndexOverflow)?;
             let edge = match outcome {
                 ledger::Support::Complete { id, .. } => SupportEdge {
-                    definition: crate::surface::identity::Definition::of(id),
+                    definition: self.graph.surface_definition(id),
                     group,
                     rejection: None,
                 },
@@ -7974,7 +8006,7 @@ impl<P: api::Phase> Context<'_, P> {
                         span: span.clone(),
                     });
                     SupportEdge {
-                        definition: crate::surface::identity::Definition::of(id),
+                        definition: self.graph.surface_definition(id),
                         group,
                         rejection: Some(rejection),
                     }
@@ -8430,7 +8462,7 @@ impl<P: api::Phase> Context<'_, P> {
                 })
                 .collect::<Option<Box<[_]>>>()?;
             traits.push(representability::convert::Type::Nominal {
-                definition: crate::surface::identity::Definition::of(trait_id),
+                definition: self.graph.surface_definition(trait_id),
                 arguments,
             });
         }
@@ -9930,7 +9962,7 @@ impl<P: api::Phase> Context<'_, P> {
         Ok(representability::convert::Type::Object(Box::new(
             Object::new(
                 pointer,
-                crate::surface::identity::Definition::of(trait_id),
+                self.graph.surface_definition(trait_id),
                 converted.into_boxed_slice(),
                 auto,
             ),
@@ -10074,7 +10106,7 @@ impl<P: api::Phase> Context<'_, P> {
             // A type only a crate's alias names is the alias's own type.
             model::Type::Definition { .. } if let Some(alias) = self.instance_alias(ty) => {
                 Type::Nominal {
-                    definition: crate::surface::identity::Definition::of(alias.id()),
+                    definition: self.graph.surface_definition(alias.id()),
                     arguments: Box::default(),
                 }
             }
@@ -10645,7 +10677,7 @@ impl<P: api::Phase> Context<'_, P> {
             let Some(name) = self.definition_name(&item) else {
                 continue;
             };
-            let identity = *crate::surface::identity::Definition::of(&trait_id).as_bytes();
+            let identity = *self.graph.surface_definition(&trait_id).as_bytes();
             if associated.iter().any(
                 |(known, _): &(representability::signature::Associated, u32)| {
                     known.trait_identity() == identity && known.name() == name
@@ -10713,7 +10745,7 @@ impl<P: api::Phase> Context<'_, P> {
                 arguments.push(ty);
             }
         }
-        let definition = crate::surface::identity::Definition::of(id);
+        let definition = self.graph.surface_definition(id);
         let traits = self.opaque_traits(bounds).unwrap_or_default();
         let forwards = (traits.len() == 1)
             .then(|| self.opaque_forwards(bounds))
@@ -10751,7 +10783,7 @@ impl<P: api::Phase> Context<'_, P> {
     fn instance_aliases(&self) -> &[usize] {
         self.shared
             .instance_aliases
-            .get_or_init(|| instance_aliases(self.graph))
+            .get_or_init(|| instance_aliases_among(self.graph, self.exported()))
     }
 
     /// The alias that is the only name of `ty` (`instance_aliases`).
@@ -11956,10 +11988,10 @@ fn passing_target<'graph>(
 /// advanced` is off: each with the root and alias of an import that names
 /// it. Rust code writes such a type through the alias, so the alias's path
 /// declares the type, as the generated code spells it.
-fn sole_passing_aliases(
-    graph: &api::Graph<impl api::Phase>,
-) -> Vec<(&str, &model::Definition, &model::Definition)> {
-    let exported = exported_by_root(graph);
+fn sole_passing_aliases<'graph>(
+    graph: &'graph api::Graph<impl api::Phase>,
+    exported: &Exported<'_>,
+) -> Vec<Passing<'graph>> {
     graph
         .exports()
         .filter_map(|path| match path {
@@ -11972,9 +12004,9 @@ fn sole_passing_aliases(
                 .nth(graph.definition_index(export.target())?)?;
             let target = passing_target(graph, alias)?;
             let root = export.key().root_alias();
-            (!exported.get(root).is_some_and(|exported| {
-                exported.contains(&crate::surface::identity::Definition::of(target.id()))
-            }))
+            (!exported
+                .get(root)
+                .is_some_and(|exported| exported.contains(&graph.surface_definition(target.id()))))
             .then_some((root, alias, target))
         })
         .collect()
@@ -12233,12 +12265,19 @@ fn type_parameter_indices(ty: &model::Type, found: &mut BTreeSet<u32>) {
 /// The crate type aliases that are the only name of the type they name, by
 /// definition index (`Context::instance_aliases`).
 pub(crate) fn instance_aliases(graph: &api::Graph<impl api::Phase>) -> Box<[usize]> {
-    let exported = exported_by_root(graph);
+    instance_aliases_among(graph, &exported_by_root(graph))
+}
+
+/// [`instance_aliases`], with the definitions `exported` by each root.
+fn instance_aliases_among(
+    graph: &api::Graph<impl api::Phase>,
+    exported: &Exported<'_>,
+) -> Box<[usize]> {
     graph
         .definitions()
         .enumerate()
-        .filter(|(_, definition)| {
-            let identity = crate::surface::identity::Definition::of(definition.id());
+        .filter(|(index, definition)| {
+            let identity = graph.surface_definitions()[*index];
             matches!(definition.visibility(), model::Visibility::Public)
                 && matches!(
                     definition.kind(),
@@ -12282,7 +12321,7 @@ fn exported_by_root(
             exported
                 .entry(export.key().root_alias())
                 .or_default()
-                .insert(crate::surface::identity::Definition::of(export.target()));
+                .insert(graph.surface_definition(export.target()));
         }
     }
     exported
@@ -13766,7 +13805,7 @@ fn parameter_opaque(
     }
     model::Type::ImplTrait {
         id: api::identity::Definition::new(
-            method.id().unit().clone(),
+            std::sync::Arc::clone(method.id().shared_unit()),
             format!("{}#{}", method.id().def_path_hash(), parameter.index()).into(),
             api::identity::Namespace::Type,
         ),
@@ -17306,7 +17345,9 @@ mod tests {
             "{TYPES} types of {} definitions: {digests} digests",
             graph.definitions().len()
         );
-        assert_eq!(digests, graph.definitions().len());
+        // The graph digests each definition once, at the first ask, which
+        // may come before these.
+        assert!(digests <= graph.definitions().len(), "{digests} digests");
     }
 
     #[test]

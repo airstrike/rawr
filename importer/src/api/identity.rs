@@ -1,5 +1,7 @@
 //! Canonical Cargo, compiler-unit, definition, and export identities.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::Retained;
@@ -75,17 +77,21 @@ impl Namespace {
 }
 
 /// A definition identity derived from rustc's stable definition-path hash.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialOrd, Serialize)]
+///
+/// Every definition of one unit shares the unit, so a clone copies no
+/// string. Definitions order by their hash first: two definitions almost
+/// never share one, so an ordering reads no unit.
+#[derive(Clone, Debug, Deserialize, Eq, Serialize)]
 pub struct Definition {
-    unit: Unit,
+    unit: Arc<Unit>,
     def_path_hash: Box<str>,
     namespace: Namespace,
 }
 
 /// Exact identity of a compiler-recorded re-export item, which has no Rust namespace.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Serialize)]
 pub struct Reexport {
-    unit: Unit,
+    unit: Arc<Unit>,
     def_path_hash: Box<str>,
 }
 
@@ -124,7 +130,55 @@ impl PartialEq for Definition {
     fn eq(&self, other: &Self) -> bool {
         self.def_path_hash == other.def_path_hash
             && self.namespace == other.namespace
-            && self.unit == other.unit
+            && same_unit(&self.unit, &other.unit)
+    }
+}
+
+impl Ord for Definition {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.def_path_hash
+            .cmp(&other.def_path_hash)
+            .then(self.namespace.cmp(&other.namespace))
+            .then_with(|| unit_order(&self.unit, &other.unit))
+    }
+}
+
+impl PartialOrd for Definition {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Reexport {
+    fn eq(&self, other: &Self) -> bool {
+        self.def_path_hash == other.def_path_hash && same_unit(&self.unit, &other.unit)
+    }
+}
+
+impl Ord for Reexport {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.def_path_hash
+            .cmp(&other.def_path_hash)
+            .then_with(|| unit_order(&self.unit, &other.unit))
+    }
+}
+
+impl PartialOrd for Reexport {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Whether two shared units are one: the same allocation, or equal.
+fn same_unit(unit: &Arc<Unit>, other: &Arc<Unit>) -> bool {
+    Arc::ptr_eq(unit, other) || unit == other
+}
+
+fn unit_order(unit: &Arc<Unit>, other: &Arc<Unit>) -> std::cmp::Ordering {
+    if Arc::ptr_eq(unit, other) {
+        std::cmp::Ordering::Equal
+    } else {
+        unit.cmp(other)
     }
 }
 
@@ -367,16 +421,25 @@ impl Definition {
             .checked_add(self.def_path_hash.len())
     }
 
-    pub(crate) fn new(unit: Unit, def_path_hash: Box<str>, namespace: Namespace) -> Self {
+    pub(crate) fn new(
+        unit: impl Into<Arc<Unit>>,
+        def_path_hash: Box<str>,
+        namespace: Namespace,
+    ) -> Self {
         Self {
-            unit,
+            unit: unit.into(),
             def_path_hash,
             namespace,
         }
     }
 
     /// The exact compiler unit owning the definition.
-    pub const fn unit(&self) -> &Unit {
+    pub fn unit(&self) -> &Unit {
+        &self.unit
+    }
+
+    /// The unit owning the definition, as every definition of it shares it.
+    pub(crate) const fn shared_unit(&self) -> &Arc<Unit> {
         &self.unit
     }
 
@@ -398,15 +461,15 @@ impl Reexport {
         retained.string(&self.def_path_hash)
     }
 
-    pub(crate) fn new(unit: Unit, def_path_hash: Box<str>) -> Self {
+    pub(crate) fn new(unit: impl Into<Arc<Unit>>, def_path_hash: Box<str>) -> Self {
         Self {
-            unit,
+            unit: unit.into(),
             def_path_hash,
         }
     }
 
     /// The exact Cargo or sysroot compiler unit containing the use item.
-    pub const fn unit(&self) -> &Unit {
+    pub fn unit(&self) -> &Unit {
         &self.unit
     }
 

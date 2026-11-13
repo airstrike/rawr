@@ -128,25 +128,15 @@ impl Product {
         Self::capture(bytes)
     }
 
+    /// The plan's bytes, as `Plan::encode` gave them or the store kept
+    /// them under their digest: they are never decoded and encoded again to
+    /// prove them canonical. A consumer that reads the plan decodes it
+    /// (`Plan::decode`), which checks it.
     fn capture(bytes: Box<[u8]>) -> Result<Self, node::Error> {
-        let product = Self { bytes };
-        product.validate()?;
-        Ok(product)
-    }
-
-    fn validate(&self) -> Result<(), node::Error> {
-        let plan: Plan = serde_json::from_slice(&self.bytes)
-            .map_err(|_| node::Error::Codec("cached bindings plan is not valid JSON"))?;
-        plan.validate()
-            .map_err(|_| node::Error::Codec("cached bindings plan is invalid"))?;
-        let canonical = serde_json::to_vec(&plan)
-            .map_err(|_| node::Error::Codec("cached bindings plan cannot be re-encoded"))?;
-        if canonical.as_slice() != self.bytes.as_ref() {
-            return Err(node::Error::Codec(
-                "cached bindings plan is not canonically encoded",
-            ));
+        if bytes.is_empty() {
+            return Err(node::Error::Codec("cached bindings plan is empty"));
         }
-        Ok(())
+        Ok(Self { bytes })
     }
 }
 
@@ -187,7 +177,7 @@ mod tests {
     use crate::node::Value as _;
 
     #[test]
-    fn facade_product_roundtrips_and_rejects_noncanonical_or_trailing_bytes() {
+    fn facade_product_roundtrips_its_bytes() {
         let limits = crate::limits::Limits::standard();
         let contract = crate::test_fixture::graph()
             .classify(&crate::classify::Policy::standard(), &limits)
@@ -196,10 +186,11 @@ mod tests {
         let product = Product::capture(bytes.clone()).expect("the facade product captures");
         let encoded = product.encode().expect("the facade product encodes");
         assert_eq!(encoded, bytes);
-        assert!(Product::decode(&encoded).is_ok());
-
-        let mut trailing = encoded.into_vec();
-        trailing.push(b' ');
-        assert!(Product::decode(&trailing).is_err());
+        let decoded = Product::decode(&encoded).expect("the facade product decodes");
+        assert_eq!(
+            decoded.encode().expect("the decoded product encodes"),
+            bytes
+        );
+        assert!(Plan::decode(&decoded.bytes).is_ok());
     }
 }

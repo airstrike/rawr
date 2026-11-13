@@ -23,7 +23,7 @@ pub fn classification_implementation_outcomes() -> api::Graph<api::Extracted> {
     let target = definition("a0", identity::Namespace::Type);
     let implementation = definition("a1", identity::Namespace::Type);
     let associated = definition("a2", identity::Namespace::Value);
-    let definitions = vec![
+    let mut definitions = vec![
         model::Definition::new(
             target.clone(),
             path(&["fixture", "Target"]),
@@ -59,6 +59,7 @@ pub fn classification_implementation_outcomes() -> api::Graph<api::Extracted> {
             model::Origin::Source,
         ),
     ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
     let implementations = vec![model::Implementation::new(
         "fixture-target-impl".into(),
         implementation,
@@ -887,7 +888,7 @@ fn captured_graph_with_support_order(
     let accept = definition("04", identity::Namespace::Value);
     let unsafe_call = definition("05", identity::Namespace::Value);
     let module = definition("06", identity::Namespace::Type);
-    let definitions = vec![
+    let mut definitions = vec![
         model::Definition::new(
             pair.clone(),
             Box::from([Box::<str>::from("fixture"), Box::<str>::from("Pair")]),
@@ -995,6 +996,7 @@ fn captured_graph_with_support_order(
             model::Origin::Source,
         ),
     ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
     let support = if retain_support {
         let unresolved = definition("07", identity::Namespace::Type);
         let mut support = vec![
@@ -1072,7 +1074,7 @@ pub fn representability_families() -> api::Graph<api::Extracted> {
     let alias = definition("10", identity::Namespace::Type);
     let method = definition("11", identity::Namespace::Value);
     let generic = definition("12", identity::Namespace::Value);
-    let definitions = vec![
+    let mut definitions = vec![
         model::Definition::new(
             alias.clone(),
             Box::from([Box::<str>::from("fixture"), Box::<str>::from("Alias")]),
@@ -1148,6 +1150,7 @@ pub fn representability_families() -> api::Graph<api::Extracted> {
             model::Origin::Source,
         ),
     ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
     let mut exports = [alias, method, generic]
         .into_iter()
         .enumerate()
@@ -1261,7 +1264,7 @@ pub fn option_function() -> api::Graph<api::Extracted> {
         id: option.clone(),
         arguments: Box::from([model::Argument::Type(ty)]),
     };
-    let definitions = vec![
+    let mut definitions = vec![
         model::Definition::new(
             pick.clone(),
             path(&["fixture", "pick"]),
@@ -1296,6 +1299,7 @@ pub fn option_function() -> api::Graph<api::Extracted> {
             model::Origin::Source,
         ),
     ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
     let exports = vec![ledger::Path::Imported(ledger::Export::new(
         identity::Export::new(
             "fixture".into(),
