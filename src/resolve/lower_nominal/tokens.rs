@@ -205,13 +205,33 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// The text of `source` within `selected`, each other character but a
+/// newline blank, so each of its characters keeps its line and column.
+/// Each line before the span is its newline alone, and the lines after it
+/// are left out: the text is as long as the span and its lines before, not
+/// as the whole source, however many bodies a source has (#1850).
 pub(super) fn source_span(source: &str, selected: Span) -> String {
-    let mut output = String::with_capacity(source.len());
+    let first = selected.start().line().unwrap_or(0);
+    let last = selected.end().line().unwrap_or(0);
+    let mut output = String::new();
     let mut line = 1_u16;
+    let mut rest = source;
+    while usize::from(line) < first && line < u16::MAX {
+        let Some(newline) = rest.find('\n') else {
+            return output;
+        };
+        output.push('\n');
+        rest = &rest[newline + 1..];
+        line += 1;
+    }
     let mut column = 0_u16;
 
-    for character in source.chars() {
+    for character in rest.chars() {
         if character == '\n' {
+            // What follows the span's last line is blank.
+            if usize::from(line) >= last && line < u16::MAX {
+                break;
+            }
             output.push(character);
             line = line.saturating_add(1);
             column = 0;

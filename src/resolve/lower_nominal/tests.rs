@@ -1812,3 +1812,16 @@ fn an_or_pattern_over_crate_variants_below_a_program_variant_binds_no_names() {
         "{error}"
     );
 }
+
+/// A body's text keeps each of its characters at its line and column, its
+/// lines before it newlines alone and nothing after its last line, so a
+/// source's bodies' texts are as long as the bodies, not as the source
+/// once each (#1850).
+#[test]
+fn a_span_s_text_is_the_span_at_its_places_and_no_more() {
+    let source = "fn a() {\n    1\n}\n\nfn b() { 2 }\nfn c() {}\n";
+    let start = crate::Position::new(5, 8);
+    let end = crate::Position::new(5, 13);
+    let text = super::source_span(source, crate::Span::new(start, end));
+    assert_eq!(text, "\n\n\n\n       { 2 }");
+}
