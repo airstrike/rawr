@@ -601,8 +601,10 @@ fn prepare_resolving(
     // Why the call a check stopped at has no application, when the check
     // tried to prove it in place.
     let mut unproved = None;
-    // The compiler that checks the program when no owner keeps one.
+    // The compiler that checks the program when no owner keeps one, and
+    // what its last check kept for the next round's.
     let mut own_checker = None;
+    let mut own_checked = rawr::package::import::Kept::default();
     // A cache entry that goes stale while this run uses it is `Error::Stale`,
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
@@ -755,18 +757,21 @@ fn prepare_resolving(
                 // save lowers again only the sources it changed; else this
                 // preparation's own, so a round lowers again only the
                 // sources a proof or a demand changed.
-                let (kept_api, checker, copies) = match kept.as_deref_mut() {
+                let (kept_api, (checker, checked), copies) = match kept.as_deref_mut() {
                     Some(kept) => {
-                        let (api, checker, copies) = kept.split(build);
-                        (Some(api), checker, copies)
+                        let (api, check, copies) = kept.split(build);
+                        (Some(api), check, copies)
                     }
                     None => (
                         None,
-                        &*own_checker.get_or_insert_with(|| {
-                            let mut engine = rawr_cli::base::engine(build);
-                            engine.keep_lowerings();
-                            engine
-                        }),
+                        (
+                            &*own_checker.get_or_insert_with(|| {
+                                let mut engine = rawr_cli::base::engine(build);
+                                engine.keep_lowerings();
+                                engine
+                            }),
+                            &mut own_checked,
+                        ),
                         &mut own_copies,
                     ),
                 };
@@ -798,6 +803,7 @@ fn prepare_resolving(
                                 snapshot,
                                 &applications,
                                 &cells,
+                                checked,
                             );
                             rawr_import::progress::parsed(cells.counts().parsed - parsed);
                             rawr_import::progress::lowered(checker.checked_sources() - lowered);

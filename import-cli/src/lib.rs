@@ -62,7 +62,13 @@ pub trait Profile {
 #[derive(Default)]
 pub struct Kept {
     api: rawr_import::api::Kept,
-    check: Option<(rawr_cli::base::Build, rawr::Engine)>,
+    /// The compiler that checks the program as a build builds it, and the
+    /// registry its last check installed the crates' facades in.
+    check: Option<(
+        rawr_cli::base::Build,
+        rawr::Engine,
+        rawr::package::import::Kept,
+    )>,
     /// The parse cells of each directory a load read, remembered.
     cells: Vec<std::rc::Rc<rawr::package::Cells>>,
     /// The program a save loaded through the cells of this directory.
@@ -112,25 +118,25 @@ impl Kept {
     }
 
     /// The API graph, the compiler that checks the program as `build`
-    /// builds it (the last check's, when it was of the same build), and
-    /// the shadow crate's files.
+    /// builds it (the last check's, when it was of the same build) with
+    /// what its last check kept, and the shadow crate's files.
     pub fn split(
         &mut self,
         build: rawr_cli::base::Build,
     ) -> (
         &mut rawr_import::api::Kept,
-        &rawr::Engine,
+        (&rawr::Engine, &mut rawr::package::import::Kept),
         &mut rawr::package::Copies,
     ) {
-        if self.check.as_ref().is_some_and(|(kept, _)| *kept != build) {
+        if self.check.as_ref().is_some_and(|(kept, ..)| *kept != build) {
             self.check = None;
         }
-        let (_, engine) = self.check.get_or_insert_with(|| {
+        let (_, engine, checked) = self.check.get_or_insert_with(|| {
             let mut engine = rawr_cli::base::engine(build);
             engine.keep_lowerings();
-            (build, engine)
+            (build, engine, rawr::package::import::Kept::default())
         });
-        (&mut self.api, engine, &mut self.copies)
+        (&mut self.api, (engine, checked), &mut self.copies)
     }
 }
 

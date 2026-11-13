@@ -11,6 +11,7 @@ pub(crate) mod family;
 #[cfg(feature = "rust-import")]
 pub(crate) mod image;
 pub mod item;
+mod merge;
 pub(crate) mod path;
 pub(crate) mod projection;
 pub mod runtime;
@@ -631,51 +632,55 @@ impl Registry {
 
         let parts = definition.into_registry_parts();
         let dependency = facade::Dependency::try_new(&parts.root, parts.fingerprint)?;
-        // Appended, then sorted once: a stable sort keeps the items
-        // already registered ahead of the ones that share their path, and
-        // merges the two sorted runs rather than shifting the registry
-        // once for every entry.
-        self.modules.push(parts.root);
-        self.modules.extend(parts.modules);
-        self.modules.sort();
-        self.types.extend(parts.types);
-        self.types
-            .sort_by(|left, right| left.path_ref().cmp(right.path_ref()));
-        self.items.extend(parts.items);
-        self.items
-            .sort_by(|left, right| left.path_ref().cmp(right.path_ref()));
+        // Merged into each sorted table: an entry already registered stays
+        // ahead of an incoming one at its path, and only the incoming ones
+        // are compared, so an install costs what its facade holds (#1755).
+        let mut modules = Vec::from(parts.modules);
+        modules.push(parts.root);
+        merge::merge(&mut self.modules, modules, Ord::cmp);
+        #[cfg_attr(not(feature = "rust-import"), allow(unused_variables))]
+        let types = merge::merge(&mut self.types, parts.types.into_vec(), |left, right| {
+            left.path_ref().cmp(right.path_ref())
+        });
+        merge::merge(&mut self.items, parts.items.into_vec(), |left, right| {
+            left.path_ref().cmp(right.path_ref())
+        });
         self.aliases
             .try_reserve(parts.aliases.len())
             .map_err(|_| Error::Allocation)?;
-        self.aliases.extend(parts.aliases);
-        self.aliases.sort();
+        merge::merge(&mut self.aliases, parts.aliases.into_vec(), Ord::cmp);
         self.reexports
             .try_reserve(parts.reexports.len())
             .map_err(|_| Error::Allocation)?;
         self.reexported
             .try_reserve(parts.reexports.len())
             .map_err(|_| Error::Allocation)?;
-        self.reexported.extend(
+        merge::merge(
+            &mut self.reexported,
             parts
                 .reexports
                 .iter()
-                .map(|(path, module)| (module.clone(), path.clone())),
+                .map(|(path, module)| (module.clone(), path.clone()))
+                .collect(),
+            Ord::cmp,
         );
-        self.reexported.sort();
-        self.reexports.extend(parts.reexports);
-        self.reexports.sort();
+        merge::merge(&mut self.reexports, parts.reexports.into_vec(), Ord::cmp);
         self.type_aliases
             .try_reserve(parts.type_aliases.len())
             .map_err(|_| Error::Allocation)?;
-        self.type_aliases.extend(parts.type_aliases);
-        self.type_aliases
-            .sort_by(|left, right| left.path().cmp(right.path()));
+        merge::merge(
+            &mut self.type_aliases,
+            parts.type_aliases.into_vec(),
+            |left, right| left.path().cmp(right.path()),
+        );
         self.trait_headers
             .try_reserve(parts.trait_headers.len())
             .map_err(|_| Error::Allocation)?;
-        self.trait_headers.extend(parts.trait_headers);
-        self.trait_headers
-            .sort_by(|left, right| left.path.cmp(&right.path));
+        merge::merge(
+            &mut self.trait_headers,
+            parts.trait_headers.into_vec(),
+            |left, right| left.path.cmp(&right.path),
+        );
         self.impl_headers
             .try_reserve(parts.impl_headers.len())
             .map_err(|_| Error::Allocation)?;
@@ -688,8 +693,7 @@ impl Registry {
         self.derives
             .try_reserve(parts.derives.len())
             .map_err(|_| Error::Allocation)?;
-        self.derives.extend(parts.derives);
-        self.derives.sort();
+        merge::merge(&mut self.derives, parts.derives.into_vec(), Ord::cmp);
         let facade_index = self
             .facades
             .binary_search_by(|facade| facade.root().cmp(dependency.root()))
@@ -705,7 +709,7 @@ impl Registry {
             self.held.insert(index, (held, installed));
         }
         #[cfg(feature = "rust-import")]
-        self.rebuild_imported_index();
+        self.index_installed(&types, facade_index);
         Ok(self)
     }
 
@@ -1882,6 +1886,63 @@ impl Registry {
             .find(|existing| existing.identity() == identity)
     }
 
+    /// Index the imported types an install placed at `types` (the
+    /// merge's places, `merge::merge`) and its facade at `facade`: each
+    /// type already indexed keeps its run, at the indices the install
+    /// moved it and its facade to, and the new facade's types make runs
+    /// of their own, as [`Self::rebuild_imported_index`] would order them.
+    /// Rebuilding the whole index sorted every imported type again at each
+    /// of a thousand installs (#1755).
+    #[cfg(feature = "rust-import")]
+    fn index_installed(&mut self, types: &[usize], facade: usize) {
+        let mut keyed = Vec::new();
+        for (order, place) in types.iter().enumerate() {
+            let index = place + order;
+            let definition = &self.types[index];
+            let Some(identity) = definition.identity().imported() else {
+                continue;
+            };
+            let path = definition.path_ref();
+            let root = path.segments().first();
+            // A type below another facade's root joins that facade's runs,
+            // which only a whole rebuild orders.
+            if root.is_none_or(|root| self.facades[facade].root() != root.as_str()) {
+                self.rebuild_imported_index();
+                return;
+            }
+            let hidden = path
+                .segments()
+                .iter()
+                .any(|segment| path::is_hidden(segment));
+            keyed.push((*identity, hidden, index));
+        }
+        for alias in &mut self.imported_aliases {
+            *alias = merge::moved(types, *alias);
+        }
+        for entry in &mut self.imported {
+            if entry.facade >= facade {
+                entry.facade += 1;
+            }
+        }
+        keyed.sort_unstable();
+        let mut runs = Vec::<ImportedIndex>::new();
+        for (identity, _, index) in keyed {
+            let alias = self.imported_aliases.len();
+            self.imported_aliases.push(index);
+            match runs.last_mut() {
+                Some(last) if last.identity == identity => last.aliases.end = alias + 1,
+                _ => runs.push(ImportedIndex {
+                    identity,
+                    facade,
+                    aliases: alias..alias + 1,
+                }),
+            }
+        }
+        merge::merge(&mut self.imported, runs, |left, right| {
+            (left.identity, left.facade).cmp(&(right.identity, right.facade))
+        });
+    }
+
     #[cfg(feature = "rust-import")]
     fn rebuild_imported_index(&mut self) {
         // One sort of every imported type's (identity, facade, type index)
@@ -2036,6 +2097,72 @@ mod tests {
         let mut byte_short = super::TestImportAllocation::new(usize::MAX, oracle_bytes - 1);
         assert!(registry.clone_for_import(&mut byte_short).is_err());
         assert_eq!(byte_short.usage(), (0, 0));
+    }
+
+    /// A facade installed among others keeps each imported type's paths
+    /// in the runs a whole rebuild of the index gives them, and each type
+    /// at its place among the others' (#1755).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn an_install_indexes_its_types_as_a_whole_rebuild_does() {
+        const HIDDEN: &str = "__rawr_crate_things_00000000000000ab";
+        let shared = type_def::import::Identity::new([0x41; 32]);
+        let own = type_def::import::Identity::new([0x42; 32]);
+        let mut registry = Registry::new();
+        for root in ["middle", "alpha", "omega"] {
+            let mut builder = facade::Builder::new(root, facade::Abi::new(1).unwrap()).unwrap();
+            let mut allocation = super::TestImportAllocation::default();
+            builder.imported_module(HIDDEN, &mut allocation).unwrap();
+            for (path, identity) in [("Thing", shared), (HIDDEN, shared), ("Other", own)] {
+                let path = if path == HIDDEN {
+                    format!("{path}::Thing")
+                } else {
+                    path.to_owned()
+                };
+                builder
+                    .imported_type(
+                        &path,
+                        identity,
+                        &[],
+                        Box::default(),
+                        Box::default(),
+                        type_def::Shape::Opaque.into(),
+                        &mut allocation,
+                    )
+                    .unwrap();
+            }
+            registry.install(builder.finish().unwrap()).unwrap();
+        }
+        let lookups = |registry: &Registry| {
+            registry
+                .imported
+                .iter()
+                .map(|entry| {
+                    let paths = registry.imported_aliases[entry.aliases.clone()]
+                        .iter()
+                        .map(|alias| registry.types[*alias].path_ref().to_string())
+                        .collect::<Vec<_>>();
+                    (
+                        entry.identity,
+                        registry.facades[entry.facade].root().to_owned(),
+                        paths,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let installed = lookups(&registry);
+        let mut rebuilt = registry.clone();
+        rebuilt.rebuild_imported_index();
+        assert_eq!(installed, lookups(&rebuilt));
+        assert_eq!(installed.len(), 6, "{installed:?}");
+        let paths = registry
+            .types
+            .iter()
+            .map(|definition| definition.path_ref().to_string())
+            .collect::<Vec<_>>();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
     }
 
     #[derive(Clone)]
