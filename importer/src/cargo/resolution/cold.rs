@@ -680,8 +680,10 @@ pub(in crate::cargo) fn shared_build(
     let named = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
+    let copying = std::time::Instant::now();
     super::relocate::unshare(target)?;
     let bytes = super::relocate::relocate(&named, &shared, build)?;
+    crate::progress::timed("the build's outputs were copied", copying.elapsed());
     let key = crate::deps::nightly::Key {
         project: &request.project_root,
         build: kind,

@@ -938,6 +938,7 @@ impl Evaluation {
                 Box::<str>::from(&*self.request.profile),
             )),
         };
+        let replaying = std::time::Instant::now();
         let replay = self
             .request
             .replay_observed_in(
@@ -955,6 +956,7 @@ impl Evaluation {
                 cargo_account,
             )
             .map_err(error)?;
+        crate::progress::timed("the resolution's bundle was replayed", replaying.elapsed());
         if let Some((root, target, profile)) = fresh {
             staged(|stage| {
                 stage.keep_record(StagedRecord {
@@ -1030,6 +1032,7 @@ impl Evaluation {
         accounts: &mut Accounts,
         graph: &node::GraphBudget,
     ) -> Result<node::Bundled<Product>, node::Error> {
+        let preparing = std::time::Instant::now();
         let harness = self.request.prepare_harness_in(
             &layout,
             &self.cached,
@@ -1037,6 +1040,7 @@ impl Evaluation {
             &self.limits,
             cargo_account,
         )?;
+        crate::progress::timed("the resolution's harness was prepared", preparing.elapsed());
         // Every selected crate's table in the home: no nightly build and no
         // probe. The attempt is abandoned; the API is read from the tables.
         let final_form = layout.final_form();
@@ -1116,7 +1120,9 @@ impl Evaluation {
             ))?
             .complete()
             .as_bytes();
+        let sealing = std::time::Instant::now();
         let sealed = self.seal_completed(completed, layout, accounts, graph)?;
+        crate::progress::timed("the resolution's bundle was sealed", sealing.elapsed());
         let (stored, pending) = sealed.into_parts();
         let product = Product {
             bundle: stored.encode(),
