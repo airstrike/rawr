@@ -124,6 +124,7 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
     let continuation = Attempt::Prepare(
         Some(adapter.prepare_inputs(incoming.inputs()).unwrap()),
         Reason::Uncovered,
+        Box::new(incoming.graph()),
     );
     adapter.inject_modify(&incoming_source);
     assert!(matches!(
@@ -134,7 +135,7 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
     ));
 
     let fallback_inputs = match continuation {
-        Attempt::Prepare(staged, _) => staged,
+        Attempt::Prepare(staged, ..) => staged,
         Attempt::Settled | Attempt::Swapped(_) | Attempt::Restart(..) => {
             panic!("native miss must continue full preparation")
         }
@@ -173,6 +174,7 @@ fn resident_dropped_prepare_continuation_retires_candidate_inputs() {
     let continuation = Attempt::Prepare(
         Some(adapter.prepare_inputs(incoming.inputs()).unwrap()),
         Reason::Uncovered,
+        Box::new(incoming.graph()),
     );
     drop(continuation);
     adapter.inject_modify(&incoming.root.join("src/main.rs"));

@@ -62,7 +62,12 @@ fn expand_in(root: &Path) {
     let limits = graph.rust_limits();
     let environment = rawr_import::cargo::config::Environment::capture().unwrap();
     let request = graph
-        .rust_inventory_plain(environment, &[], &limits)
+        .rust_inventory_plain(
+            environment,
+            &[],
+            &limits,
+            &mut rawr::package::Copies::default(),
+        )
         .unwrap()
         .expect("the fixture has dependencies");
     let native = request.pinned_native(&limits).unwrap();

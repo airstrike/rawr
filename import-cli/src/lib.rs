@@ -54,13 +54,20 @@ pub trait Profile {
 }
 
 /// What an owner that prepares again on each save keeps from one
-/// preparation to the next: the API graph its saves share, and the
-/// compiler that checks the program, which lowers again only the sources
-/// whose check reads something a save changed.
+/// preparation to the next: the API graph its saves share, the compiler
+/// that checks the program, which lowers again only the sources whose
+/// check reads something a save changed, the parse cells its loads read,
+/// the program a save loaded before it prepared, and the shadow crate's
+/// files as they were last written (#1849).
 #[derive(Default)]
 pub struct Kept {
     api: rawr_import::api::Kept,
     check: Option<(rawr_cli::base::Build, rawr::Engine)>,
+    /// The parse cells of each directory a load read, remembered.
+    cells: Vec<std::rc::Rc<rawr::package::Cells>>,
+    /// The program a save loaded through the cells of this directory.
+    loaded: Option<(PathBuf, rawr::package::Graph)>,
+    copies: rawr::package::Copies,
 }
 
 impl Kept {
@@ -69,12 +76,52 @@ impl Kept {
         &mut self.api
     }
 
-    /// The API graph, and the compiler that checks the program as `build`
-    /// builds it: the last check's, when it was of the same build.
+    /// The shadow crate's files as they were last written.
+    pub fn copies(&mut self) -> &mut rawr::package::Copies {
+        &mut self.copies
+    }
+
+    /// The parse cells in `directory`, remembered across every load the
+    /// owner makes through them.
+    pub fn cells(&mut self, directory: PathBuf) -> std::rc::Rc<rawr::package::Cells> {
+        if let Some(cells) = self
+            .cells
+            .iter()
+            .find(|cells| cells.directory() == directory)
+        {
+            return std::rc::Rc::clone(cells);
+        }
+        let cells = std::rc::Rc::new(rawr::package::Cells::new(directory).remember());
+        self.cells.push(std::rc::Rc::clone(&cells));
+        cells
+    }
+
+    /// Keep `graph`, the program as a save loaded it through `cells`, for
+    /// the preparation that follows, so that preparation loads it again
+    /// only when it reads other cells.
+    pub fn offer(&mut self, cells: &rawr::package::Cells, graph: rawr::package::Graph) {
+        self.loaded = Some((cells.directory().to_path_buf(), graph));
+    }
+
+    /// The program the last save loaded through `cells`, once.
+    fn take_loaded(&mut self, cells: &rawr::package::Cells) -> Option<rawr::package::Graph> {
+        match self.loaded.take() {
+            Some((directory, graph)) if directory == cells.directory() => Some(graph),
+            _ => None,
+        }
+    }
+
+    /// The API graph, the compiler that checks the program as `build`
+    /// builds it (the last check's, when it was of the same build), and
+    /// the shadow crate's files.
     pub fn split(
         &mut self,
         build: rawr_cli::base::Build,
-    ) -> (&mut rawr_import::api::Kept, &rawr::Engine) {
+    ) -> (
+        &mut rawr_import::api::Kept,
+        &rawr::Engine,
+        &mut rawr::package::Copies,
+    ) {
         if self.check.as_ref().is_some_and(|(kept, _)| *kept != build) {
             self.check = None;
         }
@@ -83,7 +130,7 @@ impl Kept {
             engine.keep_lowerings();
             (build, engine)
         });
-        (&mut self.api, engine)
+        (&mut self.api, engine, &mut self.copies)
     }
 }
 

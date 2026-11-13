@@ -222,6 +222,8 @@ pub fn run(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
 ) -> Result<bool, diagnostic::Report> {
+    let mut kept = crate::Kept::default();
+    let cells = cells(target, &mut kept);
     let ran = session(
         target,
         Origin::graph(graph),
@@ -229,8 +231,8 @@ pub fn run(
         profile,
         None,
         None,
-        &cells(target),
-        &mut crate::Kept::default(),
+        &cells,
+        &mut kept,
     )
     .map_err(Unchecked::into_report);
     events(ran.as_ref().map_err(Some), None);
@@ -299,9 +301,9 @@ pub fn run_program(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let interactive = rawr_cli::supervise::interactive();
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
-    let cells = cells(target);
     // The API graph each session's saves share, kept across restarts.
     let mut kept = crate::Kept::default();
+    let cells = cells(target, &mut kept);
     let mut ran = session(
         target,
         Origin::graph(graph),
@@ -430,8 +432,8 @@ pub fn run_tests(
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
-    let cells = cells(target);
     let mut kept = crate::Kept::default();
+    let cells = cells(target, &mut kept);
     let ran = loop {
         match session(
             target,
@@ -493,9 +495,13 @@ fn load(
 
 /// The parse cells of the program `target` selects, remembered across its
 /// loads: each save and each session of a run reads a source again only
-/// when its text changed (#1604, #1762).
-fn cells(target: &rawr::project::Target) -> rawr::package::Cells {
-    rawr::package::Cells::new(rawr_cli::cells::directory(target)).remember()
+/// when its text changed (#1604, #1762). They are `kept`'s, so a
+/// preparation that reads the same cells shares them (#1849).
+fn cells(
+    target: &rawr::project::Target,
+    kept: &mut crate::Kept,
+) -> std::rc::Rc<rawr::package::Cells> {
+    kept.cells(rawr_cli::cells::directory(target))
 }
 
 /// Where the program is: the crate's root, or its single file.
@@ -784,9 +790,10 @@ fn session(
                             continue;
                         }
                     }
-                    Ok(resident::Attempt::Prepare(staged, reason)) => {
+                    Ok(resident::Attempt::Prepare(staged, reason, loaded)) => {
                         rawr_import::process::say(format_args!("rawr: preparing again: {reason}"));
                         rawr_cli::events::preparing(&reason.to_string());
+                        kept.offer(cells, *loaded);
                         staged
                     }
                     Err(report) => {
@@ -799,6 +806,7 @@ fn session(
                 let prepared =
                     profile.prepare(&next_target, None, revision, &scope, Some(&mut *kept));
                 preparation.tell_preparation();
+                work.tell_reads();
                 let prepared = match prepared {
                     Ok(prepared) => prepared,
                     // A newer save; its own attempt follows.

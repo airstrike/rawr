@@ -21,6 +21,9 @@ pub mod source;
 pub mod test;
 
 pub use cell::{Cells, Counts};
+#[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub use rust::{compare_reads, Copies};
 /// The shadow crate's module that holds a marked `async fn main`'s entry.
 pub(crate) const ENTRY_MODULE: &str = entry::MODULE;
 pub use error::{Category, Error};

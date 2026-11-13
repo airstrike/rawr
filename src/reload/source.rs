@@ -64,11 +64,11 @@ pub struct Inputs {
 /// Exact source and manifest contents consumed by one compiled candidate.
 ///
 /// A snapshot becomes final-admission evidence only after a publication stage
-/// revalidates every file against the filesystem.
-#[derive(Debug)]
+/// revalidates every file against the filesystem. A clone shares its files.
+#[derive(Clone, Debug)]
 pub struct Snapshot {
     inputs: Arc<Inputs>,
-    files: Box<[File]>,
+    files: Arc<[File]>,
     #[cfg(feature = "rust-import")]
     entry: PathBuf,
     /// The entry package's features, which a runner's compile of the
@@ -470,7 +470,7 @@ impl Snapshot {
         files.dedup_by(|later, first| later.path == first.path);
         Self {
             inputs: Arc::new(Inputs::from_graph(graph)),
-            files: files.into_boxed_slice(),
+            files: files.into(),
             #[cfg(feature = "rust-import")]
             entry: graph.entry_source().path().to_path_buf(),
             #[cfg(feature = "rust-import")]
@@ -507,7 +507,7 @@ impl Snapshot {
         )?;
         let cfg = self.features.lines().collect::<Vec<_>>();
         builder.features(cfg.iter().map(String::as_str))?;
-        for file in &self.files {
+        for file in self.files.iter() {
             builder.file(
                 file.path
                     .to_str()
@@ -535,7 +535,7 @@ impl Snapshot {
         )?;
         let cfg = self.features.lines().collect::<Vec<_>>();
         capture.features(cfg.iter().map(String::as_str))?;
-        for file in &self.files {
+        for file in self.files.iter() {
             capture.file(
                 file.path
                     .to_str()
@@ -556,7 +556,7 @@ impl Snapshot {
     /// This authority-free check is also used by initial native bootstrap
     /// after its watcher has registered the compiled graph.
     pub fn revalidate(&self) -> Result<(), Error> {
-        for file in &self.files {
+        for file in self.files.iter() {
             let contents = fs::read(&file.path).map_err(|source| Error::Read {
                 path: file.path.clone(),
                 source,
@@ -887,7 +887,7 @@ mod tests {
     fn imported_snapshot_rejects_non_utf8_entry_and_file_paths() {
         let limits = rawr_import::limits::Limits::standard();
         let invalid = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
-        let snapshot = |entry, files| Snapshot {
+        let snapshot = |entry, files: Box<[File]>| Snapshot {
             inputs: Arc::new(Inputs {
                 paths: Box::default(),
                 directories: Box::default(),
@@ -895,7 +895,7 @@ mod tests {
                 sources: Box::default(),
                 unwatched: Box::default(),
             }),
-            files,
+            files: files.into(),
             entry,
             features: crate::project::cargo::features::Enabled::default(),
         };

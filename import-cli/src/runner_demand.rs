@@ -47,7 +47,11 @@ pub(crate) fn own(remembered: &[Box<str>], seed: &[Box<str>]) -> Vec<Box<str>> {
 /// Where the project at `project` keeps its last runner's native items,
 /// and the paths beside them.
 fn location(project: &Path) -> (PathBuf, PathBuf) {
-    let directory = rawr_import::location::rawr_directory_here(project);
+    location_in(&rawr_import::location::rawr_directory_here(project))
+}
+
+/// [`location`] for the project whose Rawr directory is `directory`.
+fn location_in(directory: &Path) -> (PathBuf, PathBuf) {
     (
         directory.join("runner-demand.json"),
         directory.join("runner-paths"),
@@ -77,9 +81,10 @@ pub(crate) fn store(project: &Path, kept: &[u8], paths: &[Box<str>]) {
     }
 }
 
-/// The last runner's demand the project at `project` keeps, or none.
-pub(crate) fn load(project: &Path) -> Option<Last> {
-    let (items, resolved) = location(project);
+/// The last runner's demand the project whose Rawr directory is `rawr`
+/// keeps, or none.
+pub(crate) fn load_in(rawr: &Path) -> Option<Last> {
+    let (items, resolved) = location_in(rawr);
     let kept = rawr_import::surface::Kept::decode(&std::fs::read(items).ok()?)?;
     let mut paths = std::fs::read_to_string(resolved)
         .ok()?

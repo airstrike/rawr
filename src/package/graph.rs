@@ -149,6 +149,10 @@ pub struct Graph {
     /// may start at any crate the host registered, as no manifest names
     /// its dependencies.
     hosted: bool,
+    /// The project's Rawr directory, when the program's owner resolved it
+    /// ([`Graph::keep_rawr_directory`]).
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    rawr: Option<PathBuf>,
 }
 
 impl Id {
@@ -376,13 +380,41 @@ impl Bin {
     }
 }
 
+/// How many times this process loaded a program's graph from its files.
+static LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl Graph {
+    /// How many times this process loaded a program's graph from its
+    /// files, for `RAWR_VERBOSE`'s account of a save.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn loads() -> usize {
+        LOADS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Load and parse one complete target graph through the supplied Engine.
     ///
     /// Every source path is canonicalized before it enters this proof
     /// bundle. Only declared `mod` edges are traversed.
     pub fn load(engine: &Engine, target: &project::Target) -> Result<Self, Error> {
         Builder::new(engine).load(target)
+    }
+
+    /// Keep `directory` as the project's Rawr directory, which its owner
+    /// resolved once, so reading the records kept there resolves it no
+    /// more (#1849).
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    #[doc(hidden)]
+    pub fn keep_rawr_directory(&mut self, directory: PathBuf) {
+        self.rawr = Some(directory);
+    }
+
+    /// The project's Rawr directory: the one kept, or resolved now.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    pub(crate) fn rawr_directory(&self) -> PathBuf {
+        self.rawr.clone().unwrap_or_else(|| {
+            rawr_import::location::rawr_directory_here(self.entry_package().root())
+        })
     }
 
     /// The root of the package `target` selects: the project's root, or for
@@ -506,7 +538,7 @@ impl Graph {
     /// last check recorded native code naming (`package::called`, #1807).
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) fn island_shadow(&self) -> Option<super::island::Shadow> {
-        let called = super::called::kept(self.entry_package().root());
+        let called = super::called::kept_in(&self.rawr_directory());
         self.island_shadow_for(called.as_ref())
     }
 
@@ -738,6 +770,7 @@ impl<'a> Builder<'a> {
     }
 
     fn load(mut self, target: &project::Target) -> Result<Graph, Error> {
+        LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let request = match target {
             project::Target::File(source) => Request {
                 root: file_root(source.path(), source.text(), |manifest| manifest.is_file()),
@@ -762,6 +795,8 @@ impl<'a> Builder<'a> {
             #[cfg(feature = "rust-import")]
             stale: self.stale,
             hosted: false,
+            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+            rawr: None,
         })
     }
 
@@ -788,6 +823,8 @@ impl<'a> Builder<'a> {
             #[cfg(feature = "rust-import")]
             stale: self.stale,
             hosted,
+            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+            rawr: None,
         })
     }
 

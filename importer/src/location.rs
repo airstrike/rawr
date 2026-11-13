@@ -14,11 +14,22 @@ pub mod copy;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// How many times this process resolved a project's Rawr directory.
+static RESOLVED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many times this process resolved a project's Rawr directory, for
+/// `RAWR_VERBOSE`'s account of a save.
+#[must_use]
+pub fn resolutions() -> usize {
+    RESOLVED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `<target>/rawr` for `project`, the target directory resolved as Cargo
 /// does, or `<target>/rawr/members/<path>` for a workspace member
 /// ([`rawr_location::rawr_directory`]).
 #[must_use]
 pub fn rawr_directory(project: &Path, environment: &crate::cargo::config::Environment) -> PathBuf {
+    RESOLVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let project = fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
     rawr_location::rawr_directory(
         &project,
@@ -35,6 +46,7 @@ pub fn rawr_directory_here(project: &Path) -> PathBuf {
     match crate::cargo::config::Environment::capture() {
         Ok(environment) => rawr_directory(project, &environment),
         Err(_) => {
+            RESOLVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let project = fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
             rawr_location::rawr_directory(&project, |_| None, None)
         }

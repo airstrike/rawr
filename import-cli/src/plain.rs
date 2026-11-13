@@ -223,6 +223,7 @@ fn acquire(
     limits: &rawr_import::cargo::Limits,
     input: &[u8; 32],
     settlement: &mut rawr_import::bindings::Settlement,
+    copies: &mut rawr::package::Copies,
 ) -> Result<Facts, crate::Error> {
     use crate::Error;
     use rawr_import::applicability::{inventory, store};
@@ -257,10 +258,10 @@ fn acquire(
             return Ok(Facts { entries, aliases });
         }
     }
-    let request = |closure: &[rawr_import::cargo::config::Dependency]| {
+    let mut request = |closure: &[rawr_import::cargo::config::Dependency]| {
         let environment = Environment::capture().map_err(Error::other)?;
         graph
-            .rust_inventory_plain(environment, closure, limits)
+            .rust_inventory_plain(environment, closure, limits, copies)
             .map_err(Error::other)?
             .ok_or_else(|| Error::other("the crate has no Rust dependency"))
     };
@@ -463,7 +464,12 @@ fn keep_expansions(
     let directory = expand::directory(project);
     let environment = Environment::capture().map_err(Error::other)?;
     let request = graph
-        .rust_inventory_plain(environment, &[], limits)
+        .rust_inventory_plain(
+            environment,
+            &[],
+            limits,
+            &mut rawr::package::Copies::default(),
+        )
         .map_err(Error::other)?
         .ok_or_else(|| Error::other("cannot expand a derive in a crate with no Rust dependency"))?;
     let native = request.pinned_native(limits).map_err(Error::other)?;
@@ -517,25 +523,46 @@ fn prepare_resolving(
     use crate::Error;
     // The program's parses, read from its cells and remembered: each round's
     // check loads the program again, and a demand changes none of its
-    // sources, so no round parses one the check read already (#1618).
-    let cells = rawr::package::Cells::new(build.cells(target)).remember();
-    let graph = match graph {
+    // sources, so no round parses one the check read already (#1618). An
+    // owner's cells outlast the preparation, and the program a save loaded
+    // through them before it prepared is this preparation's (#1849).
+    let cells = match kept.as_deref_mut() {
+        Some(kept) => kept.cells(build.cells(target)),
+        None => std::rc::Rc::new(rawr::package::Cells::new(build.cells(target)).remember()),
+    };
+    let loaded = kept
+        .as_deref_mut()
+        .and_then(|kept| kept.take_loaded(&cells));
+    let graph = graph.or(loaded);
+    let mut graph = match graph {
         Some(graph) => graph,
         None => rawr::package::Graph::load_with_cells(&build.parser(), target, &cells)
             .map_err(Error::Rawr)?,
     };
+    // The shadow crate's files as they were last written, the owner's when
+    // one prepares: a round writes and reads only those it changes.
+    let mut own_copies = rawr::package::Copies::default();
+    let project = graph.entry_package().root().to_path_buf();
+    // The Rawr directory, resolved once for the owner: each record below
+    // is read from it.
+    let rawr = match kept.as_deref_mut() {
+        Some(kept) => kept.copies(),
+        None => &mut own_copies,
+    }
+    .rawr_directory_here(&project);
+    graph.keep_rawr_directory(rawr.clone());
     let limits = graph.rust_limits();
     let source = rawr::reload::source::Graph::from_package(&graph);
+    // Each round's check takes a clone, which shares the files.
     let snapshot = rawr::reload::source::Snapshot::from_graph(&source);
     let expected = snapshot.imported(&limits).map_err(Error::other)?;
     let transport = snapshot
         .imported_transport(expected, &limits)
         .map_err(Error::other)?;
-    let project = graph.entry_package().root().to_path_buf();
     // After an install, the instances the last build's check recorded are
     // this check's first guess, which its build confirms or corrects, so
     // the install costs no second build (D869).
-    rawr::package::instances::adopt(&project).map_err(Error::other)?;
+    rawr::package::instances::adopt_in(&rawr).map_err(Error::other)?;
     // A program that used proved applications last time keys its check by
     // the identity of every input its API was read from: its dependencies'
     // facts change only with them, so no facts are read for a warm run.
@@ -548,15 +575,14 @@ fn prepare_resolving(
     let mut keyed;
     let mut current_adapter = None;
     let policy = rawr_import::classify::Policy::standard();
-    let mut snapshot = Some(snapshot);
-    let mut crate_demand = rawr_import::crate_demand::load(&project);
+    let mut crate_demand = rawr_import::crate_demand::load_in(&rawr);
     let mut settlement = rawr_import::bindings::Settlement::default();
     let mut remembered = !crate_demand.is_empty();
     let seed = graph.rust_demand_seed();
     // The last runner, when this program names no path its API wasn't
     // resolved for: its API is resolved again, and its runner kept while
     // it covers the program's native items (#1743).
-    let mut last = crate::runner_demand::load(&project).filter(|last| {
+    let mut last = crate::runner_demand::load_in(&rawr).filter(|last| {
         resolve == Resolve::Last && last.resolves(&seed) && last.resolves(&crate_demand)
     });
     // Proof-backed applications of imported calls whose candidate depends
@@ -596,8 +622,17 @@ fn prepare_resolving(
         resolved.clone_from(&request_demand);
         let environment = Environment::capture().map_err(Error::other)?;
         let universe = rawr_import::cargo::universe::Catalog::plain().map_err(Error::other)?;
-        let request = match graph.rust_import_plain(environment, universe, &request_demand, &limits)
-        {
+        let copies = match kept.as_deref_mut() {
+            Some(kept) => kept.copies(),
+            None => &mut own_copies,
+        };
+        let request = match graph.rust_import_plain(
+            environment,
+            universe,
+            &request_demand,
+            &limits,
+            copies,
+        ) {
             Ok(Some(request)) => request,
             Ok(None) => {
                 return Err(Error::other(rawr_import::Error::Request {
@@ -612,25 +647,27 @@ fn prepare_resolving(
             Err(_) if remembered => {
                 remembered = false;
                 crate_demand.clear();
-                rawr_import::crate_demand::store(&project, &crate_demand);
+                rawr_import::crate_demand::store_in(&rawr, &crate_demand);
                 continue;
             }
             Err(error) => return Err(Error::other(error)),
         };
         remembered = false;
+        // The instances the last check recorded, read once for the round.
+        let mut instances = rawr::package::instances::kept_in(&rawr);
         // A first build whose check records instances the table lacks stops
         // before its probe: its API is read once, after the retry.
         let request = if instances_retried {
             request
         } else {
-            request.kept_instances(rawr::package::instances::kept(&project))
+            request.kept_instances(instances.clone())
         };
         // So does one whose uses have rawr's copy written with other bodies
         // (#1807).
         let request = if called_retried {
             request
         } else {
-            request.kept_bodies(rawr::package::called::kept(&project).map_or(
+            request.kept_bodies(rawr::package::called::kept_in(&rawr).map_or(
                 rawr_import::uses::Bodies::Every,
                 rawr_import::uses::Bodies::Named,
             ))
@@ -654,11 +691,12 @@ fn prepare_resolving(
         // hold yet is written, and the crate checked again with it (D869).
         let new_instances = match prepared.recorded_instances().map_err(Error::other)? {
             Some(record) => {
-                rawr::package::instances::store(&project, &record).map_err(Error::other)?
-                    && !rawr::package::instances::kept(&project)
-                        .instances()
-                        .is_empty()
-                    && !instances_retried
+                let stored =
+                    rawr::package::instances::store_in(&rawr, &record).map_err(Error::other)?;
+                if stored {
+                    instances = rawr::package::instances::kept_in(&rawr);
+                }
+                stored && !instances.instances().is_empty() && !instances_retried
             }
             None => false,
         };
@@ -670,7 +708,7 @@ fn prepare_resolving(
         uses = prepared.recorded_uses().map_err(Error::other)?;
         let new_bodies = match &uses {
             Some(uses) => {
-                rawr::package::called::store(&project, uses.named()).map_err(Error::other)?
+                rawr::package::called::store_in(&rawr, uses.named()).map_err(Error::other)?
                     && !called_retried
             }
             None => false,
@@ -686,13 +724,8 @@ fn prepare_resolving(
         let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
-        let adapter = &*current_adapter.insert(adapter(
-            keyed.as_ref(),
-            &rawr::package::instances::kept(&project),
-        ));
-        let snapshot = snapshot
-            .take()
-            .unwrap_or_else(|| rawr::reload::source::Snapshot::from_graph(&source));
+        let adapter = &*current_adapter.insert(adapter(keyed.as_ref(), &instances));
+        let snapshot = snapshot.clone();
         let warm = rawr_import::composition::resolve_api_semantic(
             api,
             adapter,
@@ -722,10 +755,10 @@ fn prepare_resolving(
                 // save lowers again only the sources it changed; else this
                 // preparation's own, so a round lowers again only the
                 // sources a proof or a demand changed.
-                let (kept_api, checker) = match kept.as_deref_mut() {
+                let (kept_api, checker, copies) = match kept.as_deref_mut() {
                     Some(kept) => {
-                        let (api, checker) = kept.split(build);
-                        (Some(api), checker)
+                        let (api, checker, copies) = kept.split(build);
+                        (Some(api), checker, copies)
                     }
                     None => (
                         None,
@@ -734,6 +767,7 @@ fn prepare_resolving(
                             engine.keep_lowerings();
                             engine
                         }),
+                        &mut own_copies,
                     ),
                 };
                 let (api, kept_api) = match kept_api {
@@ -748,11 +782,8 @@ fn prepare_resolving(
                     expected,
                     &limits,
                     |contract, _profile, facade| {
-                        let mut snapshot = Some(snapshot);
                         loop {
-                            let snapshot = snapshot.take().unwrap_or_else(|| {
-                                rawr::reload::source::Snapshot::from_graph(&source)
-                            });
+                            let snapshot = snapshot.clone();
                             // Async code compiles against the core's future
                             // (D513.3), whose facade the runner installs
                             // too. `rawr run` and `rawr check` read the
@@ -787,8 +818,13 @@ fn prepare_resolving(
                                 return Err(Error::Rawr(error));
                             };
                             if inventory.is_none() {
-                                inventory =
-                                    Some(acquire(&graph, &limits, &input, &mut settlement)?);
+                                inventory = Some(acquire(
+                                    &graph,
+                                    &limits,
+                                    &input,
+                                    &mut settlement,
+                                    copies,
+                                )?);
                             }
                             let facts = inventory
                                 .as_ref()
@@ -823,8 +859,17 @@ fn prepare_resolving(
                                     Error::other("the failed check names no imported call")
                                 })?;
                                 if inventory.is_none() {
-                                    inventory =
-                                        Some(acquire(&graph, &limits, &input, &mut settlement)?);
+                                    let copies = match kept.as_deref_mut() {
+                                        Some(kept) => kept.copies(),
+                                        None => &mut own_copies,
+                                    };
+                                    inventory = Some(acquire(
+                                        &graph,
+                                        &limits,
+                                        &input,
+                                        &mut settlement,
+                                        copies,
+                                    )?);
                                 }
                                 let facts = inventory.as_ref().ok_or_else(|| {
                                     Error::other("the crates' facts were not loaded")
@@ -848,7 +893,7 @@ fn prepare_resolving(
                                 if crate::new_demand(&error, &request_demand, &graph).is_some() =>
                             {
                                 demand_more(&error, &request_demand, &mut crate_demand, &graph);
-                                rawr_import::crate_demand::store(&project, &crate_demand);
+                                rawr_import::crate_demand::store_in(&rawr, &crate_demand);
                                 continue;
                             }
                             Err(Proof::Rejected(_)) if error.rust_member_owner().is_some() => {
@@ -866,7 +911,7 @@ fn prepare_resolving(
                         if crate::new_demand(&error, &request_demand, &graph).is_some() =>
                     {
                         demand_more(&error, &request_demand, &mut crate_demand, &graph);
-                        rawr_import::crate_demand::store(&project, &crate_demand);
+                        rawr_import::crate_demand::store_in(&rawr, &crate_demand);
                         continue;
                     }
                     Err(rawr_import::checked::Evaluation::Transform(error)) => return Err(error),

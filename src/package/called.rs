@@ -32,7 +32,12 @@ struct Record {
 
 /// Where the project at `root` keeps its record.
 fn location(root: &Path) -> PathBuf {
-    rawr_import::location::rawr_directory_here(root).join("called.json")
+    location_in(&rawr_import::location::rawr_directory_here(root))
+}
+
+/// Where the project whose Rawr directory is `rawr` keeps its record.
+fn location_in(rawr: &Path) -> PathBuf {
+    rawr.join("called.json")
 }
 
 /// The marked items the project at `root` last recorded native code
@@ -40,7 +45,18 @@ fn location(root: &Path) -> PathBuf {
 /// body.
 #[must_use]
 pub fn kept(root: &Path) -> Option<BTreeSet<String>> {
-    let bytes = fs::read(location(root)).ok()?;
+    read(&location(root))
+}
+
+/// [`kept`] for the project whose Rawr directory is `rawr`.
+#[must_use]
+pub fn kept_in(rawr: &Path) -> Option<BTreeSet<String>> {
+    read(&location_in(rawr))
+}
+
+/// The record at `path`.
+fn read(path: &Path) -> Option<BTreeSet<String>> {
+    let bytes = fs::read(path).ok()?;
     let record = serde_json::from_slice::<Record>(&bytes).ok()?;
     (record.schema == SCHEMA).then_some(record.named)
 }
@@ -53,7 +69,21 @@ pub fn kept(root: &Path) -> Option<BTreeSet<String>> {
 ///
 /// The record can't be written.
 pub fn store(root: &Path, named: &BTreeSet<String>) -> io::Result<bool> {
-    let kept = kept(root);
+    write(&location(root), named)
+}
+
+/// [`store`] for the project whose Rawr directory is `rawr`.
+///
+/// # Errors
+///
+/// The record can't be written.
+pub fn store_in(rawr: &Path, named: &BTreeSet<String>) -> io::Result<bool> {
+    write(&location_in(rawr), named)
+}
+
+/// Keep `named` with the record at `path`.
+fn write(path: &Path, named: &BTreeSet<String>) -> io::Result<bool> {
+    let kept = read(path);
     if kept.as_ref().is_some_and(|kept| kept.is_superset(named)) {
         return Ok(false);
     }
@@ -62,14 +92,10 @@ pub fn store(root: &Path, named: &BTreeSet<String>) -> io::Result<bool> {
         named: kept.unwrap_or_default(),
     };
     record.named.extend(named.iter().cloned());
-    let path = location(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(
-        &path,
-        serde_json::to_vec(&record).map_err(io::Error::other)?,
-    )?;
+    fs::write(path, serde_json::to_vec(&record).map_err(io::Error::other)?)?;
     Ok(true)
 }
 
