@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A save that changes only Rawr code no longer installs every crate's facades again for the program's check: the check shares the registry the last check built for the same API, and a facade's install now merges its entries instead of re-sorting the whole registry.","issues":[1870],"refs":[1755,1850]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.208",
@@ -4120,7 +4125,7 @@
     {"issue":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1856,"title":"Three owner suffix tests fail on main: Overlay must reuse content","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1857,"title":"An owner's check of the program keeps each source's lowering across saves","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.203"},
-    {"issue":1858,"title":"A save reads every source's parse from disk cells again; the owner could keep the remembered cells","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1858,"title":"A save reads every source's parse from disk cells again; the owner could keep the remembered cells","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1859,"title":"About 20 s pass between the program's check and the runner build on an inboard start","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1860,"title":"One ledger transaction and one root sync per save","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open","category":"Shared dependency cache (D607)"},
@@ -4131,7 +4136,8 @@
     {"issue":1866,"title":"A start whose API is current reads it, its classification and its facade once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.206"},
     {"issue":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1868,"title":"A native pull from a program's kept iterator removes its first item, O(n) per pull","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1870,"title":"The program's check keeps the registry it installed, and a facade's install costs what the facade holds","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5368,7 +5374,7 @@
             {"number":1854,"title":"The admitting replay still compares every input the build just captured","state":"open"},
             {"number":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open"},
             {"number":1856,"title":"Three owner suffix tests fail on main: Overlay must reuse content","state":"open"},
-            {"number":1858,"title":"A save reads every source's parse from disk cells again; the owner could keep the remembered cells","state":"open"},
+            {"number":1858,"title":"A save reads every source's parse from disk cells again; the owner could keep the remembered cells","state":"closed"},
             {"number":1859,"title":"About 20 s pass between the program's check and the runner build on an inboard start","state":"open"},
             {"number":1860,"title":"One ledger transaction and one root sync per save","state":"open"},
             {"number":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open"},

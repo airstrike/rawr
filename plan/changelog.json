@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A save that changes only Rawr code no longer installs every crate's facades again for the program's check: the check shares the registry the last check built for the same API, and a facade's install now merges its entries instead of re-sorting the whole registry.","issues":[1870],"refs":[1755,1850]}
+    ]
   },
   "releases": [
     {

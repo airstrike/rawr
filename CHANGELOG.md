@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save that changes only Rawr code no longer installs every crate's facades again for the program's check: the check shares the registry the last check built for the same API, and a facade's install now merges its entries instead of re-sorting the whole registry. (#1870; part of #1755, #1850)
 
 ## 0.3.208 (2026-11-13)
 
