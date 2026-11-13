@@ -16,6 +16,10 @@ pub(in crate::input) mod scripts;
 pub(crate) struct Build {
     pub(super) evidence: Evidence,
     pub(super) package_files: BTreeMap<Box<str>, package::Set>,
+    /// The closure index of the graph an extraction plan binds, built once
+    /// for every crate's closure (#1846).
+    #[cfg(feature = "rustc-driver")]
+    pub(super) closure: Option<super::closure::Index>,
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -61,6 +65,12 @@ pub(crate) struct Retained {
 impl Retained {
     pub(crate) fn build(&self) -> &Build {
         &self.build
+    }
+
+    /// Index `graph` for the closures of the crates a replay's plan binds.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn bind_closure(&mut self, graph: &unit::BuildGraph) {
+        self.build.bind_closure(graph);
     }
 
     /// Public Build output paths, without interpreting Cargo's scratch layout.

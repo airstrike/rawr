@@ -228,6 +228,8 @@ impl build::Retained {
                     environment,
                 },
                 package_files: BTreeMap::new(),
+                #[cfg(feature = "rustc-driver")]
+                closure: None,
             },
         })
     }

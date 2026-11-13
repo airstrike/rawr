@@ -220,13 +220,15 @@ impl Request {
             internal,
             pending,
         } = parsed;
-        let retained = build::Retained::decode(
+        let mut retained = build::Retained::decode(
             record.build(),
             &graph,
             paths.final_form().build(),
             &self.target,
             budget,
         )?;
+        // Every replay of this interpretation binds its plan to this graph.
+        retained.bind_closure(&graph);
         let namespace = record.decode_namespace(budget)?.map(Arc::new);
         let stored = stored::Stored::decode(record.input(), budget)?;
         Ok(Arc::new(Decoded {

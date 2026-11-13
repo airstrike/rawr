@@ -78,6 +78,8 @@ impl Fixture {
                     environment: Box::default(),
                 },
                 package_files: BTreeMap::new(),
+                #[cfg(feature = "rustc-driver")]
+                closure: None,
             },
         };
         Self {

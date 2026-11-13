@@ -22,10 +22,13 @@ mod artifact;
 pub(crate) mod bindings;
 pub(crate) mod build;
 pub(crate) mod canonical;
+#[cfg(feature = "rustc-driver")]
+mod closure;
 pub(crate) mod complete;
 pub(crate) mod config;
 pub mod declaration;
 mod dependency;
+mod messages;
 #[cfg(feature = "rustc-driver")]
 pub(crate) use dependency::scan::{escape_environment, escape_path};
 pub mod fingerprint;
@@ -305,14 +308,11 @@ impl Evidence {
         graph: &cargo::unit::BuildGraph,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[PathBuf]>> {
+        let units = messages::Units::of(graph.artifacts());
         let mut directories = Vec::new();
         for artifact in &self.artifacts {
             for output in &artifact.outputs {
-                if !graph
-                    .artifacts()
-                    .iter()
-                    .any(|unit| compare_artifact(unit, artifact) == Ordering::Equal)
-                {
+                if !units.contains(artifact) {
                     return Err(input("missing-probe-output-join", output.display()));
                 }
                 let parent = output
@@ -329,7 +329,8 @@ impl Evidence {
 
     /// The canonical paths of every artifact of the units `unit_key`
     /// reaches through its dependencies, its own excluded: the crates whose
-    /// traits and impls its API can name (#672).
+    /// traits and impls its API can name (#672). A build bound to the
+    /// graph walks its closure index instead ([`Build::bind_closure`]).
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn closure_artifacts(
         &self,
@@ -380,12 +381,21 @@ impl Evidence {
         graph: &cargo::unit::BuildGraph,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[SelectedArtifact]>> {
+        let mut outputs = BTreeMap::<&str, Vec<&cargo::unit::Output>>::new();
+        for output in graph.artifacts() {
+            outputs
+                .entry(output.semantic_key())
+                .or_default()
+                .push(output);
+        }
+        let messages = messages::Messages::of(&self.artifacts);
         let mut selected = Vec::new();
         for unit in graph.extraction() {
-            let mut unit_matches = graph
-                .artifacts()
-                .iter()
-                .filter(|output| output.semantic_key() == unit.semantic_key());
+            let mut unit_matches = outputs
+                .get(unit.semantic_key())
+                .into_iter()
+                .flatten()
+                .copied();
             let output = unit_matches
                 .next()
                 .ok_or_else(|| input("missing-selected-unit-output", unit.semantic_key()))?;
@@ -406,10 +416,7 @@ impl Evidence {
                         .is_some_and(|name| name == platform)
                 })
             };
-            let mut matches = self
-                .artifacts
-                .iter()
-                .filter(|artifact| compare_artifact(output, artifact) == Ordering::Equal);
+            let mut matches = messages.matching(output).iter().copied();
             let artifact = matches
                 .next()
                 .ok_or_else(|| input("missing-selected-artifact", unit.semantic_key()))?;
@@ -440,15 +447,9 @@ impl Evidence {
                 return Err(input("selected-semantic-key-mismatch", unit.semantic_key()));
             }
             // A compiler artifact read binds to the physical capture bound,
-            // never to the configurable JSON target.
-            let bytes = read_file_accounted(
-                "selected rmeta artifact",
-                rmeta,
-                crate::process::CAPTURE_BYTES,
-                allocation,
-            )?;
-            let length = u64::try_from(bytes.len())
-                .map_err(|_| input("selected-rmeta-length", rmeta.display()))?;
+            // never to the configurable JSON target. An unchanged file's
+            // digest is the one the digest memo holds.
+            let (length, digest) = rmeta_digest(rmeta, allocation)?;
             allocation.reserve(&mut selected, 1)?;
             allocation.items(1)?;
             allocation.bytes(artifact.profile.as_bytes().len())?;
@@ -464,7 +465,7 @@ impl Evidence {
                 fresh: artifact.fresh,
                 rmeta: allocation.clone_path(rmeta)?,
                 length,
-                digest: Sha256::digest(bytes).into(),
+                digest,
             });
         }
         selected.sort_unstable();
@@ -884,6 +885,14 @@ impl Build {
         self.evidence.probe_directories(graph, allocation)
     }
 
+    /// Index `graph`'s units and the canonical paths of their artifacts
+    /// once, for the closure of every crate an extraction plan binds
+    /// (#1846).
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn bind_closure(&mut self, graph: &cargo::unit::BuildGraph) {
+        self.closure = Some(closure::Index::of(graph, &self.evidence.artifacts));
+    }
+
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn closure_artifacts(
         &self,
@@ -891,7 +900,17 @@ impl Build {
         unit_key: &str,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[Box<str>]>> {
-        self.evidence.closure_artifacts(graph, unit_key, allocation)
+        let Some(index) = self.closure.as_ref().filter(|index| index.is_of(graph)) else {
+            return self.evidence.closure_artifacts(graph, unit_key, allocation);
+        };
+        let mut paths = Vec::new();
+        for path in index.closure(unit_key) {
+            allocation.reserve(&mut paths, 1)?;
+            paths.push(allocation.owned(path)?);
+        }
+        paths.sort_unstable();
+        paths.dedup();
+        Ok(paths.into_boxed_slice())
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -939,6 +958,8 @@ impl Build {
         Ok(Self {
             evidence: Evidence::parse(bytes, environment, cargo_commit, limits)?,
             package_files: BTreeMap::new(),
+            #[cfg(feature = "rustc-driver")]
+            closure: None,
         })
     }
 
@@ -1035,19 +1056,15 @@ fn correlate_artifacts(expected: &[cargo::unit::Output], artifacts: &[Artifact])
     // therefore produce multiple distinct artifacts with the same public projection. Prove total
     // coverage here; selected artifact authority is joined later by its path to a full PackageId,
     // profile, and reachable semantic unit, where zero or residual ambiguity rejects.
+    let messages = messages::Messages::of(artifacts);
     for output in expected {
-        if !artifacts
-            .iter()
-            .any(|artifact| compare_artifact(output, artifact) == Ordering::Equal)
-        {
+        if messages.matching(output).is_empty() {
             return Err(input("missing-build-artifact", output.package_id()));
         }
     }
+    let units = messages::Units::of(expected);
     for artifact in artifacts {
-        if !expected
-            .iter()
-            .any(|output| compare_artifact(output, artifact) == Ordering::Equal)
-        {
+        if !units.contains(artifact) {
             return Err(input(
                 "unexpected-build-artifact",
                 artifact.key.package_id.as_ref(),
@@ -1905,55 +1922,26 @@ fn freshness_digest(resource: &'static str, path: &Path, expected: usize) -> Res
     Ok(digest)
 }
 
+/// The length and SHA-256 of one selected `.rmeta`, bound by the physical
+/// capture bound and charged as a whole read of it is. A file whose identity
+/// is unchanged since it was hashed is not read again (#1846).
 #[cfg(feature = "rustc-driver")]
-fn read_file_accounted(
-    resource: &'static str,
+fn rmeta_digest(
     path: &Path,
-    limit: usize,
     allocation: &mut crate::extract::Allocation,
-) -> Result<Vec<u8>> {
-    let mut file = File::open(path).map_err(|source| Error::Io {
-        operation: "open bounded input",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let metadata = file.metadata().map_err(|source| Error::Io {
-        operation: "inspect bounded input handle",
+) -> Result<(u64, [u8; 32])> {
+    const RESOURCE: &str = "selected rmeta artifact";
+    let metadata = fs::metadata(path).map_err(|source| Error::Io {
+        operation: "inspect bounded input",
         path: path.to_path_buf(),
         source,
     })?;
     let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-    limited(resource, limit, length)?;
+    limited(RESOURCE, crate::process::CAPTURE_BYTES, length)?;
     allocation.items(1)?;
     allocation.bytes(length)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|source| Error::Allocation {
-            operation: "accounted input read",
-            source,
-        })?;
-    bytes.resize(length, 0);
-    if let Err(source) = file.read_exact(&mut bytes) {
-        if source.kind() == std::io::ErrorKind::UnexpectedEof {
-            return Err(input("input-changed-during-read", path.display()));
-        }
-        return Err(Error::Io {
-            operation: "read bounded input",
-            path: path.to_path_buf(),
-            source,
-        });
-    }
-    let mut extra = [0_u8; 1];
-    let extra = file.read(&mut extra).map_err(|source| Error::Io {
-        operation: "probe bounded input growth",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if extra != 0 {
-        return Err(input("input-changed-during-read", path.display()));
-    }
-    Ok(bytes)
+    let digest = freshness_digest(RESOURCE, path, length)?;
+    Ok((metadata.len(), digest))
 }
 
 fn canonical_path(field: &'static str, path: &Path) -> Result<PathBuf> {
@@ -2386,6 +2374,8 @@ mod build_message_tests {
                 environment: Box::default(),
             },
             package_files: BTreeMap::new(),
+            #[cfg(feature = "rustc-driver")]
+            closure: None,
         };
         let graph = unit::BuildGraph::fixture_artifacts(Box::from([output.clone()]));
         build

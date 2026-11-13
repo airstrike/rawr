@@ -25,6 +25,8 @@ fn retained() -> build::Retained {
                 .into_boxed_slice(),
             },
             package_files: BTreeMap::new(),
+            #[cfg(feature = "rustc-driver")]
+            closure: None,
         },
     }
 }

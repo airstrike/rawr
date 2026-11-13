@@ -2126,6 +2126,7 @@ impl Request {
         let mut capture = if self.inputs_only {
             None
         } else {
+            build.bind_closure(&build_unit);
             Some(match probe_scope {
                 Some(scope) => scope
                     .run(|| extraction_plan.seal(native, &build, &build_unit, &metadata, limits))?,
@@ -2206,6 +2207,10 @@ impl Request {
         if let Some(current) =
             crate::input::bindings::Current::capture(&self.project_root, &self.config, limits)
         {
+            // One index of the build's inputs serves every table, so a
+            // file many closures reach is observed once (#1846).
+            let mut capture =
+                crate::input::bindings::Capture::new(&input, retained_build.build(), &current);
             for settled in &mut settlement {
                 if let crate::bindings::Settled::Extracted {
                     inputs_packages,
@@ -2214,12 +2219,7 @@ impl Request {
                     ..
                 } = settled
                 {
-                    match crate::input::bindings::Inputs::capture(
-                        &input,
-                        retained_build.build(),
-                        inputs_packages,
-                        &current,
-                    ) {
+                    match capture.inputs(inputs_packages) {
                         Ok(inputs) => publish.meta.inputs = Some(inputs),
                         Err(reason) => *unshared = Some(reason),
                     }
@@ -2239,14 +2239,11 @@ impl Request {
                         else {
                             return None;
                         };
-                        let inputs = publish.meta.inputs.clone().or_else(|| {
-                            crate::input::bindings::Inputs::capture_staged(
-                                &input,
-                                retained_build.build(),
-                                inputs_packages,
-                                &current,
-                            )
-                        })?;
+                        let inputs = publish
+                            .meta
+                            .inputs
+                            .clone()
+                            .or_else(|| capture.staged(inputs_packages))?;
                         Some((settled, inputs))
                     })
                     .collect::<Vec<_>>();
