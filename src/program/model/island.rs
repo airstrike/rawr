@@ -361,6 +361,24 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// Whether `value` is of a struct native code holds by the handle of the
+/// program value (D961).
+fn held_by_handle(value: &Dynamic) -> bool {
+    match &value.0 {
+        Union::Struct(structure, ..) => {
+            path(structure.identity()).is_some_and(|path| crate::island::handled(&path))
+        }
+        _ => false,
+    }
+}
+
+/// `value`, of a struct native code holds by its handle, kept for native
+/// code under a handle, which goes out in its place.
+fn kept_handle(value: &Dynamic, out: &mut Vec<u8>) {
+    out.push(KEPT);
+    out.extend_from_slice(&crate::island::kept_handle(value).to_le_bytes());
+}
+
 fn count(value: usize, out: &mut Vec<u8>) {
     out.extend_from_slice(&(value as u64).to_le_bytes());
 }
@@ -822,6 +840,7 @@ impl Model {
                     self.island_write_with(item, writing, out, natives, depth)?;
                 }
             }
+            Union::Struct(..) if held_by_handle(value) => kept_handle(value, out),
             Union::Struct(value, ..) => {
                 out.push(STRUCT);
                 text(
@@ -865,8 +884,15 @@ impl Model {
                     self.island_write_member(item, ty, writing, out, natives, depth)?;
                 }
             }
+            // A shared value native code holds by its handle is the one the
+            // handle keeps, when it keeps one.
             Union::Shared(..) => {
-                self.island_write_with(&value.flatten_clone(), writing, out, natives, depth)?
+                let flat = value.flatten_clone();
+                if held_by_handle(&flat) {
+                    kept_handle(value, out);
+                } else {
+                    self.island_write_with(&flat, writing, out, natives, depth)?;
+                }
             }
             Union::Variant(..) => {
                 // A lent value can't leave the call it was lent for, in its

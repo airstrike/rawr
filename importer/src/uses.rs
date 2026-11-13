@@ -58,22 +58,29 @@ pub struct Uses {
 
 /// The marked functions whose trampolines rawr wrote a generated crate
 /// with bodies for (#1807): every one, before any check recorded what
-/// native code names, or those named.
+/// native code names, or those named, with the marked types it declared
+/// as the handle of the program value (D961).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Bodies {
     Every,
-    Named(BTreeSet<String>),
+    Named {
+        named: BTreeSet<String>,
+        opaque: BTreeSet<String>,
+    },
 }
 
 impl Bodies {
     /// Whether rawr writes the crate again for `uses`, a check's of it:
     /// with the bodies of the functions it names alone, or with one it
-    /// names that the crate lacks the body of.
+    /// names that the crate lacks the body of, or with the types it holds
+    /// but never opens when they changed.
     #[must_use]
     pub fn rewritten(&self, uses: &Uses) -> bool {
         match self {
             Self::Every => true,
-            Self::Named(named) => !named.is_superset(&uses.named),
+            Self::Named { named, opaque } => {
+                !named.is_superset(&uses.named) || *opaque != uses.opaque()
+            }
         }
     }
 }
@@ -157,6 +164,14 @@ impl Uses {
     #[must_use]
     pub fn holds(&self, path: &str) -> bool {
         self.held.contains(path)
+    }
+
+    /// The marked types native code holds, which rawr's copy of the crate
+    /// may declare as the handle of the program value when native code
+    /// can't open them (D961).
+    #[must_use]
+    pub fn opaque(&self) -> BTreeSet<String> {
+        self.held.clone()
     }
 
     /// The held type that `path` is a member of (`physics::Counter` of
@@ -330,18 +345,29 @@ mod tests {
     }
 
     /// A crate written with every body is written again for its first
-    /// record, and one written with named bodies only for a name it lacks.
+    /// record, and one written with named bodies only for a name it lacks
+    /// or for a change to the types native code holds.
     #[test]
     fn bodies_are_written_again_only_for_a_name_they_lack() {
         use super::Bodies;
         let mut recorder = Recorder::default();
         recorder.name("physics::label".to_owned());
+        recorder.hold("physics::Counter".to_owned());
         let uses = recorder.finish();
-        let named =
-            |names: &[&str]| Bodies::Named(names.iter().map(|name| (*name).to_owned()).collect());
+        let paths = |paths: &[&str]| paths.iter().map(|path| (*path).to_owned()).collect();
+        let named = |names: &[&str]| Bodies::Named {
+            named: paths(names),
+            opaque: paths(&["physics::Counter"]),
+        };
+        assert_eq!(uses.opaque(), paths(&["physics::Counter"]));
         assert!(Bodies::Every.rewritten(&uses));
         assert!(named(&[]).rewritten(&uses));
         assert!(!named(&["physics::label"]).rewritten(&uses));
         assert!(!named(&["physics::label", "physics::inset"]).rewritten(&uses));
+        let opened = Bodies::Named {
+            named: paths(&["physics::label"]),
+            opaque: paths(&["physics::Counter", "physics::Ball"]),
+        };
+        assert!(opened.rewritten(&uses));
     }
 }

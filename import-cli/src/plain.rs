@@ -667,10 +667,11 @@ fn prepare_resolving(
         let request = if called_retried {
             request
         } else {
-            request.kept_bodies(rawr::package::called::kept_in(&rawr).map_or(
-                rawr_import::uses::Bodies::Every,
-                rawr_import::uses::Bodies::Named,
-            ))
+            let named = rawr::package::called::kept_in(&rawr);
+            let opaque = rawr::package::called::opaque_in(&rawr).unwrap_or_default();
+            request.kept_bodies(named.map_or(rawr_import::uses::Bodies::Every, |named| {
+                rawr_import::uses::Bodies::Named { named, opaque }
+            }))
         };
         // The shared tables' replays the owner kept: a table read for the
         // same demand last round is not read again (#1845).
@@ -704,11 +705,16 @@ fn prepare_resolving(
         // recorded it beside the generated crates (D935.3). A marked
         // function native code names gets its trampoline's body: a name
         // the record lacks is kept, and the copy written with its body and
-        // checked again, as is the first record (#1807).
+        // checked again, as is the first record (#1807). So is a copy whose
+        // types native code holds but never opens changed (D961).
         uses = prepared.recorded_uses().map_err(Error::other)?;
         let new_bodies = match &uses {
             Some(uses) => {
-                rawr::package::called::store_in(&rawr, uses.named()).map_err(Error::other)?
+                let used = rawr::package::called::Used {
+                    named: uses.named(),
+                    opaque: &uses.opaque(),
+                };
+                rawr::package::called::store_in(&rawr, &used).map_err(Error::other)?
                     && !called_retried
             }
             None => false,

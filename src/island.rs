@@ -320,8 +320,30 @@ pub(crate) fn lodged(
 /// another trait.
 pub type Maker = fn(&str, u64) -> Option<Given>;
 
-/// The stand-ins' makers each crate registered, by their type's path.
-static MAKERS: Mutex<Vec<(&'static str, Maker)>> = Mutex::new(Vec::new());
+/// What each crate registered of how native code holds program values.
+static MAKERS: Mutex<Registered> = Mutex::new(Registered {
+    makers: Vec::new(),
+    handles: Vec::new(),
+});
+
+/// [`MAKERS`]: the stand-ins' makers, by their type's path, and the
+/// paths of the structs native code holds by the handle of the program
+/// value (D961).
+struct Registered {
+    makers: Vec<(&'static str, Maker)>,
+    handles: Vec<&'static str>,
+}
+
+/// Whether native code holds a value of the struct at `path`, from its
+/// crate's root, by the handle of the program value: a value of it the
+/// program gives native code is kept, and native code gets its handle.
+pub(crate) fn handled(path: &str) -> bool {
+    MAKERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .handles
+        .contains(&path)
+}
 
 /// The program values native code holds as a native trait's object, by
 /// their handle (#1264).
@@ -434,14 +456,16 @@ fn kept<R>(change: impl FnOnce(&mut Kept) -> R) -> R {
 }
 
 /// Register the makers of a crate's stand-ins, each by its type's path
-/// from the crate's root: the shadow crate's island module calls this
+/// from the crate's root, and the paths of the structs its native code
+/// holds by their handle: the shadow crate's island module calls this
 /// before its first call into marked code.
 #[unsafe(no_mangle)]
-pub fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]) {
-    MAKERS
+pub fn __rawr_island_objects_v2(makers: &[(&'static str, Maker)], handles: &[&'static str]) {
+    let mut registered = MAKERS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .extend_from_slice(makers);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    registered.makers.extend_from_slice(makers);
+    registered.handles.extend_from_slice(handles);
 }
 
 /// Let go of the program value a stand-in held: its box was dropped.
@@ -540,6 +564,7 @@ pub(crate) fn object(value: Dynamic, owner: &str, trait_name: &str) -> Result<Dy
     let makers = MAKERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .makers
         .iter()
         .filter(|(path, _)| *path == owner)
         .map(|(_, maker)| *maker)

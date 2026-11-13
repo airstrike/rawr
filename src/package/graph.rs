@@ -543,11 +543,17 @@ impl Graph {
     }
 
     /// The shadow files with the bodies of the functions in `called`, or of
-    /// all of them.
+    /// all of them. A type the last check found native code holding but
+    /// never opening is the handle of the program value (D961), in the
+    /// shape too.
     fn island_shadow_for(
         &self,
         called: Option<&std::collections::BTreeSet<String>>,
     ) -> Option<super::island::Shadow> {
+        #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+        let opaque = super::called::opaque_in(&self.rawr_directory());
+        #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
+        let opaque = None;
         let entry = self.entry_package();
         let root = entry.native_root()?;
         let module_root = root.path().parent()?;
@@ -563,6 +569,7 @@ impl Graph {
             }),
             self.native_root_items(),
             called,
+            opaque.as_ref(),
         ))
     }
 

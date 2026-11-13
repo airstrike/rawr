@@ -1282,6 +1282,85 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
     assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
 }
 
+/// A marked struct native code holds by value but never opens, as inboard's
+/// `screen::home::State`, crosses as the handle of the program value
+/// (D961): it holds a native field, and its methods take `&mut self`, give
+/// a `&str` of it and a sidebar that borrows it and native code's registry,
+/// and its derived `Debug` prints it, as `cargo run` prints them. A save
+/// that adds a private field changes nothing native code is built against:
+/// the program restarts, as the running screen has the old fields, in a new
+/// process of the running runner with no check, and counts from the start.
+#[test]
+fn a_held_struct_native_code_never_opens_restarts_on_a_new_field_without_a_native_build() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held");
+    let stop = root.join("stop");
+    copy(Path::new(HELD), &root);
+    let printed = cargo_prints(&root);
+    assert!(
+        printed.starts_with(
+            "home (5)\n[home (5): mail, notes] home (5)\n\
+             State { input: Content { text: \"hello\" }, title: \"home (5)\", ticks: 0 }\n"
+        ),
+        "{printed}"
+    );
+    checks_and_prints(&root, &printed);
+    let mut run = start(
+        &root,
+        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
+    );
+    // `tick N {word} M`, for the word the screen's view says.
+    let ticks = |word: &'static str| {
+        move |line: &str| -> Option<(usize, usize)> {
+            let (tick, rest) = line.strip_prefix("tick ")?.split_once(' ')?;
+            let (count, _) = rest
+                .strip_prefix(word)?
+                .strip_prefix(' ')?
+                .split_once(' ')?;
+            Some((tick.parse().ok()?, count.parse().ok()?))
+        }
+    };
+    let first = ticks("ticks");
+    run.until(|line| first(line).is_some_and(|(tick, _)| tick >= 3));
+    // One write: the field, and the view's word, which says the new
+    // program runs the save.
+    let home = root.join("src/home.rs");
+    let text = fs::read_to_string(&home).unwrap();
+    fs::write(
+        &home,
+        text.replace(
+            "    ticks: usize,\n}",
+            "    ticks: usize,\n    held: u32,\n}",
+        )
+        .replace(
+            "            ticks: 0,\n",
+            "            ticks: 0,\n            held: 0,\n",
+        )
+        .replace("format!(\"ticks {} {}\"", "format!(\"held {} {}\""),
+    )
+    .unwrap();
+    let held = ticks("held");
+    run.until(|line| held(line) == Some((1, 1)));
+    fs::write(&stop, "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    assert!(
+        run.seen.iter().any(|line| line
+            == "stderr: rawr: `home::State` changed its fields, but a live value holds it; \
+                restarting the program"),
+        "{seen}"
+    );
+    assert!(!seen.contains("preparing again"), "{seen}");
+    let said = |text: &str| run.seen.iter().filter(|line| line.contains(text)).count();
+    assert_eq!(
+        said("rawr-import: a restart respawned its runner with no check"),
+        1,
+        "{seen}"
+    );
+    assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
+}
+
 /// A save whose code panics on the running program's state, as a
 /// framework's own check of its hooks can, restarts the program with the
 /// save (D553.6). It needs no native build: a new process of the running
@@ -4219,8 +4298,9 @@ fn runner_units(root: &Path) -> String {
         .unwrap_or_else(|| panic!("{said}"))
 }
 
-/// A private field on a held `pub struct` rebuilds what names the program
-/// and nothing else, and rawr and `cargo build` share the project's path
+/// A visible field on a held `pub struct`, which native code may read, so
+/// native code holds its fields rather than its handle (D961), rebuilds
+/// what names the program and nothing else, and rawr and `cargo build` share the project's path
 /// packages. The runner's base and its crates of adapters don't depend on
 /// rawr's copy of the program's crate, so the field recompiles that copy
 /// and the runner's binary, which holds what names the program (#1775,
@@ -4240,7 +4320,7 @@ fn a_held_type_s_new_field_rebuilds_two_runner_units_and_cargo_shares_the_path_p
     edit(
         &home,
         "    wizard: Option<wizard::State>,\n}",
-        "    wizard: Option<wizard::State>,\n    seen: u32,\n}",
+        "    wizard: Option<wizard::State>,\n    pub seen: u32,\n}",
     );
     edit(
         &home,

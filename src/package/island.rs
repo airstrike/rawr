@@ -46,6 +46,7 @@ use std::path::Path;
 use crate::item::{self, type_ref};
 use crate::{ImmutableString, Span};
 
+mod handle;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 mod reach;
 
@@ -155,6 +156,12 @@ pub(crate) struct Shadow {
     /// register.
     #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
     pub(crate) objects: Vec<(String, String)>,
+    /// Each struct native code holds by the handle of the program value
+    /// (D961), by its path from the crate's root, for [`support`] to
+    /// register: the interpreter keeps a value of one it gives native code
+    /// and gives its handle.
+    #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+    pub(crate) handles: Vec<String>,
     /// Each generic function native code calls through an instance entry
     /// (D869), by the path its call names, with its entry's path from the
     /// crate root, for [`support`]'s table.
@@ -670,6 +677,7 @@ pub(crate) fn shadow<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a Path, &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
     called: Option<&'a BTreeSet<String>>,
+    opaque: Option<&BTreeSet<String>>,
 ) -> Shadow {
     let sources = sources
         .into_iter()
@@ -682,6 +690,13 @@ pub(crate) fn shadow<'a>(
         .collect::<Vec<_>>();
     let mut generator = Generator::new(&sources, root);
     generator.called = called;
+    // A struct the last check found native code holding but never opening
+    // is the handle of the program value, which keeps its parts (D961).
+    if let Some(opaque) = opaque {
+        let handles = generator.handled(&sources, opaque);
+        generator.holding.retain(|path| !handles.contains(path));
+        generator.handles = handles;
+    }
     let mut files = Vec::new();
     let mut shape = BTreeMap::new();
     let mut refused = Vec::new();
@@ -716,6 +731,8 @@ pub(crate) fn shadow<'a>(
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         objects,
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
+        handles: generator.handles.iter().cloned().collect(),
+        #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         generic: generator.generic.take(),
     }
 }
@@ -749,6 +766,9 @@ struct Generator<'a> {
     /// borrow of one lends the interpreter its parts where they are, and a
     /// value moves them (#1469).
     holding: BTreeSet<String>,
+    /// The structs of `crossing` native code holds by the handle of the
+    /// program value, which keeps their fields and parts (`handle`, D961).
+    handles: BTreeSet<String>,
     /// Each generic function a trampoline stands for, which has an
     /// instance entry ([`generic_trampoline`], D869), by its call's path,
     /// with the entry's path.
@@ -965,6 +985,7 @@ impl<'a> Generator<'a> {
                 .collect(),
             implemented,
             holding: BTreeSet::new(),
+            handles: BTreeSet::new(),
             generic: std::cell::RefCell::default(),
             entries: std::cell::RefCell::default(),
             parameters: std::cell::RefCell::default(),
@@ -1375,6 +1396,11 @@ impl<'a> Generator<'a> {
         }
         match self.crosses(file, target, owner) {
             Ok(()) if self.holds(file, target, owner) => Ok(Pass::LendParts { mutable: *mutable }),
+            // Its value is the program's, which a copy back can't replace.
+            Ok(()) if *mutable && self.handled_type(file, target, owner) => Err(format!(
+                "`{}` of a type native code holds by its handle can't cross yet",
+                text.trim()
+            )),
             Ok(()) if *mutable => Ok(Pass::Mutable),
             Ok(()) => Ok(Pass::Borrow),
             // A type the marked crate doesn't declare, as ratatui's `Frame`,
@@ -1865,6 +1891,22 @@ impl<'a> Generator<'a> {
                             );
                         }
                     }
+                }
+                item::Parsed::Struct(declared)
+                    if self
+                        .handles
+                        .contains(&path_of(file.modules, &declared.name.text)) =>
+                {
+                    let path = path_of(file.modules, &declared.name.text);
+                    let handle = self.handle(file, declared, &path);
+                    items.push_str(&handle.items);
+                    shape.insert(
+                        path,
+                        Entry {
+                            kind: Kind::Type,
+                            text: handle.shape,
+                        },
+                    );
                 }
                 item::Parsed::Struct(declared) if declared.header.visibility.is_some() => {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
@@ -2593,8 +2635,12 @@ impl<'a> Generator<'a> {
         // `Id::as_str` gives `&self.0`: its text is in native code's value.
         let crossing = matches!(owner, Owner::Marked(owner) if self.crossing.contains(owner));
         let lent = crossing && matches!(function.receiver, Some(item::Receiver::Shared(_)));
+        // A method of a type native code holds by its handle takes the
+        // handle as its receiver, as a stand-in's does (D961).
+        let handle = matches!(owner, Owner::Marked(owner) if self.handles.contains(owner));
+        let held = object || handle;
         let kept = match self.kept_result(file, function).filter(|_| object || lent) {
-            Some(Ok(Borrowed::Kept(_))) if !object => {
+            Some(Ok(Borrowed::Kept(_))) if !held => {
                 reasons.push(
                     "its result: a reference to a value the interpreter copies can't come back yet"
                         .to_owned(),
@@ -2620,7 +2666,7 @@ impl<'a> Generator<'a> {
         }
         let receiver = match &function.receiver {
             None => None,
-            Some(item::Receiver::Shared(_) | item::Receiver::Mutable(_)) if object => {
+            Some(item::Receiver::Shared(_) | item::Receiver::Mutable(_)) if held => {
                 Some(Pass::Object)
             }
             Some(item::Receiver::Shared(_)) if holding => Some(Pass::LendParts { mutable: false }),
@@ -2721,7 +2767,7 @@ impl<'a> Generator<'a> {
         // A `&mut self` call ends every borrow of the receiver, as rustc
         // allows it only once none is left: what the stand-in kept for
         // them goes (#1305).
-        if object && matches!(function.receiver, Some(item::Receiver::Mutable(_))) {
+        if held && matches!(function.receiver, Some(item::Receiver::Mutable(_))) {
             text.push_str("    self.0.release();\n");
         }
         let owned = !matches!(owner, Owner::None) || object;
@@ -2930,7 +2976,7 @@ impl<'a> Generator<'a> {
                 "    let __value: {output} = __reply.read(|input| input.{read}());"
             );
         } else if let Some(Borrowed::InPlace) = kept
-            && object
+            && held
         {
             // The receiver's own native value, kept where it is for as
             // long as `&self` is borrowed.
@@ -2948,7 +2994,7 @@ impl<'a> Generator<'a> {
                  let __value: {output} = unsafe {{ __reply.lent(self) }};"
             );
         } else if let Some(Borrowed::Pinned) = kept
-            && object
+            && held
         {
             // The result is the program's own text, pinned with the value.
             let _ = writeln!(
@@ -3327,15 +3373,7 @@ impl<'a> Generator<'a> {
                         .is_some_and(|last| last.name.text == "Copy")
                 })
         });
-        // A field's span starts at its name, after any `pub` or `pub(..)`.
-        let visible = declared.fields.iter().any(|field| {
-            let before = slice(
-                file.text,
-                Span::new(declared.span.start(), field.span.start()),
-            )
-            .trim_end();
-            before.ends_with("pub") || before.ends_with(')')
-        });
+        let visible = visible_fields(file, declared);
         let dropped = file.items.iter().any(|item| {
             matches!(item, item::Parsed::Impl(declared)
                 if declared.trait_.as_ref().and_then(|path| path.segments.last())
@@ -3460,6 +3498,20 @@ impl<'a> Generator<'a> {
              fn lend<'c>(&'c self, call: &mut {island}::Call<'c>) {{\n        {lend}\n    }}\n}}\n"
         )
     }
+}
+
+/// Whether a field of `declared`, written in `file`, is visible outside
+/// its module: a field's span starts at its name, after any `pub` or
+/// `pub(..)`.
+fn visible_fields(file: &Source<'_>, declared: &item::Struct) -> bool {
+    declared.fields.iter().any(|field| {
+        let before = slice(
+            file.text,
+            Span::new(declared.span.start(), field.span.start()),
+        )
+        .trim_end();
+        before.ends_with("pub") || before.ends_with(')')
+    })
 }
 
 /// `trampoline`, the text of `function`'s, `#[inline]` unless `function`
@@ -5155,11 +5207,13 @@ fn identifiers(text: &str) -> BTreeSet<&str> {
 /// The runtime support of a native root's shadow crate, appended to its
 /// root as the module [`MODULE`]. `main` is whether the crate root has a
 /// `fn main` to start; `objects` are the crate's stand-ins' makers, each by
-/// its type's path ([`Shadow::objects`]).
+/// its type's path ([`Shadow::objects`]), and `handles` the paths of the
+/// structs native code holds by their handle ([`Shadow::handles`]).
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) fn support(
     main: bool,
     objects: &[(String, String)],
+    handles: &[String],
     instances: &[crate::package::instances::Entry],
 ) -> String {
     let entry = if main {
@@ -5170,6 +5224,11 @@ pub(crate) fn support(
     let makers = objects
         .iter()
         .map(|(owner, maker)| format!("({owner:?}, {maker} as Maker)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let handles = handles
+        .iter()
+        .map(|path| format!("{path:?}"))
         .collect::<Vec<_>>()
         .join(", ");
     // Each instance native code calls a generic function at, by the path
@@ -5189,6 +5248,7 @@ pub(crate) fn support(
     SUPPORT
         .replace("ENTRY", entry)
         .replace("__MAKER_LIST__", &format!("[{makers}]"))
+        .replace("__HANDLE_LIST__", &format!("[{handles}]"))
         .replace(
             "__INSTANCE_LIST__",
             &format!("[\n        {instances}\n    ]"),
@@ -5254,7 +5314,7 @@ unsafe extern "Rust" {
     ) -> ::std::result::Result<*mut (), u8>;
     fn __rawr_scope_release_v1(nonce: u64, shared: bool);
     fn __rawr_island_start_v1(entry: fn() -> i32);
-    fn __rawr_island_objects_v1(makers: &[(&'static str, Maker)]);
+    fn __rawr_island_objects_v2(makers: &[(&'static str, Maker)], handles: &[&'static str]);
     fn __rawr_island_release_v1(handle: u64);
     fn __rawr_island_unanchor_v1(address: u64, ty: u64);
     fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> ::std::vec::Vec<u8>;
@@ -5271,12 +5331,14 @@ unsafe extern "Rust" {
 pub type Maker = fn(&str, u64) -> ::std::option::Option<Given>;
 
 /// Register `makers`, a crate's stand-ins' makers by their types' paths
-/// from the crate's root, before its first call into marked code, which
-/// is where a program value becomes a trait object.
-pub fn register(makers: &[(&'static str, Maker)]) {
+/// from the crate's root, and `handles`, the paths of the structs native
+/// code holds by the handle of the program value, before its first call
+/// into marked code, which is where a program value becomes a trait
+/// object or a handle.
+pub fn register(makers: &[(&'static str, Maker)], handles: &[&'static str]) {
     // SAFETY: the runner links `rawr`, which defines the function with
     // this exact signature.
-    unsafe { __rawr_island_objects_v1(makers) }
+    unsafe { __rawr_island_objects_v2(makers, handles) }
 }
 
 /// Start the program at `entry`, a crate root's `main`: the runner calls
@@ -5373,6 +5435,21 @@ impl Drop for Kept {
 impl Object {
     pub fn new(handle: u64) -> Self {
         Self(handle, ::std::sync::Mutex::new(::std::vec::Vec::new()))
+    }
+
+    /// The handle of the program value, which stays held.
+    pub fn handle(&self) -> u64 {
+        self.0
+    }
+
+    /// The handle of the program value, given back to the interpreter
+    /// with the value, as native code moves it: no longer held here.
+    pub fn give(self) -> u64 {
+        let object = ::std::mem::ManuallyDrop::new(self);
+        // SAFETY: the kept results are read once, from an object that
+        // never drops; a move ended every borrow of them.
+        drop(unsafe { ::std::ptr::read(&object.1) });
+        object.0
     }
 
     /// `value`, a `&self` call's result that borrows the receiver,
@@ -6256,6 +6333,12 @@ impl<'a> In<'a> {
     }
     fn byte(&mut self) -> u8 {
         self.take(1)[0]
+    }
+    /// The handle the interpreter keeps a program value under, which a
+    /// value of a type native code holds by its handle comes back as.
+    pub fn handle(&mut self) -> u64 {
+        self.expect(KEPT, "a kept value");
+        u64::from_le_bytes(self.eight())
     }
     fn expect(&mut self, tag: u8, what: &str) {
         if self.byte() != tag {
@@ -7640,6 +7723,10 @@ pub mod __rawr_island {
     /// Each stand-in's maker, by its type's path from the crate's root.
     static MAKERS: &[(&str, Maker)] = &__MAKER_LIST__;
 
+    /// Each struct native code holds by the handle of the program value,
+    /// by its path from the crate's root.
+    static HANDLES: &[&str] = &__HANDLE_LIST__;
+
     /// Each instance native code calls a generic function at, as the
     /// record of the crate's last check found them (D869): the function's
     /// path, the name of the tuple of its types and its entry there.
@@ -7650,7 +7737,7 @@ pub mod __rawr_island {
     #[inline]
     pub fn call<'c>(path: &'static str, owned: bool) -> Call<'c> {
         static ONCE: ::std::sync::Once = ::std::sync::Once::new();
-        ONCE.call_once(|| register(MAKERS));
+        ONCE.call_once(|| register(MAKERS, HANDLES));
         Call::new(path, owned)
     }
 
@@ -7696,6 +7783,16 @@ mod tests {
 
     /// [`generate`], with the bodies of the functions `called` names.
     fn generate_called(text: &str, called: Option<&BTreeSet<String>>) -> Shadow {
+        generate_with(text, called, None)
+    }
+
+    /// [`generate`], the types `opaque` names those the last check found
+    /// native code holding but never opening.
+    fn generate_with(
+        text: &str,
+        called: Option<&BTreeSet<String>>,
+        opaque: Option<&BTreeSet<String>>,
+    ) -> Shadow {
         let unit = crate::Engine::new().parse_unit(text).unwrap();
         let modules = [ImmutableString::from("physics")];
         shadow(
@@ -7708,7 +7805,77 @@ mod tests {
             )],
             &[],
             called,
+            opaque,
         )
+    }
+
+    /// A struct the last check found native code holding but never opening
+    /// is the handle of the program value (D961): its methods take the
+    /// handle as their receiver, a `&str` of it comes back pinned with the
+    /// value, its derived `Debug` asks the program's, and a new private
+    /// field leaves its shape as it was. With no record, or with a field
+    /// native code sees, a derive the handle can't stand for, or a marked
+    /// type that holds it, it keeps its real layout.
+    #[test]
+    fn a_struct_native_code_holds_but_never_opens_is_the_handle_of_the_program_value() {
+        let state = |fields: &str, derives: &str| {
+            format!(
+                "// rawr\nuse crate::ui;\n{derives}pub struct State {{\n{fields}}}\n\
+                 impl State {{\n    pub fn new() -> Self {{ todo!() }}\n    \
+                 pub fn edit(&mut self, text: &str) {{}}\n    \
+                 pub fn title(&self) -> &str {{ todo!() }}\n    \
+                 pub fn take(&self, other: &mut State) {{}}\n}}\n"
+            )
+        };
+        let opaque = BTreeSet::from(["physics::State".to_owned()]);
+        let fields = "    content: ui::Content,\n    title: String,\n";
+        let handled = generate_with(&state(fields, "#[derive(Debug)]\n"), None, Some(&opaque));
+        let [(_, text)] = handled.files.as_slice() else {
+            panic!("{:?}", handled.files);
+        };
+        for expected in [
+            "pub struct State(crate::__rawr_island::Object);\n",
+            "Self(crate::__rawr_island::Object::new(input.handle()))",
+            "impl ::std::fmt::Debug for crate::physics::State {",
+            "    self.0.release();\n",
+            "    __call.object(&self.0);\n",
+            "let __value: &str = self.0.pinned(&mut __reply);",
+            "let __value: State = __reply.take();",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert!(!text.contains("content: ui::Content"), "{text}");
+        assert_eq!(handled.handles, ["physics::State"]);
+        // A `&mut` of it beside the receiver can't cross: a copy back
+        // can't replace the program's value.
+        assert!(text.contains("rawr: native code can't call `physics::State::take` yet"));
+        let grown = generate_with(
+            &state(&format!("{fields}    held: u32,\n"), "#[derive(Debug)]\n"),
+            None,
+            Some(&opaque),
+        );
+        assert_eq!(handled.shape.change(&grown.shape), None);
+        // Each keeps the real layout.
+        for kept in [
+            generate_with(&state(fields, "#[derive(Debug)]\n"), None, None),
+            generate_with(
+                &state("    pub content: ui::Content,\n", ""),
+                None,
+                Some(&opaque),
+            ),
+            generate_with(&state(fields, "#[derive(Hash)]\n"), None, Some(&opaque)),
+            generate_with(&state(fields, "#[repr(C)]\n"), None, Some(&opaque)),
+            generate_with(
+                &format!(
+                    "{}pub struct Pane {{\n    state: State,\n}}\n",
+                    state(fields, "")
+                ),
+                None,
+                Some(&opaque),
+            ),
+        ] {
+            assert!(kept.handles.is_empty(), "{:?}", kept.files);
+        }
     }
 
     #[test]
@@ -7770,7 +7937,7 @@ mod tests {
             "page::Page".to_owned(),
             "crate::page::__rawr_object_0".to_owned(),
         )];
-        let module = support(true, &objects, &[]);
+        let module = support(true, &objects, &[], &[]);
         assert!(
             module.contains("pub use ::__rawr_island_support::*;"),
             "{module}"
