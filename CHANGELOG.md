@@ -6,6 +6,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - `rawr run` no longer fails to settle the runner's lockfile when the program's crate has an optional dependency the project patches (inboard's `iced_test`). The runner drops a `[patch]` only when no package of its workspace names it, optional and target-specific dependencies included. (#1840)
+- A save that builds no longer parses Cargo's metadata and unit graph a third time: the replay that admits the new bundle takes what the build parsed. (#1836)
+- A save whose Cargo view is remembered no longer runs or parses the provisional `cargo metadata`. (#1837)
 
 ## 0.3.202 (2026-11-12)
 

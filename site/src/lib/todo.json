@@ -12,7 +12,9 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"`rawr run` no longer fails to settle the runner's lockfile when the program's crate has an optional dependency the project patches (inboard's `iced_test`). The runner drops a `[patch]` only when no package of its workspace names it, optional and target-specific dependencies included.","issues":[1840]}
+        {"text":"`rawr run` no longer fails to settle the runner's lockfile when the program's crate has an optional dependency the project patches (inboard's `iced_test`). The runner drops a `[patch]` only when no package of its workspace names it, optional and target-specific dependencies included.","issues":[1840]},
+        {"text":"A save that builds no longer parses Cargo's metadata and unit graph a third time: the replay that admits the new bundle takes what the build parsed.","issues":[1836]},
+        {"text":"A save whose Cargo view is remembered no longer runs or parses the provisional `cargo metadata`.","issues":[1837]}
       ]
     },
     "releases": [
@@ -4055,8 +4057,8 @@
     {"issue":1833,"title":"rawr's copy of the crate builds with the profile cargo build gives the crate","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.201"},
     {"issue":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1835,"title":"A save back to earlier sources reuses that bundle's Cargo view; the probe resolves loaded crates' paths once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.202"},
-    {"issue":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1838,"title":"Three owner-stage unit tests fail on main","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1839,"title":"A save whose API content is kept reuses the kept graph and classification","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.202"},
     {"issue":1840,"title":"The runner keeps a project patch that a member of its workspace names","state":"closed","category":"Shared dependency cache (D607)"},
@@ -4072,7 +4074,10 @@
     {"issue":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1854,"title":"The admitting replay still compares every input the build just captured","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1856,"title":"Three owner suffix tests fail on main: Overlay must reuse content","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5290,8 +5295,8 @@
             {"number":1831,"title":"An overlay hit's assembly re-hashes and copies every generated file","state":"open"},
             {"number":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open"},
             {"number":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open"},
-            {"number":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"open"},
-            {"number":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"open"},
+            {"number":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"closed"},
+            {"number":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"closed"},
             {"number":1838,"title":"Three owner-stage unit tests fail on main","state":"closed"},
             {"number":1841,"title":"A path package reached only through a member's optional path dependency can lose a patch it needs in the runner","state":"open"},
             {"number":1842,"title":"A runner without the shared runtime builds --locked from a lock lacking its members' optional dependencies","state":"open"},
@@ -5305,7 +5310,10 @@
             {"number":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open"},
             {"number":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open"},
             {"number":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"open"},
-            {"number":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"open"}
+            {"number":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"open"},
+            {"number":1854,"title":"The admitting replay still compares every input the build just captured","state":"open"},
+            {"number":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open"},
+            {"number":1856,"title":"Three owner suffix tests fail on main: Overlay must reuse content","state":"open"}
           ]
         },
         {
