@@ -19,3 +19,6 @@ src/eval/chaining.rs
 # ?play universe programs, written by play/universe/examples.sh.
 play/universe/src/examples/
 play/universe/src/examples.rs
+
+# The playground Worker's local npm lockfile (untracked in 668bcfbee)
+play/deploy/cloudflare/package-lock.json
