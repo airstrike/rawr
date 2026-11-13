@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.205",
+  "version": "0.3.206",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A start whose API is current reads it, its classification and its facade once: identities share their unit, each definition is digested once, and stored bytes are trusted by their digest instead of being encoded again to check them.","issues":[1866],"refs":[1851]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.206",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A start whose API is current reads it, its classification and its facade once: identities share their unit, each definition is digested once, and stored bytes are trusted by their digest instead of being encoded again to check them.","issues":[1866],"refs":[1851]}
+        ]
+      },
       {
         "version": "0.3.205",
         "date": "2026-11-12",
@@ -4111,7 +4113,7 @@
     {"issue":1863,"title":"The owner remembers the copies it wrote and hands its loaded program to the preparation","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.205"},
     {"issue":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1866,"title":"A start whose API is current reads it, its classification and its facade once","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1866,"title":"A start whose API is current reads it, its classification and its facade once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.206"},
     {"issue":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
