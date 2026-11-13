@@ -90,6 +90,12 @@ impl Ready {
         &self.node
     }
 
+    /// The record interpretation the replay that admitted this owner used.
+    #[cfg(test)]
+    pub(in crate::cargo) fn decoded(&self) -> &replay::Decoded {
+        &self.replay.decoded
+    }
+
     /// What a derive's expansion needs of this resolution's build (#593).
     pub(crate) const fn expansion(&self) -> &crate::extract::plan::Expansion {
         self.replay.capture.expansion()
@@ -367,6 +373,12 @@ thread_local! {
     pub(crate) static REPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Forget what this test thread staged, as a new process starts.
+#[cfg(test)]
+pub(in crate::cargo) fn unstage() {
+    STAGE.with_borrow_mut(|stage| *stage = EMPTY);
+}
+
 fn stage_hit() {
     #[cfg(test)]
     STAGE_HITS.with(|hits| hits.set(hits.get() + 1));
@@ -386,6 +398,9 @@ struct Captured {
     /// The last successful replay of this evaluation: while every path
     /// it read keeps its stamp, a later consumer reuses its result.
     current: Option<Current>,
+    /// The record interpretation of the bundle this evaluation's build
+    /// sealed, for the replay that admits it (#1836).
+    built: Option<Built>,
 }
 
 struct Current {
@@ -418,6 +433,14 @@ struct Evaluation {
     recorded: Mutex<Option<Stopped>>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
+}
+
+/// A sealed bundle's record as its build interpreted it: the bundle's
+/// owner wire, its root and the interpretation.
+struct Built {
+    wire: [u8; BYTES],
+    root: Box<Path>,
+    decoded: Arc<replay::Decoded>,
 }
 
 struct Preflight {
@@ -598,6 +621,7 @@ fn evaluate(
             enabled: true,
             replay: None,
             current: None,
+            built: None,
         }),
         settled: Mutex::new(Vec::new()),
         shared: Mutex::new(None),
@@ -741,8 +765,8 @@ impl Evaluation {
         value: &Product,
         graph: &node::GraphBudget,
     ) -> Result<Box<[u8]>, node::Error> {
-        {
-            let captured = self
+        let built = {
+            let mut captured = self
                 .captured
                 .lock()
                 .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
@@ -753,7 +777,8 @@ impl Evaluation {
             {
                 return value.completed();
             }
-        }
+            captured.built.take_if(|built| built.wire == value.wire())
+        };
         // A recorded file changed: this candidate is another save's, and
         // stays for a return to it (#1794). A refused candidate leaves the
         // capture of the one a lookup admitted before it; a replay that
@@ -795,7 +820,7 @@ impl Evaluation {
                             node::read_set::Scope::Complete,
                         )
                         .map_err(error)?;
-                    let replay = self.replay(observed, &mut accounts.cargo)?;
+                    let replay = self.replay(observed, &mut accounts.cargo, built)?;
                     if replay.completion.proof().complete().as_bytes() != &value.complete {
                         return Err(node::Error::Codec(
                             "resolution owner completion identity differs",
@@ -831,10 +856,14 @@ impl Evaluation {
         Ok(completed)
     }
 
+    /// Replay one observed bundle. Its record is interpreted as the stage
+    /// kept it, else as the `built` evaluation that sealed this bundle
+    /// interpreted it, else decoded.
     fn replay(
         &self,
         observed: bundle::PendingReplay<'_, '_, '_>,
         cargo_account: &mut cargo::unit::Allocation,
+        built: Option<Built>,
     ) -> Result<replay::Replay, node::Error> {
         let definition = self
             .request
@@ -938,6 +967,14 @@ impl Evaluation {
                 Box::<str>::from(&*self.request.profile),
             )),
         };
+        // The bundle this evaluation sealed, observed where it sealed it
+        // under the same context: the observation hashed its record against
+        // the commitment the build sealed from the bytes it interpreted.
+        let kept = kept.or_else(|| {
+            built
+                .filter(|built| *built.root == *paths.root() && built.decoded.context() == context)
+                .map(|built| built.decoded)
+        });
         let replaying = std::time::Instant::now();
         let replay = self
             .request
@@ -1121,13 +1158,21 @@ impl Evaluation {
             .complete()
             .as_bytes();
         let sealing = std::time::Instant::now();
-        let sealed = self.seal_completed(completed, layout, accounts, graph)?;
+        let root = Box::<Path>::from(layout.root());
+        let (sealed, decoded) = self.seal_completed(completed, layout, accounts, graph)?;
         crate::progress::timed("the resolution's bundle was sealed", sealing.elapsed());
         let (stored, pending) = sealed.into_parts();
         let product = Product {
             bundle: stored.encode(),
             complete,
         };
+        if let Ok(mut captured) = self.captured.lock() {
+            captured.built = Some(Built {
+                wire: product.wire(),
+                root,
+                decoded,
+            });
+        }
         let bundled = node::Bundled::validate(product, pending, |value, _| value.completed())?;
         accounts.refused = false;
         let attestation = self.cached.attestation.content().digest();
@@ -1140,16 +1185,26 @@ impl Evaluation {
         Ok(bundled)
     }
 
+    /// Seal the completed build's bundle, and interpret its record from
+    /// what the build bound of the same bytes: the replay that admits the
+    /// bundle parses none of its Cargo documents again (#1836).
     fn seal_completed(
         &self,
         completed: cargo::CompletedHarness,
         layout: layout::Layout,
         accounts: &mut Accounts,
         graph: &node::GraphBudget,
-    ) -> Result<bundle::Sealed, node::Error> {
-        // Consuming the cold result here releases its semantic data and the
-        // encoding buffers before current replay builds the validated owner.
+    ) -> Result<(bundle::Sealed, Arc<replay::Decoded>), node::Error> {
+        // Consuming the cold result here releases its encoding buffers
+        // before current replay builds the validated owner.
         accounts.cargo = completed.cargo_allocation;
+        // The graph's reachability walks start from the account as the
+        // replay finds it, as a graph that replay parsed would.
+        let mut unit = completed.build_unit;
+        unit.bind_reachability(&accounts.cargo, &self.limits)?;
+        let pending = completed.replayed.ok_or(node::Error::Codec(
+            "complete resolution did not retain its universe evidence",
+        ))?;
         let retained = completed.observations.ok_or(node::Error::Codec(
             "complete resolution did not retain its observations",
         ))?;
@@ -1189,8 +1244,25 @@ impl Evaluation {
         }
         .map_err(error)?;
         let record = stored::Record::decode(&bytes, &mut budget).map_err(error)?;
+        let decoded = self
+            .request
+            .decode_built_in(
+                layout.paths(),
+                &record,
+                replay::Parsed {
+                    metadata: completed.metadata,
+                    graph: unit,
+                    selected: completed.selected,
+                    internal: completed.internal,
+                    pending,
+                },
+                &mut budget,
+            )
+            .map_err(error)?;
         crate::progress::sealed();
-        bundle::Stored::capture(layout, &record, &scope, &mut budget).map_err(error)
+        let sealed =
+            bundle::Stored::capture(layout, &record, &scope, &mut budget).map_err(error)?;
+        Ok((sealed, decoded))
     }
 }
 

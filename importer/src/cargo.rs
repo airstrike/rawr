@@ -419,6 +419,10 @@ struct CompletedHarness {
     internal: internal::Recipe,
     observations: Option<Retained>,
     universe: Option<universe::Proof>,
+    /// The evidence `universe` completed, with the receipt it wrote: what
+    /// a replay of the sealed bundle completes again (#1836).
+    #[cfg(feature = "rustc-driver")]
+    replayed: Option<universe::Pending>,
     #[cfg(feature = "rustc-driver")]
     capture: Option<crate::extract::plan::Capture>,
     /// The shared tables this extraction leaves to publish.
@@ -1439,6 +1443,7 @@ impl Request {
                         &mut cargo_allocation,
                         &definition,
                         (&manifest_path, &source_path, &lock_path),
+                        None,
                         |phase| match phase {
                             MetadataPhase::Provisional => cargo_metadata(
                                 native,
@@ -1635,35 +1640,26 @@ impl Request {
         self.authority.lock.as_deref().unwrap_or(definition.seed())
     }
 
+    /// Materialize the candidate resolution. The provisional metadata is
+    /// observed only to seal the internal recipe, so a `recalled` recipe, the
+    /// one an identical request sealed, observes none (#1837).
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one materialization binds the request's paths, observations and accounts"
+    )]
     fn materialize_fresh(
         &self,
         limits: &Limits,
         cargo_allocation: &mut unit::Allocation,
         definition: &universe::Definition,
         paths: (&Path, &Path, &Path),
+        recalled: Option<internal::Recipe>,
         mut observe: impl FnMut(MetadataPhase) -> Result<Box<[u8]>>,
         parse: impl FnOnce(&[u8], &mut unit::Allocation) -> Result<unit::Metadata>,
     ) -> Result<Materialized> {
-        let mut provisional_scope = cargo_allocation.begin_provisional()?;
-        let provisional = (|| {
-            let bytes = observe(MetadataPhase::Provisional)?;
-            self.revalidate(limits, "provisional metadata")?;
-            let metadata = parse(&bytes, cargo_allocation)?;
-            let selected = metadata.selections(&self.dependencies, cargo_allocation)?;
-            let internal = self.internal.seal(&metadata, &selected)?;
-            Ok::<_, Error>((internal, selected, metadata))
-        })();
-        let internal = match provisional {
-            Ok((internal, selected, metadata)) => {
-                drop(selected);
-                drop(metadata);
-                cargo_allocation.release_provisional(&mut provisional_scope)?;
-                internal
-            }
-            Err(error) => {
-                cargo_allocation.release_provisional(&mut provisional_scope)?;
-                return Err(error);
-            }
+        let internal = match recalled {
+            Some(internal) => internal,
+            None => self.seal_provisional(limits, cargo_allocation, &mut observe, parse)?,
         };
         let (manifest_path, source_path, lock_path) = paths;
         let manifest = render_manifest(self, Some(&internal))?;
@@ -1688,6 +1684,38 @@ impl Request {
             internal,
             lock,
         })
+    }
+
+    /// Seal the internal recipe from the provisional metadata, which is
+    /// released once it is sealed.
+    fn seal_provisional(
+        &self,
+        limits: &Limits,
+        cargo_allocation: &mut unit::Allocation,
+        observe: &mut impl FnMut(MetadataPhase) -> Result<Box<[u8]>>,
+        parse: impl FnOnce(&[u8], &mut unit::Allocation) -> Result<unit::Metadata>,
+    ) -> Result<internal::Recipe> {
+        let mut provisional_scope = cargo_allocation.begin_provisional()?;
+        let provisional = (|| {
+            let bytes = observe(MetadataPhase::Provisional)?;
+            self.revalidate(limits, "provisional metadata")?;
+            let metadata = parse(&bytes, cargo_allocation)?;
+            let selected = metadata.selections(&self.dependencies, cargo_allocation)?;
+            let internal = self.internal.seal(&metadata, &selected)?;
+            Ok::<_, Error>((internal, selected, metadata))
+        })();
+        match provisional {
+            Ok((internal, selected, metadata)) => {
+                drop(selected);
+                drop(metadata);
+                cargo_allocation.release_provisional(&mut provisional_scope)?;
+                Ok(internal)
+            }
+            Err(error) => {
+                cargo_allocation.release_provisional(&mut provisional_scope)?;
+                Err(error)
+            }
+        }
     }
 
     #[allow(
@@ -2226,30 +2254,31 @@ impl Request {
                 crate::bindings::stage(staged, &keys, &entries);
             }
         }
-        let universe = universe
-            .map(|pending| {
-                pending.complete(
+        let (universe, replayed) = match universe {
+            Some(pending) => {
+                let completion = pending.complete(
                     manifest,
                     source,
                     metadata.digest(),
                     build_unit.digest(),
                     &input,
                     limits,
-                )
-            })
-            .transpose();
-        let universe = universe?;
-
-        let universe = if let Some(completion) = universe {
-            let proof = completion.proof();
-            if let Some(receipt) = completion.receipt() {
-                let receipt = receipt.encode()?;
-                write_atomic(receipt_path, &receipt)?;
+                )?;
+                let proof = completion.proof();
+                let replayed = match completion.receipt() {
+                    Some(receipt) => {
+                        write_atomic(receipt_path, &receipt.encode()?)?;
+                        pending.with_receipt(receipt)
+                    }
+                    None => pending,
+                };
+                (Some(proof), Some(replayed))
             }
-            Some(proof)
-        } else {
-            None
+            None => (None, None),
         };
+        // Only an owner replays the bundle it seals.
+        #[cfg(not(feature = "rustc-driver"))]
+        drop(replayed);
         // A capture of intrinsic facts keeps what the nightly's build
         // scripts gave, for its entries to be compared with the project's.
         #[cfg(feature = "rustc-driver")]
@@ -2280,6 +2309,8 @@ impl Request {
             internal,
             observations,
             universe,
+            #[cfg(feature = "rustc-driver")]
+            replayed,
             #[cfg(feature = "rustc-driver")]
             capture,
             #[cfg(feature = "rustc-driver")]

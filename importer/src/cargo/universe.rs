@@ -946,12 +946,28 @@ impl Pending {
         &self.metadata
     }
 
+    /// The command, config and toolchain context this evidence binds.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) const fn context(&self) -> ContextProof {
+        self.context
+    }
+
+    /// This evidence as a replay of the bundle a completion wrote `receipt`
+    /// into decodes it: the replay revalidates that receipt instead of
+    /// writing one (#1836).
+    pub(crate) fn with_receipt(self, receipt: Receipt) -> Self {
+        Self {
+            receipt: Some(receipt),
+            ..self
+        }
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "completion joins the exact post-build observations retained by the receipt"
     )]
     pub(crate) fn complete(
-        self,
+        &self,
         manifest: Digest,
         source: Digest,
         metadata: Digest,

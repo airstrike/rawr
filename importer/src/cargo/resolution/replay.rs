@@ -49,6 +49,35 @@ impl Decoded {
     pub(in crate::cargo) fn entries(&self) -> &[crate::input::proof::Entry] {
         self.stored.entries()
     }
+
+    /// The context the universe evidence binds.
+    pub(in crate::cargo) fn context(&self) -> universe::ContextProof {
+        self.pending.context()
+    }
+
+    /// Whether `other` interprets the same record the same way, whatever
+    /// account each was parsed under.
+    #[cfg(test)]
+    pub(in crate::cargo) fn same(&self, other: &Self) -> bool {
+        format!("{:?}", self.metadata) == format!("{:?}", other.metadata)
+            && self.graph.same_units(&other.graph)
+            && self.selected == other.selected
+            && self.internal == other.internal
+            && self.stored.entries() == other.stored.entries()
+            && self.namespace.is_some() == other.namespace.is_some()
+            && self.context() == other.context()
+    }
+}
+
+/// The Cargo documents of one record as the cold path or a decode bound
+/// them: the final metadata, its selections and internal recipe, the unit
+/// graph and the universe evidence a replay completes.
+pub(in crate::cargo) struct Parsed {
+    pub(in crate::cargo) metadata: unit::Metadata,
+    pub(in crate::cargo) graph: unit::BuildGraph,
+    pub(in crate::cargo) selected: Box<[Selection]>,
+    pub(in crate::cargo) internal: internal::Recipe,
+    pub(in crate::cargo) pending: universe::Pending,
 }
 
 /// The complete replay result, not a current node receipt or published owner.
@@ -147,6 +176,50 @@ impl Request {
             cargo_limits,
             cargo_allocation,
         )?;
+        self.decode_parsed_in(
+            paths,
+            record,
+            Parsed {
+                metadata,
+                graph,
+                selected,
+                internal,
+                pending,
+            },
+            budget,
+        )
+    }
+
+    /// Interpret the record a build seals from the Cargo documents it bound
+    /// from the same bytes, so its replay right after parses neither again
+    /// (#1836). The record's other sections are decoded as any replay's.
+    pub(in crate::cargo) fn decode_built_in(
+        &self,
+        paths: &layout::Paths,
+        record: &stored::Record<'_>,
+        parsed: Parsed,
+        budget: &mut stored::Budget<'_>,
+    ) -> stored::Result<Arc<Decoded>> {
+        budget.check()?;
+        self.decode_parsed_in(paths, record, parsed, budget)
+    }
+
+    /// Decode the record's build, namespace and input sections against its
+    /// bound Cargo documents.
+    fn decode_parsed_in(
+        &self,
+        paths: &layout::Paths,
+        record: &stored::Record<'_>,
+        parsed: Parsed,
+        budget: &mut stored::Budget<'_>,
+    ) -> stored::Result<Arc<Decoded>> {
+        let Parsed {
+            metadata,
+            graph,
+            selected,
+            internal,
+            pending,
+        } = parsed;
         let retained = build::Retained::decode(
             record.build(),
             &graph,
