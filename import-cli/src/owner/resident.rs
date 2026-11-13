@@ -440,12 +440,14 @@ impl Respawn {
     }
 
     /// Restart the program in a new process of `lane`'s runner, from this
-    /// save. On an error no runner runs.
+    /// save; with `unchanged`, it walks no read set. On an error no runner
+    /// runs.
     pub(super) fn start(
         self,
         lane: &mut super::Lane,
+        unchanged: Option<rawr_watch::native::Unchanged>,
     ) -> Result<rawr_import::supervisor::GenerationKey, crate::native::Error> {
-        lane.respawn(self.snapshot, &self.observation)
+        lane.respawn(self.snapshot, &self.observation, unchanged)
     }
 }
 

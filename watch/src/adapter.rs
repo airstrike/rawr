@@ -420,6 +420,14 @@ impl Adapter {
         self.resident_change(baseline).is_none()
     }
 
+    /// The watcher's word that no native input changed since `baseline`,
+    /// `None` when one may have.
+    #[must_use]
+    pub fn unchanged(&self, baseline: &native::Baseline) -> Option<native::Unchanged> {
+        self.resident_eligible(baseline)
+            .then_some(native::Unchanged(()))
+    }
+
     /// Why a save can't take the resident route against `baseline`, `None`
     /// when it can (see [`Self::resident_eligible`]).
     #[must_use]

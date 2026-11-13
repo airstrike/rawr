@@ -18,6 +18,13 @@ pub struct Baseline {
     stamp: Stamp,
 }
 
+/// The watcher's word, at one moment, that no native input changed since
+/// a baseline: a new process of the runner checked against it needs no
+/// walk of its read set (#1755). Only [`crate::Adapter::unchanged`] makes
+/// one.
+#[derive(Debug)]
+pub struct Unchanged(pub(super) ());
+
 /// Why a native baseline no longer stands, so a save can't take the
 /// resident route against the running native build.
 #[derive(Clone, Debug, Eq, PartialEq)]

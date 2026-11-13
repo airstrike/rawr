@@ -18,16 +18,19 @@ impl super::Owner {
     /// change after that walk is the runner's to see, and one before it
     /// is the walk's. The walk before admission proves nothing more, as
     /// nothing runs the program until this returns.
+    ///
+    /// With [`Current::Watched`], nothing walks it (#1755).
     pub fn bootstrap_observed<B>(
         &mut self,
         manifest: crate::runner::Manifest<crate::runner::Built, B>,
         snapshot: super::snapshot::Bytes,
         process: &crate::process::Owner,
         observation: &[u8],
+        current: Current,
     ) -> Result<crate::process::Candidate<crate::process::Admitted, B>, Error> {
         let mut admitted =
             self.bootstrap_checked(manifest, snapshot, process, Check::AfterObservation)?;
-        if let Err(failure) = admitted.observe_initial(observation) {
+        if let Err(failure) = admitted.observe_initial(observation, current) {
             return match admitted.shutdown() {
                 Ok(()) => Err(Error::Process(failure)),
                 Err(cleanup) => Err(Error::ObserveCleanup {
@@ -96,6 +99,18 @@ pub(crate) fn admit_current<T>(
         read_set.revalidate_complete().map_err(Error::Node)?;
     }
     admit().map_err(Error::Process)
+}
+
+/// What proves a started runner's read set current once the runner
+/// observes its inputs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Current {
+    /// A walk of it: the start's one (#1760).
+    Walked,
+    /// The caller's watcher, which observed every input of it since an
+    /// earlier process of the same runner walked it, and saw none change:
+    /// a new process of that runner walks it no more (#1755).
+    Watched,
 }
 
 /// Where a bootstrap walks its runner's read set, once.
