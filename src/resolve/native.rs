@@ -10,10 +10,19 @@ use std::sync::{Arc, Mutex};
 /// This is diagnostic provenance, never executable or reuse authority.
 pub(crate) struct Capture {
     aliases: Box<[ImmutableString]>,
-    terminal: Mutex<Option<Miss>>,
+    terminal: Mutex<Terminal>,
 }
 
-struct Miss {
+/// The misses recorded so far: how many, and the last.
+#[derive(Default)]
+struct Terminal {
+    recorded: usize,
+    last: Option<Miss>,
+}
+
+/// A failed lookup's place and kind.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct Miss {
     source: program::source::Id,
     span: Span,
     kind: Discriminant<Error>,
@@ -57,7 +66,7 @@ impl Capture {
         );
         Ok(Arc::new(Self {
             aliases: aliases.into_boxed_slice(),
-            terminal: Mutex::new(None),
+            terminal: Mutex::new(Terminal::default()),
         }))
     }
 
@@ -72,10 +81,12 @@ impl Capture {
     /// Only the error that actually escapes this same pass can classify a miss.
     /// Successful/speculative lookups and different diagnostics cannot inherit it.
     pub(crate) fn matches(&self, source: program::source::Id, error: &Error) -> bool {
-        self.terminal
-            .lock()
-            .ok()
-            .is_some_and(|terminal| terminal.as_ref().is_some_and(|miss| miss.is(source, error)))
+        self.terminal.lock().ok().is_some_and(|terminal| {
+            terminal
+                .last
+                .as_ref()
+                .is_some_and(|miss| miss.is(source, error))
+        })
     }
 
     /// The miss recorded for `error` is the miss of `restated`, the error
@@ -83,11 +94,39 @@ impl Capture {
     /// at the path's last segment.
     pub(crate) fn restate(&self, source: program::source::Id, error: &Error, restated: &Error) {
         if let Ok(mut terminal) = self.terminal.lock()
-            && let Some(miss) = terminal.as_mut()
+            && let Some(miss) = terminal.last.as_mut()
             && miss.is(source, error)
         {
             miss.span = restated.primary_span();
             miss.kind = discriminant(restated);
+        }
+    }
+
+    /// The crates the entry package's manifest names.
+    pub(crate) fn roots(&self) -> &[ImmutableString] {
+        &self.aliases
+    }
+
+    /// How many misses were recorded so far.
+    pub(crate) fn recorded(&self) -> usize {
+        self.terminal.lock().map_or(0, |terminal| terminal.recorded)
+    }
+
+    /// The last miss, when one was recorded after the first `recorded`.
+    pub(crate) fn since(&self, recorded: usize) -> Option<Miss> {
+        self.terminal
+            .lock()
+            .ok()
+            .filter(|terminal| terminal.recorded > recorded)
+            .and_then(|terminal| terminal.last.clone())
+    }
+
+    /// Record `miss` again, as the resolution that recorded it does when a
+    /// later one reuses what it resolved (#1876).
+    pub(crate) fn replay(&self, miss: &Miss) {
+        if let Ok(mut terminal) = self.terminal.lock() {
+            terminal.recorded += 1;
+            terminal.last = Some(miss.clone());
         }
     }
 }
@@ -141,7 +180,8 @@ impl<'a> Site<'a> {
     /// Call only at an actual terminal absence after establishing native origin.
     pub(crate) fn record(&self, error: &Error) {
         if let Ok(mut terminal) = self.capture.terminal.lock() {
-            *terminal = Some(Miss {
+            terminal.recorded += 1;
+            terminal.last = Some(Miss {
                 source: self.source,
                 span: error.primary_span(),
                 kind: discriminant(error),

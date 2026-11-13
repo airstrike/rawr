@@ -1,6 +1,13 @@
 //! Aggregate semantic resolution for a validated static package graph.
 
+mod kept;
+mod tables;
+
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) use kept::Resolutions;
+use tables::Tables;
 
 use super::{item, type_ref, Error, LocatedError, Namespace, Private, Program, Script, Unresolved};
 use crate::package::{graph, source, Graph};
@@ -14,6 +21,9 @@ type UnitBindings = (
 
 /// A name a `use` binds, and the path it names.
 type UsePath = (crate::item::Name, Box<[ImmutableString]>);
+
+/// The type each pattern names through a module, by where its path is.
+type PatternOwners = BTreeMap<(program::source::Id, Span), type_def::Identity>;
 
 /// The items each block of a unit declares, by name, with the spans of
 /// their names: no path names them, and only their block sees them
@@ -38,7 +48,7 @@ struct Address {
     name: ImmutableString,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Declaration {
     source: source::Id,
     span: Span,
@@ -46,7 +56,7 @@ struct Declaration {
     target: Target,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Target {
     Module,
     /// A crate trait at its address: Rawr's traits are known by name in
@@ -77,7 +87,7 @@ impl Target {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ResolvedQualifiedCalls {
     functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
     owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
@@ -93,7 +103,7 @@ struct QualifiedCall {
     name_span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Export {
     source: source::Id,
     context: Context,
@@ -101,7 +111,7 @@ struct Export {
     span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Context {
     source: source::Id,
     package: graph::Id,
@@ -126,25 +136,17 @@ struct Resolver<'a> {
     native: Option<std::sync::Arc<super::native::Capture>>,
     host: &'a host::Registry,
     package: ImmutableString,
-    packages: Box<[graph::Package]>,
     evidence: Box<[crate::diagnostic::Source]>,
     units: Vec<Unit>,
     entry_source: source::Id,
     /// A host's one in-memory file, which has no extern prelude to bound
     /// its paths ([`Graph::hosted`]).
     hosted: bool,
-    declarations: BTreeMap<Address, Declaration>,
-    exports: BTreeMap<Address, Export>,
-    /// Private `use` bindings, so a path may start with an imported module.
-    aliases: BTreeMap<Address, Export>,
-    /// A second private `use` of a name `aliases` binds, in Rust's other
-    /// namespace: the function `use badge::{self, badge};` binds beside
-    /// the module (`through_alias`).
-    other_aliases: BTreeMap<Address, Export>,
-    /// The names each module's private glob imports bind (`use super::*;`,
-    /// `use Shape::*;`), which its declarations and explicit imports
-    /// shadow, as in Rust.
-    globs: BTreeMap<Address, Export>,
+    /// The names the crate's modules bind, and its packages.
+    tables: Tables,
+    /// What the compiler keeps of its resolutions, when it keeps them
+    /// (#1876).
+    kept: Option<&'a RefCell<Resolutions>>,
     type_declarations: Vec<type_def::Declaration>,
     /// The ids `type_declarations` hold (`type_def::Id::keyed`).
     type_ids: BTreeSet<type_def::Id>,
@@ -153,9 +155,6 @@ struct Resolver<'a> {
     /// `home::IntoContent` beside `sidebar::IntoContent`. A trait whose
     /// name is the crate's only one is known by its name.
     trait_names: BTreeMap<Address, ImmutableString>,
-    /// Each crate enum's variant names, for `use Shape::Circle;` and
-    /// `use Shape::*;`.
-    enum_variants: BTreeMap<type_def::Id, Box<[ImmutableString]>>,
     /// Each crate derive whose expansion the graph loaded (#593).
     expanded: crate::capability::Expanded,
     /// The marked types of a native root that rawr's copy of the crate
@@ -177,7 +176,14 @@ struct Resolver<'a> {
 pub(crate) const ORDERING_VARIANTS: [&str; 3] = ["Less", "Equal", "Greater"];
 
 pub(crate) fn resolve(graph: Graph, host: &host::Registry) -> Result<Program, Failure> {
-    Resolver::new(graph, host)?.resolve()
+    Resolver::new(
+        graph,
+        host,
+        #[cfg(feature = "rust-import")]
+        None,
+        None,
+    )?
+    .resolve()
 }
 
 #[cfg(feature = "rust-import")]
@@ -186,13 +192,42 @@ pub(crate) fn resolve_captured(
     host: &host::Registry,
     native: std::sync::Arc<super::native::Capture>,
 ) -> Result<Program, Failure> {
-    let mut resolver = Resolver::new(graph, host)?;
-    resolver.native = Some(native);
-    resolver.resolve()
+    Resolver::new(graph, host, Some(native), None)?.resolve()
+}
+
+/// [`resolve_captured`], reusing each unit's resolution that `kept` holds
+/// while what it reads is as it was, and keeping each one it resolves
+/// again (#1876). `registry` is the engine's registry, `host`, with how
+/// many times it was changed.
+#[cfg(feature = "rust-import")]
+pub(crate) fn resolve_kept(
+    graph: Graph,
+    registry: &host::Current,
+    native: Option<std::sync::Arc<super::native::Capture>>,
+    kept: &mut Resolutions,
+) -> Result<Program, Failure> {
+    let cell = RefCell::new(std::mem::take(kept));
+    let resolved = Resolver::new(graph, registry, native, Some((&cell, registry.changes())))
+        .and_then(Resolver::resolve);
+    *kept = cell.into_inner();
+    resolved
 }
 
 impl<'a> Resolver<'a> {
-    fn new(graph: Graph, host: &'a host::Registry) -> Result<Self, Failure> {
+    /// The resolver of `graph`, its units declared and their globs bound,
+    /// which records misses against native code in `native`. One that
+    /// keeps its resolutions in `kept` reads what the last one kept there,
+    /// which read the registry as it was after so many changes (#1876).
+    fn new(
+        graph: Graph,
+        host: &'a host::Registry,
+        #[cfg(feature = "rust-import")] native: Option<std::sync::Arc<super::native::Capture>>,
+        kept: Option<(&'a RefCell<Resolutions>, u64)>,
+    ) -> Result<Self, Failure> {
+        #[cfg(feature = "rust-import")]
+        let roots = native.as_ref().map(|capture| capture.roots().into());
+        #[cfg(not(feature = "rust-import"))]
+        let roots = None;
         let expanded = graph.expanded();
         let hosted = graph.hosted();
         #[cfg(feature = "rust-import")]
@@ -303,25 +338,28 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        // The crates this package's paths may start with, as rustc's extern
+        // prelude has them. None for a host's one in-memory file, whose host
+        // decides what it reaches.
+        let prelude = packages
+            .iter()
+            .filter(|_| !hosted)
+            .find(|candidate| candidate.name() == package.as_str())
+            .map(super::extern_prelude::Prelude::of);
         let mut resolver = Self {
             #[cfg(feature = "rust-import")]
             native: None,
             host,
             package,
-            packages,
             evidence,
             units,
             entry_source,
             hosted,
-            declarations: BTreeMap::new(),
-            exports: BTreeMap::new(),
-            aliases: BTreeMap::new(),
-            other_aliases: BTreeMap::new(),
-            globs: BTreeMap::new(),
+            tables: Tables::new(packages, prelude),
+            kept: kept.map(|(kept, _)| kept),
             type_declarations: Vec::new(),
             type_ids: BTreeSet::new(),
             trait_names: BTreeMap::new(),
-            enum_variants: BTreeMap::new(),
             expanded,
             #[cfg(feature = "rust-import")]
             mirrors,
@@ -331,8 +369,15 @@ impl<'a> Resolver<'a> {
             natives,
         };
         resolver.predeclare()?;
-        resolver.predeclare_globs();
         resolver.trait_names = resolver.shared_trait_names();
+        if let Some((kept, changes)) = kept {
+            kept.borrow_mut().refresh(&resolver, changes, roots);
+        }
+        resolver.predeclare_globs();
+        #[cfg(feature = "rust-import")]
+        {
+            resolver.native = native;
+        }
         Ok(resolver)
     }
 
@@ -418,7 +463,7 @@ impl<'a> Resolver<'a> {
                             let type_key = context.namespace.type_key(&name.text).in_block(ordinal);
                             let definition = type_def::Id::keyed(&type_key, &mut self.type_ids);
                             if let crate::item::Parsed::Enum(declared) = parsed {
-                                self.enum_variants.insert(
+                                self.tables.declare_variants(
                                     definition,
                                     declared
                                         .variants
@@ -476,18 +521,13 @@ impl<'a> Resolver<'a> {
                             path,
                             span: name.span,
                         };
-                        let aliases = if self.aliases.contains_key(&address) {
-                            &mut self.other_aliases
-                        } else {
-                            &mut self.aliases
-                        };
-                        aliases.insert(address, export);
+                        self.tables.alias_at(address, export);
                     }
                     continue;
                 }
                 for (name, path) in use_paths(use_item) {
                     let address = context.address(&name.text);
-                    if let Some(previous) = self.declarations.get(&address) {
+                    if let Some(previous) = self.tables.declaration(&address) {
                         return Err(Failure {
                             primary: context.source,
                             secondary: Some(previous.source),
@@ -498,7 +538,7 @@ impl<'a> Resolver<'a> {
                             },
                         });
                     }
-                    if let Some(previous) = self.exports.insert(
+                    if let Some(previous) = self.tables.export_at(
                         address,
                         Export {
                             source: context.source,
@@ -531,7 +571,7 @@ impl<'a> Resolver<'a> {
     /// package.
     fn shared_trait_names(&self) -> BTreeMap<Address, ImmutableString> {
         let mut by_name = BTreeMap::<&str, Vec<&Address>>::new();
-        for declaration in self.declarations.values() {
+        for declaration in self.tables.declarations() {
             if let Target::Trait(address) = &declaration.target {
                 by_name
                     .entry(address.name.as_str())
@@ -583,7 +623,7 @@ impl<'a> Resolver<'a> {
                     }
                     for name in self.glob_names(context, &segments).unwrap_or_default() {
                         let address = context.address(&name);
-                        if self.binds(&address) || found.contains_key(&address) {
+                        if self.tables.binds(&address) || found.contains_key(&address) {
                             continue;
                         }
                         let mut path = segments.to_vec();
@@ -602,22 +642,9 @@ impl<'a> Resolver<'a> {
                 return;
             }
             for (address, (export, public)) in found {
-                let bound = if public {
-                    &mut self.exports
-                } else {
-                    &mut self.globs
-                };
-                bound.insert(address, export);
+                self.tables.glob_at(address, export, public);
             }
         }
-    }
-
-    /// Whether a declaration or an import binds `address`.
-    fn binds(&self, address: &Address) -> bool {
-        self.declarations.contains_key(address)
-            || self.exports.contains_key(address)
-            || self.aliases.contains_key(address)
-            || self.globs.contains_key(address)
     }
 
     fn insert_declaration(
@@ -625,10 +652,7 @@ impl<'a> Resolver<'a> {
         address: Address,
         declaration: Declaration,
     ) -> Result<(), Failure> {
-        if let Some(previous) = self
-            .declarations
-            .insert(address.clone(), declaration.clone())
-        {
+        if let Some(previous) = self.tables.declare(address.clone(), declaration.clone()) {
             return Err(Failure {
                 primary: declaration.source,
                 secondary: Some(previous.source),
@@ -645,125 +669,80 @@ impl<'a> Resolver<'a> {
     fn resolve_qualified_calls(&self) -> Result<ResolvedQualifiedCalls, Failure> {
         let mut resolved = ResolvedQualifiedCalls::default();
         for unit in &self.units {
-            for parsed in unit.parsed.items() {
-                for call in qualified_calls(parsed) {
-                    if !self.is_script_path(&unit.context, &call.path) {
-                        continue;
-                    }
-                    let source = program::source::Id::from_index(unit.context.source.index());
-                    // `crate::model::Thing::new` into a `.rs` module
-                    // is the app crate's `polyglot::model::Thing::new`.
-                    if let Some(spelled) = self.rust_spelling(&unit.context, &call.path) {
-                        resolved
-                            .rust
-                            .insert((source, call.path_span), spelled.into_boxed_slice());
-                        continue;
-                    }
-                    // `kinds::Secondary` after `pub use self::Kind::Secondary;`
-                    // in `kinds`: the variant of the enum the import names.
-                    let (origin_context, origin_path) = self.origin(&unit.context, &call.path);
-                    if *origin_path != *call.path {
-                        match self.variant(&origin_context, &origin_path) {
-                            Some(item::Import::Variant { identity, .. }) => {
-                                resolved.owners.insert((source, call.owner_span), identity);
-                                continue;
-                            }
-                            // A crate's, spelled through its enum's path.
-                            Some(item::Import::HostVariant { owner }) => {
-                                let spelled = owner
-                                    .split("::")
-                                    .map(ImmutableString::from)
-                                    .chain(call.path.last().cloned())
-                                    .collect();
-                                resolved.rust.insert((source, call.path_span), spelled);
-                                continue;
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if call.path.len() >= 3 {
-                        let mut active = BTreeSet::new();
-                        match self.resolve_path(
-                            &unit.context,
-                            &call.path[..call.path.len() - 1],
-                            call.owner_span,
-                            &mut active,
-                        )? {
-                            Target::Type(type_ref::Target::Script { identity, .. }) => {
-                                resolved.owners.insert((source, call.owner_span), identity);
-                                continue;
-                            }
-                            // `home::Shape::size(&x)`: the trait's function.
-                            Target::Trait(address) => {
-                                let known = self.known_trait_name(address);
-                                resolved.traits.insert((source, call.owner_span), known);
-                                continue;
-                            }
-                            Target::Module | Target::HostModuleItem { .. } | Target::Item(_) => {}
-                            Target::HostItem { .. }
-                            | Target::Type(
-                                type_ref::Target::Builtin
-                                | type_ref::Target::Host { .. }
-                                | type_ref::Target::Parameter
-                                | type_ref::Target::Projection(..)
-                                | type_ref::Target::Alias(_)
-                                | type_ref::Target::Std(_),
-                            ) => continue,
-                        }
-                    }
-
-                    let mut active = BTreeSet::new();
-                    match self
-                        .resolve_path(&unit.context, &call.path, call.path_span, &mut active)
-                        .map_err(|failure| self.not_in_module(&unit.context, &call, failure))?
-                    {
-                        Target::Item(key) => {
-                            resolved.functions.insert((source, call.path_span), key);
-                        }
-                        // A qualified type, as in a `let` annotation.
-                        Target::Type(type_ref::Target::Script { identity, .. }) => {
-                            resolved.owners.insert((source, call.path_span), identity);
-                        }
-                        // `<T as home::Shape>::size(..)`'s trait.
-                        Target::Trait(address) => {
-                            let known = self.known_trait_name(address);
-                            resolved.traits.insert((source, call.path_span), known);
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            let found = self.reused(
+                unit.context.source,
+                kept::Unit::calls,
+                |_| true,
+                || self.unit_qualified_calls(unit),
+            )?;
+            resolved.functions.extend(found.functions);
+            resolved.owners.extend(found.owners);
+            resolved.rust.extend(found.rust);
+            resolved.traits.extend(found.traits);
         }
         Ok(resolved)
     }
 
-    fn resolve_qualified_pattern_owners(
-        &self,
-    ) -> Result<BTreeMap<(program::source::Id, Span), type_def::Identity>, Failure> {
-        let mut resolved = BTreeMap::new();
-        for unit in &self.units {
-            for parsed in unit.parsed.items() {
-                for (path, owner) in qualified_pattern_owners(parsed) {
-                    if !self.is_script_path(&unit.context, &path) {
-                        continue;
-                    }
-                    let mut active = BTreeSet::new();
-                    match self.resolve_path(&unit.context, &path, owner, &mut active)? {
-                        Target::Type(type_ref::Target::Script { identity, .. }) => {
-                            resolved.insert(
-                                (
-                                    program::source::Id::from_index(unit.context.source.index()),
-                                    owner,
-                                ),
-                                identity,
-                            );
+    /// The qualified paths `unit`'s bodies call or name, by where they are.
+    fn unit_qualified_calls(&self, unit: &Unit) -> Result<ResolvedQualifiedCalls, Failure> {
+        let mut resolved = ResolvedQualifiedCalls::default();
+        for parsed in unit.parsed.items() {
+            for call in qualified_calls(parsed) {
+                if !self.is_script_path(&unit.context, &call.path) {
+                    continue;
+                }
+                let source = program::source::Id::from_index(unit.context.source.index());
+                // `crate::model::Thing::new` into a `.rs` module
+                // is the app crate's `polyglot::model::Thing::new`.
+                if let Some(spelled) = self.rust_spelling(&unit.context, &call.path) {
+                    resolved
+                        .rust
+                        .insert((source, call.path_span), spelled.into_boxed_slice());
+                    continue;
+                }
+                // `kinds::Secondary` after `pub use self::Kind::Secondary;`
+                // in `kinds`: the variant of the enum the import names.
+                let (origin_context, origin_path) = self.origin(&unit.context, &call.path);
+                if *origin_path != *call.path {
+                    match self.variant(&origin_context, &origin_path) {
+                        Some(item::Import::Variant { identity, .. }) => {
+                            resolved.owners.insert((source, call.owner_span), identity);
+                            continue;
                         }
-                        Target::Module
-                        | Target::Trait(_)
-                        | Target::HostModuleItem { .. }
-                        | Target::Item(_)
-                        | Target::HostItem { .. }
+                        // A crate's, spelled through its enum's path.
+                        Some(item::Import::HostVariant { owner }) => {
+                            let spelled = owner
+                                .split("::")
+                                .map(ImmutableString::from)
+                                .chain(call.path.last().cloned())
+                                .collect();
+                            resolved.rust.insert((source, call.path_span), spelled);
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if call.path.len() >= 3 {
+                    let mut active = BTreeSet::new();
+                    match self.resolve_path(
+                        &unit.context,
+                        &call.path[..call.path.len() - 1],
+                        call.owner_span,
+                        &mut active,
+                    )? {
+                        Target::Type(type_ref::Target::Script { identity, .. }) => {
+                            resolved.owners.insert((source, call.owner_span), identity);
+                            continue;
+                        }
+                        // `home::Shape::size(&x)`: the trait's function.
+                        Target::Trait(address) => {
+                            let known = self.known_trait_name(address);
+                            resolved.traits.insert((source, call.owner_span), known);
+                            continue;
+                        }
+                        Target::Module | Target::HostModuleItem { .. } | Target::Item(_) => {}
+                        Target::HostItem { .. }
                         | Target::Type(
                             type_ref::Target::Builtin
                             | type_ref::Target::Host { .. }
@@ -771,8 +750,81 @@ impl<'a> Resolver<'a> {
                             | type_ref::Target::Projection(..)
                             | type_ref::Target::Alias(_)
                             | type_ref::Target::Std(_),
-                        ) => {}
+                        ) => continue,
                     }
+                }
+
+                let mut active = BTreeSet::new();
+                match self
+                    .resolve_path(&unit.context, &call.path, call.path_span, &mut active)
+                    .map_err(|failure| self.not_in_module(&unit.context, &call, failure))?
+                {
+                    Target::Item(key) => {
+                        resolved.functions.insert((source, call.path_span), key);
+                    }
+                    // A qualified type, as in a `let` annotation.
+                    Target::Type(type_ref::Target::Script { identity, .. }) => {
+                        resolved.owners.insert((source, call.path_span), identity);
+                    }
+                    // `<T as home::Shape>::size(..)`'s trait.
+                    Target::Trait(address) => {
+                        let known = self.known_trait_name(address);
+                        resolved.traits.insert((source, call.path_span), known);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_qualified_pattern_owners(&self) -> Result<PatternOwners, Failure> {
+        let mut resolved = BTreeMap::new();
+        for unit in &self.units {
+            let found = self.reused(
+                unit.context.source,
+                kept::Unit::owners,
+                |_| true,
+                || self.unit_pattern_owners(unit),
+            )?;
+            resolved.extend(found);
+        }
+        Ok(resolved)
+    }
+
+    /// The types `unit`'s patterns name through a module, by where they
+    /// are.
+    fn unit_pattern_owners(&self, unit: &Unit) -> Result<PatternOwners, Failure> {
+        let mut resolved = BTreeMap::new();
+        for parsed in unit.parsed.items() {
+            for (path, owner) in qualified_pattern_owners(parsed) {
+                if !self.is_script_path(&unit.context, &path) {
+                    continue;
+                }
+                let mut active = BTreeSet::new();
+                match self.resolve_path(&unit.context, &path, owner, &mut active)? {
+                    Target::Type(type_ref::Target::Script { identity, .. }) => {
+                        resolved.insert(
+                            (
+                                program::source::Id::from_index(unit.context.source.index()),
+                                owner,
+                            ),
+                            identity,
+                        );
+                    }
+                    Target::Module
+                    | Target::Trait(_)
+                    | Target::HostModuleItem { .. }
+                    | Target::Item(_)
+                    | Target::HostItem { .. }
+                    | Target::Type(
+                        type_ref::Target::Builtin
+                        | type_ref::Target::Host { .. }
+                        | type_ref::Target::Parameter
+                        | type_ref::Target::Projection(..)
+                        | type_ref::Target::Alias(_)
+                        | type_ref::Target::Std(_),
+                    ) => {}
                 }
             }
         }
@@ -855,108 +907,38 @@ impl<'a> Resolver<'a> {
                 });
             }
 
-            let (mut uses, mut types, _occupied) =
-                self.resolve_unit_bindings(&context, &parsed_items)?;
-            let block_types =
-                self.resolve_block_bindings(&context, &parsed_items, &blocks, &types, &mut uses)?;
-            for (expansion, (_, derive)) in derives
+            let entering = around.remove(&context.source).unwrap_or_default();
+            let sites = derives
                 .iter()
                 .filter(|(_, (item, _))| *item == context.source)
-            {
-                let Some(block) = super::block::innermost(&block_types, *derive) else {
-                    continue;
-                };
-                let names = block
-                    .iter()
-                    .filter(|(name, target)| types.get(*name) != Some(*target))
-                    .map(|(name, target)| (name.clone(), target.clone()))
-                    .collect();
-                around.insert(*expansion, names);
-            }
-            for (name, target) in around.remove(&context.source).into_iter().flatten() {
-                if !self.declarations.contains_key(&context.address(&name)) {
-                    types.insert(name, target);
-                }
-            }
-            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
-            if context.source == self.entry_source {
-                root_types = Some(types.clone());
-            }
-            // The host modules this unit's `use`s bind, by name: an imported
-            // trait is one (`use freya::prelude::IntoElement;`). A crate
-            // trait it imports is known by its name, never a host path.
-            let modules = uses
-                .iter()
-                .flatten()
-                .flat_map(|used| used.bindings.iter())
-                .filter(|binding| {
-                    matches!(
-                        binding.target,
-                        item::Import::Module | item::Import::ModuleItem { .. }
-                    ) && !matches!(
-                        self.resolve_path(
-                            &context,
-                            &["self".into(), binding.name.text.clone()],
-                            binding.name.span,
-                            &mut BTreeSet::new(),
-                        ),
-                        Ok(Target::Trait(_))
+                .map(|(expansion, (_, derive))| (*expansion, *derive))
+                .collect::<Vec<_>>();
+            let resolved = self.reused(
+                context.source,
+                kept::Unit::resolved,
+                |kept| kept.entering == entering && kept.sites == sites,
+                || {
+                    self.resolve_unit(
+                        &context,
+                        parsed_items,
+                        (&slots, &blocks),
+                        entering.clone(),
+                        &sites,
                     )
-                })
-                .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
-                .collect::<BTreeMap<_, _>>();
-            aliases.extend(super::source_aliases(
-                program::source::Id::from_index(context.source.index()),
-                &types,
-            ));
-            for (index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
-                let Some(slot) = &slots[index] else {
-                    continue;
-                };
-                let types = parsed
-                    .scope()
-                    .and_then(|block| super::block::innermost(&block_types, block))
-                    .unwrap_or(&types);
-                let parsed = {
-                    let mut parsed = parsed;
-                    qualify_opaque_bounds(&mut parsed, &modules);
-                    write_renamed_modules(&mut parsed, &modules);
-                    self.write_native_trait_objects(&context, &mut parsed, &modules);
-                    self.write_trait_names(&context, &mut parsed);
-                    parsed
-                };
-                let shell = super::resolve_item(
-                    slot.id,
-                    program::source::Id::from_index(context.source.index()),
-                    slot.key.clone(),
-                    uses[index].clone(),
-                    parsed,
-                    types,
-                    self.host,
-                    #[cfg(feature = "rust-import")]
-                    self.native.as_deref().map(|capture| {
-                        capture
-                            .at(program::source::Id::from_index(context.source.index()))
-                            .with_names(&_occupied)
-                    }),
-                )
-                .map_err(|error| {
-                    let restated = self.unresolved_type(&context, &modules, error.clone());
-                    #[cfg(feature = "rust-import")]
-                    if let Some(capture) = self.native.as_deref() {
-                        capture.restate(
-                            program::source::Id::from_index(context.source.index()),
-                            &error,
-                            &restated,
-                        );
-                    }
-                    Failure {
-                        primary: context.source,
-                        secondary: None,
-                        error: restated,
-                    }
-                })?;
-                shells.push(shell);
+                },
+            )?;
+            around.extend(resolved.around);
+            #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+            if resolved.root.is_some() {
+                root_types = resolved.root;
+            }
+            aliases.extend(resolved.aliases);
+            // A reused shell is numbered as the program numbers its items now.
+            for (shell, slot) in resolved.shells.into_iter().zip(slots.iter().flatten()) {
+                shells.push(item::Shell {
+                    id: slot.id,
+                    ..shell
+                });
             }
             scripts.push((
                 context.source,
@@ -991,7 +973,8 @@ impl<'a> Resolver<'a> {
             .into_boxed_slice();
 
         let entry = self
-            .packages
+            .tables
+            .packages()
             .iter()
             .find(|package| package.name() == self.package.as_str());
         let entry_crate = entry
@@ -1044,6 +1027,128 @@ impl<'a> Resolver<'a> {
         Ok(program)
     }
 
+    /// `parsed_items`, the items of the unit `context`, with the slots and
+    /// block items it declared, resolved: their shells, the type aliases
+    /// the unit names, and the names the blocks around each derive of its
+    /// items bind, by the derive's expansion in `sites`. `entering` holds
+    /// the names the blocks around the derive the unit expands bind.
+    fn resolve_unit(
+        &self,
+        context: &Context,
+        parsed_items: Box<[crate::item::Parsed]>,
+        (slots, blocks): (&[Option<Slot>], &BlockItems),
+        entering: BTreeMap<ImmutableString, type_ref::Target>,
+        sites: &[(source::Id, Span)],
+    ) -> Result<kept::Resolved, Failure> {
+        let (mut uses, mut types, _occupied) =
+            self.resolve_unit_bindings(context, &parsed_items)?;
+        let block_types =
+            self.resolve_block_bindings(context, &parsed_items, blocks, &types, &mut uses)?;
+        let mut around = Vec::new();
+        for (expansion, derive) in sites {
+            let Some(block) = super::block::innermost(&block_types, *derive) else {
+                continue;
+            };
+            let names = block
+                .iter()
+                .filter(|(name, target)| types.get(*name) != Some(*target))
+                .map(|(name, target)| (name.clone(), target.clone()))
+                .collect();
+            around.push((*expansion, names));
+        }
+        for (name, target) in &entering {
+            if self.tables.declaration(&context.address(name)).is_none() {
+                types.insert(name.clone(), target.clone());
+            }
+        }
+        let root = (context.source == self.entry_source).then(|| types.clone());
+        // The host modules this unit's `use`s bind, by name: an imported
+        // trait is one (`use freya::prelude::IntoElement;`). A crate
+        // trait it imports is known by its name, never a host path.
+        let modules = uses
+            .iter()
+            .flatten()
+            .flat_map(|used| used.bindings.iter())
+            .filter(|binding| {
+                matches!(
+                    binding.target,
+                    item::Import::Module | item::Import::ModuleItem { .. }
+                ) && !matches!(
+                    self.resolve_path(
+                        context,
+                        &["self".into(), binding.name.text.clone()],
+                        binding.name.span,
+                        &mut BTreeSet::new(),
+                    ),
+                    Ok(Target::Trait(_))
+                )
+            })
+            .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let aliases = super::source_aliases(
+            program::source::Id::from_index(context.source.index()),
+            &types,
+        );
+        let mut shells = Vec::new();
+        for (index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
+            let Some(slot) = &slots[index] else {
+                continue;
+            };
+            let types = parsed
+                .scope()
+                .and_then(|block| super::block::innermost(&block_types, block))
+                .unwrap_or(&types);
+            let parsed = {
+                let mut parsed = parsed;
+                qualify_opaque_bounds(&mut parsed, &modules);
+                write_renamed_modules(&mut parsed, &modules);
+                self.write_native_trait_objects(context, &mut parsed, &modules);
+                self.write_trait_names(context, &mut parsed);
+                parsed
+            };
+            let shell = super::resolve_item(
+                slot.id,
+                program::source::Id::from_index(context.source.index()),
+                slot.key.clone(),
+                uses[index].clone(),
+                parsed,
+                types,
+                self.host,
+                #[cfg(feature = "rust-import")]
+                self.native.as_deref().map(|capture| {
+                    capture
+                        .at(program::source::Id::from_index(context.source.index()))
+                        .with_names(&_occupied)
+                }),
+            )
+            .map_err(|error| {
+                let restated = self.unresolved_type(context, &modules, error.clone());
+                #[cfg(feature = "rust-import")]
+                if let Some(capture) = self.native.as_deref() {
+                    capture.restate(
+                        program::source::Id::from_index(context.source.index()),
+                        &error,
+                        &restated,
+                    );
+                }
+                Failure {
+                    primary: context.source,
+                    secondary: None,
+                    error: restated,
+                }
+            })?;
+            shells.push(shell);
+        }
+        Ok(kept::Resolved {
+            entering,
+            sites: sites.to_vec(),
+            shells,
+            aliases,
+            around,
+            root,
+        })
+    }
+
     /// Each recorded instance, by the path native code's call names its
     /// function or method by, its types read in the crate root's names
     /// (D869); the template that path names is found where instances are
@@ -1060,7 +1165,8 @@ impl<'a> Resolver<'a> {
         };
         let source = program::source::Id::from_index(self.entry_source.index());
         let Some(krate) = self
-            .packages
+            .tables
+            .packages()
             .iter()
             .find(|package| package.name() == self.package.as_str())
             .and_then(|package| package.rust_crate())
@@ -1147,8 +1253,8 @@ impl<'a> Resolver<'a> {
                         continue;
                     }
                     if let Some(declaration) = self
-                        .declarations
-                        .get_mut(&context.address(&alias.name.text))
+                        .tables
+                        .declaration_mut(&context.address(&alias.name.text))
                         && matches!(
                             declaration.target,
                             Target::Type(type_ref::Target::Alias(type_ref::Alias {
@@ -1181,30 +1287,36 @@ impl<'a> Resolver<'a> {
     }
 
     fn validate_exports(&self) -> Result<(), Failure> {
-        for (address, export) in &self.exports {
-            // `pub use self::Kind::Secondary;` re-exports a variant.
-            let (context, path) = self.origin(&export.context, &export.path);
-            if self.variant(&context, &path).is_some() {
-                continue;
-            }
-            let mut active = BTreeSet::new();
-            active.insert(address.clone());
-            let target =
-                self.resolve_any_path(&export.context, &export.path, export.span, &mut active)?;
-            if matches!(target, Target::Module | Target::HostModuleItem { .. }) {
-                return Err(Failure {
-                    primary: export.source,
-                    secondary: None,
-                    error: Error::InvalidImport {
-                        path: export.path.join("::").into(),
-                        reason:
-                            "module re-exports are not supported; export the module with `pub mod`"
-                                .into(),
-                        reference: export.span,
-                        declaration: None,
-                    },
-                });
-            }
+        for (address, export) in self.tables.exports() {
+            self.validated(address, export, || self.validate_export(address, export))?;
+        }
+        Ok(())
+    }
+
+    /// Whether the re-export `export` at `address` names an item or a
+    /// variant, as `pub use` may.
+    fn validate_export(&self, address: &Address, export: &Export) -> Result<(), Failure> {
+        // `pub use self::Kind::Secondary;` re-exports a variant.
+        let (context, path) = self.origin(&export.context, &export.path);
+        if self.variant(&context, &path).is_some() {
+            return Ok(());
+        }
+        let mut active = BTreeSet::new();
+        active.insert(address.clone());
+        let target =
+            self.resolve_any_path(&export.context, &export.path, export.span, &mut active)?;
+        if matches!(target, Target::Module | Target::HostModuleItem { .. }) {
+            return Err(Failure {
+                primary: export.source,
+                secondary: None,
+                error: Error::InvalidImport {
+                    path: export.path.join("::").into(),
+                    reason: "module re-exports are not supported; export the module with `pub mod`"
+                        .into(),
+                    reference: export.span,
+                    declaration: None,
+                },
+            });
         }
         Ok(())
     }
@@ -1287,14 +1399,17 @@ impl<'a> Resolver<'a> {
     /// names a module of this crate binds that `context` sees (`use
     /// super::*;`); or a std or crate module's names. `None` when the
     /// prefix names none of these.
-    fn glob_names(
+    fn names_of_glob(
         &self,
         context: &Context,
         segments: &[ImmutableString],
     ) -> Option<Vec<ImmutableString>> {
         let module: ImmutableString = segments.join("::").into();
         if let Some((definition, _)) = self.script_enum(context, segments) {
-            return Some(self.enum_variants[&definition].to_vec());
+            return self
+                .tables
+                .variants(&definition)
+                .map(<[ImmutableString]>::to_vec);
         }
         if super::std_ordering(&module) {
             return Some(
@@ -1330,12 +1445,19 @@ impl<'a> Resolver<'a> {
     fn module_names(&self, context: &Context, modules: &[ImmutableString]) -> Vec<ImmutableString> {
         let inside = context.namespace.modules.starts_with(modules);
         let package = &context.namespace.package;
-        let declared = in_module(&self.declarations, package, modules)
+        let declared = self
+            .tables
+            .declared_in(package, modules)
             .filter(|(_, declaration)| declaration.public || inside)
             .map(|(address, _)| address);
-        let exported = in_module(&self.exports, package, modules).map(|(address, _)| address);
-        let imported = in_module(&self.aliases, package, modules)
-            .chain(in_module(&self.globs, package, modules))
+        let exported = self
+            .tables
+            .exported_in(package, modules)
+            .map(|(address, _)| address);
+        let imported = self
+            .tables
+            .aliased_in(package, modules)
+            .chain(self.tables.globbed_in(package, modules))
             .filter(|_| inside)
             .map(|(address, _)| address);
         declared
@@ -1358,8 +1480,14 @@ impl<'a> Resolver<'a> {
     ) -> (Context, Box<[ImmutableString]>) {
         let mut context = context.clone();
         let mut path: Box<[ImmutableString]> = path.into();
-        // Each step follows a distinct import, so a cycle ends the walk.
-        for _ in 0..=self.aliases.len() + self.exports.len() + self.globs.len() {
+        // Each step follows a distinct import, so a cycle ends the walk
+        // after as many steps as there are imports.
+        let mut steps = 0..=self.tables.imports();
+        loop {
+            if steps.next().is_none() {
+                self.tables.walked_imports();
+                break;
+            }
             if let Some(import) = self.path_import(&context, &path) {
                 context = import.context.clone();
                 path = import.path.clone();
@@ -1386,13 +1514,13 @@ impl<'a> Resolver<'a> {
             modules: modules.into_boxed_slice(),
             name: name.clone(),
         };
-        if self.declarations.contains_key(&address) {
+        if self.tables.declaration(&address).is_some() {
             return None;
         }
-        self.exports
-            .get(&address)
-            .or_else(|| self.aliases.get(&address))
-            .or_else(|| self.globs.get(&address))
+        self.tables
+            .export(&address)
+            .or_else(|| self.tables.alias(&address))
+            .or_else(|| self.tables.glob(&address))
     }
 
     /// Whether a glob import of `segments` names an enum's variants, the
@@ -1422,8 +1550,9 @@ impl<'a> Resolver<'a> {
                 .enum_variant(&super::std_reexport(&path.join("::"), self.host))
                 .map(|owner| item::Import::HostVariant { owner });
         };
-        self.enum_variants[&definition]
-            .contains(last)
+        self.tables
+            .variants(&definition)
+            .is_some_and(|variants| variants.contains(last))
             .then_some(item::Import::Variant {
                 definition,
                 identity,
@@ -1439,13 +1568,13 @@ impl<'a> Resolver<'a> {
     ) -> Option<(type_def::Id, type_def::Identity)> {
         let target = match prefix {
             [] => return None,
-            [name] => match self.declarations.get(&context.address(name)) {
+            [name] => match self.tables.declaration(&context.address(name)) {
                 Some(declaration) => declaration.target.clone(),
                 None => {
                     let address = context.address(name);
                     let alias = self
                         .through_alias(&address)
-                        .or_else(|| self.globs.get(&address))?;
+                        .or_else(|| self.tables.glob(&address))?;
                     if alias.path.len() < 2 {
                         return None;
                     }
@@ -1467,7 +1596,7 @@ impl<'a> Resolver<'a> {
             Target::Type(type_ref::Target::Script {
                 definition,
                 identity,
-            }) if self.enum_variants.contains_key(&definition) => Some((definition, identity)),
+            }) if self.tables.variants(&definition).is_some() => Some((definition, identity)),
             _ => None,
         }
     }
@@ -1521,11 +1650,9 @@ impl<'a> Resolver<'a> {
         // bound it: two imports are rustc's E0252.
         let mut bound =
             BTreeMap::<(ImmutableString, item::Namespace), (source::Id, Span, bool)>::new();
-        let declared = in_module(
-            &self.declarations,
-            &context.namespace.package,
-            &context.namespace.modules,
-        );
+        let declared = self
+            .tables
+            .declared_in(&context.namespace.package, &context.namespace.modules);
         for (address, declaration) in declared {
             let namespace = match declaration.target {
                 Target::Module | Target::Trait(_) => item::Namespace::Type,
@@ -1981,7 +2108,7 @@ impl<'a> Resolver<'a> {
         let address = context.address(name);
         let alias = self
             .through_alias(&address)
-            .or_else(|| self.exports.get(&address))?;
+            .or_else(|| self.tables.export(&address))?;
         let module = self.is_direct_script_path(&alias.context, &alias.path)
             && matches!(
                 self.resolve_path(
@@ -2010,7 +2137,7 @@ impl<'a> Resolver<'a> {
         let address = context.address(first);
         let alias = self
             .through_alias(&address)
-            .or_else(|| self.exports.get(&address))?;
+            .or_else(|| self.tables.export(&address))?;
         let direct = host_target(
             self.host,
             path,
@@ -2026,8 +2153,8 @@ impl<'a> Resolver<'a> {
     /// module, as `badge::Secondary` goes through the module of `use
     /// badge::{self, badge};` and `badge(..)` calls the function.
     fn through_alias(&self, address: &Address) -> Option<&Export> {
-        let first = self.aliases.get(address)?;
-        let Some(other) = self.other_aliases.get(address) else {
+        let first = self.tables.alias(address)?;
+        let Some(other) = self.tables.other_alias(address) else {
             return Some(first);
         };
         let module = |alias: &Export| {
@@ -2050,8 +2177,8 @@ impl<'a> Resolver<'a> {
     }
 
     fn is_child_module(&self, context: &Context, name: &str) -> bool {
-        self.declarations
-            .get(&context.address(name))
+        self.tables
+            .declaration(&context.address(name))
             .is_some_and(|declaration| matches!(declaration.target, Target::Module))
     }
 
@@ -2108,11 +2235,10 @@ impl<'a> Resolver<'a> {
         name: &ImmutableString,
         reference: Span,
     ) -> Option<Result<Target, Failure>> {
-        let package = &self.packages[package.index()];
-        let alias = package.rust_crate()?;
+        let alias = self.tables.rust_crate(package)?;
         let mut item = modules.to_vec();
         item.push(name.clone());
-        if !package.is_native_path(&item) {
+        if !self.tables.is_native_path(package, &item) {
             return None;
         }
         let mut path = Vec::with_capacity(modules.len() + 2);
@@ -2327,8 +2453,7 @@ impl<'a> Resolver<'a> {
         context: &Context,
         path: &[ImmutableString],
     ) -> Option<Vec<ImmutableString>> {
-        let package = &self.packages[context.package.index()];
-        let alias = package.rust_crate()?;
+        let alias = self.tables.rust_crate(context.package)?;
         let path = through_self(path);
         let first = path.first()?;
         let supers = path
@@ -2364,11 +2489,13 @@ impl<'a> Resolver<'a> {
         } else {
             return None;
         }
-        package.names_native(&absolute).then(|| {
-            std::iter::once(ImmutableString::from(alias))
-                .chain(absolute)
-                .collect()
-        })
+        self.tables
+            .names_native(context.package, &absolute)
+            .then(|| {
+                std::iter::once(ImmutableString::from(alias))
+                    .chain(absolute)
+                    .collect()
+            })
     }
 
     fn resolve_path(
@@ -2429,18 +2556,18 @@ impl<'a> Resolver<'a> {
         if let Some(target) = self.rust_module_item(context, package, &modules, name, reference) {
             return target;
         }
-        let package_name: ImmutableString = self.packages[package.index()].name().into();
+        let package_name: ImmutableString = self.tables.package_name(package).into();
         let address = Address {
             package: package_name,
             modules: modules.into_boxed_slice(),
             name: name.clone(),
         };
 
-        if let Some(declaration) = self.declarations.get(&address) {
+        if let Some(declaration) = self.tables.declaration(&address) {
             self.validate_visibility(context, &address, declaration, reference)?;
             return Ok(declaration.target.clone());
         }
-        if let Some(export) = self.exports.get(&address) {
+        if let Some(export) = self.tables.export(&address) {
             self.validate_module_hops(context, &address, reference)?;
             if !active.insert(address.clone()) {
                 return Err(Failure {
@@ -2462,7 +2589,7 @@ impl<'a> Resolver<'a> {
         // A private `use` is visible to the module's descendants, as in
         // Rust: `use crate::Preset;` inside `mod grid` reaches the root's
         // `use preset::Preset;`.
-        if let Some(alias) = self.aliases.get(&address)
+        if let Some(alias) = self.tables.alias(&address)
             && within(context, &address, address.modules.len())
         {
             self.validate_module_hops(context, &address, reference)?;
@@ -2484,7 +2611,7 @@ impl<'a> Resolver<'a> {
         }
         // A name a private glob import binds, which the module's
         // descendants see as they see its private `use`s.
-        if let Some(glob) = self.globs.get(&address)
+        if let Some(glob) = self.tables.glob(&address)
             && within(context, &address, address.modules.len())
             && active.insert(address.clone())
         {
@@ -2522,7 +2649,7 @@ impl<'a> Resolver<'a> {
                 modules: address.modules[..depth].into(),
                 name: address.modules[depth].clone(),
             };
-            let Some(module) = self.declarations.get(&module_address) else {
+            let Some(module) = self.tables.declaration(&module_address) else {
                 return Err(self.unknown_import(context, &[], reference));
             };
             if !module.public && !within(context, address, depth) {
@@ -2545,7 +2672,7 @@ impl<'a> Resolver<'a> {
             Target::Module => Private::Module,
             Target::Trait(_) => Private::Trait,
             Target::Type(type_ref::Target::Script { definition, .. })
-                if self.enum_variants.contains_key(definition) =>
+                if self.tables.variants(definition).is_some() =>
             {
                 Private::Enum
             }
@@ -2636,11 +2763,7 @@ impl<'a> Resolver<'a> {
     /// prelude has them. `None` for a host's one in-memory file, whose host
     /// decides what it reaches.
     fn prelude(&self) -> Option<super::extern_prelude::Prelude> {
-        self.packages
-            .iter()
-            .filter(|_| !self.hosted)
-            .find(|package| package.name() == self.package.as_str())
-            .map(super::extern_prelude::Prelude::of)
+        self.tables.prelude().cloned()
     }
 
     /// Whether `root`, a path's first segment in `context`, names no crate,
@@ -2648,22 +2771,20 @@ impl<'a> Resolver<'a> {
     fn unresolved_root(&self, context: &Context, root: &str) -> bool {
         let address = context.address(root);
         // A `use` binds the name, unless it is `use root;` itself.
-        let bound = |uses: &BTreeMap<Address, Export>| {
-            uses.get(&address).is_some_and(|export| {
+        let bound = |used: Option<&Export>| {
+            used.is_some_and(|export| {
                 export.path.first().map(ImmutableString::as_str) != Some(root)
             })
         };
         !matches!(
             root,
             "std" | "core" | "alloc" | "crate" | "self" | "super" | "Self"
-        ) && !self.declarations.contains_key(&address)
-            && !bound(&self.exports)
-            && !bound(&self.aliases)
-            && !bound(&self.globs)
+        ) && self.tables.declaration(&address).is_none()
+            && !bound(self.tables.export(&address))
+            && !bound(self.tables.alias(&address))
+            && !bound(self.tables.glob(&address))
             && self.host.entry(root).is_none()
-            && self
-                .prelude()
-                .is_none_or(|crates| crates.reach(root, Span::NONE).is_err())
+            && !self.tables.reaches(root)
     }
 
     /// Whether `path` in `context` names a module of this crate or of
@@ -3122,22 +3243,6 @@ fn last_segment(reference: Span, name: &str) -> Span {
         }
         _ => reference,
     }
-}
-
-/// The entries of `map` at the module `modules` of `package`, in the
-/// order of their names: a range of the map, never a scan of it (#1850).
-fn in_module<'m, V>(
-    map: &'m BTreeMap<Address, V>,
-    package: &'m ImmutableString,
-    modules: &'m [ImmutableString],
-) -> impl Iterator<Item = (&'m Address, &'m V)> + 'm {
-    let from = Address {
-        package: package.clone(),
-        modules: modules.into(),
-        name: ImmutableString::new(),
-    };
-    map.range(from..)
-        .take_while(move |(address, _)| address.package == *package && *address.modules == *modules)
 }
 
 /// Rust privacy: a private item declared in a module is visible from that

@@ -41,7 +41,7 @@ mod inference;
 mod interface;
 mod iterator;
 #[cfg(feature = "rust-import")]
-mod kept;
+pub(crate) mod kept;
 mod keyed;
 mod lending;
 mod literal;
