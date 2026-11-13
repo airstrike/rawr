@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-13",
-  "version": "0.3.208",
+  "version": "0.3.209",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A save that changes only Rawr code no longer installs every crate's facades again for the program's check: the check shares the registry the last check built for the same API, and a facade's install now merges its entries instead of re-sorting the whole registry.","issues":[1870],"refs":[1755,1850]},
-        {"text":"A start or save of a large program does less repeated work: a reused body's text is never built, each body's text is as long as the body, a source's interface reads only the declarations it reaches, and resolution neither copies each unit's items nor scans every declaration per module.","issues":[1871],"refs":[1850,1755]},
-        {"text":"A marked struct that native code holds by value but never opens (no field read, struct literal, pattern or layout read, and no `&mut` of it outside a method's receiver) crosses as a handle of the program's value, so adding or removing one of its private fields builds nothing native: the program restarts from its runner, or swaps when no value of the type is alive. Its auto traits still follow its fields, so `rawr check` rejects what `cargo check` rejects, and a native module that starts reading a field gets the real layout back.","issues":[1872],"refs":[1865]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.209",
+        "date": "2026-11-13",
+        "entries": [
+          {"text":"A save that changes only Rawr code no longer installs every crate's facades again for the program's check: the check shares the registry the last check built for the same API, and a facade's install now merges its entries instead of re-sorting the whole registry.","issues":[1870],"refs":[1755,1850]},
+          {"text":"A start or save of a large program does less repeated work: a reused body's text is never built, each body's text is as long as the body, a source's interface reads only the declarations it reaches, and resolution neither copies each unit's items nor scans every declaration per module.","issues":[1871],"refs":[1850,1755]},
+          {"text":"A marked struct that native code holds by value but never opens (no field read, struct literal, pattern or layout read, and no `&mut` of it outside a method's receiver) crosses as a handle of the program's value, so adding or removing one of its private fields builds nothing native: the program restarts from its runner, or swaps when no value of the type is alive. Its auto traits still follow its fields, so `rawr check` rejects what `cargo check` rejects, and a native module that starts reading a field gets the real layout back.","issues":[1872],"refs":[1865]}
+        ]
+      },
       {
         "version": "0.3.208",
         "date": "2026-11-13",
@@ -4139,9 +4141,9 @@
     {"issue":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1868,"title":"A native pull from a program's kept iterator removes its first item, O(n) per pull","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1870,"title":"The program's check keeps the registry it installed, and a facade's install costs what the facade holds","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1871,"title":"A start keys each body by where it is, and resolution and the interface copy and scan less","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1872,"title":"A marked struct native code holds but never opens crosses as a handle of the program value","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1870,"title":"The program's check keeps the registry it installed, and a facade's install costs what the facade holds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.209"},
+    {"issue":1871,"title":"A start keys each body by where it is, and resolution and the interface copy and scan less","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.209"},
+    {"issue":1872,"title":"A marked struct native code holds but never opens crosses as a handle of the program value","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.209"},
     {"issue":1873,"title":"A start that replays shared bindings keeps no record of what native code uses","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1874,"title":"A rustc auto-trait error about a handle-held struct names rawr's hidden marker","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open","category":"Shared dependency cache (D607)"},

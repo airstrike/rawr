@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.209 (2026-11-13)
+
 - A save that changes only Rawr code no longer installs every crate's facades again for the program's check: the check shares the registry the last check built for the same API, and a facade's install now merges its entries instead of re-sorting the whole registry. (#1870; part of #1755, #1850)
 - A start or save of a large program does less repeated work: a reused body's text is never built, each body's text is as long as the body, a source's interface reads only the declarations it reaches, and resolution neither copies each unit's items nor scans every declaration per module. (#1871; part of #1850, #1755)
 - A marked struct that native code holds by value but never opens (no field read, struct literal, pattern or layout read, and no `&mut` of it outside a method's receiver) crosses as a handle of the program's value, so adding or removing one of its private fields builds nothing native: the program restarts from its runner, or swaps when no value of the type is alive. Its auto traits still follow its fields, so `rawr check` rejects what `cargo check` rejects, and a native module that starts reading a field gets the real layout back. (#1872; part of #1865)
