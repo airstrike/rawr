@@ -2737,8 +2737,6 @@ impl Engine {
         inputs: impl IntoIterator<Item = &'a (impl AsRef<str> + 'a)>,
         token_mapper: Option<&'a OnParseTokenCallback>,
     ) -> (TokenIterator<'a>, TokenizerControl) {
-        let buffer: TokenizerControl = RefCell::new(TokenizerControlBlock::new()).into();
-        let buffer2 = buffer.clone();
         let inputs: StaticVec<&'a str> = inputs.into_iter().map(AsRef::as_ref).collect();
         let mut streams: StaticVec<_> = inputs.iter().map(|s| s.chars().peekable()).collect();
         let mut pos = Position::new(1, 0);
@@ -2769,7 +2767,33 @@ impl Engine {
                 }
             }
         }
+        self.tokens(streams, pos, pending, token_mapper)
+    }
 
+    /// Tokenize `text`, a piece of a longer generated text that starts at
+    /// `at` there: each token's position is the longer text's, as if the
+    /// whole were tokenized (#1877). Nothing is stepped over: a piece is
+    /// never a file's start.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn lex_at<'a>(
+        &'a self,
+        text: &'a str,
+        at: Position,
+    ) -> (TokenIterator<'a>, TokenizerControl) {
+        let mut streams = StaticVec::new();
+        streams.push(text.chars().peekable());
+        self.tokens(streams, at, None, self.token_mapper.as_deref())
+    }
+
+    fn tokens<'a>(
+        &'a self,
+        streams: StaticVec<Peekable<Chars<'a>>>,
+        pos: Position,
+        pending: Option<(Token, Position)>,
+        token_mapper: Option<&'a OnParseTokenCallback>,
+    ) -> (TokenIterator<'a>, TokenizerControl) {
+        let buffer: TokenizerControl = RefCell::new(TokenizerControlBlock::new()).into();
+        let buffer2 = buffer.clone();
         (
             TokenIterator {
                 state: TokenizeState {

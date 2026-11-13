@@ -46,7 +46,10 @@ pub(super) fn relocate_statement(
         statement.set_position(position);
     }
     match statement {
-        Stmt::Var(value, ..) => relocate_expr(&mut value.1, locate),
+        Stmt::Var(value, ..) => {
+            value.0.pos = locate(value.0.pos);
+            relocate_expr(&mut value.1, locate);
+        }
         Stmt::Assignment(value) => {
             relocate_expr(&mut value.1.lhs, locate);
             relocate_expr(&mut value.1.rhs, locate);
@@ -60,6 +63,10 @@ pub(super) fn relocate_statement(
             relocate_block(&mut flow.branch, locate);
         }
         Stmt::For(value, ..) => {
+            value.0.pos = locate(value.0.pos);
+            if let Some(counter) = &mut value.1 {
+                counter.pos = locate(counter.pos);
+            }
             relocate_expr(&mut value.2.expr, locate);
             relocate_block(&mut value.2.body, locate);
         }

@@ -428,6 +428,27 @@ impl Engine {
         }
         Ok(_ast)
     }
+
+    /// Parse `script`, a piece of a lowered program's text that starts at
+    /// `at` in it, as [`compile_legacy_script_with_scope_raw`] parses the
+    /// whole: its statements and its functions' module, each at the whole
+    /// text's positions (#1877).
+    ///
+    /// [`compile_legacy_script_with_scope_raw`]: Self::compile_legacy_script_with_scope_raw
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn compile_legacy_piece(
+        &self,
+        scope: Option<&Scope>,
+        script: &str,
+        at: crate::Position,
+        optimization_level: crate::OptimizationLevel,
+    ) -> ParseResult<(crate::ast::StmtBlockContainer, crate::SharedModule)> {
+        let (stream, tc) = self.lex_at(script, at);
+        let input = &mut stream.peekable();
+        let lib = &mut <_>::default();
+        let state = ParseState::new(scope, input, tc, lib);
+        self.parse_parts(state, optimization_level)
+    }
     /// Compile a string containing an expression into an [`AST`],
     /// which can be used later for evaluation.
     ///

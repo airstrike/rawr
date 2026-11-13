@@ -3470,4 +3470,21 @@ impl Engine {
             optimization_level,
         ))
     }
+
+    /// Run the parser on an input stream, returning its statements and its
+    /// functions' module, each optimized as [`parse`](Self::parse) does.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn parse_parts(
+        &self,
+        mut state: ParseState,
+        optimization_level: crate::OptimizationLevel,
+    ) -> ParseResult<(crate::ast::StmtBlockContainer, crate::SharedModule)> {
+        let (statements, lib) = self.parse_global_level(&mut state, |_| {})?;
+        Ok(self.optimize_parts(
+            state.external_constants,
+            statements,
+            lib,
+            optimization_level,
+        ))
+    }
 }
