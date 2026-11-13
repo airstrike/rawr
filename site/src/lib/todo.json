@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-13",
-  "version": "0.3.210",
+  "version": "0.3.211",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save.","issues":[1876]},
-        {"text":"A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare.","issues":[1884],"refs":[1755,1850]},
-        {"text":"A save that changes a declaration lowers again only the files whose names can reach it; a file that merely writes a name of the same kind, such as its own `State`, keeps its lowering.","issues":[1886]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.211",
+        "date": "2026-11-13",
+        "entries": [
+          {"text":"A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save.","issues":[1876]},
+          {"text":"A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare.","issues":[1884],"refs":[1755,1850]},
+          {"text":"A save that changes a declaration lowers again only the files whose names can reach it; a file that merely writes a name of the same kind, such as its own `State`, keeps its lowering.","issues":[1886]}
+        ]
+      },
       {
         "version": "0.3.210",
         "date": "2026-11-13",
@@ -4164,7 +4166,7 @@
     {"issue":1873,"title":"A start that replays shared bindings keeps no record of what native code uses","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1874,"title":"A rustc auto-trait error about a handle-held struct names rawr's hidden marker","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"},
     {"issue":1877,"title":"Splice kept lowerings in as parsed pieces instead of reprinting and reparsing the whole script","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
     {"issue":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
     {"issue":1879,"title":"A vouched respawn walks no read set, unchanged sources aren't re-read, and the runner looks adapters up","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
@@ -4172,9 +4174,9 @@
     {"issue":1881,"title":"A lent &mut of a native type with an elided lifetime builds and takes a new value back","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.210"},
     {"issue":1882,"title":"Reuse finish_definitions, resolve_methods and Layouts per item across saves","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1883,"title":"The owner's check reuses kept unit resolutions","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1884,"title":"A save reveals again only the bodies whose own reads changed","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1884,"title":"A save reveals again only the bodies whose own reads changed","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"},
     {"issue":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)"}
+    {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"}
   ],
   "groups": [
     {
