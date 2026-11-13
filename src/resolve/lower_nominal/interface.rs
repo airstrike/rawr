@@ -390,8 +390,21 @@ pub(super) struct Native {
 }
 
 impl Native {
-    /// What `program`'s lowering reads of `registry`'s facades.
+    /// What `program`'s lowering reads of `registry`'s facades, outlined
+    /// fresh.
+    #[cfg(test)]
     pub(super) fn new(program: &Program, registry: &crate::host::Registry) -> Self {
+        Self::outlined(program, registry, image::Outline::new)
+    }
+
+    /// What `program`'s lowering reads of `registry`'s facades, the
+    /// outline of those it reads entry by entry from `outline`, which an
+    /// earlier runner of the same image may have kept (#1755).
+    pub(super) fn outlined(
+        program: &Program,
+        registry: &crate::host::Registry,
+        outline: impl FnOnce(&[&image::Held]) -> image::Outline,
+    ) -> Self {
         let held = registry
             .held_facades()
             .filter(|held| {
@@ -408,7 +421,7 @@ impl Native {
                 .iter()
                 .map(|held| held.root().to_string().into())
                 .collect(),
-            outline: (!held.is_empty()).then(|| image::Outline::new(&held)),
+            outline: (!held.is_empty()).then(|| outline(&held)),
         }
     }
 
