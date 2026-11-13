@@ -347,6 +347,9 @@ pub(super) struct Work {
     api: rawr_import::progress::Work,
     registered: usize,
     roots: usize,
+    compared: usize,
+    loads: usize,
+    resolved: usize,
 }
 
 impl Work {
@@ -357,7 +360,25 @@ impl Work {
             api: rawr_import::progress::work(),
             registered: rawr::Engine::registered_facades(),
             roots: rawr_watch::derived_roots(),
+            compared: rawr::package::compare_reads(),
+            loads: rawr::package::Graph::loads(),
+            resolved: rawr_import::location::resolutions(),
         }
+    }
+
+    /// With `RAWR_VERBOSE`, say what files the save since `self` read
+    /// again: the shadow crate's copies it compared, the program's loads
+    /// from its files and the Rawr directory's resolutions (#1849).
+    pub(super) fn tell_reads(&self) {
+        if !rawr_cli::cells::verbose() {
+            return;
+        }
+        eprintln!(
+            "rawr-import: a save compare-read {} copies, loaded the program {} times, resolved the Rawr directory {} times",
+            rawr::package::compare_reads() - self.compared,
+            rawr::package::Graph::loads() - self.loads,
+            rawr_import::location::resolutions() - self.resolved,
+        );
     }
 
     /// With `RAWR_VERBOSE`, say what the save since `self` did.
@@ -374,6 +395,7 @@ impl Work {
             now.registered - self.registered,
             now.roots - self.roots,
         );
+        self.tell_reads();
     }
 }
 
@@ -382,8 +404,13 @@ pub(super) enum Attempt {
     /// The runner committed the new generation compiled against it, which a
     /// restart starts from when the program refuses it as it admits it.
     Swapped(Respawn),
-    /// The save takes the full preparation, for this reason.
-    Prepare(Option<rawr_watch::StagedInputs>, Reason),
+    /// The save takes the full preparation, for this reason, from the
+    /// program as the attempt loaded it (#1849).
+    Prepare(
+        Option<rawr_watch::StagedInputs>,
+        Reason,
+        Box<rawr::package::Graph>,
+    ),
     /// The running program can't take the save, for this reason (D553.6):
     /// it restarts from the save, with no preparation first, and the save's
     /// inputs are watched once it runs.
@@ -462,7 +489,8 @@ pub(super) fn attempt(
             &Manifests::from_graph(&graph),
         );
         let project = graph.entry_package().root().to_path_buf();
-        let graph = source::Graph::from_package(&graph);
+        let loaded = graph;
+        let graph = source::Graph::from_package(&loaded);
         let snapshot = source::Snapshot::from_graph(&graph);
         let expected = snapshot
             .imported(&limits)
@@ -491,7 +519,7 @@ pub(super) fn attempt(
         let freshness = scope
             .observe(&bytes)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
-        Ok((bytes, freshness, observation, staged, reason))
+        Ok((bytes, freshness, observation, staged, reason, loaded))
     })();
     let captured = match capture {
         Ok(captured) => captured,
@@ -504,7 +532,7 @@ pub(super) fn attempt(
             return Err(error);
         }
     };
-    let (bytes, freshness, observation, staged, reason) = captured;
+    let (bytes, freshness, observation, staged, reason, loaded) = captured;
     if !adapter.gate().request_is_current(watch_request) {
         lane.cancel_compile(started)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
@@ -521,6 +549,7 @@ pub(super) fn attempt(
             return Ok(Attempt::Prepare(
                 Some(staged),
                 reason.unwrap_or(Reason::Owed),
+                Box::new(loaded),
             ));
         }
     };
@@ -552,11 +581,15 @@ pub(super) fn attempt(
             }))
         }
         resident::Outcome::NeedsPreparation if adapter.gate().request_is_current(watch_request) => {
-            Ok(Attempt::Prepare(Some(staged), Reason::Uncovered))
+            Ok(Attempt::Prepare(
+                Some(staged),
+                Reason::Uncovered,
+                Box::new(loaded),
+            ))
         }
-        resident::Outcome::Unstarted if adapter.gate().request_is_current(watch_request) => {
-            Ok(Attempt::Prepare(Some(staged), Reason::Unstarted))
-        }
+        resident::Outcome::Unstarted if adapter.gate().request_is_current(watch_request) => Ok(
+            Attempt::Prepare(Some(staged), Reason::Unstarted, Box::new(loaded)),
+        ),
         resident::Outcome::Refused(reason) if adapter.gate().request_is_current(watch_request) => {
             Ok(Attempt::Restart(
                 reason,

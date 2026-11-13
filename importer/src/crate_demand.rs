@@ -8,14 +8,20 @@
 
 use std::path::{Path, PathBuf};
 
-fn file(project: &Path) -> PathBuf {
-    crate::location::rawr_directory_here(project).join("cache/demand")
+fn file(rawr: &Path) -> PathBuf {
+    rawr.join("cache/demand")
 }
 
 /// The remembered demand, sorted; empty when the file is missing or malformed.
 #[must_use]
 pub fn load(project: &Path) -> Vec<Box<str>> {
-    let Ok(text) = std::fs::read_to_string(file(project)) else {
+    load_in(&crate::location::rawr_directory_here(project))
+}
+
+/// [`load`] for the project whose Rawr directory is `rawr`.
+#[must_use]
+pub fn load_in(rawr: &Path) -> Vec<Box<str>> {
+    let Ok(text) = std::fs::read_to_string(file(rawr)) else {
         return Vec::new();
     };
     let mut paths = Vec::new();
@@ -40,10 +46,15 @@ pub fn load(project: &Path) -> Vec<Box<str>> {
 /// Replace the remembered demand with `paths`, sorted, written atomically.
 /// A write failure only costs the next preparation one rediscovery.
 pub fn store(project: &Path, paths: &[Box<str>]) {
+    store_in(&crate::location::rawr_directory_here(project), paths);
+}
+
+/// [`store`] for the project whose Rawr directory is `rawr`.
+pub fn store_in(rawr: &Path, paths: &[Box<str>]) {
     let mut sorted = paths.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    let file = file(project);
+    let file = file(rawr);
     let temporary = file.with_extension("partial");
     let mut text = String::new();
     for path in &sorted {

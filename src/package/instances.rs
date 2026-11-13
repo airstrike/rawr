@@ -25,9 +25,9 @@ pub(crate) struct Entry {
     pub(crate) types: Vec<String>,
 }
 
-/// Where the project at `root` keeps its record.
-fn location(root: &Path) -> PathBuf {
-    rawr_import::location::rawr_directory_here(root).join("instances.json")
+/// Where the project whose Rawr directory is `rawr` keeps its record.
+fn location_in(rawr: &Path) -> PathBuf {
+    rawr.join("instances.json")
 }
 
 /// The build of rawr that keeps a record: the digest of its sources
@@ -66,7 +66,16 @@ fn decode(build: &str, bytes: &[u8]) -> Record {
 ///
 /// The record can't be written.
 pub fn store(root: &Path, record: &Record) -> io::Result<bool> {
-    let path = location(root);
+    store_in(&rawr_import::location::rawr_directory_here(root), record)
+}
+
+/// [`store`] for the project whose Rawr directory is `rawr`.
+///
+/// # Errors
+///
+/// The record can't be written.
+pub fn store_in(rawr: &Path, record: &Record) -> io::Result<bool> {
+    let path = location_in(rawr);
     let bytes = encode(&build(), record)?;
     if fs::read(&path).is_ok_and(|kept| kept == bytes) {
         return Ok(false);
@@ -90,7 +99,16 @@ pub fn store(root: &Path, record: &Record) -> io::Result<bool> {
 ///
 /// The record can't be written.
 pub fn adopt(root: &Path) -> io::Result<()> {
-    let Ok(bytes) = fs::read(location(root)) else {
+    adopt_in(&rawr_import::location::rawr_directory_here(root))
+}
+
+/// [`adopt`] for the project whose Rawr directory is `rawr`.
+///
+/// # Errors
+///
+/// The record can't be written.
+pub fn adopt_in(rawr: &Path) -> io::Result<()> {
+    let Ok(bytes) = fs::read(location_in(rawr)) else {
         return Ok(());
     };
     let Some((kept_by, record)) = bytes
@@ -110,7 +128,7 @@ pub fn adopt(root: &Path) -> io::Result<()> {
         return Ok(());
     }
     match serde_json::from_slice::<Record>(record) {
-        Ok(record) => store(root, &record).map(drop),
+        Ok(record) => store_in(rawr, &record).map(drop),
         Err(_) => Ok(()),
     }
 }
@@ -118,7 +136,13 @@ pub fn adopt(root: &Path) -> io::Result<()> {
 /// The record the project at `root` keeps, or none.
 #[must_use]
 pub fn kept(root: &Path) -> Record {
-    fs::read(location(root))
+    kept_in(&rawr_import::location::rawr_directory_here(root))
+}
+
+/// [`kept`] for the project whose Rawr directory is `rawr`.
+#[must_use]
+pub fn kept_in(rawr: &Path) -> Record {
+    fs::read(location_in(rawr))
         .map(|bytes| decode(&build(), &bytes))
         .unwrap_or_default()
 }
@@ -147,7 +171,7 @@ impl Graph {
     /// The instances the project's native code calls marked generic
     /// functions at.
     pub(crate) fn native_instances(&self) -> Vec<Instance> {
-        kept(self.entry_package().root()).instances().to_vec()
+        kept_in(&self.rawr_directory()).instances().to_vec()
     }
 
     /// The support table's entries: each recorded instance of a function
@@ -200,7 +224,7 @@ mod tests {
             name: "(app::Message,)".into(),
             types: vec!["crate::Message".into()],
         }]);
-        let location = super::location(&root);
+        let location = super::location_in(&rawr_import::location::rawr_directory_here(&root));
         std::fs::create_dir_all(location.parent().expect("the record has a directory"))
             .expect("the directory is written");
         let other = "f".repeat(64);

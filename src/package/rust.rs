@@ -28,14 +28,15 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment)?;
+        let app = app_crate(self, &environment, &mut Copies::default())?;
         request(entry, config, environment, None, app, &[], limits).map(Some)
     }
 
     /// The Rust imports, resolved in `universe` (the importer's plain one).
     /// `demand` holds the Rust paths Rawr names below wholesale crate
     /// re-exports (see [`super::Error::rust_demand`]). The runner links the
-    /// `rawr` crate and the crate's own dependencies only.
+    /// `rawr` crate and the crate's own dependencies only. The shadow
+    /// crate's files are written as `copies` last saw them.
     #[doc(hidden)]
     pub fn rust_import_plain(
         &self,
@@ -43,13 +44,14 @@ impl Graph {
         universe: rawr_import::cargo::universe::Catalog,
         demand: &[Box<str>],
         limits: &Limits,
+        copies: &mut Copies,
     ) -> rawr_import::Result<Option<Request>> {
         let entry = self.entry_package();
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment)?;
+        let app = app_crate(self, &environment, copies)?;
         request(
             entry,
             config,
@@ -72,13 +74,14 @@ impl Graph {
         environment: Environment,
         closure: &[Dependency],
         limits: &Limits,
+        copies: &mut Copies,
     ) -> rawr_import::Result<Option<Request>> {
         let entry = self.entry_package();
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment)?;
+        let app = app_crate(self, &environment, copies)?;
         request_inventory(entry, config, environment, app, closure, limits).map(Some)
     }
 
@@ -300,7 +303,67 @@ struct App {
     recorded: Vec<std::path::PathBuf>,
 }
 
-fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<App> {
+/// The shadow crate's files as this process last wrote or linked them, so
+/// a round writes and reads again only the files whose text changed. An
+/// owner keeps one across its saves; one check makes its own (#1849).
+#[derive(Default)]
+pub struct Copies {
+    /// The project root and its Rawr directory, resolved once.
+    directory: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    /// Each copy as this process last saw it hold its text.
+    written: std::collections::HashMap<std::path::PathBuf, Written>,
+    /// Each linked asset's original as it was linked: its length and its
+    /// modification time.
+    linked: std::collections::HashMap<std::path::PathBuf, (u64, std::time::SystemTime)>,
+}
+
+/// One copy as [`Copies`] last saw it hold its text: the text's digest and
+/// length, and the file's modification time then.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct Written {
+    digest: u64,
+    len: u64,
+    modified: std::time::SystemTime,
+}
+
+impl Copies {
+    /// The Rawr directory of the project at `root`, resolved the first
+    /// time and kept: an owner's environment stays its own.
+    fn rawr_directory(&mut self, root: &Path, environment: &Environment) -> std::path::PathBuf {
+        match &self.directory {
+            Some((kept, directory)) if kept == root => directory.clone(),
+            _ => {
+                let directory = rawr_import::location::rawr_directory(root, environment);
+                self.directory = Some((root.to_path_buf(), directory.clone()));
+                directory
+            }
+        }
+    }
+
+    /// The Rawr directory of the project at `root` under this process's
+    /// environment, resolved the first time and kept.
+    pub fn rawr_directory_here(&mut self, root: &Path) -> std::path::PathBuf {
+        match &self.directory {
+            Some((kept, directory)) if kept == root => directory.clone(),
+            _ => {
+                let directory = rawr_import::location::rawr_directory_here(root);
+                self.directory = Some((root.to_path_buf(), directory.clone()));
+                directory
+            }
+        }
+    }
+}
+
+/// The digest [`Copies`] keeps of a copy's text.
+fn digest(text: &str) -> u64 {
+    ahash::RandomState::with_seeds(0x7261_7772, 0x636f_7079, 0x7368_6164, 0x6f77).hash_one(text)
+}
+
+fn app_crate(
+    graph: &Graph,
+    environment: &Environment,
+    copies: &mut Copies,
+) -> rawr_import::Result<App> {
     let entry = graph.entry_package();
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
         if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
@@ -323,9 +386,11 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
         .parent()
         .unwrap_or(entry.root())
         .to_path_buf();
-    let directory = rawr_import::location::rawr_directory(entry.root(), environment).join("crate");
+    let directory = copies
+        .rawr_directory(entry.root(), environment)
+        .join("crate");
     let package = cargo.path.parent().unwrap_or(entry.root());
-    let copies = directory.join("src");
+    let sources = directory.join("src");
     let mut instances = Vec::new();
     let mut files = if let Some(root) = entry.native_root() {
         let shadow = graph
@@ -357,7 +422,7 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
                 ),
             ),
             (
-                copies.join(relative),
+                sources.join(relative),
                 native_root(
                     root,
                     package,
@@ -371,11 +436,11 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
             shadow
                 .files
                 .into_iter()
-                .map(|(path, text)| (copies.join(path), text)),
+                .map(|(path, text)| (sources.join(path), text)),
         );
         files
     } else {
-        let mut library = app_library(entry, &copies);
+        let mut library = app_library(entry, &sources);
         if let Some(attribute) = entry.entry() {
             library.push_str(&super::entry::source(attribute));
         }
@@ -411,14 +476,14 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
         } else {
             widened
         };
-        files.push((copies.join(relative), copy));
+        files.push((sources.join(relative), copy));
     }
     if !entry.is_script() {
         files.extend(build_script(cargo, &directory, entry.features())?);
     }
-    write_changed(files)?;
+    write_changed(files, &mut copies.written)?;
     if entry.native_root().is_some() || !entry.rust_modules().is_empty() {
-        link_assets(&module_root, &copies)?;
+        link_assets(&module_root, &sources, &mut copies.linked)?;
     }
     // The features Cargo enabled for the package under the command's
     // feature flags, and no others: `default` among them when it is on.
@@ -432,8 +497,15 @@ fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Ap
     }
     if let Some(bin) = entry.bin() {
         crates.push(
-            bin_crate(bin, cargo, &directory, &module_root, entry.features())?
-                .features(features(), false)?,
+            bin_crate(
+                bin,
+                cargo,
+                &directory,
+                &module_root,
+                entry.features(),
+                &mut copies.written,
+            )?
+            .features(features(), false)?,
         );
         recorded.push(directory.with_file_name("bin"));
     }
@@ -477,6 +549,7 @@ fn bin_crate(
     library: &Path,
     module_root: &Path,
     features: &crate::project::cargo::features::Enabled,
+    written: &mut std::collections::HashMap<std::path::PathBuf, Written>,
 ) -> rawr_import::Result<Dependency> {
     let directory = library.with_file_name("bin");
     let package = cargo.path.parent().unwrap_or(module_root);
@@ -504,7 +577,7 @@ fn bin_crate(
         ));
     }
     files.extend(build_script(cargo, &directory, features)?);
-    write_changed(files)?;
+    write_changed(files, written)?;
     Dependency::path(super::island::BIN, &directory)?.package(&bin_package(cargo))
 }
 
@@ -689,7 +762,11 @@ fn bin_package(cargo: &super::manifest::cargo::Cargo) -> String {
 /// linked where it can be and copied otherwise, and kept while it is as
 /// new as the original. Hidden directories, `target` and the copies' own
 /// tree are passed over.
-fn link_assets(from: &Path, to: &Path) -> rawr_import::Result<()> {
+fn link_assets(
+    from: &Path,
+    to: &Path,
+    linked: &mut std::collections::HashMap<std::path::PathBuf, (u64, std::time::SystemTime)>,
+) -> rawr_import::Result<()> {
     let io = |operation, path: &Path| {
         let path = path.to_path_buf();
         move |source| rawr_import::Error::Io {
@@ -723,30 +800,54 @@ fn link_assets(from: &Path, to: &Path) -> rawr_import::Result<()> {
             };
             let target = to.join(relative);
             let original = entry.metadata().map_err(io("read metadata", &path))?;
-            let current = std::fs::metadata(&target).ok().is_some_and(|linked| {
-                linked.len() == original.len()
-                    && linked
+            let seen = original
+                .modified()
+                .ok()
+                .map(|modified| (original.len(), modified));
+            // An original as this process last linked it is linked still.
+            if seen.is_some() && linked.get(&target) == seen.as_ref() {
+                continue;
+            }
+            let current = std::fs::metadata(&target).ok().is_some_and(|copy| {
+                copy.len() == original.len()
+                    && copy
                         .modified()
                         .ok()
                         .zip(original.modified().ok())
-                        .is_some_and(|(linked, original)| linked >= original)
+                        .is_some_and(|(copy, original)| copy >= original)
             });
-            if current {
-                continue;
+            if !current {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(io("create directory", parent))?;
+                }
+                let _ = std::fs::remove_file(&target);
+                if std::fs::hard_link(&path, &target).is_err() {
+                    std::fs::copy(&path, &target).map_err(io("copy", &target))?;
+                }
             }
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(io("create directory", parent))?;
-            }
-            let _ = std::fs::remove_file(&target);
-            if std::fs::hard_link(&path, &target).is_err() {
-                std::fs::copy(&path, &target).map_err(io("copy", &target))?;
+            if let Some(seen) = seen {
+                linked.insert(target, seen);
             }
         }
     }
     Ok(())
 }
 
-fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Result<()> {
+/// How many of the shadow crate's files this process read to compare.
+static COMPARED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many of the shadow crate's files this process read to compare them
+/// with what it would write, for `RAWR_VERBOSE`'s account of a save.
+#[doc(hidden)]
+#[must_use]
+pub fn compare_reads() -> usize {
+    COMPARED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn write_changed(
+    files: Vec<(std::path::PathBuf, String)>,
+    written: &mut std::collections::HashMap<std::path::PathBuf, Written>,
+) -> rawr_import::Result<()> {
     let io = |operation, path: &Path| {
         let path = path.to_path_buf();
         move |source| rawr_import::Error::Io {
@@ -755,13 +856,39 @@ fn write_changed(files: Vec<(std::path::PathBuf, String)>) -> rawr_import::Resul
             source,
         }
     };
+    // The copy at `path` as it is now, holding a text of `digest` and `len`.
+    let seen = |path: &Path, digest, len| {
+        let metadata = std::fs::metadata(path).ok()?;
+        (metadata.len() == len).then_some(())?;
+        Some(Written {
+            digest,
+            len,
+            modified: metadata.modified().ok()?,
+        })
+    };
     for (path, text) in files {
+        let digest = digest(&text);
+        let len = text.len() as u64;
+        // A copy as this process last saw it, by its length and
+        // modification time, holds this text when the digests agree: it
+        // is neither read nor written.
+        if let Some(kept) = written.get(&path)
+            && kept.digest == digest
+            && seen(&path, digest, len).as_ref() == Some(kept)
+        {
+            continue;
+        }
+        COMPARED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(io("create directory", parent))?;
             }
             std::fs::write(&path, text).map_err(io("write", &path))?;
         }
+        match seen(&path, digest, len) {
+            Some(copy) => written.insert(path, copy),
+            None => written.remove(&path),
+        };
     }
     Ok(())
 }
@@ -1682,7 +1809,8 @@ preview = ["dep:rawr-macros"]
         write(".git/HEAD", "ref\n");
         write("target/out.txt", "built\n");
         let copies = root.join("generated/src");
-        super::link_assets(&source, &copies).unwrap();
+        let mut linked = std::collections::HashMap::new();
+        super::link_assets(&source, &copies, &mut linked).unwrap();
         let read = |path: &str| std::fs::read_to_string(copies.join(path)).ok();
         assert_eq!(read("shader/vert.wgsl").as_deref(), Some("vertex\n"));
         assert_eq!(read("scene.rs"), None);
@@ -1690,8 +1818,34 @@ preview = ["dep:rawr-macros"]
         assert_eq!(read("target/out.txt"), None);
         std::fs::remove_file(source.join("shader/vert.wgsl")).unwrap();
         write("shader/vert.wgsl", "edited vertex\n");
-        super::link_assets(&source, &copies).unwrap();
+        super::link_assets(&source, &copies, &mut linked).unwrap();
         assert_eq!(read("shader/vert.wgsl").as_deref(), Some("edited vertex\n"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A copy written once holds its text for the next round, which writes
+    /// it again when its text changes, and when anything else changed the
+    /// file or removed it since (#1849).
+    #[test]
+    fn a_kept_copy_is_written_again_when_its_text_or_its_file_changed() {
+        let root = std::env::temp_dir().join(format!("rawr-copies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("src/lib.rs");
+        let read = || std::fs::read_to_string(&path).ok();
+        let mut written = std::collections::HashMap::new();
+        let mut write = |text: &str| {
+            super::write_changed(vec![(path.clone(), text.to_owned())], &mut written).unwrap();
+        };
+        write("pub fn a() {}\n");
+        assert_eq!(read().as_deref(), Some("pub fn a() {}\n"));
+        write("pub fn b() {}\n");
+        assert_eq!(read().as_deref(), Some("pub fn b() {}\n"));
+        std::fs::write(&path, "pub fn other() {}\n").unwrap();
+        write("pub fn b() {}\n");
+        assert_eq!(read().as_deref(), Some("pub fn b() {}\n"));
+        std::fs::remove_file(&path).unwrap();
+        write("pub fn b() {}\n");
+        assert_eq!(read().as_deref(), Some("pub fn b() {}\n"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
