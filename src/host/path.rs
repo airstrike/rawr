@@ -26,30 +26,30 @@ impl Path {
 
     pub(crate) fn parse(path: impl Into<ImmutableString>) -> Result<Self, host::Error> {
         let path = path.into();
-        let count = path.split("::").count();
-        let mut segments = Vec::new();
-        segments
+        let count = segments(&path).count();
+        let mut parts = Vec::<ImmutableString>::new();
+        parts
             .try_reserve_exact(count)
             .map_err(|_| host::Error::Allocation)?;
-        segments.extend(path.split("::").map(Into::into));
+        parts.extend(segments(&path).map(Into::into));
 
         // A tuple field's reader ends in its index: `touch::Finger::0`.
         let tuple_field = |segment: &ImmutableString| {
             !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
         };
         if path.is_empty()
-            || segments
+            || parts
                 .iter()
                 .enumerate()
                 .any(|(index, segment): (usize, &ImmutableString)| {
                     !is_valid_identifier(segment)
-                        && !(index + 1 == segments.len() && index > 0 && tuple_field(segment))
+                        && !(index + 1 == parts.len() && index > 0 && tuple_field(segment))
                 })
         {
             return Err(host::Error::InvalidFacadePath(path));
         }
 
-        Ok(Self(segments.into_boxed_slice()))
+        Ok(Self(parts.into_boxed_slice()))
     }
 
     #[cfg(feature = "rust-import")]
@@ -57,10 +57,9 @@ impl Path {
         path: &str,
         allocation: &mut A,
     ) -> Result<Self, host::Error> {
-        let count = path.split("::").count();
-        let string_bytes = path
-            .split("::")
-            .try_fold(0_usize, |bytes, segment| bytes.checked_add(segment.len()));
+        let count = segments(path).count();
+        let string_bytes =
+            segments(path).try_fold(0_usize, |bytes, segment| bytes.checked_add(segment.len()));
         let bytes = count
             .checked_mul(std::mem::size_of::<ImmutableString>())
             .and_then(|bytes| bytes.checked_add(string_bytes?));
@@ -183,6 +182,37 @@ impl fmt::Display for Path {
     }
 }
 
+/// The segments of the written path `text`, as `text.split("::")` gives
+/// them, found by its colons: a lookup splits a path at each step of a
+/// search, and a substring search costs more than the comparison.
+pub(crate) fn segments(text: &str) -> Segments<'_> {
+    Segments { rest: Some(text) }
+}
+
+/// The segments of a written path ([`segments`]).
+pub(crate) struct Segments<'a> {
+    rest: Option<&'a str>,
+}
+
+impl<'a> Iterator for Segments<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let rest = self.rest?;
+        let bytes = rest.as_bytes();
+        let mut from = 0;
+        while let Some(at) = rest[from..].find(':').map(|at| from + at) {
+            if bytes.get(at + 1) == Some(&b':') {
+                self.rest = Some(&rest[at + 2..]);
+                return Some(&rest[..at]);
+            }
+            from = at + 1;
+        }
+        self.rest = None;
+        Some(rest)
+    }
+}
+
 /// The segment the importer gives a crate a macro's `$crate` names, after
 /// the root of the dependency the macro came through:
 /// `__rawr_crate_<name>_<16 hex digits>`.
@@ -265,6 +295,27 @@ fn hidden(text: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_path_splits_at_each_pair_of_colons() {
+        for text in [
+            "",
+            "a",
+            "a::b",
+            "iced::widget::Text",
+            "a:::b",
+            "::a::",
+            "a:b::c",
+            "a::::b",
+            ":",
+        ] {
+            assert_eq!(
+                super::segments(text).collect::<Vec<_>>(),
+                text.split("::").collect::<Vec<_>>(),
+                "{text:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_std_type_reads_from_std() {
         assert_eq!(

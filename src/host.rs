@@ -323,7 +323,7 @@ impl Registry {
     /// Whether the type or item at `path` is an app's export, whose fields
     /// and methods are apart.
     pub(crate) fn is_exported(&self, path: &str) -> bool {
-        let root = path.split("::").next().unwrap_or(path);
+        let root = path::segments(path).next().unwrap_or(path);
         self.exported.iter().any(|exported| exported == root)
     }
 
@@ -757,9 +757,14 @@ impl Registry {
     /// The held facade whose root is `path`'s first segment.
     #[cfg(feature = "rust-import")]
     fn held(&self, path: &path::Path) -> Option<&image::Held> {
-        let root = path.segments().first()?;
+        self.held_named(path.segments().first()?)
+    }
+
+    /// The held facade whose root is the crate `root`.
+    #[cfg(feature = "rust-import")]
+    fn held_named(&self, root: &str) -> Option<&image::Held> {
         self.held
-            .binary_search_by(|(held, _)| held.root().name().cmp(root.as_str()))
+            .binary_search_by(|(held, _)| held.root().name().cmp(root))
             .ok()
             .map(|index| &self.held[index].0)
     }
@@ -941,7 +946,7 @@ impl Registry {
         if &self.facades[facade] != owner {
             return None;
         }
-        if let Some(held) = self.held(&path::Path::parse(owner.root()).ok()?) {
+        if let Some(held) = self.held_named(path::segments(owner.root()).next()?) {
             let aliases = held.identity_types(identity);
             let first = *aliases.first()?;
             let originating =
@@ -950,12 +955,12 @@ impl Registry {
                 aliases
                     .iter()
                     .copied()
-                    .find(|alias| &held.type_path(*alias) == originating.path_ref())
+                    .find(|alias| held.type_is_at(*alias, originating.path_ref()))
             });
             // A type below a re-exported module has its paths below each
             // module that re-exports it too.
             let exact_alias = exact.is_some()
-                || aliases.len() == 1 && self.reexported(&held.type_path(first)).is_empty();
+                || aliases.len() == 1 && !self.is_reexported(held.type_at(first).path_ref());
             let definition = held.type_at(exact.unwrap_or(first));
             return Some(ImportedType {
                 definition,
@@ -979,15 +984,12 @@ impl Registry {
             aliases
                 .iter()
                 .copied()
-                .find(|alias| self.types[*alias].path() == originating.path())
+                .find(|alias| self.types[*alias].path_ref() == originating.path_ref())
         });
         // A type below a re-exported module has its paths below each
         // module that re-exports it too.
         let exact_alias = exact.is_some()
-            || aliases.len() == 1
-                && self
-                    .reexported(self.types[aliases[0]].path_ref())
-                    .is_empty();
+            || aliases.len() == 1 && !self.is_reexported(self.types[aliases[0]].path_ref());
         let alias = exact.unwrap_or(aliases[0]);
         let definition = &self.types[alias];
         Some(ImportedType {
@@ -1010,7 +1012,7 @@ impl Registry {
         if &self.facades[facade] != owner {
             return None;
         }
-        if let Some(held) = self.held(&path::Path::parse(owner.root()).ok()?) {
+        if let Some(held) = self.held_named(path::segments(owner.root()).next()?) {
             let aliases = held.identity_types(identity);
             if aliases.is_empty() {
                 return None;
@@ -1792,6 +1794,23 @@ impl Registry {
     /// it.
     fn through_reexports(&self, path: &path::Path) -> Option<path::Path> {
         through_reexports(&self.reexports, path)
+    }
+
+    /// Whether another path names what `path` names through a re-exported
+    /// module above it: whether [`Self::reexported`] finds one, found with
+    /// no path built.
+    #[cfg(feature = "rust-import")]
+    fn is_reexported(&self, path: &path::Path) -> bool {
+        let segments = path.segments();
+        (1..=segments.len()).any(|length| {
+            let module = &segments[..length];
+            let start = self
+                .reexported
+                .partition_point(|(target, _)| target.segments() < module);
+            self.reexported
+                .get(start)
+                .is_some_and(|(target, _)| target.segments() == module)
+        })
     }
 
     /// Each other path that names what `path` names through a re-exported
