@@ -23,7 +23,11 @@
 //! instances the body's own calls take, not its source's other bodies',
 //! and another module's struct without its private fields, which the
 //! body can't name, so a save that adds one to a screen's state reads
-//! again only the bodies of the module that declares it (#1755).
+//! again only the bodies of the module that declares it (#1755). A
+//! template's instances aren't in the key: a reading keeps those of each
+//! template its calls bind and is reused while each is as it was, so an
+//! instance round reads again only the bodies whose calls bind a template
+//! that gained one.
 //!
 //! An owner's check of the program, which checks it again on each save,
 //! keeps the same way what each source's check found: the crates' items
@@ -199,7 +203,7 @@ pub(super) struct Found {
     /// crate's types (`reaches_host`).
     pub(super) reaches: bool,
     /// Each template whose instances the reading read: each its calls
-    /// bind, the calls it keeps no record of among them (`take_templates`).
+    /// bind, the calls it keeps no record of among them (`called_templates`).
     pub(super) templates: BTreeSet<crate::item::Key>,
 }
 

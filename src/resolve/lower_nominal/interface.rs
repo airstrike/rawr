@@ -231,7 +231,7 @@ impl Instances {
     }
 }
 
-/// The instance each call of a template takes (`Instances::calls`),
+/// The instance each call of a template takes (`resolve::Instances::calls`),
 /// digested by the body that makes the call: a body reads only its own
 /// calls' (`Parser::called_instance`), so reveal reads a body again only
 /// when its own calls' change, not another body's (#1755).
