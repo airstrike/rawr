@@ -2039,9 +2039,10 @@ fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
 
 /// Saves of a marked file in a running program reach it in turn, a body,
 /// a line above a function, a doc comment, a lint, a blank line and a
-/// signature over more lines among them (#1604, #1646); a kept type's new
-/// field prepares again, a `cfg` swaps in place, and an error below the
-/// moved lines names its own line.
+/// signature over more lines among them (#1604, #1646); a held type's new
+/// private field restarts the program with no native build while a live
+/// value has the old fields (D961), a `cfg` swaps in place, and an error
+/// below the moved lines names its own line.
 #[test]
 fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line() {
     let root = THEME.project();
@@ -2115,10 +2116,11 @@ fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line(
         let tick = format!(" tick {next} styled 0");
         run.until(|line| line.starts_with("tick ") && line.ends_with(&tick));
     }
-    // A new field of a type native code keeps and a `cfg` change what
-    // native code is built from: a new native build, whose runner lowers
-    // again only the files that name what changed, and the program runs
-    // on. A new derive swaps in place instead (#1737). The save's wait ends
+    // A new private field of a type native code holds restarts the program
+    // from the save, and a `cfg` changes what native code is built from: a
+    // new native build, whose runner lowers again only the files that name
+    // what changed, and the program runs on. A new derive swaps in place
+    // instead (#1737). The save's wait ends
     // on the event that settles it, whichever that is: a program that took
     // it in place prints no new start for a wait on that to end on.
     let settled = |text: &str| {
@@ -2139,9 +2141,18 @@ fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line(
         "            wizard: None,\n",
         "            wizard: None,\n            visits: 0,\n",
     );
+    // Native code holds `home::State` by its handle (D961), so its new
+    // private field changes nothing native code is built against, but the
+    // program's live screen has the old fields (D937): the program restarts
+    // from the save in a new process of the running runner, with no native
+    // build (D943).
     let told = run.told(&events, |text| settled(text) > settled(&before));
+    let after = &told[before.len()..];
     assert!(
-        told[before.len()..].contains("\"event\":\"preparing\""),
+        after.contains(
+            "{\"event\":\"restarting\",\"reason\":\"`home::State` changed its fields, but a \
+             live value holds it\"}"
+        ) && !after.contains("\"event\":\"preparing\""),
         "{told}\n{}",
         run.seen.join("\n")
     );
@@ -2194,15 +2205,19 @@ fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line(
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
-    // Only the field builds native code again: native code holds a
-    // `State`, and names no `widget::sidebar::default`, which the `cfg`
-    // takes away in place (D935.3).
+    // The field builds nothing native: native code holds `State` by its
+    // handle. (A start that replayed shared bindings has no record of what
+    // native code uses, so the `cfg` that takes `widget::sidebar::default`
+    // away may build again, as the shape alone judges it.)
     let prepared = run
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr: preparing again: "))
         .collect::<Vec<_>>();
-    assert_eq!(prepared, ["`home::State` changed its fields"], "{seen}");
+    assert!(
+        !prepared.iter().any(|reason| reason.contains("home::State")),
+        "{seen}"
+    );
 }
 
 /// Saves of private items a marked child module names through `super`
