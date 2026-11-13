@@ -131,6 +131,10 @@ impl Interface {
         )?;
         let every = with(compiler, declarations.everywhere);
         let every_revealed = with(compiler, declarations.revealed);
+        // A program with an `impl Drop` writes each drop's glue by its
+        // value's fields, private ones too: each source's lowering reads
+        // every struct whole (#1885).
+        let drops = models.std_traits.contains("Drop");
         let namespaces = program
             .scripts
             .iter()
@@ -162,6 +166,17 @@ impl Interface {
             }
             written.0.update(own.get(&Some(source)).unwrap_or(&[0; 32]));
             let resolved: [u8; 32] = written.0.finalize().into();
+            // Another module's struct, unless the source is that module or
+            // below it: as the source's lowering reads it, without its
+            // private fields of a plain type, and as its bodies' reveal
+            // reads it, without its private fields.
+            let here = namespaces.get(&source);
+            let outside = |declared: source::Id| {
+                declared != source
+                    && !here
+                        .zip(namespaces.get(&declared))
+                        .is_some_and(|(here, declared)| here.sees_private(declared))
+            };
             let mut lowering = Sha256::new();
             lowering.update(every);
             declarations.reached(
@@ -170,21 +185,12 @@ impl Interface {
                 &outline.mentioned,
                 &mut walk,
                 &mut lowering,
-                None,
+                Reader::Lowering,
+                (!drops).then_some(&outside),
             );
             lowering.update(resolved);
             lowering.update(calls.get(&Some(source)).unwrap_or(&[0; 32]));
             sources.insert(source, lowering.finalize().into());
-            // Another module's struct as the source's bodies read it: its
-            // private fields aside, unless the source is that module or
-            // below it.
-            let here = namespaces.get(&source);
-            let outside = |declared: source::Id| {
-                declared != source
-                    && !here
-                        .zip(namespaces.get(&declared))
-                        .is_some_and(|(here, declared)| here.sees_private(declared))
-            };
             let mut reading = Sha256::new();
             reading.update(every_revealed);
             declarations.reached(
@@ -193,6 +199,7 @@ impl Interface {
                 &outline.mentioned,
                 &mut walk,
                 &mut reading,
+                Reader::Reveal,
                 Some(&outside),
             );
             reading.update(resolved);
@@ -439,7 +446,7 @@ fn every(
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v12");
+    written.0.update(b"rawr.lowering.interface/v13");
     // The compiler: the facades its host registry holds, and its options.
     if let Some(registered) = registered {
         write!(written, "{registered}").ok()?;
@@ -568,6 +575,10 @@ struct Digest {
     /// As reveal reads a struct with a private field in another module,
     /// whose bodies can't name the field: without it.
     outside: Option<[u8; 32]>,
+    /// As a lowering in another module reads a struct with a private field
+    /// of a plain type (`plain`): without it, when nothing the lowering
+    /// asks of the struct's type answers otherwise for it (`lowered`).
+    lowered: Option<[u8; 32]>,
 }
 
 impl Digest {
@@ -577,6 +588,7 @@ impl Digest {
             lowering,
             revealed: None,
             outside: None,
+            lowered: None,
         }
     }
 }
@@ -796,14 +808,18 @@ impl<'p> Declarations<'p> {
                     true => Some(item_digest(Reader::Reveal)?),
                     false => None,
                 };
-                let outside = match outline {
-                    Some(outline) => outside(item, outline, places.as_ref(), &program.instances)?,
-                    None => None,
+                let (outside, lowered) = match outline {
+                    Some(outline) => (
+                        outside(item, outline, places.as_ref(), &program.instances)?,
+                        lowered(item, outline, places.as_ref(), &program.instances)?,
+                    ),
+                    None => (None, None),
                 };
                 Some(Digest {
                     lowering,
                     revealed,
                     outside,
+                    lowered,
                 })
             })?;
             let writes = scopes.writes(
@@ -891,9 +907,13 @@ impl<'p> Declarations<'p> {
     /// `mentioned` reaches: how many, and their digests summed lane by
     /// lane, which no order of the walk changes. The walk touches only
     /// what it reaches, and no digest is digested again (#1850). Reveal's
-    /// reading of a body reads each as `Digest::revealed`, and a struct a
+    /// reading of a body reads each as `Digest::revealed`. A struct a
     /// source `outside` says the text's module doesn't see the private
-    /// items of as `Digest::outside`.
+    /// items of `reader` reads as `Digest::outside` or `Digest::lowered`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one walk's reader and its places; each is the walk's own"
+    )]
     fn reached(
         &self,
         source: source::Id,
@@ -901,7 +921,8 @@ impl<'p> Declarations<'p> {
         mentioned: &[(Box<str>, Head)],
         walk: &mut Walk,
         digest: &mut Sha256,
-        reveal: Option<&dyn Fn(source::Id) -> bool>,
+        reader: Reader,
+        outside: Option<&dyn Fn(source::Id) -> bool>,
     ) {
         let mut sum = [0_u64; 4];
         let mut count = 0_u64;
@@ -922,11 +943,12 @@ impl<'p> Declarations<'p> {
                 count += 1;
                 let declaration = &self.declarations[index];
                 let found = declaration.digest;
-                let read = match reveal {
-                    None => found.lowering,
-                    Some(outside) => found
+                let unseen = outside.is_some_and(|outside| declaration.source.is_some_and(outside));
+                let read = match reader {
+                    Reader::Lowering => found.lowered.filter(|_| unseen).unwrap_or(found.lowering),
+                    Reader::Reveal => found
                         .outside
-                        .filter(|_| declaration.source.is_some_and(outside))
+                        .filter(|_| unseen)
                         .or(found.revealed)
                         .unwrap_or(found.lowering),
                 };
@@ -1107,6 +1129,103 @@ fn outside(
         Ok(())
     })?;
     Some(Some(digest))
+}
+
+/// The digest of `item`, a struct with a private field of a plain type,
+/// as a lowering in another module reads it (#1885): each public field and
+/// each private field of another type, by its own places and its slot,
+/// which a field's access names, so a private field of a plain type a save
+/// adds keeps it the same. `None` for any other item, and for a struct
+/// that has a parameter or holds a reference, whose fields a borrow's
+/// check reads. What else a lowering asks of the struct's type, whether a
+/// value of it is `Send` or holds a cell, a plain field answers as none
+/// does; what reads its fields whole, a struct pattern's discards or a
+/// derived `Default`'s fields, the lowering reads again on reuse
+/// (`kept::Read::Fields`). Its places are `places`, as its digest's are.
+fn lowered(
+    item: Item<'_>,
+    outline: &Outline,
+    places: Option<&Places>,
+    instances: &crate::resolve::Instances,
+) -> Option<Option<[u8; 32]>> {
+    let item::Kind::Struct(declared) = &item.shell.kind else {
+        return Some(None);
+    };
+    let public = |field: &item::Field| {
+        outline
+            .private
+            .binary_search(&field.name.span.start())
+            .is_err()
+    };
+    let referent = |field: &item::Field| {
+        field.shared_str || matches!(field.ty, type_ref::Type::Reference { .. })
+    };
+    let dropped =
+        |field: &item::Field| !public(field) && plain(&super::ty::Ty::from_resolved(&field.ty));
+    if declared.form != crate::item::StructForm::Named
+        || declared.lifetimes > 0
+        || !declared.generics.is_empty()
+        || declared.fields.iter().any(referent)
+        || !declared.fields.iter().any(dropped)
+    {
+        return Some(None);
+    }
+    let mut bare = declared.clone();
+    bare.fields = Box::default();
+    let kind = outlined(&item::Kind::Struct(bare));
+    let identity = item.identity;
+    let shell = item.shell;
+    let digest = digest(places, |written| {
+        write!(
+            written,
+            "lowered|{identity}|{:?}|{:?}|{:?}|{kind:?}|",
+            shell.key,
+            shell.span.start(),
+            shell.facades,
+        )?;
+        for (slot, field) in declared.fields.iter().enumerate() {
+            if dropped(field) {
+                continue;
+            }
+            let mut field = field.clone();
+            meaningful(&mut field.attributes);
+            write!(written, "{slot}|")?;
+            outline
+                .places
+                .between(field.span.start(), field.span.end())
+                .writing(|| write!(written, "{field:?}|"))?;
+        }
+        for held in item.held {
+            match held {
+                Held::Type(definition) => {
+                    definition.write_without_schema(written)?;
+                    write!(written, "|")?;
+                }
+                held => write_held(
+                    std::slice::from_ref(held),
+                    Reader::Lowering,
+                    instances,
+                    written,
+                )?,
+            }
+        }
+        Ok(())
+    })?;
+    Some(Some(digest))
+}
+
+/// Whether a field of type `ty` is plain: a scalar, a `String`, or a
+/// tuple, an `Option` or a sequence of plain types, whose values hold no
+/// reference, cell, pointer, thread, closure or program type, so whatever
+/// a lowering asks of a type that holds one, it answers as for none.
+fn plain(ty: &super::ty::Ty) -> bool {
+    use super::ty::Ty;
+    match ty {
+        Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_) | Ty::String => true,
+        Ty::Option(element) | Ty::Array { element, .. } => plain(element),
+        Ty::Tuple(members) => members.iter().all(plain),
+        _ => false,
+    }
 }
 
 /// What a [`Held`] holds, kept with a digest of it (`Digests`).

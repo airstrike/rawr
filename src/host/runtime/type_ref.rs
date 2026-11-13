@@ -172,6 +172,86 @@ impl Type {
         }
     }
 
+    /// This type with each program type's schema as `schema` gives it: a
+    /// kept lowering's proof for a new generation of the program, whose
+    /// struct may have gained a private field (#1885). `None` when
+    /// `schema` has none for a type it names.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn renewed(
+        &self,
+        schema: &dyn Fn(&type_def::Identity) -> Option<program::schema::Fingerprint>,
+    ) -> Option<Self> {
+        let each = |types: &[Self]| -> Option<Box<[Self]>> {
+            types.iter().map(|ty| ty.renewed(schema)).collect()
+        };
+        Some(match self {
+            Self::Array { element, length } => Self::Array {
+                element: Box::new(element.renewed(schema)?),
+                length: *length,
+            },
+            Self::Option(element) => Self::Option(Box::new(element.renewed(schema)?)),
+            Self::Result(ok, err) => Self::Result(
+                Box::new(ok.renewed(schema)?),
+                Box::new(err.renewed(schema)?),
+            ),
+            Self::Tuple(members) => Self::Tuple(each(members)?),
+            Self::Callable {
+                inputs,
+                output,
+                item,
+            } => Self::Callable {
+                inputs: each(inputs)?,
+                output: Box::new(output.renewed(schema)?),
+                item: item.clone(),
+            },
+            Self::Counted { name, element } => Self::Counted {
+                name: name.clone(),
+                element: each(element)?,
+            },
+            Self::Joined { runtime, element } => Self::Joined {
+                runtime: *runtime,
+                element: each(element)?,
+            },
+            Self::Script {
+                identity,
+                kind,
+                runtime,
+                arguments,
+                ..
+            } => Self::Script {
+                identity: identity.clone(),
+                schema: schema(identity)?,
+                kind: *kind,
+                runtime: *runtime,
+                arguments: each(arguments)?,
+            },
+            Self::Host {
+                path,
+                identity,
+                arguments,
+                owner,
+            } => Self::Host {
+                path: path.clone(),
+                identity: *identity,
+                arguments: each(arguments)?,
+                owner: owner.clone(),
+            },
+            #[cfg(feature = "rust-import")]
+            Self::Imported {
+                path,
+                identity,
+                arguments,
+                owner,
+            } => Self::Imported {
+                path: path.clone(),
+                identity: *identity,
+                arguments: each(arguments)?,
+                owner: owner.clone(),
+            },
+            Self::Unit | Self::Builtin { .. } | Self::Object(_) => self.clone(),
+        })
+    }
+
     /// This type with each generic parameter replaced by its argument.
     pub(crate) fn instantiate(&self, arguments: &[Self]) -> Self {
         let each = |types: &[Self]| -> Box<[Self]> {
