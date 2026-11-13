@@ -3175,6 +3175,19 @@ pub enum ViewedArgument<T: 'static> {
     Lent(__rawr_internal::scope::Lent),
 }
 
+/// Whether `value` is a lend native code keeps as long as an anchored
+/// call's result (#1413), or a marked value native code lent whole by one
+/// (#1484): what a result that borrows it can be borrowed with only in that
+/// call's region.
+#[allow(dead_code)]
+pub fn kept_lend<T: 'static>(value: &Dynamic) -> bool {
+    value
+        .read_lock::<__rawr_internal::scope::Lent>()
+        .map(|lent| *lent)
+        .or_else(|| __rawr_internal::island::lent_whole_of::<T>(value))
+        .is_some_and(|lent| lent.is_kept())
+}
+
 #[allow(dead_code)]
 impl<T: 'static> ViewedArgument<T> {
     /// The value `value` names: one native code lent, or one its slot
@@ -14489,6 +14502,8 @@ fn render_method_opening(
             receiver, signature, &container, &call, &converted, &frame, &kept, &texts, &reached,
             holds,
         )?;
+        let anchored = arena_anchored(receiver, holds, &kept, &container, &call, &converted);
+        let held = format!("{anchored}{held}");
         return writeln!(
             output,
             "    let scoped = scoped_value(arguments, 0);
@@ -14640,6 +14655,59 @@ fn lent_opening(
             .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
             return result.ok_or_else(|| failed(__rawr_internal::scope::Error::Busy))?;"
     ))
+}
+
+/// The body of a scope frame's call on a `&self` receiver of the arena
+/// whose output keeps a lend native code keeps beside it (`kept`), as
+/// inboard's `wizard.view(catalog, theme)` of a marked `home::State`
+/// native code holds by its handle, whose open wizard is the program's
+/// (D961), keeps `theme: &'a Theme`. The output can be borrowed with that
+/// lend only in the anchored region of the call native code lent it to, so
+/// it is made there, the receiver shared with that region's pins, which
+/// keep it as long as rustc lets native code hold the output: till native
+/// code next takes the anchor `&mut`. Nothing for another call, whose
+/// output the frame keeps.
+fn arena_anchored(
+    receiver: Receiver,
+    holds: bool,
+    kept: &[KeptInput],
+    container: &str,
+    call: &str,
+    converted: &str,
+) -> String {
+    if !matches!(receiver, Receiver::Shared) || holds || kept.is_empty() {
+        return String::new();
+    }
+    let lends = kept
+        .iter()
+        .map(|KeptInput { position, rust }| format!("kept_lend::<{rust}>(&argument_{position})"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    format!(
+        "if let Some(anchor) = __rawr_internal::scope::anchor().filter(|_| {lends}) {{
+                    let value = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+                        let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;
+                        let lender = Some(&*region);
+                        let _ = lender;
+                        let receiver: &{container} = match lasting {{
+                            Some(lasting) => lasting,
+                            None => pins.hold(with_arena(|arena| arena.share(handle.ok_or(Error::Stale)?))?),
+                        }};{}
+                        let made = {call};
+                        with_arena(|arena| {{
+                            let mut values: [&mut Dynamic; 0] = [];
+                            #[allow(unused_variables)]
+                            let arguments = &mut Arguments {{ values: &mut values, arena }};
+                            {converted}
+                        }})
+                    }})
+                    .map_err(|error| runtime_error(Error::Lent(\"the anchored region\", error)))?
+                    .map_err(runtime_error)?;
+                    return rest(value);
+                }}
+                ",
+        reach_kept(kept, "")
+    )
 }
 
 /// Each input a scope frame's output keeps with its receiver, as

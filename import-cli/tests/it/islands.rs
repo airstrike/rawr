@@ -1235,6 +1235,212 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
     assert!(!seen.contains("preparing again"), "{seen}");
 }
 
+/// A marked struct native code holds by value but never opens, as inboard's
+/// `screen::home::State`, crosses as the handle of the program value
+/// (D961): it holds a native field, and its methods take `&mut self`, give
+/// a `&str` of it and a sidebar that borrows it and native code's registry,
+/// and its derived `Debug` prints it, as `cargo run` prints them. A save
+/// that adds a private field changes nothing native code is built against:
+/// the program restarts, as the running screen has the old fields, in a new
+/// process of the running runner with no check, and counts from the start.
+#[test]
+fn a_held_struct_native_code_never_opens_restarts_on_a_new_field_without_a_native_build() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held");
+    let stop = root.join("stop");
+    copy(Path::new(HELD), &root);
+    let printed = cargo_prints(&root);
+    assert!(
+        printed.starts_with(
+            "home (5)\n[home (5): mail, notes] home (5)\n\
+             State { input: Content { text: \"hello\" }, title: \"home (5)\", ticks: 0 }\n"
+        ),
+        "{printed}"
+    );
+    checks_and_prints(&root, &printed);
+    let mut run = start(
+        &root,
+        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
+    );
+    // `tick N {word} M`, for the word the screen's view says.
+    let ticks = |word: &'static str| {
+        move |line: &str| -> Option<(usize, usize)> {
+            let (tick, rest) = line.strip_prefix("tick ")?.split_once(' ')?;
+            let (count, _) = rest
+                .strip_prefix(word)?
+                .strip_prefix(' ')?
+                .split_once(' ')?;
+            Some((tick.parse().ok()?, count.parse().ok()?))
+        }
+    };
+    let first = ticks("ticks");
+    run.until(|line| first(line).is_some_and(|(tick, _)| tick >= 3));
+    // One write: the field, and the view's word, which says the new
+    // program runs the save.
+    let home = root.join("src/home.rs");
+    let text = fs::read_to_string(&home).unwrap();
+    fs::write(
+        &home,
+        text.replace(
+            "    ticks: usize,\n}",
+            "    ticks: usize,\n    held: u32,\n}",
+        )
+        .replace(
+            "            ticks: 0,\n",
+            "            ticks: 0,\n            held: 0,\n",
+        )
+        .replace("format!(\"ticks {} {}\"", "format!(\"held {} {}\""),
+    )
+    .unwrap();
+    let held = ticks("held");
+    run.until(|line| held(line) == Some((1, 1)));
+    fs::write(&stop, "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    assert!(
+        run.seen.iter().any(|line| line
+            == "stderr: rawr: `home::State` changed its fields, but a live value holds it; \
+                restarting the program"),
+        "{seen}"
+    );
+    assert!(!seen.contains("preparing again"), "{seen}");
+    let said = |text: &str| run.seen.iter().filter(|line| line.contains(text)).count();
+    assert_eq!(
+        said("rawr-import: a restart respawned its runner with no check"),
+        1,
+        "{seen}"
+    );
+    assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
+}
+
+/// Native code that reads the layout of a type holding the marked screen,
+/// as `size_of::<Workspace>()` does, opens the screen (D961): the check
+/// records it, and rawr's copy keeps its real layout, so the run prints the
+/// size `cargo run` prints.
+#[test]
+fn a_held_struct_whose_layout_native_code_reads_keeps_its_real_layout() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held-layout");
+    copy(Path::new(HELD), &root);
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"{}\", workspace.home.title());\n",
+        "    println!(\"{}\", workspace.home.title());\n    \
+         println!(\"size {}\", std::mem::size_of::<Workspace>());\n",
+    );
+    let printed = cargo_prints(&root);
+    assert!(printed.contains("\nsize "), "{printed}");
+    checks_and_prints(&root, &printed);
+}
+
+/// A struct native code holds by its handle is `Send` and `Sync` as its
+/// fields are (D961): once it holds an `Rc`, the screen native code moves
+/// to another thread is rustc's E0277 under `rawr check`, as under `cargo
+/// check`, where before the check passed with the handle.
+#[test]
+fn a_held_struct_s_handle_is_send_as_its_fields_are() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held-send");
+    copy(Path::new(HELD), &root);
+    let check = |tool: &str| {
+        let mut command = match tool {
+            "cargo check" => {
+                let mut cargo = std::process::Command::new("cargo");
+                cargo.arg("check").current_dir(&root);
+                cargo
+            }
+            _ => {
+                let mut rawr = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+                rawr.arg("check")
+                    .arg(&root)
+                    .env("RAWR_HOME", crate::support::runtime_home());
+                rawr
+            }
+        };
+        command
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    // The first check records the screen as one native code holds but
+    // never opens, and checks again with its handle.
+    let first = check("rawr check");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "    ticks: usize,\n}",
+        "    ticks: usize,\n    shared: std::rc::Rc<str>,\n}",
+    );
+    edit(
+        &home,
+        "            ticks: 0,\n",
+        "            ticks: 0,\n            shared: std::rc::Rc::from(\"home\"),\n",
+    );
+    for tool in ["cargo check", "rawr check"] {
+        let checked = check(tool);
+        let stderr = String::from_utf8_lossy(&checked.stderr);
+        assert!(!checked.status.success(), "{tool}: {stderr}");
+        assert!(stderr.contains("error[E0277]"), "{tool}: {stderr}");
+    }
+}
+
+/// A native child module of the marked screen's module that starts reading
+/// one of its private fields, as rustc lets it, opens the screen (D961):
+/// the check of the copy that held it by its handle fails, and the check
+/// again with the real layout passes, so `rawr run` prints what `cargo run`
+/// prints.
+#[test]
+fn a_native_child_that_starts_reading_a_held_struct_s_field_checks_with_its_real_layout() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held-child");
+    copy(Path::new(HELD), &root);
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "use crate::editor;\n",
+        "use crate::editor;\n\npub mod peek;\n",
+    );
+    fs::create_dir_all(root.join("src/home")).unwrap();
+    fs::write(
+        root.join("src/home/peek.rs"),
+        "//! Native: a child of the marked screen's module, which sees its\n\
+         //! private fields.\n\n\
+         pub fn ticks(state: &super::State) -> usize {\n    state.ticks\n}\n",
+    )
+    .unwrap();
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"{}\", workspace.home.title());\n",
+        "    println!(\"{}\", workspace.home.title());\n    \
+         println!(\"peeked {}\", home::peek::ticks(&workspace.home));\n",
+    );
+    let printed = cargo_prints(&root);
+    assert!(printed.contains("\npeeked 0\n"), "{printed}");
+    checks_and_prints(&root, &printed);
+}
+
 /// A save whose code panics on the running program's state, as a
 /// framework's own check of its hooks can, restarts the program with the
 /// save (D553.6), and the new program counts from the start, where the
@@ -3694,9 +3900,10 @@ fn runs(root: &Path) {
     assert!(run.status.success(), "{said}");
 }
 
-/// A private field on a held `pub struct` runs, and rawr and `cargo build`
-/// build the project's path packages in one target, each after the other
-/// (#1775, #1777, #1793).
+/// A visible field on a held `pub struct`, which native code may read, so
+/// native code holds its fields rather than its handle (D961), runs, and
+/// rawr and `cargo build` build the project's path packages in one target,
+/// each after the other (#1775, #1777, #1793).
 #[test]
 fn a_held_type_s_new_field_runs_and_cargo_builds_beside_rawr() {
     const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -3709,7 +3916,7 @@ fn a_held_type_s_new_field_runs_and_cargo_builds_beside_rawr() {
     edit(
         &home,
         "    wizard: Option<wizard::State>,\n}",
-        "    wizard: Option<wizard::State>,\n    seen: u32,\n}",
+        "    wizard: Option<wizard::State>,\n    pub seen: u32,\n}",
     );
     edit(
         &home,

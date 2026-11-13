@@ -400,6 +400,7 @@ fn app_crate(
                 shape: super::island::Shape::default(),
                 refused: Vec::new(),
                 objects: Vec::new(),
+                handles: Vec::new(),
                 generic: std::collections::BTreeMap::new(),
             });
         if !shadow.refused.is_empty() {
@@ -427,7 +428,7 @@ fn app_crate(
                     root,
                     package,
                     !entry.is_library(),
-                    &shadow.objects,
+                    Some(&shadow),
                     &instances,
                 ),
             ),
@@ -562,7 +563,7 @@ fn bin_crate(
         ),
         (
             copies.join("main.rs"),
-            native_root(bin.root(), package, true, &[], &[]),
+            native_root(bin.root(), package, true, None, &[]),
         ),
     ]);
     // The binary's modules are beside its root, wherever Cargo finds it.
@@ -899,21 +900,26 @@ fn write_changed(
 /// `include_str!` paths absolute, and the island's runtime support at the
 /// end. A `forbid(unsafe_code)` becomes `deny`, which the support module's
 /// own `allow` can lift for its two calls into the runner. A binary's
-/// root (`main`) has the `main` the support runs, and `objects` are the
-/// makers of the crate's stand-ins (`island::Shadow::objects`).
+/// root (`main`) has the `main` the support runs, and the support
+/// registers the makers of the crate's stand-ins and the structs native
+/// code holds by their handle, of the marked modules' `shadow` when the
+/// crate has any (`island::Shadow::objects`, `handles`).
 fn native_root(
     root: &super::graph::RustModule,
     package: &Path,
     main: bool,
-    objects: &[(String, String)],
+    shadow: Option<&super::island::Shadow>,
     instances: &[super::instances::Entry],
 ) -> String {
     let text = super::polyglot::widened(root.text(), false, root.path(), package);
     let public = super::polyglot::root_items_public(&text);
     let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
+    let (objects, handles) = shadow.map_or((&[][..], &[][..]), |shadow| {
+        (&shadow.objects[..], &shadow.handles[..])
+    });
     format!(
         "{public}\n{}",
-        super::island::support(main, objects, instances)
+        super::island::support(main, objects, handles, instances)
     )
 }
 

@@ -498,6 +498,16 @@ enum Resolve {
     Own,
 }
 
+/// Whether a failed check says native code opened a struct by its fields,
+/// as rustc says of one it holds by its handle (D961): a field it lacks or
+/// can't see (E0609, E0616), a literal or a pattern of fields it lacks or
+/// can't see (E0026, E0063, E0451, E0560).
+fn opens_a_handle(failure: &str) -> bool {
+    ["E0026", "E0063", "E0451", "E0560", "E0609", "E0616"]
+        .iter()
+        .any(|code| failure.contains(&format!("error[{code}]")))
+}
+
 /// Resolve, extract, check and seal a program's runner with no host profile.
 fn prepare(
     build: rawr_cli::base::Build,
@@ -594,6 +604,9 @@ fn prepare_resolving(
     // Whether it ran again for the bodies of marked functions native code
     // names that rawr's copy was written without.
     let mut called_retried = false;
+    // Whether it ran again with each marked type's real layout, after a
+    // check of a copy that held one by its handle failed (D961).
+    let mut layout_retried = false;
     // What the last check recorded of native code's uses.
     let mut uses;
     // The paths the last round resolved the crates' API for.
@@ -669,10 +682,11 @@ fn prepare_resolving(
         let request = if called_retried {
             request
         } else {
-            request.kept_bodies(rawr::package::called::kept_in(&rawr).map_or(
-                rawr_import::uses::Bodies::Every,
-                rawr_import::uses::Bodies::Named,
-            ))
+            let named = rawr::package::called::kept_in(&rawr);
+            let opaque = rawr::package::called::opaque_in(&rawr).unwrap_or_default();
+            request.kept_bodies(named.map_or(rawr_import::uses::Bodies::Every, |named| {
+                rawr_import::uses::Bodies::Named { named, opaque }
+            }))
         };
         // The shared tables' replays the owner kept: a table read for the
         // same demand last round is not read again (#1845).
@@ -681,9 +695,23 @@ fn prepare_resolving(
             None => request,
         };
         rawr_import::progress::phase("resolving");
-        let mut prepared = request
-            .prepare_cached_in(&limits, scope)
-            .map_err(Error::import)?;
+        let mut prepared = match request.prepare_cached_in(&limits, scope) {
+            Ok(prepared) => prepared,
+            // A copy that holds a marked type by its handle fails where
+            // native code began to open the type, as a native child module
+            // reading a private field, which only a check of the real
+            // layout finds (D961): it is checked again with each type's real
+            // layout, once, and that check's record decides the next copy.
+            Err(error)
+                if !layout_retried
+                    && opens_a_handle(&error.to_string())
+                    && rawr::package::called::forget_opaque_in(&rawr).map_err(Error::other)? =>
+            {
+                layout_retried = true;
+                continue;
+            }
+            Err(error) => return Err(Error::import(error)),
+        };
         if let Some(kept) = kept.as_deref_mut() {
             prepared.keep_tables(kept.api());
         }
@@ -706,11 +734,16 @@ fn prepare_resolving(
         // recorded it beside the generated crates (D935.3). A marked
         // function native code names gets its trampoline's body: a name
         // the record lacks is kept, and the copy written with its body and
-        // checked again, as is the first record (#1807).
+        // checked again, as is the first record (#1807). So is a copy whose
+        // types native code holds but never opens changed (D961).
         uses = prepared.recorded_uses().map_err(Error::other)?;
         let new_bodies = match &uses {
             Some(uses) => {
-                rawr::package::called::store_in(&rawr, uses.named()).map_err(Error::other)?
+                let used = rawr::package::called::Used {
+                    named: uses.named(),
+                    opaque: &uses.opaque(),
+                };
+                rawr::package::called::store_in(&rawr, &used).map_err(Error::other)?
                     && !called_retried
             }
             None => false,
