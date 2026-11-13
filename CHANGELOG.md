@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.204 (2026-11-12)
+
 - A native save's store work no longer grows with the whole store: the installation ledger is decoded only when it changes, a reservation reads no index rows and repeats no recovery, an entry takes one full flush instead of four, and a freshly computed node is used as computed instead of being read back. (#1843, #1844)
 
 ## 0.3.203 (2026-11-12)

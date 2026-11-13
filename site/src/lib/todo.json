@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-12",
-  "version": "0.3.203",
+  "version": "0.3.204",
   "examples": {
     "running": 34,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A native save's store work no longer grows with the whole store: the installation ledger is decoded only when it changes, a reservation reads no index rows and repeats no recovery, an entry takes one full flush instead of four, and a freshly computed node is used as computed instead of being read back.","issues":[1843,1844]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.204",
+        "date": "2026-11-12",
+        "entries": [
+          {"text":"A native save's store work no longer grows with the whole store: the installation ledger is decoded only when it changes, a reservation reads no index rows and repeats no recovery, an entry takes one full flush instead of four, and a freshly computed node is used as computed instead of being read back.","issues":[1843,1844]}
+        ]
+      },
       {
         "version": "0.3.203",
         "date": "2026-11-12",
@@ -4072,8 +4074,8 @@
     {"issue":1840,"title":"The runner keeps a project patch that a member of its workspace names","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.203"},
     {"issue":1841,"title":"A path package reached only through a member's optional path dependency can lose a patch it needs in the runner","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1842,"title":"A runner without the shared runtime builds --locked from a lock lacking its members' optional dependencies","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1843,"title":"The store reads and decodes its whole installation ledger once per read-set entry and three times per lookup","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1844,"title":"Publishing a node fsyncs about 14 times, rewrites the ledger 3 times, then reads the payload back and hashes it twice","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1843,"title":"The store reads and decodes its whole installation ledger once per read-set entry and three times per lookup","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.204"},
+    {"issue":1844,"title":"Publishing a node fsyncs about 14 times, rewrites the ledger 3 times, then reads the payload back and hashes it twice","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.204"},
     {"issue":1845,"title":"Shared binding tables are read, hashed and parsed for every crate before their inputs are checked, then replayed again","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1847,"title":"A Persisted cold resolution reruns cargo metadata and --unit-graph although the remembered output proves them unchanged","state":"open","category":"Shared dependency cache (D607)"},
