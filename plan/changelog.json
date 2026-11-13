@@ -6,7 +6,8 @@
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
       {"text":"A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save.","issues":[1876]},
-      {"text":"A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare.","issues":[1884],"refs":[1755,1850]}
+      {"text":"A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare.","issues":[1884],"refs":[1755,1850]},
+      {"text":"A save that changes a declaration lowers again only the files whose names can reach it; a file that merely writes a name of the same kind, such as its own `State`, keeps its lowering.","issues":[1886]}
     ]
   },
   "releases": [

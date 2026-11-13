@@ -7,6 +7,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save. (#1876)
 - A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare. (#1884; part of #1755, #1850)
+- A save that changes a declaration lowers again only the files whose names can reach it; a file that merely writes a name of the same kind, such as its own `State`, keeps its lowering. (#1886)
 
 ## 0.3.210 (2026-11-13)
 

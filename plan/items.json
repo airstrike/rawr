@@ -1885,6 +1885,6 @@
     {"t":"T1883","issue":1883,"title":"T1883: The owner's check reuses kept unit resolutions","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"parity","row":"build-phase"},"decisions":[],"commit":null,"release":null},
     {"t":"T1884","issue":1884,"title":"T1884: A save reveals again only the bodies whose own reads changed","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":"93430e98d","release":null},
     {"t":"T1885","issue":1885,"title":"T1885: A private-field save lowers again every source that names a type of that name","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"parity","row":"build-phase"},"decisions":[],"commit":null,"release":null},
-    {"t":"T1886","issue":1886,"title":"T1886: Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"parity","row":"build-phase"},"decisions":[],"commit":null,"release":null}
+    {"t":"T1886","issue":1886,"title":"T1886: Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"parity","row":"build-phase"},"decisions":[],"commit":"e8246d288","release":null}
   ]
 }

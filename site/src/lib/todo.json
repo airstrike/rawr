@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A save's compile resolves again only the files whose names or reads changed, reusing the rest of the program's resolution from the last save.","issues":[1876]},
-        {"text":"A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare.","issues":[1884],"refs":[1755,1850]}
+        {"text":"A save that adds a private field to a struct no longer reveals the other marked files again, each instance round reads again only the bodies whose calls gained an instance, and a host call's type lookup no longer searches or builds paths to compare.","issues":[1884],"refs":[1755,1850]},
+        {"text":"A save that changes a declaration lowers again only the files whose names can reach it; a file that merely writes a name of the same kind, such as its own `State`, keeps its lowering.","issues":[1886]}
       ]
     },
     "releases": [
@@ -4173,7 +4174,7 @@
     {"issue":1883,"title":"The owner's check reuses kept unit resolutions","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1884,"title":"A save reveals again only the bodies whose own reads changed","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5422,7 +5423,7 @@
             {"number":1882,"title":"Reuse finish_definitions, resolve_methods and Layouts per item across saves","state":"open"},
             {"number":1883,"title":"The owner's check reuses kept unit resolutions","state":"open"},
             {"number":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"open"},
-            {"number":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"open"}
+            {"number":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed"}
           ]
         },
         {
