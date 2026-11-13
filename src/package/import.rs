@@ -7,6 +7,10 @@ use crate::{capability, diagnostic, host, receiver, ImmutableString};
 #[doc(hidden)]
 pub mod runner;
 
+mod kept;
+
+pub use kept::Kept;
+
 /// Same-pass compilation against metadata owned by the retained native compiler.
 #[doc(hidden)]
 pub mod resident;
@@ -118,7 +122,7 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
-        self.compile_imported_applied(contract, snapshot, &limits, &[], None, None)
+        self.compile_imported_applied(contract, snapshot, &limits, &[], None, None, None)
             .map(|compiled| compiled.demand)
     }
 
@@ -128,9 +132,11 @@ impl crate::Engine {
     /// `facade` is the contract's cached facade node, whose plan the check
     /// reads instead of generating it a second time, and the program is
     /// loaded through `cells`, so a check that remembers its parses parses
-    /// each source once across its rounds (#1618).
+    /// each source once across its rounds (#1618). A check against the API
+    /// the check `kept` installed shares its registry (#1755).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
     pub fn compile_imported_with_applications(
         &self,
         contract: &rawr_import::Contract<rawr_import::Classified>,
@@ -138,6 +144,7 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
         applications: &[rawr_import::surface::application::Application],
         cells: &super::Cells,
+        kept: &mut Kept,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
         self.compile_imported_applied(
@@ -147,10 +154,12 @@ impl crate::Engine {
             applications,
             Some(facade.bytes()),
             Some(cells),
+            Some(kept),
         )
         .map(|compiled| compiled.demand)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compile_imported_applied(
         &self,
         contract: &rawr_import::Contract<rawr_import::Classified>,
@@ -159,6 +168,7 @@ impl crate::Engine {
         applications: &[rawr_import::surface::application::Application],
         facade: Option<&[u8]>,
         cells: Option<&super::Cells>,
+        kept: Option<&mut Kept>,
     ) -> Result<CompiledImported, super::Error> {
         let mut step = std::time::Instant::now();
         let mut steps = Vec::new();
@@ -212,15 +222,10 @@ impl crate::Engine {
             .map_err(Error::from)
             .map_err(super::Error::import)?;
         let paths = imported_paths(contract, &mut allocation).map_err(super::Error::import)?;
-        let mut registry = self
-            .host_registry
-            .clone_for_import(&mut allocation)
-            .map_err(Error::from)
-            .map_err(super::Error::import)?;
-        install(contract, &mut registry, &mut allocation).map_err(super::Error::import)?;
-        admit_applications(&mut registry, applications).map_err(super::Error::import)?;
         // Every lowering below shares this one copy.
-        let registry = crate::Shared::new(registry);
+        let registry = self
+            .installed(contract, applications, &mut allocation, kept)
+            .map_err(super::Error::import)?;
         took("installing");
         let mut program = match crate::resolve::package::resolve(graph, &registry) {
             Ok(program) => program,
@@ -1679,6 +1684,56 @@ fn shape_usage(representability: &Representability) -> Result<(usize, usize), Er
     }
 }
 
+impl crate::Engine {
+    /// This compiler's registry with `contract`'s facades installed and
+    /// `applications` admitted. The registry the check `kept` installed for
+    /// the same API and over the same registry of this compiler's is
+    /// shared, its install charged again, and copied only to admit
+    /// applications; any other is installed, and kept (#1755).
+    fn installed(
+        &self,
+        contract: &rawr_import::Contract<rawr_import::Classified>,
+        applications: &[rawr_import::surface::application::Application],
+        allocation: &mut rawr_import::contract::Allocation,
+        kept: Option<&mut Kept>,
+    ) -> Result<crate::Shared<host::Registry>, Error> {
+        let own = self.host_registry.share();
+        let shared = match kept
+            .as_deref()
+            .and_then(|kept| kept.registry(&own, contract))
+        {
+            Some((installed, (items, bytes))) => {
+                allocation.retain(items, bytes)?;
+                crate::Shared::clone(installed)
+            }
+            None => {
+                let (items, bytes) = allocation.retained_usage();
+                let mut registry = own.clone_for_import(allocation)?;
+                install(contract, &mut registry, allocation)?;
+                let Some(kept) = kept else {
+                    admit_applications(&mut registry, applications)?;
+                    return Ok(crate::Shared::new(registry));
+                };
+                let (all_items, all_bytes) = allocation.retained_usage();
+                let installed = crate::Shared::new(registry);
+                kept.keep(
+                    own,
+                    contract,
+                    crate::Shared::clone(&installed),
+                    (all_items - items, all_bytes - bytes),
+                );
+                installed
+            }
+        };
+        if applications.is_empty() {
+            return Ok(shared);
+        }
+        let mut registry = host::Registry::clone(&shared);
+        admit_applications(&mut registry, applications)?;
+        Ok(crate::Shared::new(registry))
+    }
+}
+
 fn install(
     contract: &rawr_import::Contract<rawr_import::Classified>,
     registry: &mut host::Registry,
@@ -2066,8 +2121,17 @@ fn install(
             .collect::<Vec<_>>(),
         &facades.iter().map(facade_named).collect::<Vec<_>>(),
     );
+    // What each facade's dependents resolve through it, whose exports are
+    // read before the facade moves into the registry: a copy of each
+    // facade kept for them copied every facade's whole body (#1755).
+    let mut wanted = vec![std::collections::BTreeSet::new(); facades.len()];
+    for &index in resolution.order() {
+        for (identity, provider) in resolution.through(index) {
+            wanted[*provider].insert(host::type_def::import::Identity::new(*identity));
+        }
+    }
     let mut facades = facades.into_iter().map(Some).collect::<Vec<_>>();
-    let mut built = vec![None; facades.len()];
+    let mut exports = vec![std::collections::BTreeMap::new(); facades.len()];
     for &index in resolution.order() {
         let facade = facades[index]
             .take()
@@ -2091,11 +2155,9 @@ fn install(
             .iter()
             .map(|(identity, provider)| {
                 let identity = host::type_def::import::Identity::new(*identity);
-                let export = built[*provider]
-                    .as_ref()
-                    .and_then(|provider: &host::facade::Definition| {
-                        provider.export_imported(&identity)
-                    })
+                let export = exports[*provider]
+                    .get(&identity)
+                    .cloned()
                     .expect("bindings are built after those they resolve through");
                 (identity, export)
             })
@@ -2111,9 +2173,15 @@ fn install(
         )?;
         let (items, bytes) = definition.registry_usage();
         allocation.retain_checked(items, bytes)?;
-        registry.install(definition.clone())?;
+        exports[index] = std::mem::take(&mut wanted[index])
+            .into_iter()
+            .filter_map(|identity| {
+                let export = definition.export_imported(&identity)?;
+                Some((identity, export))
+            })
+            .collect();
+        registry.install(definition)?;
         registry.defer_imported(families)?;
-        built[index] = Some(definition);
     }
     Ok(())
 }

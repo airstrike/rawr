@@ -555,7 +555,11 @@ impl Allocation {
         (self.item_limit, self.byte_limit)
     }
 
-    pub(crate) const fn retained_usage(&self) -> (usize, usize) {
+    /// The items and bytes retained so far, which a compiler that shares
+    /// what an earlier check retained charges again.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn retained_usage(&self) -> (usize, usize) {
         (self.usage.items, self.usage.bytes)
     }
 
