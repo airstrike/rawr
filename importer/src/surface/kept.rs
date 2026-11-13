@@ -83,7 +83,7 @@ impl Kept {
     pub(crate) fn widen<B>(
         &self,
         request: Request<B>,
-        key: impl Fn(&Request<B>) -> Option<BuildRequestKey>,
+        key: impl FnOnce(&Request<B>) -> Option<BuildRequestKey>,
     ) -> Request<B> {
         let Some(stored) = self.covering(&request) else {
             return request;

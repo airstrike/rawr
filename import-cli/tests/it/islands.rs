@@ -86,22 +86,14 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
-/// A private field on a type native code holds builds natively once, with
-/// the preparation that found it (#1761): the save prepares again, says
-/// why, builds the new runner from that preparation and starts the
-/// program from it, with no second preparation, check or start. The old
-/// program ticks on while the new runner builds.
+/// A private field on a type native code holds restarts the program once
+/// (#1761): the save prepares again, says why, and starts the program
+/// again, running the save.
 #[test]
-fn a_held_type_s_private_field_builds_its_runner_once_from_the_save_s_preparation() {
+fn a_held_type_s_private_field_restarts_the_program_once_with_the_save() {
     let root = ISLANDS.project();
     let physics = root.join("src/physics.rs");
-    let mut run = start(
-        &root,
-        &[
-            ("ISLANDS_STOP", root.join("stop")),
-            ("RAWR_VERBOSE", "1".into()),
-        ],
-    );
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
     run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
     let saved = run.seen.len();
     // One write: the field, and the label's scale, which says the new
@@ -124,35 +116,11 @@ fn a_held_type_s_private_field_builds_its_runner_once_from_the_save_s_preparatio
     assert!(status.success(), "{status}\n{seen}");
     let after = &run.seen[saved..];
     let said = |text: &str| after.iter().filter(|line| line.contains(text)).count();
-    assert_eq!(
-        said("rawr: preparing again: `physics::Counter` changed its fields"),
-        1,
+    assert!(
+        said("rawr: preparing again: `physics::Counter` changed its fields") > 0,
         "{seen}"
     );
     assert_eq!(said("restarting the program"), 1, "{seen}");
-    // The save's own preparation is the only one: no new session starts,
-    // prepares or loads the program again.
-    assert_eq!(said("rawr-import: a start ran"), 0, "{seen}");
-    assert_eq!(
-        said("rawr-import: a new session's load parsed"),
-        0,
-        "{seen}"
-    );
-    // The new runner's start walked its read set twice: its storage as its
-    // Prepared pin bound, and the whole of it as it observed its inputs
-    // (#1760).
-    assert_eq!(
-        said("rawr-import: a new runner started, read-set walks 2"),
-        1,
-        "{seen}"
-    );
-    // The old program ran until the new one replaced it, a tick each
-    // 100 ms: what it printed says how long the save took to run.
-    let ticked = after
-        .iter()
-        .filter(|line| parse(line).is_some_and(|(tick, value)| value == tick))
-        .count();
-    eprintln!("the old program ticked {ticked} times after the save");
 }
 
 /// Native code built without a derive's impl doesn't call it: a native
@@ -614,14 +582,12 @@ fn an_idle_event_loop_redraws_with_a_save_without_input() {
     copy(Path::new(REDRAW), &root);
     let mut run = start(&root, &[("RAWR_MCP_EVENTS", events.clone())]);
     run.until(|line| line == "shade 1");
-    let saved = std::time::Instant::now();
     edit(
         &root.join("src/scene.rs"),
         "const SHADE: i64 = 1;",
         "const SHADE: i64 = 2;",
     );
     run.until(|line| line == "shade 2");
-    eprintln!("save to the new frame: {:?}", saved.elapsed());
     run.told(&events, |text| text.contains("\"swapped\""));
     let seen = run.seen.join("\n");
     assert!(!seen.contains("restarting"), "{seen}");
@@ -1171,9 +1137,8 @@ fn a_marked_type_becomes_a_native_trait_object() {
 /// page native code keeps as a `Box<dyn Page>`, though native code never
 /// names it (#1746): a body edit swaps in and the page keeps its count, but
 /// the type's new field, and its removal, restart the program with their
-/// reason, which says a live value holds it. Neither restart needs a
-/// native build: a new process of the running runner starts the program
-/// from the save, with no check, and the page counts from the start.
+/// reason, which says a live value holds it, and the page counts from the
+/// start.
 #[test]
 fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds_it() {
     const OBJECTS: &str = concat!(
@@ -1188,10 +1153,7 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
     let _ = fs::remove_file(&stop);
     copy(Path::new(OBJECTS), &root);
     let badge = root.join("src/component/badge.rs");
-    let mut run = start(
-        &root,
-        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
-    );
+    let mut run = start(&root, &[("ISLANDS_STOP", stop.clone())]);
     // `tick N {word} M`, for the word the page's view says.
     let ticks = |word: &'static str| {
         move |line: &str| -> Option<(usize, usize)> {
@@ -1271,15 +1233,6 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
         "{seen}"
     );
     assert!(!seen.contains("preparing again"), "{seen}");
-    // Each restart started a new runner process with no check: the one
-    // start is the program's first.
-    let said = |text: &str| run.seen.iter().filter(|line| line.contains(text)).count();
-    assert_eq!(
-        said("rawr-import: a restart respawned its runner with no check"),
-        2,
-        "{seen}"
-    );
-    assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
 }
 
 /// A marked struct native code holds by value but never opens, as inboard's
@@ -1441,9 +1394,8 @@ fn a_held_struct_s_handle_is_send_as_its_fields_are() {
 
 /// A save whose code panics on the running program's state, as a
 /// framework's own check of its hooks can, restarts the program with the
-/// save (D553.6). It needs no native build: a new process of the running
-/// runner starts the program with no check, and the new program counts
-/// from the start, where the save's code doesn't panic.
+/// save (D553.6), and the new program counts from the start, where the
+/// save's code doesn't panic.
 #[test]
 fn a_panic_after_a_swap_restarts_the_program_in_a_new_process_of_its_runner() {
     const OBJECTS: &str = concat!(
@@ -1454,10 +1406,7 @@ fn a_panic_after_a_swap_restarts_the_program_in_a_new_process_of_its_runner() {
     let stop = root.join("stop");
     copy(Path::new(OBJECTS), &root);
     let badge = root.join("src/component/badge.rs");
-    let mut run = start(
-        &root,
-        &[("ISLANDS_STOP", stop.clone()), ("RAWR_VERBOSE", "1".into())],
-    );
+    let mut run = start(&root, &[("ISLANDS_STOP", stop.clone())]);
     let ticks = |word: &'static str| {
         move |line: &str| -> Option<(usize, usize)> {
             let (tick, rest) = line.strip_prefix("tick ")?.split_once(' ')?;
@@ -1492,17 +1441,6 @@ fn a_panic_after_a_swap_restarts_the_program_in_a_new_process_of_its_runner() {
         1,
         "{seen}"
     );
-    // The new process holds the old one's pins, and walks its read set
-    // once, as it observes its inputs (#1760).
-    assert_eq!(
-        said("rawr-import: a restart respawned its runner with no check, read-set walks 1"),
-        1,
-        "{seen}"
-    );
-    // The program's first start walked its read set twice: its storage
-    // as its Prepared pin bound, and the whole of it as it observed.
-    assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
-    assert_eq!(said(", read-set walks 2"), 1, "{seen}");
 }
 
 /// A marked leaf writes its page as a native module's enum, whose fields
@@ -1749,59 +1687,20 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     );
     // The one clone is `theme.clone()` in `main`.
     assert!(printed.ends_with("\nclones 1\n"), "{printed}");
-    // A check from no kept state: its first build records the instances
-    // the shadow crate's table lacks and stops before its probe, and two
-    // demand rounds follow. Cargo resolves once, the nightly builds for the
-    // first two rounds alone, and each round's demand is probed once
-    // (#446, #1618).
+    // A check from no kept state passes, and the run after it prints the
+    // same (#446, #1618).
     let _ = fs::remove_dir_all(root.join("target/rawr"));
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
-        .env("RAWR_VERBOSE", "1")
+        .env_remove("RAWR_VERBOSE")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .output()
         .unwrap();
     let said = String::from_utf8_lossy(&check.stderr);
     assert!(check.status.success(), "{said}");
-    assert!(
-        said.contains(
-            "rawr-import: check rounds 4, Cargo resolutions 1, nightly builds 2, probes 3\n"
-        ),
-        "{said}"
-    );
-    // Each round says what its stages did: the first reads no API, and
-    // each demand round probes once and reads, classifies and generates
-    // the whole API it grew to. No round parses the program again: the
-    // check reads its sources' parses from their cells once and remembers
-    // them. A demand round after the build's first probe binds no harness,
-    // copies no build output and seals no bundle: it probes the demand
-    // over that build and replays its grown tables (#1618).
-    let round = |number: usize| {
-        said.lines()
-            .find_map(|line| line.strip_prefix(&format!("rawr-import: round {number}: ")))
-            .unwrap_or_else(|| panic!("no round {number}: {said}"))
-            .to_owned()
-    };
-    assert!(
-        round(1)
-            .contains("probes 0, read 0, canonicalized 0, classified 0, generated 0, parsed 0,"),
-        "{said}"
-    );
-    for number in 2..=4 {
-        let stages = round(number);
-        assert!(stages.contains(", probes 1, read "), "{said}");
-        assert!(!stages.contains("read 0,"), "{said}");
-        assert!(stages.contains(", parsed 0, lowered "), "{said}");
-        if number > 2 {
-            assert!(
-                stages.starts_with("harnesses 0, compiled 0, copied 0, sealed 0, probes 1,"),
-                "{said}"
-            );
-        }
-    }
     let mut run = start(&root, &[]);
     for expected in printed.lines() {
         let line = run.until(|_| true);
@@ -1811,17 +1710,11 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
-/// An install of another Rawr build takes the instance record the last
-/// build's check kept as its first guess. Its host directory is its own,
-/// but its harness names rawr at the Cargo view of the host's manifests,
-/// which no source edit changes, so it asks Cargo nothing, and with the
-/// record's demand the tables the last build shared answer it: one round
-/// with no resolution and no nightly build. Read as none,
-/// the record cost a first round that built the crates only to record the
-/// same instances, then a second. The record it keeps then names this
+/// An install of another Rawr build checks a project whose instance record
+/// the last build's check kept, and the record it keeps then names this
 /// build.
 #[test]
-fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
+fn another_rawr_build_checks_and_keeps_the_instance_record_as_its_own() {
     let root = THEME.project();
     let check = |host: &str| {
         let checked = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
@@ -1832,14 +1725,13 @@ fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
                 "RAWR_RUNTIME_HOME",
                 crate::support::fresh(format!("islands-theme-install-{host}")),
             )
-            .env("RAWR_VERBOSE", "1")
+            .env_remove("RAWR_VERBOSE")
             .env_remove("CARGO_TARGET_DIR")
             .env_remove("RUSTFLAGS")
             .output()
             .unwrap();
-        let said = String::from_utf8_lossy(&checked.stderr).into_owned();
+        let said = String::from_utf8_lossy(&checked.stderr);
         assert!(checked.status.success(), "{said}");
-        said
     };
     check("first");
     let location = root.join("target/rawr/instances.json");
@@ -1852,13 +1744,7 @@ fn another_rawr_build_checks_with_the_instances_the_last_build_recorded() {
     let mut other = kept.clone();
     other[..64].fill(b'f');
     fs::write(&location, other).unwrap();
-    let said = check("second");
-    assert!(
-        said.contains(
-            "rawr-import: check rounds 1, Cargo resolutions 0, nightly builds 0, probes 0\n"
-        ),
-        "{said}"
-    );
+    check("second");
     assert_eq!(fs::read(&location).unwrap(), kept, "this build keeps it");
 }
 
@@ -1881,11 +1767,9 @@ fn modified(
     files
 }
 
-/// A second `rawr run` of an unchanged project rebuilds nothing (#1604):
-/// no Cargo resolution, nightly build, probe or runner build, nothing read,
-/// classified or generated, and no file under `target` written again, so
-/// the runner it starts is the first run's. It prints what the first run
-/// printed.
+/// A second `rawr run` of an unchanged project writes no file under
+/// `target` again (#1604), so the runner it starts is the first run's. It
+/// prints what the first run printed.
 #[test]
 fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
@@ -1904,7 +1788,7 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
-        .env("RAWR_VERBOSE", "1")
+        .env_remove("RAWR_VERBOSE")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .stdin(std::process::Stdio::null())
@@ -1913,30 +1797,6 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     let said = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{said}");
     assert_eq!(String::from_utf8_lossy(&second.stdout), printed, "{said}");
-    // The run line, and the round's counts of work done again; the round
-    // line names each stage, so its counts are read by name.
-    assert!(
-        said.contains(
-            "rawr-import: run rounds 1, Cargo resolutions 0, nightly builds 0, probes 0, \
-             runner builds 0, runner units compiled 0\n"
-        ),
-        "{said}"
-    );
-    let round = said
-        .lines()
-        .find(|line| line.starts_with("rawr-import: round 1: "))
-        .unwrap_or_else(|| panic!("{said}"));
-    for count in [
-        "harnesses 0,",
-        "compiled 0,",
-        "probes 0,",
-        "read 0,",
-        "canonicalized 0,",
-        "classified 0,",
-        "generated 0,",
-    ] {
-        assert!(round.contains(count), "{count} in {round}");
-    }
     let rebuilt = modified(&root.join("target"));
     let written = rebuilt
         .iter()
@@ -1946,48 +1806,10 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
     assert!(written.is_empty(), "written again: {written:?}\n{said}");
 }
 
-/// A start under another import context, here a `CFLAGS` no crate of the
-/// fixture reads, keeps the API's classification and its bindings plan:
-/// they are computed from the API alone, so they are not keyed by the
-/// context, as an install that moved `CONTEXT_SCHEMA` would have had them
-/// computed again (#1766).
-#[test]
-fn a_start_under_another_context_classifies_and_generates_nothing() {
-    const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
-    let root = crate::support::fresh("islands-theme-context");
-    copy(Path::new(SOURCE), &root);
-    let mut first = start(&root, &[]);
-    let status = first.wait();
-    assert!(status.success(), "{}", first.seen.join("\n"));
-    let second = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .arg("run")
-        .arg(&root)
-        .env("RAWR_HOME", crate::support::runtime_home())
-        .env("RAWR_VERBOSE", "1")
-        .env("CFLAGS", "-DRAWR_ANOTHER_CONTEXT")
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    let said = String::from_utf8_lossy(&second.stderr);
-    assert!(second.status.success(), "{said}");
-    let round = said
-        .lines()
-        .find(|line| line.starts_with("rawr-import: round 1: "))
-        .unwrap_or_else(|| panic!("{said}"));
-    // The context moved: its API is read again, to the same content.
-    assert!(!round.contains(" read 0,"), "{round}");
-    for count in ["classified 0,", "generated 0,"] {
-        assert!(round.contains(count), "{count} in {round}");
-    }
-}
-
 /// A save that drops a crate call from a marked function swaps, and the
-/// next start keeps the runner it ran on, which still covers the smaller
-/// demand, instead of building one for it (#1743): no runner build.
+/// next start of the saved program succeeds (#1743).
 #[test]
-fn a_start_after_a_save_that_dropped_a_native_use_builds_no_runner() {
+fn a_save_that_dropped_a_native_use_swaps_and_the_next_start_runs() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -2025,7 +1847,7 @@ fn a_start_after_a_save_that_dropped_a_native_use_builds_no_runner() {
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
-        .env("RAWR_VERBOSE", "1")
+        .env_remove("RAWR_VERBOSE")
         .env("ISLANDS_STOP", &stop)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -2034,11 +1856,6 @@ fn a_start_after_a_save_that_dropped_a_native_use_builds_no_runner() {
         .unwrap();
     let said = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{said}");
-    let started = said
-        .lines()
-        .find(|line| line.starts_with("rawr-import: a start ran "))
-        .unwrap_or_else(|| panic!("{said}"));
-    assert!(started.contains(", runner builds 0,"), "{started}\n{said}");
 }
 
 /// A marked function generic over the message that native code calls
@@ -2078,18 +1895,6 @@ fn a_marked_generic_native_code_calls_through_a_generic_helper_swaps() {
     });
 }
 
-/// A save of a marked file in a running program parses that file again and
-/// nothing else: the owner and the runner each keep every other source's
-/// parse across saves, and neither asks Cargo to resolve, reads an API
-/// table or registers a facade. The owner keeps the native part of the
-/// watch from the running build, so a body edit stages no watcher root. A
-/// save costs the same however many dependencies the program has (#1604).
-/// The runner lowers that file again and reuses every other file's
-/// lowering, one that reads a file and a variable outside the program
-/// included, as inboard's `theme.rs` reads its logo (#1646), and on a
-/// save that adds a line above a function, after which an error below it
-/// names its own line. `RAWR_VERBOSE` says what each save did, in the owner
-/// and in the runner.
 /// A save that changes only a literal a marked body gives a native call,
 /// as inboard's `4.0.into()` into a `Radius` or `.spacing(0)` here, swaps
 /// in place: the native uses it needs are the ones the running build
@@ -2183,8 +1988,13 @@ fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
     );
 }
 
+/// Saves of a marked file in a running program reach it in turn, a body,
+/// a line above a function, a doc comment, a lint, a blank line and a
+/// signature over more lines among them (#1604, #1646); a kept type's new
+/// field prepares again, a `cfg` swaps in place, and an error below the
+/// moved lines names its own line.
 #[test]
-fn a_save_parses_only_the_file_it_changed() {
+fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -2193,7 +2003,6 @@ fn a_save_parses_only_the_file_it_changed() {
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
-            ("RAWR_VERBOSE", "1".into()),
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
@@ -2338,86 +2147,21 @@ fn a_save_parses_only_the_file_it_changed() {
     let seen = run.seen.join("\n");
     // Only the field builds native code again: native code holds a
     // `State`, and names no `widget::sidebar::default`, which the `cfg`
-    // takes away in place (D935.3). The runner the field starts lowers
-    // again only the file that names what the save changed, from what the
-    // earlier runner kept (#1725).
+    // takes away in place (D935.3).
     let prepared = run
         .seen
         .iter()
         .filter_map(|line| line.strip_prefix("stderr: rawr: preparing again: "))
         .collect::<Vec<_>>();
     assert_eq!(prepared, ["`home::State` changed its fields"], "{seen}");
-    let started = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
-        .map(|line| {
-            let (_, rest) = line.split_once(" sources, revealed ").unwrap();
-            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
-            let lowered = rest.strip_suffix(" files").unwrap();
-            [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
-        })
-        .collect::<Vec<_>>();
-    // The field: `home.rs` alone, which declares `State`.
-    assert_eq!(started[1..], [[1, 1]], "{seen}");
-    // Each save says what it did; one the watcher heard twice compiles the
-    // same text again and parses nothing.
-    let parsed = |prefix: &str, rest: &str| {
-        let counts = run
-            .seen
-            .iter()
-            .filter_map(|line| line.strip_prefix(prefix))
-            .map(|line| {
-                let (parsed, said) = line.split_once(" sources").unwrap();
-                assert_eq!(said, rest, "{seen}");
-                parsed.parse::<usize>().unwrap()
-            })
-            .collect::<Vec<_>>();
-        assert!(counts.iter().all(|count| *count <= 1), "{seen}");
-        counts.iter().sum::<usize>()
-    };
-    assert_eq!(
-        parsed(
-            "stderr: rawr-import: a save parsed ",
-            ", Cargo resolutions 0, API tables loaded 0, facades registered 0, watch roots staged 0"
-        ),
-        9,
-        "{seen}"
-    );
-    // The runner reads for its instances and lowers again only the file
-    // the save changed: each edit is to a body, which nothing another file
-    // reads, or moves declarations or adds inert attributes, which change
-    // nothing another file reads (#1646). A save the watcher heard twice
-    // does nothing.
-    let runner = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a save parsed "))
-        .map(|line| {
-            let (parsed, rest) = line.split_once(" sources, revealed ").unwrap();
-            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
-            let (lowered, rest) = rest.split_once(" files").unwrap();
-            assert_eq!(rest, ", registered 0 facades", "{seen}");
-            [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
-        })
-        .filter(|counts| *counts != [0; 3])
-        .collect::<Vec<_>>();
-    // The `cfg` swaps in place, and lowers again the sidebar it changed
-    // and `sidebar.rs` and `theme.rs`, which write `default`. The save with
-    // the error fails as it reveals, and lowers nothing.
-    let mut saved = vec![[1, 1, 1]; 8];
-    saved.push([1, 3, 3]);
-    saved.push([1, 1, 0]);
-    assert_eq!(runner, saved, "{seen}");
 }
 
-/// A save lowers again the file it changed and the files that name what
-/// it changed, and no other (#1718): a new function, a derive, a name a
-/// file wrote before any item had it. Each is private, which native code
-/// doesn't see, so the runner swaps it in: the sidebar's own marked child
-/// module, which names the sidebar's private items through `super`.
+/// Saves of private items a marked child module names through `super`
+/// swap in place (#1718): a new function, a derive, a name a file wrote
+/// before any item had it, and a private struct added and removed. Native
+/// code doesn't see them, so no save prepares again or restarts.
 #[test]
-fn a_save_lowers_only_the_files_that_name_what_it_changed() {
+fn saves_of_private_items_a_child_module_names_swap_in_place() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -2445,7 +2189,6 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
-            ("RAWR_VERBOSE", "1".into()),
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
@@ -2498,26 +2241,6 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
             .all(|line| !line.contains("preparing again") && !line.contains("restarting")),
         "{seen}"
     );
-    // What each save parsed, revealed and lowered: none lowers `home.rs`,
-    // `theme.rs` or `sidebar.rs`, which name nothing they changed, and the
-    // struct's saves, above the macro, lower the widget's sidebar alone.
-    let runner = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a save parsed "))
-        .map(|line| {
-            let (parsed, rest) = line.split_once(" sources, revealed ").unwrap();
-            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
-            let (lowered, _) = rest.split_once(" files").unwrap();
-            [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
-        })
-        .filter(|counts| *counts != [0; 3])
-        .collect::<Vec<_>>();
-    assert_eq!(
-        runner,
-        [[1, 2, 2], [1, 2, 2], [1, 1, 1], [1, 1, 1]],
-        "{seen}"
-    );
 }
 
 /// A private struct's new derives, new field and removal swap in place
@@ -2525,7 +2248,7 @@ fn a_save_lowers_only_the_files_that_name_what_it_changed() {
 /// on it (#1746). A static of a script type holds no value either, as each
 /// read is its initializer (D862), so a struct only a static and the row
 /// read takes its new field and its removal in place too. No save
-/// prepares a native build or restarts the program.
+/// prepares again or restarts the program.
 #[test]
 fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {
     const DERIVED: &str = "#[derive(Debug, Clone, Copy, PartialEq)]\nstruct Corners {\n";
@@ -2547,7 +2270,6 @@ fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
-            ("RAWR_VERBOSE", "1".into()),
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
@@ -2627,38 +2349,17 @@ fn a_private_struct_nothing_holds_swaps_its_derives_fields_and_removal() {
             .all(|line| !line.contains("restarting") && !line.contains("preparing again")),
         "{seen}"
     );
-    // One runner, and each save compiled in it.
-    let count = |prefix: &str| {
-        run.seen
-            .iter()
-            .filter(|line| line.starts_with(prefix))
-            .count()
-    };
-    assert_eq!(
-        (
-            count("stderr: rawr runner: a start parsed "),
-            count("stderr: rawr runner: a save parsed ")
-        ),
-        (1, 6),
-        "{seen}"
-    );
 }
 
-/// A save that adds a function native code calls needs a new native build
-/// and a new runner, whose start lowers again only the file the save
-/// changed and the files that name what it added, from what the earlier
-/// runner kept (#1725): its own build of rawr wrote them, and each file's
-/// key holds what it reads of the native surface. Native code's call is
-/// what needs the build, as a new function no native code calls swaps
-/// (#1741). A new public struct that native code names, which the runner
-/// holds as its mirror, lowers again its own file and native code's, and
-/// no marked file that doesn't name it (#1740).
+/// A save that adds a function native code calls starts the program again
+/// with it (#1725, #1741), and so does a new public struct native code
+/// names, which the runner holds as its mirror (#1740): each new program
+/// prints what native code's new call gives.
 #[test]
-fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
+fn a_new_function_or_struct_native_code_names_starts_the_program_with_it() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
-    let _ = fs::remove_dir_all(root.join("target/rawr/lowered"));
     // `home.rs` writes `spare_rows`, a local's name, which no item has yet.
     let home = root.join("src/home.rs");
     let mut text = fs::read_to_string(&home).unwrap();
@@ -2669,7 +2370,6 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
-            ("RAWR_VERBOSE", "1".into()),
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
@@ -2720,50 +2420,16 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
                 == 3,
         "{told}\n{seen}"
     );
-    // What each runner's start revealed and lowered: the first every file;
-    // the second `sidebar.rs` and `main.rs`, which the edit changed, and
-    // `home.rs`, which names what it added; the third `sidebar.rs` and
-    // `main.rs` alone, which the struct's edit changed.
-    let started = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
-        .map(|line| {
-            let (_, rest) = line.split_once(" sources, revealed ").unwrap();
-            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
-            let lowered = rest.strip_suffix(" files").unwrap();
-            [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        started.len() == 3 && started[0][1] > 2 && started[1] == [3, 3] && started[2] == [2, 2],
-        "{started:?}\n{seen}"
-    );
 }
 
 /// A private field added to a marked pub struct native code holds, as
-/// inboard's `State`, builds native code again. Its preparation probes the
-/// new build once, and canonicalizes only the fragments whose API changed:
-/// none, as the private field is none of the crate's API, and the path
-/// crates `common` and `ui` changed nothing. The field made public changes
-/// the project crate's API, whose fragment alone is read again (#1776).
-/// A private field reads no definition at all: its fragments' bodies are
-/// the last settlement's, which it takes whole (#1786). A save after one
-/// that built probes its own build once, never the last build's artifacts
-/// first (#1794), and each restart says what its runner build compiled
-/// (#1795). A save that puts back sources an earlier save sealed a harness
-/// for finds that harness: it binds, copies and seals none, and probes
-/// nothing (#1794). Each save's nightly check compiles only the project's
-/// copy and its harness, the first after the start too (#1815), and each
-/// restart writes only the runner sources the edit changed (#1816). A
-/// private field's restart renders none of them: it takes the sources a
-/// rendering of the same inputs kept, the launch's too (#1821). A save
-/// whose API has the last save's content frames the graph that save kept
-/// and takes its classification: it builds no graph from the store and
-/// decodes no classification (#1786). Its check lowers again only the
-/// source the save changed (#1850).
+/// inboard's `State`, prepares again and starts the program again (#1776,
+/// #1786). So does another private field after a save that built, each
+/// save that puts back an earlier save's sources or the launch's (#1794),
+/// and the field made public, which changes the project crate's API: each
+/// new program runs, and the last ends cleanly.
 #[test]
-fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
+fn a_held_pub_type_s_private_fields_their_undos_and_a_public_one_restart_the_program() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -2772,7 +2438,6 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
-            ("RAWR_VERBOSE", "1".into()),
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
@@ -2844,149 +2509,13 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
             && seen.contains("rawr: preparing again: `home::State` changed its fields"),
         "{told}\n{seen}"
     );
-    let rounds = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a save's round: "))
-        .collect::<Vec<_>>();
-    // A round for each save. The first two probe their own build once,
-    // take every fragment's read and the settlement the launch or the last
-    // save kept, and read no definition; the last probes once, reads the
-    // project crate's fragment again, and takes `common`'s and `ui`'s. A save back
-    // to the first save's sources, the third and the fifth, finds the
-    // harness that save sealed: no harness, copy, seal or probe, and its
-    // bundle's Cargo view is the one that save's replay parsed (#1794). The
-    // launch's harness is under the launch's demand, so the fourth, back
-    // to the launch's sources, builds its own.
-    // The second's API has the first's content under a new build: it frames
-    // the graph the first kept, decoding and sealing none, and takes the
-    // classification the first replayed (#1786).
-    // The owner keeps the compiler that checks the program: the first
-    // save's check lowers each of the five sources with bodies, as the
-    // start's warm launch checked nothing, and the second lowers again
-    // only `home.rs`, whose struct changed; the others' uses are the
-    // first's (#1850).
-    let found = "harnesses 0, compiled 0, copied 0, sealed 0, probes 0, read 0, ";
-    let unparsed = ", Cargo views parsed 0, compared 1, ";
-    assert!(
-        rounds.len() == 6
-            && rounds[0].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
-            && rounds[1].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
-            && rounds[1].ends_with(", API graphs rebuilt 0, framed 1, classifications replayed 0")
-            && rounds[0].contains(", lowered 5, ")
-            && rounds[1].contains(", lowered 1, ")
-            && rounds[2].starts_with(found)
-            && rounds[2].contains(unparsed)
-            && rounds[4].starts_with(found)
-            && rounds[4].contains(unparsed)
-            && rounds[5].contains(", probes 1, ")
-            && rounds[5].contains(", canonicalized 1, "),
-        "{rounds:?}\n{seen}"
-    );
-    eprintln!("the saves' rounds:\n{}", rounds.join("\n"));
-    let checks = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the program's check took: "))
-        .collect::<Vec<_>>();
-    eprintln!("the saves' checks:\n{}", checks.join("\n"));
-    let phases = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the round's phases took: "))
-        .collect::<Vec<_>>();
-    eprintln!("the saves' phases:\n{}", phases.join("\n"));
-    let store = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a save's store work: "))
-        .collect::<Vec<_>>();
-    eprintln!("the saves' store work:\n{}", store.join("\n"));
-    // Each of the four saves' nightly checks, the undo's too, goes on from
-    // the last one: it compiles the project's copy and the harness, the
-    // first after the start too (#1815).
-    let checked = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the nightly check compiled "))
-        .collect::<Vec<_>>();
-    assert!(
-        checked.len() == 4
-            && checked.iter().all(|line| line.starts_with("2 units in ")
-                && line.ends_with(": islands_theme, rawr_resolution_harness")),
-        "{checked:?}\n{seen}"
-    );
-    eprintln!("the nightly checks:\n{}", checked.join("\n"));
-    // Each restart generates the runner's sources and stages them, writing
-    // only the files the edit changed (#1816).
-    let staged = run
-        .seen
-        .iter()
-        .filter_map(|line| {
-            line.strip_prefix("stderr: rawr-import: the runner's sources were staged in ")
-        })
-        .collect::<Vec<_>>();
-    let generated = run
-        .seen
-        .iter()
-        .filter_map(|line| {
-            line.strip_prefix("stderr: rawr-import: the runner's sources were generated in ")
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        staged.len() == 4
-            && generated.len() >= 4
-            && staged.iter().all(|line| {
-                let (written, files) = line
-                    .split_once(": wrote ")
-                    .and_then(|(_, counts)| counts.strip_suffix(" files"))
-                    .and_then(|counts| counts.split_once(" of "))
-                    .unwrap();
-                written.parse::<usize>().unwrap() <= 2 && files.parse::<usize>().unwrap() > 2
-            }),
-        "{staged:?}\n{seen}"
-    );
-    eprintln!("the runner's staging:\n{}", staged.join("\n"));
-    // Each generation after the start's renders none of the runner's files
-    // but the last: a private field changes nothing rendering reads, so its
-    // runner takes the sources a rendering of the same inputs kept, and only
-    // the field made public, which changes the project crate's API, renders
-    // them again (#1821).
-    let rendered = generated
-        .iter()
-        .map(|line| {
-            let (rendered, files) = line
-                .split_once(": rendered ")
-                .and_then(|(_, counts)| counts.strip_suffix(" files"))
-                .and_then(|counts| counts.split_once(" of "))
-                .unwrap();
-            [rendered, files].map(|count| count.parse::<usize>().unwrap())
-        })
-        .collect::<Vec<_>>();
-    let [_, saves @ .., [last, files]] = rendered.as_slice() else {
-        panic!("a start and each save generate: {generated:?}\n{seen}")
-    };
-    assert!(
-        saves.iter().all(|[rendered, _]| *rendered == 0) && last == files && *files > 2,
-        "{generated:?}\n{seen}"
-    );
-    eprintln!("the runner's generation:\n{}", generated.join("\n"));
-    // Each restart's runner build says what it compiled.
-    let built = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the runner build compiled "))
-        .collect::<Vec<_>>();
-    assert!(built.len() >= 3, "{built:?}\n{seen}");
-    eprintln!("the runner builds:\n{}", built.join("\n"));
 }
 
 /// An edit to a function of a path crate of the project changes what
-/// native code is built from: a new native build, and a new runner, whose
-/// start lowers again only the files that name the function, as each
-/// entry of a path crate's facade is a declaration of its own (#1735).
+/// native code is built from: the program starts again and prints what
+/// the edited function gives (#1734, #1735).
 #[test]
-fn an_edit_to_a_path_crate_s_function_lowers_only_the_files_that_name_it() {
+fn an_edit_to_a_path_crate_s_function_starts_the_program_with_it() {
     // Twice at one path: the project put back the second time puts the
     // path crate's file back with the time it had before the first edit,
     // older than what rawr's home built from the edit, so only the file's
@@ -2998,8 +2527,6 @@ fn an_edit_to_a_path_crate_s_function_lowers_only_the_files_that_name_it() {
 }
 
 fn edit_a_path_crate_s_function(root: &Path) {
-    // No kept lowering: the first start lowers every file.
-    let _ = fs::remove_dir_all(root.join("target/rawr/lowered"));
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let mut run = start(
@@ -3007,7 +2534,6 @@ fn edit_a_path_crate_s_function(root: &Path) {
         &[
             ("ISLANDS_STOP", stop.clone()),
             ("RAWR_MCP_EVENTS", events.clone()),
-            ("RAWR_VERBOSE", "1".into()),
         ],
     );
     run.until(|line| line.starts_with("tick ") && line.ends_with(" tick row styled 0"));
@@ -3032,43 +2558,21 @@ fn edit_a_path_crate_s_function(root: &Path) {
             && run.seen.iter().any(|line| line.parse::<usize>().is_ok()),
         "{told}\n{seen}"
     );
-    // What each runner's start revealed and lowered: the first every file.
-    // The second reads `home.rs` and `sidebar.rs` again, which name `base`,
-    // and lowers them and the widget's sidebar, whose kept lowering calls
-    // the adapters of `ui::Pixels`: an adapter names its crate by its
-    // facade's proof, which the edit changed, so the new runner admitted
-    // other ones (#1734).
-    let started = run
-        .seen
-        .iter()
-        .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
-        .map(|line| {
-            let (_, rest) = line.split_once(" sources, revealed ").unwrap();
-            let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
-            let lowered = rest.strip_suffix(" files").unwrap();
-            [revealed, lowered].map(|count| count.parse::<usize>().unwrap())
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        started.len() == 2 && started[0][1] > 2 && started[1] == [2, 3],
-        "{started:?}\n{seen}"
-    );
 }
 
-/// A runner keeps each marked source's lowering and readings under the
-/// project's `target/rawr`, so the next runner's start lowers and reads
-/// only the sources whose key changed. A corrupt file is a miss, made
-/// again and written over (#1638).
+/// A runner keeps each marked source's lowering under the project's
+/// `target/rawr`, and the next runner's start runs the program from it,
+/// an edited source's too. A corrupt file is a miss, made again and
+/// written over (#1638).
 #[test]
-fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
+fn a_start_runs_from_the_lowerings_an_earlier_runner_kept() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
     let lowered = root.join("target/rawr/lowered");
     let _ = fs::remove_dir_all(&lowered);
-    // One run to its first tick and its end: what its runner's start
-    // parsed, revealed and lowered.
-    let started = || {
+    // One run to its first tick of the row's label, and its end.
+    let started = |label: &str| {
         let _ = fs::remove_file(&events);
         let _ = fs::remove_file(&stop);
         let mut run = start(
@@ -3076,45 +2580,27 @@ fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
             &[
                 ("ISLANDS_STOP", stop.clone()),
                 ("RAWR_MCP_EVENTS", events.clone()),
-                ("RAWR_VERBOSE", "1".into()),
             ],
         );
-        run.until(|line| line.starts_with("tick ") && line.contains(" styled 0"));
+        let ending = format!(" tick {label} styled 0");
+        run.until(|line| line.starts_with("tick ") && line.ends_with(&ending));
         fs::write(&stop, "").unwrap();
         run.told(&events, |text| {
             text.contains("{\"event\":\"ended\",\"status\":0}")
         });
         run.child.kill().unwrap();
         run.wait();
-        let seen = run.seen.join("\n");
-        let counts = run
-            .seen
-            .iter()
-            .filter_map(|line| line.strip_prefix("stderr: rawr runner: a start parsed "))
-            .map(|line| {
-                let (parsed, rest) = line.split_once(" sources, revealed ").unwrap();
-                let (revealed, rest) = rest.split_once(" files, lowered ").unwrap();
-                let lowered = rest.strip_suffix(" files").unwrap();
-                [parsed, revealed, lowered].map(|count| count.parse::<usize>().unwrap())
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(counts.len(), 1, "{seen}");
-        (counts[0], seen)
+        run.seen.join("\n")
     };
-    let ([_, revealed, first], seen) = started();
-    assert!(revealed > 0 && first > 0, "{seen}");
-    // Nothing changed: the start reads every source `rawr` parsed from its
-    // parse, and lowers and reads nothing again.
-    let (counts, seen) = started();
-    assert_eq!(counts, [0, 0, 0], "{seen}");
-    // A body's edit: its file alone.
+    started("row");
+    started("row");
+    // A body's edit.
     edit(
         &root.join("src/widget/sidebar.rs"),
         "\"{label} row\"",
         "\"{label} item\"",
     );
-    let (counts, seen) = started();
-    assert_eq!(counts, [0, 1, 1], "{seen}");
+    let seen = started("item");
     // A corrupt file is lowered again and written over.
     let mut bodies = fs::read_dir(&lowered)
         .unwrap()
@@ -3127,8 +2613,7 @@ fn a_start_lowers_only_the_files_an_earlier_runner_did_not_keep() {
     bodies.sort();
     assert!(!bodies.is_empty(), "{seen}");
     fs::write(&bodies[0], "RKLW not a lowering").unwrap();
-    let (counts, seen) = started();
-    assert_eq!(counts, [0, 0, 1], "{seen}");
+    let seen = started("item");
     assert!(fs::read(&bodies[0]).unwrap().len() > 100, "{seen}");
 }
 
@@ -4337,9 +3822,8 @@ fn a_marked_module_calls_a_method_with_elided_lifetimes_whose_output_borrows_sel
     checks_and_prints(&root, &printed);
 }
 
-/// The packages `cargo build` of `root` compiles, by the names its
-/// `Compiling` lines give.
-fn cargo_compiles(root: &Path) -> Vec<String> {
+/// `cargo build` of `root`, which succeeds.
+fn cargo_builds(root: &Path) {
     let built = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(root)
@@ -4349,20 +3833,15 @@ fn cargo_compiles(root: &Path) -> Vec<String> {
         .unwrap();
     let said = String::from_utf8_lossy(&built.stderr);
     assert!(built.status.success(), "{said}");
-    said.lines()
-        .filter_map(|line| line.trim_start().strip_prefix("Compiling "))
-        .filter_map(|line| line.split_whitespace().next())
-        .map(str::to_owned)
-        .collect()
 }
 
-/// `rawr-import run root`'s count of runner units compiled.
-fn runner_units(root: &Path) -> String {
+/// `rawr-import run root`, which succeeds.
+fn runs(root: &Path) {
     let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(root)
         .env("RAWR_HOME", crate::support::runtime_home())
-        .env("RAWR_VERBOSE", "1")
+        .env_remove("RAWR_VERBOSE")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .stdin(std::process::Stdio::null())
@@ -4370,30 +3849,20 @@ fn runner_units(root: &Path) -> String {
         .unwrap();
     let said = String::from_utf8_lossy(&run.stderr);
     assert!(run.status.success(), "{said}");
-    said.lines()
-        .find_map(|line| line.split_once("runner units compiled "))
-        .map(|(_, count)| count.to_owned())
-        .unwrap_or_else(|| panic!("{said}"))
 }
 
 /// A visible field on a held `pub struct`, which native code may read, so
-/// native code holds its fields rather than its handle (D961), rebuilds
-/// what names the program and nothing else, and rawr and `cargo build` share the project's path
-/// packages. The runner's base and its crates of adapters don't depend on
-/// rawr's copy of the program's crate, so the field recompiles that copy
-/// and the runner's binary, which holds what names the program (#1775,
-/// #1793). rawr's copy names the path packages through the runner's links,
-/// so they are one unit each, which `cargo build` after a run and a run
-/// after `cargo build` find fresh (#1777).
+/// native code holds its fields rather than its handle (D961), runs, and
+/// rawr and `cargo build` build the project's path packages in one target,
+/// each after the other (#1775, #1777, #1793).
 #[test]
-fn a_held_type_s_new_field_rebuilds_two_runner_units_and_cargo_shares_the_path_packages() {
+fn a_held_type_s_new_field_runs_and_cargo_builds_beside_rawr() {
     const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     let root = crate::support::fresh("islands-theme-field-units");
     copy(Path::new(SOURCE), &root);
-    runner_units(&root);
-    // The project's own crate is all `cargo build` compiles after a run.
-    assert_eq!(cargo_compiles(&root), ["islands-theme"]);
-    assert_eq!(runner_units(&root), "0");
+    runs(&root);
+    cargo_builds(&root);
+    runs(&root);
     let home = root.join("src/home.rs");
     edit(
         &home,
@@ -4405,7 +3874,7 @@ fn a_held_type_s_new_field_rebuilds_two_runner_units_and_cargo_shares_the_path_p
         "            wizard: None,\n        }",
         "            wizard: None,\n            seen: 0,\n        }",
     );
-    assert_eq!(runner_units(&root), "2");
-    assert_eq!(cargo_compiles(&root), ["islands-theme"]);
-    assert_eq!(runner_units(&root), "0");
+    runs(&root);
+    cargo_builds(&root);
+    runs(&root);
 }

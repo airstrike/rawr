@@ -35,33 +35,26 @@ pub(crate) struct Unit {
 impl Named {
     /// The units `messages` name, whose hashed files lie in `profiles`.
     /// `rawr` is the directory rawr generates packages under, if any.
-    pub(crate) fn read(messages: &[u8], profiles: &[PathBuf], rawr: Option<&Path>) -> Self {
+    pub(crate) fn read(
+        messages: &crate::cargo::messages::Messages<'_>,
+        profiles: &[PathBuf],
+        rawr: Option<&Path>,
+    ) -> Self {
         let mut named = Self::default();
         let mut hashed = None;
-        for line in messages.split(|byte| *byte == b'\n') {
-            let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
-                continue;
-            };
-            let text = |pointer: &str| message.pointer(pointer).and_then(serde_json::Value::as_str);
-            let generated = text("/package_id")
+        for message in messages.iter() {
+            let generated = message
+                .package_id()
                 .and_then(super::package_name)
                 .is_some_and(member::is_runner_package)
-                || text("/manifest_path")
+                || message
+                    .manifest_path()
                     .zip(rawr)
                     .is_some_and(|(manifest, rawr)| Path::new(manifest).starts_with(rawr));
-            let crate_target = text("/reason") == Some("compiler-artifact")
-                && text("/target/kind/0") != Some("custom-build");
-            let rebuilt = message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false);
-            let paths: Vec<&str> = message
-                .get("filenames")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .chain(message.get("executable"))
-                .chain(message.get("out_dir"))
-                .filter_map(serde_json::Value::as_str)
-                .collect();
-            for path in paths {
+            let crate_target = message.reason() == Some("compiler-artifact")
+                && message.target_kind() != Some("custom-build");
+            let rebuilt = message.fresh() == Some(false);
+            for path in message.paths() {
                 let hashed = &mut hashed;
                 let Some((krate, hash)) = unit_of(Path::new(path), move || {
                     hashed.get_or_insert_with(|| listing(profiles)).as_slice()
@@ -219,7 +212,8 @@ mod tests {
             ),
         ]
         .join("\n");
-        let named = super::Named::read(messages.as_bytes(), &[profile], None);
+        let messages = crate::cargo::messages::Messages::parse(messages.as_bytes());
+        let named = super::Named::read(&messages, &[profile], None);
         let units: Vec<(&str, &str, bool, bool)> = named
             .iter()
             .map(|(hash, unit)| (hash, unit.krate(), unit.rebuilt(), unit.generated()))

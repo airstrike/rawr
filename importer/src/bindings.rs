@@ -242,27 +242,30 @@ impl Observed {
 
 /// Build-script results by package id, from cargo's JSON messages.
 pub(crate) fn scripts_from_messages(messages: &[u8]) -> Option<BTreeMap<String, Vec<Script>>> {
-    #[derive(Deserialize)]
-    struct Message {
-        package_id: String,
-        out_dir: PathBuf,
-        cfgs: Vec<String>,
-        env: Vec<(String, String)>,
+    scripts_in(&crate::cargo::messages::Messages::parse(messages))
+}
+
+/// Build-script results by package id, from cargo's decoded `messages`.
+/// `None` when a line was no message or a script's result is incomplete.
+fn scripts_in(
+    messages: &crate::cargo::messages::Messages<'_>,
+) -> Option<BTreeMap<String, Vec<Script>>> {
+    if !messages.is_complete() {
+        return None;
     }
     let mut scripts = BTreeMap::<String, Vec<Script>>::new();
-    for line in messages.split(|byte| *byte == b'\n') {
-        if line.is_empty() {
+    for message in messages.iter() {
+        if message.reason() != Some("build-script-executed") {
             continue;
         }
-        let message = serde_json::from_slice::<serde_json::Value>(line).ok()?;
-        if message.get("reason").and_then(serde_json::Value::as_str)
-            != Some("build-script-executed")
-        {
-            continue;
-        }
-        let message: Message = serde_json::from_value(message).ok()?;
-        let script = Script::new(message.cfgs, message.env, &message.out_dir).ok()?;
-        let entry = scripts.entry(message.package_id).or_default();
+        let package = message.package_id()?;
+        let out_dir = Path::new(message.out_dir()?);
+        let cfgs = message.cfgs()?.map(str::to_owned);
+        let env = message
+            .env()?
+            .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        let script = Script::new(cfgs, env, out_dir).ok()?;
+        let entry = scripts.entry(package.to_owned()).or_default();
         if !entry.contains(&script) {
             entry.push(script);
             entry.sort_unstable();
@@ -271,12 +274,13 @@ pub(crate) fn scripts_from_messages(messages: &[u8]) -> Option<BTreeMap<String, 
     Some(scripts)
 }
 
-/// Keep the build scripts' results of the runner's build, where the next
-/// settlement reads them. A failed capture removes older evidence so it cannot
-/// authorize a run built without the required observations.
-pub(crate) fn record_runner_scripts(work: &Path, messages: &[u8]) {
+/// Keep the build scripts' results of the runner's build, from its decoded
+/// `messages`, where the next settlement reads them. A failed capture
+/// removes older evidence so it cannot authorize a run built without the
+/// required observations.
+pub(crate) fn record_runner_scripts(work: &Path, messages: &crate::cargo::messages::Messages<'_>) {
     let recorded = work.join(RUNNER_SCRIPTS);
-    if let Some(scripts) = scripts_from_messages(messages)
+    if let Some(scripts) = scripts_in(messages)
         && let Ok(bytes) = serde_json::to_vec(&scripts)
     {
         let temporary = work.join(format!(".{RUNNER_SCRIPTS}.{}", std::process::id()));
@@ -2104,7 +2108,7 @@ mod tests {
             "cfgs": [], "env": [["WIDTH", "four"]]
         });
         let bytes = serde_json::to_vec(&message).unwrap();
-        super::record_runner_scripts(&work, &bytes);
+        super::record_runner_scripts(&work, &crate::cargo::messages::Messages::parse(&bytes));
         let recorded = work.join(super::RUNNER_SCRIPTS);
         assert!(recorded.exists());
         assert_eq!(
@@ -2113,7 +2117,7 @@ mod tests {
         );
         fs::remove_dir(&directory).unwrap();
         assert!(Script::new([], [], &directory).is_err());
-        super::record_runner_scripts(&work, &bytes);
+        super::record_runner_scripts(&work, &crate::cargo::messages::Messages::parse(&bytes));
         assert!(
             !recorded.exists(),
             "failed capture retained old success evidence"
@@ -2199,7 +2203,10 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                 super::scripts_from_messages(&build(crate::cargo::toolchain::CHANNEL, mode))
                     .unwrap();
             let stable = build("stable", mode);
-            super::record_runner_scripts(&rawr.join("runner"), &stable);
+            super::record_runner_scripts(
+                &rawr.join("runner"),
+                &crate::cargo::messages::Messages::parse(&stable),
+            );
             let packages = nightly.keys().cloned().collect::<Vec<_>>();
             assert_eq!(packages.len(), 1);
             let settlement = Settlement {

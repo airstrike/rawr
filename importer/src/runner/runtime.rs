@@ -321,10 +321,10 @@ pub(crate) fn link_failure(stderr: &str) -> Option<String> {
 }
 
 impl Runtime {
-    /// The runner's manifest without its `rawr` dependency and that crate's
-    /// profile.
-    pub(crate) fn manifest(&self, text: &str) -> Option<String> {
-        let mut document = text.parse::<DocumentMut>().ok()?;
+    /// The runner's manifest `document` without its `rawr` dependency and
+    /// that crate's profile. `None`, with `document` as it was, when it
+    /// names no `rawr` dependency.
+    pub(crate) fn manifest(&self, document: &mut DocumentMut) -> Option<()> {
         let dependency = document
             .get_mut("dependencies")?
             .as_table_like_mut()?
@@ -353,13 +353,14 @@ impl Runtime {
                 }
             }
         }
-        Some(document.to_string())
+        Some(())
     }
 
-    /// The runner's lockfile without `rawr` and what only it needs. Cargo
-    /// settles it before the `--locked` build (`settle_lock`).
-    pub(crate) fn lock(&self, text: &str) -> Option<String> {
-        prune_lock(text)
+    /// The runner's lockfile `document` without `rawr` and what only it
+    /// needs. Cargo settles it before the `--locked` build (`settle_lock`).
+    /// `None`, with `document` as it was, when it has no runner.
+    pub(crate) fn lock(&self, document: &mut DocumentMut) -> Option<()> {
+        prune_lock(document)
     }
 
     /// The lock cargo settled the runner's `pruned` lock to at an earlier
@@ -371,8 +372,9 @@ impl Runtime {
     }
 
     /// Settle the runner's lockfile in `work`, written from the `pruned`
-    /// lock and `manifest`, to what cargo resolves without rawr, unless an
-    /// earlier build did. Pruning walks the lock's edges, which name a
+    /// lock and `manifest`, to what cargo resolves without rawr, for a
+    /// build that found no lock an earlier build settled
+    /// ([`Self::settled_lock`]). Pruning walks the lock's edges, which name a
     /// shared package's dependencies at the features rawr turned on too:
     /// ahash keeps `const-random` from rawr's `compile-time-rng`. Cargo
     /// drops what no remaining feature needs and keeps every version, so
@@ -385,9 +387,6 @@ impl Runtime {
         manifest: &[u8],
         pruned: &[u8],
     ) -> Result<(), node::Error> {
-        if Self::settled_lock(work, manifest, pruned).is_some() {
-            return Ok(());
-        }
         let output = Command::new(&self.cargo)
             .args(["update", "--workspace", "--offline", "--quiet"])
             .arg("--manifest-path")
@@ -459,7 +458,10 @@ impl Runtime {
     /// a static library that a build script of the project's links too,
     /// from a copy that may disagree with the runtime's (`native`).
     /// `messages` is the runner build's cargo JSON.
-    pub(crate) fn native_clash(&self, messages: &[u8]) -> Option<String> {
+    pub(crate) fn native_clash(
+        &self,
+        messages: &crate::cargo::messages::Messages<'_>,
+    ) -> Option<String> {
         native::Link::all_in(messages).iter().find_map(|project| {
             self.native
                 .iter()
@@ -485,10 +487,10 @@ pub(crate) fn host_sources() -> Vec<PathBuf> {
     sources
 }
 
-/// A runner manifest that compiles rawr in the project, with the `rawr`
-/// crate at the opt-level setting. `None` when it already is.
-pub(crate) fn with_opt_level(text: &str, level: &Item) -> Option<String> {
-    let mut document = text.parse::<DocumentMut>().ok()?;
+/// A runner manifest `document` that compiles rawr in the project, with the
+/// `rawr` crate at the opt-level setting. `None`, with `document` as it was,
+/// when it already is.
+pub(crate) fn with_opt_level(document: &mut DocumentMut, level: &Item) -> Option<()> {
     let root = document
         .get("dependencies")?
         .get(INTERNAL_ALIAS)?
@@ -514,7 +516,7 @@ pub(crate) fn with_opt_level(text: &str, level: &Item) -> Option<String> {
             }
         }
     }
-    changed.then(|| document.to_string())
+    changed.then_some(())
 }
 
 /// Whether a `[profile.*.package]` key names the `rawr` package at `root`.
@@ -566,29 +568,11 @@ fn rawr_dependent(lock: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// `lock` without the `rawr` dependency of the runner and its members, and
-/// every package that only `rawr` reached.
-fn prune_lock(lock: &str) -> Option<String> {
-    let mut document = lock.parse::<DocumentMut>().ok()?;
+/// The lock `document` without the `rawr` dependency of the runner and its
+/// members, and every package that only `rawr` reached. `None`, with
+/// `document` as it was, when it has no runner.
+fn prune_lock(document: &mut DocumentMut) -> Option<()> {
     let packages = document.get_mut("package")?.as_array_of_tables_mut()?;
-    let identity = |table: &Table| {
-        (
-            table
-                .get("name")
-                .and_then(Item::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            table
-                .get("version")
-                .and_then(Item::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            table
-                .get("source")
-                .and_then(Item::as_str)
-                .map(str::to_owned),
-        )
-    };
     let root = packages.iter().position(|package| {
         package.get("name").and_then(Item::as_str) == Some(RUNNER)
             && !package.contains_key("source")
@@ -603,59 +587,61 @@ fn prune_lock(lock: &str) -> Option<String> {
             });
         }
     }
-    let identities = packages.iter().map(identity).collect::<Vec<_>>();
-    let edges = packages
-        .iter()
-        .map(|package| {
-            package
+    let reached = {
+        let tables = packages.iter().collect::<Vec<&Table>>();
+        fn text<'a>(table: &'a Table, key: &str) -> Option<&'a str> {
+            table.get(key).and_then(Item::as_str)
+        }
+        // Each package's index by its name, in lock order.
+        let mut named = BTreeMap::<&str, Vec<usize>>::new();
+        for (index, table) in tables.iter().enumerate() {
+            named
+                .entry(text(table, "name").unwrap_or_default())
+                .or_default()
+                .push(index);
+        }
+        // A dependency is `name`, `name version` or `name version (source)`:
+        // the first package of that name at that version and source.
+        let find = |dependency: &str| {
+            let mut parts = dependency.splitn(3, ' ');
+            let name = parts.next().unwrap_or_default();
+            let version = parts.next();
+            let source = parts
+                .next()
+                .map(|source| source.trim_start_matches('(').trim_end_matches(')'));
+            named.get(name)?.iter().copied().find(|&index| {
+                version.is_none_or(|version| {
+                    version == text(tables[index], "version").unwrap_or_default()
+                }) && source.is_none_or(|source| text(tables[index], "source") == Some(source))
+            })
+        };
+        let mut reached = vec![false; tables.len()];
+        let mut queue = VecDeque::from([root]);
+        reached[root] = true;
+        while let Some(index) = queue.pop_front() {
+            let dependencies = tables[index]
                 .get("dependencies")
                 .and_then(Item::as_array)
-                .map(|dependencies| {
-                    dependencies
-                        .iter()
-                        .filter_map(|dependency| dependency.as_str().map(str::to_owned))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    // A dependency is `name`, `name version` or `name version (source)`.
-    let find = |dependency: &str| {
-        let mut parts = dependency.splitn(3, ' ');
-        let name = parts.next().unwrap_or_default();
-        let version = parts.next();
-        let source = parts
-            .next()
-            .map(|source| source.trim_start_matches('(').trim_end_matches(')'));
-        identities
-            .iter()
-            .position(|(candidate, candidate_version, candidate_source)| {
-                candidate == name
-                    && version.is_none_or(|version| version == candidate_version)
-                    && source.is_none_or(|source| candidate_source.as_deref() == Some(source))
-            })
-    };
-    let mut reached = vec![false; identities.len()];
-    let mut queue = VecDeque::from([root]);
-    reached[root] = true;
-    while let Some(index) = queue.pop_front() {
-        for dependency in &edges[index] {
-            if let Some(next) = find(dependency)
-                && !reached[next]
-            {
-                reached[next] = true;
-                queue.push_back(next);
+                .into_iter()
+                .flatten()
+                .filter_map(toml_edit::Value::as_str);
+            for dependency in dependencies {
+                if let Some(next) = find(dependency)
+                    && !reached[next]
+                {
+                    reached[next] = true;
+                    queue.push_back(next);
+                }
             }
         }
-    }
-    let mut kept = toml_edit::ArrayOfTables::new();
-    for (index, package) in packages.iter().enumerate() {
-        if reached[index] {
-            kept.push(package.clone());
-        }
-    }
-    *packages = kept;
-    Some(document.to_string())
+        reached
+    };
+    let mut index = 0;
+    packages.retain(|_| {
+        index += 1;
+        reached[index - 1]
+    });
+    Some(())
 }
 
 /// The project's compiler, as its `cargo build` finds it.
@@ -1117,7 +1103,7 @@ fn publish(entry: &Path, key: &str, messages: &[u8]) -> Result<(), node::Error> 
     }
     fs::rename(&staging, &lib).map_err(io("publish rawr's runtime", lib.clone()))?;
     let _ = fs::remove_dir_all(&retired);
-    let native = native::Link::all_in(messages)
+    let native = native::Link::all_in(&crate::cargo::messages::Messages::parse(messages))
         .iter()
         .map(native::Link::record)
         .collect::<String>();
@@ -1209,7 +1195,7 @@ pub(crate) fn prune(runtimes: &Path, keep: &[&Path], recent: Duration) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::SystemTime;
@@ -1243,7 +1229,7 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
 
-    fn runtime() -> super::Runtime {
+    pub(crate) fn runtime() -> super::Runtime {
         let root = scratch("lease");
         fs::create_dir_all(&root).unwrap();
         super::Runtime {
@@ -1364,7 +1350,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
     #[test]
     fn the_runner_lock_keeps_only_what_the_runner_reaches_without_rawr() {
-        let pruned = super::prune_lock(LOCK).unwrap();
+        let mut document = LOCK.parse::<super::DocumentMut>().unwrap();
+        super::prune_lock(&mut document).unwrap();
+        let pruned = document.to_string();
         assert!(pruned.contains("name = \"itoa\""), "{pruned}");
         assert!(!pruned.contains("name = \"rawr\""), "{pruned}");
         assert!(!pruned.contains("smartstring"), "{pruned}");
@@ -1385,7 +1373,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             itoa = \"1\"\n\n\
             [profile.dev.package.\"path+file:///hosts/a#rawr@0.3.3\"]\nopt-level = 3\n\n\
             [profile.dev.package.itoa]\nopt-level = 1\n";
-        let rewired = runtime.manifest(manifest).unwrap();
+        let mut document = manifest.parse::<super::DocumentMut>().unwrap();
+        runtime.manifest(&mut document).unwrap();
+        let rewired = document.to_string();
         assert!(!rewired.contains("__rawr_internal"), "{rewired}");
         assert!(!rewired.contains("#rawr@"), "{rewired}");
         assert!(rewired.contains("[profile.dev.package.itoa]"), "{rewired}");
@@ -1417,9 +1407,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         assert_eq!(super::link_failure("error[E0308]: mismatched types"), None);
         let messages = br#"{"reason":"build-script-executed","package_id":"path+file:///work/asm#sha2-asm@0.6.4","linked_libs":["static=sha2-asm","dylib=System"],"linked_paths":[],"cfgs":[],"env":[],"out_dir":"/o"}
 "#;
-        let clash = runtime().native_clash(messages).unwrap();
+        let parsed = crate::cargo::messages::Messages::parse(messages);
+        let clash = runtime().native_clash(&parsed).unwrap();
         assert!(clash.contains("`sha2-asm`"), "{clash}");
-        assert_eq!(runtime().native_clash(b"{}\n"), None);
+        let empty = crate::cargo::messages::Messages::parse(b"{}\n");
+        assert_eq!(runtime().native_clash(&empty), None);
     }
 
     #[test]

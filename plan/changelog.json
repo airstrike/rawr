@@ -8,6 +8,21 @@
   },
   "releases": [
     {
+      "version": "0.3.207",
+      "date": "2026-11-13",
+      "entries": [
+        {"text":"A save does less repeated work in the runner build and the generator: the runner executable is hashed once, Cargo.lock and each manifest are parsed once, Cargo's messages are decoded once, and each plan's signature and opaque facts are computed once.","issues":[1853]},
+        {"text":"A kept overlay of runner sources no longer re-hashes every generated file on a hit.","issues":[1831]}
+      ]
+    },
+    {
+      "version": "0.3.206",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"A start whose API is current reads it, its classification and its facade once: identities share their unit, each definition is digested once, and stored bytes are trusted by their digest instead of being encoded again to check them.","issues":[1866],"refs":[1851]}
+      ]
+    },
+    {
       "version": "0.3.205",
       "date": "2026-11-12",
       "entries": [

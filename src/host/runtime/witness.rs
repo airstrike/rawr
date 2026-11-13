@@ -62,11 +62,10 @@ impl Authority {
 }
 
 impl Witness {
-    pub(super) fn issue(authority: Authority, ty: Type) -> Self {
-        Self {
-            authority,
-            ty: Shared::new(ty),
-        }
+    /// The witness of `ty`, which it shares: a requirement's types are
+    /// made shared once, so each call's witnesses copy no type (#1852).
+    pub(super) const fn issue(authority: Authority, ty: Shared<Type>) -> Self {
+        Self { authority, ty }
     }
 
     pub(super) fn matches(&self, authority: Authority, ty: &Type) -> bool {
@@ -105,7 +104,7 @@ impl Witness {
             (Type::Callable { inputs, .. }, index) => inputs.get(index)?.clone(),
             _ => self.ty.arguments().get(index)?.clone(),
         };
-        Some(Self::issue(self.authority, ty))
+        Some(Self::issue(self.authority, Shared::new(ty)))
     }
 
     /// Whether this witness names the exact builtin type. Generated native
@@ -132,7 +131,10 @@ impl Witness {
             Type::Array {
                 element,
                 length: None,
-            } => Some(Self::issue(self.authority, (**element).clone())),
+            } => Some(Self::issue(
+                self.authority,
+                Shared::new((**element).clone()),
+            )),
             _ => None,
         }
     }
@@ -160,12 +162,12 @@ impl fmt::Debug for Witness {
 
 #[cfg(test)]
 mod tests {
-    use super::{Authority, Type, Witness};
+    use super::{Authority, Shared, Type, Witness};
 
     #[test]
     fn option_and_result_witnesses_give_their_inner_types() {
         let authority = Authority::issue();
-        let option = Witness::issue(authority, Type::option(Type::unit()));
+        let option = Witness::issue(authority, Shared::new(Type::option(Type::unit())));
         assert!(option
             .argument_witness(0)
             .unwrap()
@@ -173,7 +175,10 @@ mod tests {
         assert!(option.argument_witness(1).is_none());
 
         let ok = Type::option(Type::unit());
-        let result = Witness::issue(authority, Type::result(ok.clone(), Type::unit()));
+        let result = Witness::issue(
+            authority,
+            Shared::new(Type::result(ok.clone(), Type::unit())),
+        );
         assert!(result.argument_witness(0).unwrap().matches(authority, &ok));
         assert!(result
             .argument_witness(1)
@@ -185,7 +190,7 @@ mod tests {
             element: Box::new(ok.clone()),
             length: None,
         };
-        let slice = Witness::issue(authority, slice);
+        let slice = Witness::issue(authority, Shared::new(slice));
         assert!(slice.argument_witness(0).unwrap().matches(authority, &ok));
     }
 }

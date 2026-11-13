@@ -200,26 +200,48 @@ pub(crate) struct Requirement {
 /// calls skip the facade lookup. Registries only add facade roots and never
 /// replace them, and every generation of one runner shares them, so a binding
 /// found under one runner's authority stays exact.
+/// It also keeps the requirement's operand and output types, shared, made
+/// once on its first call: every witness its calls issue shares them, and
+/// none copies a type (#1852).
 /// A clone starts empty and the cache never takes part in comparisons.
 #[derive(Default)]
-pub(crate) struct Bound(OnceCell<(witness::Authority, Shared<dyn Callback>)>);
+pub(crate) struct Bound {
+    binding: OnceCell<(witness::Authority, Shared<dyn Callback>)>,
+    proofs: OnceCell<Proofs>,
+}
+
+/// A requirement's operand types and its output type, shared.
+type Proofs = (Box<[Shared<type_ref::Type>]>, Shared<type_ref::Type>);
 
 type OnceCell<T> = once_cell::sync::OnceCell<T>;
 
 impl Bound {
     pub(crate) const fn new() -> Self {
-        Self(OnceCell::new())
+        Self {
+            binding: OnceCell::new(),
+            proofs: OnceCell::new(),
+        }
     }
 
     fn get(&self, authority: witness::Authority) -> Option<&Shared<dyn Callback>> {
-        self.0
+        self.binding
             .get()
             .filter(|(owner, _)| owner.same_runner(authority))
             .map(|(_, binding)| binding)
     }
 
     fn remember(&self, authority: witness::Authority, binding: &Shared<dyn Callback>) {
-        let _ = self.0.set((authority, binding.clone()));
+        let _ = self.binding.set((authority, binding.clone()));
+    }
+
+    /// `operands` and `output`, shared, as the first call made them.
+    fn proofs(&self, operands: &[type_ref::Type], output: &type_ref::Type) -> &Proofs {
+        self.proofs.get_or_init(|| {
+            (
+                operands.iter().cloned().map(Shared::new).collect(),
+                Shared::new(output.clone()),
+            )
+        })
     }
 }
 
@@ -1109,21 +1131,21 @@ impl Registry {
                 binding
             }
         };
+        let (operands, output) = requirement
+            .bound
+            .proofs(&requirement.operands, &requirement.output);
         let call = match requirement.binding {
             Binding::Item(_) => Call::item(
                 self.witness,
-                &requirement.operands,
-                &requirement.output,
+                operands,
+                output,
                 requirement.receiver,
                 invocation,
             )
             .with_equal(equal),
-            Binding::Structural(_) => Call::structural(
-                self.witness,
-                &requirement.operands,
-                &requirement.output,
-                requirement.receiver,
-            ),
+            Binding::Structural(_) => {
+                Call::structural(self.witness, operands, output, requirement.receiver)
+            }
         }
         .with_access(access);
         binding.invoke(&call, args)
@@ -1132,7 +1154,7 @@ impl Registry {
     // Only a rust-import build issues one.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn witness_for(&self, ty: &type_ref::Type) -> Witness {
-        Witness::issue(self.witness, ty.clone())
+        Witness::issue(self.witness, Shared::new(ty.clone()))
     }
 
     pub(crate) fn invoke_projection(
@@ -1648,13 +1670,13 @@ mod witness_tests {
         );
     }
 
-    fn carrier(argument: type_ref::Type) -> type_ref::Type {
-        type_ref::Type::host(
+    fn carrier(argument: type_ref::Type) -> crate::Shared<type_ref::Type> {
+        crate::Shared::new(type_ref::Type::host(
             "test::Carrier".into(),
             TypeId::of::<Carrier>(),
             vec![argument].into_boxed_slice(),
             None,
-        )
+        ))
     }
 }
 

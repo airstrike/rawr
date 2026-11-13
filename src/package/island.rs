@@ -5382,10 +5382,10 @@ pub type Instance = unsafe fn(*mut (), *mut ());
 /// the hash of its types' tuple's name, as rawr names the instance
 /// (`package::instances::key`), interned for the program's life.
 pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
-    static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, &'static str, &'static str)>> =
-        ::std::sync::Mutex::new(::std::vec::Vec::new());
+    static KEYS: ::std::sync::Mutex<::std::collections::BTreeMap<(&'static str, &'static str), &'static str>> =
+        ::std::sync::Mutex::new(::std::collections::BTreeMap::new());
     let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-    if let Some((_, _, key)) = keys.iter().find(|(known, named, _)| *known == path && *named == name) {
+    if let ::std::option::Option::Some(key) = keys.get(&(path, name)) {
         return key;
     }
     // FNV-1a, as `package::instances::key` hashes it.
@@ -5395,7 +5395,7 @@ pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     let key: &'static str = ::std::boxed::Box::leak(::std::format!("{path}#{hash:016x}").into_boxed_str());
-    keys.push((path, name, key));
+    keys.insert((path, name), key);
     key
 }
 
@@ -5403,15 +5403,17 @@ pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
 /// argument is of gives itself (`+Content`), as the resolver compiles
 /// one instance for each impl.
 pub fn keyed_given(path: &'static str, name: &'static str, given: &[&'static str]) -> &'static str {
-    static KEYS: ::std::sync::Mutex<::std::vec::Vec<(&'static str, ::std::vec::Vec<&'static str>, &'static str)>> =
-        ::std::sync::Mutex::new(::std::vec::Vec::new());
+    // By `base`, then by the names given.
+    type Keys = ::std::collections::BTreeMap<&'static str, ::std::collections::BTreeMap<::std::vec::Vec<&'static str>, &'static str>>;
+    static KEYS: ::std::sync::Mutex<Keys> = ::std::sync::Mutex::new(::std::collections::BTreeMap::new());
     let base = keyed(path, name);
     let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-    if let Some((_, _, key)) = keys.iter().find(|(known, names, _)| *known == base && names.as_slice() == given) {
+    let keys = keys.entry(base).or_default();
+    if let ::std::option::Option::Some(key) = keys.get(given) {
         return key;
     }
     let key: &'static str = ::std::boxed::Box::leak(::std::format!("{base}{}", given.concat()).into_boxed_str());
-    keys.push((base, given.to_vec(), key));
+    keys.insert(given.to_vec(), key);
     key
 }
 

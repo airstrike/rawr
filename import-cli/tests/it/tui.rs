@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::support::{copy, start_with, Fixture, Scratch};
 
@@ -402,15 +402,14 @@ impl Terminal {
             .join(":")
     }
 
-    /// Wait until `accept` holds for the screen; how long that took. A
-    /// terminal that closes first fails the test.
-    fn until(&self, what: &str, accept: impl Fn(&Screen) -> bool) -> Duration {
-        let started = Instant::now();
+    /// Wait until `accept` holds for the screen. A terminal that closes
+    /// first fails the test.
+    fn until(&self, what: &str, accept: impl Fn(&Screen) -> bool) {
         loop {
             {
                 let screen = self.screen.lock().unwrap();
                 if accept(&screen) {
-                    return started.elapsed();
+                    return;
                 }
                 assert!(
                     !screen.closed,
@@ -423,7 +422,7 @@ impl Terminal {
         }
     }
 
-    fn shows(&self, text: &'static str) -> Duration {
+    fn shows(&self, text: &'static str) {
         self.until(text, move |screen| {
             screen.alternate && screen.rows().iter().any(|row| row.contains(text))
         })
@@ -489,8 +488,7 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
 
     // A body edit: no key is pressed, and the program draws it.
     edit(&app, "\"tui-one\"", "\"tui-two\"");
-    let took = terminal.shows("tui-two");
-    eprintln!("a body edit repainted in {took:?}");
+    terminal.shows("tui-two");
     let rows = terminal.screen.lock().unwrap().rows();
     assert!(rows.iter().any(|row| row.contains("> beta")), "{rows:#?}");
     assert!(rows.iter().any(|row| row.contains("keys=1:x")), "{rows:#?}");

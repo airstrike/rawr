@@ -1,5 +1,7 @@
 //! Stable generated-span mapping to Rust declarations and Rawr use sites.
 
+use std::collections::BTreeMap;
+
 use serde::ser::SerializeSeq as _;
 use serde::{Serialize, Serializer};
 
@@ -46,25 +48,35 @@ impl<B> Serialize for Borrowed<'_, B> {
     where
         S: Serializer,
     {
+        // Each plan, and each identity's entries in their order, found once
+        // rather than searched for at each span (#1832).
+        let plans: BTreeMap<[u8; 32], &surface::adapter::Plan> = self
+            .request
+            .plans
+            .iter()
+            // The first of an identity, as a search finds it.
+            .rev()
+            .map(|plan| (*plan.identity().as_bytes(), plan))
+            .collect();
+        let mut entries = BTreeMap::<[u8; 32], Vec<&surface::Entry>>::new();
+        for entry in &self.request.entries {
+            entries
+                .entry(*entry.identity().as_bytes())
+                .or_default()
+                .push(entry);
+        }
+        let entries_of = |identity: &[u8; 32]| entries.get(identity).map_or(&[][..], Vec::as_slice);
         let mut count = 0_usize;
         for plan in &self.request.plans {
             count = count.saturating_add(match plan.builder_steps() {
                 Some(steps) => steps.len(),
-                None => self
-                    .request
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.identity().as_bytes() == plan.identity().as_bytes())
-                    .count(),
+                None => entries_of(plan.identity().as_bytes()).len(),
             });
         }
         let mut sequence = serializer.serialize_seq(Some(count))?;
         for (identity, file, generated) in self.spans {
-            let plan = self
-                .request
-                .plans
-                .iter()
-                .find(|plan| plan.identity() == *identity)
+            let plan = plans
+                .get(identity.as_bytes())
                 .ok_or_else(|| serde::ser::Error::custom("generated plan is absent"))?;
             if let Some(steps) = plan.builder_steps() {
                 for step in steps {
@@ -79,12 +91,7 @@ impl<B> Serialize for Borrowed<'_, B> {
                 }
                 continue;
             }
-            for entry in self
-                .request
-                .entries
-                .iter()
-                .filter(|entry| entry.identity().as_bytes() == identity.as_bytes())
-            {
+            for entry in entries_of(identity.as_bytes()) {
                 sequence.serialize_element(&Record {
                     identity: identity.as_bytes(),
                     file,

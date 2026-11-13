@@ -27,7 +27,7 @@ const REQUEST_SCHEMA: u32 = 12;
 /// keep their own versions and stay (#1766). An installed rawr's request
 /// key also carries the rawr sources' digest (#1712), so there this
 /// version matters for a development checkout and the store's eviction.
-const GENERATOR_VERSION: u32 = 308;
+const GENERATOR_VERSION: u32 = 310;
 
 /// Exact pre-build cache lookup identity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -41,6 +41,9 @@ pub struct GenerationRequestKey<B> {
     profile: profile::Profile,
     revision: crate::supervisor::Revision,
     build: BuildRequestKey,
+    /// The request's semantic digest (`generate::semantic_digest`), which
+    /// its build request key and its rendering key share.
+    semantic: [u8; 32],
 }
 
 impl BuildRequestKey {
@@ -68,13 +71,14 @@ impl<B: crate::surface::Runner> Demand<Sealed, B> {
     ) -> Result<GenerationRequestKey<B>, request::Error> {
         let request = self.into_request();
         request.require_runner_profile(&profile)?;
-        let build = build_request_key(&request, &native, &profile)?;
+        let (build, semantic) = keys(&request, &native, &profile)?;
         Ok(GenerationRequestKey {
             request,
             native,
             profile: profile.into(),
             revision,
             build,
+            semantic,
         })
     }
 }
@@ -90,7 +94,7 @@ impl<B: crate::surface::Runner> Demand<Sealed, B> {
     ) -> Result<GenerationRequestKey<B>, request::Error> {
         let request = self.into_request();
         request.require_retained_runner_profile(&pair)?;
-        let build = build_request_key(&request, &native, pair.proof.value())?;
+        let (build, semantic) = keys(&request, &native, pair.proof.value())?;
         let profile = if matches!(&pair.demand, crate::node::staging::Owned::Current(_))
             && matches!(&pair.generated, crate::node::staging::Owned::Current(_))
         {
@@ -113,6 +117,7 @@ impl<B: crate::surface::Runner> Demand<Sealed, B> {
             profile,
             revision,
             build,
+            semantic,
         })
     }
 }
@@ -139,11 +144,34 @@ impl<B> GenerationRequestKey<B> {
     }
 }
 
+/// `request`'s build request key, with its semantic digest
+/// (`generate::semantic_digest`), computed once for both of its keys.
 #[cfg(not(target_arch = "wasm32"))]
+fn keys<B: crate::surface::Runner>(
+    request: &crate::surface::Request<B>,
+    native: &crate::input::proof::Proof,
+    profile: &crate::profile::Proof,
+) -> Result<(BuildRequestKey, [u8; 32]), request::Error> {
+    let semantic = generate::semantic_digest(request)?;
+    Ok((build_key(request, native, profile, &semantic)?, semantic))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn build_request_key<B: crate::surface::Runner>(
     request: &crate::surface::Request<B>,
     native: &crate::input::proof::Proof,
     profile: &crate::profile::Proof,
+) -> Result<BuildRequestKey, request::Error> {
+    keys(request, native, profile).map(|(build, _)| build)
+}
+
+/// `request`'s build request key, with its `semantic` digest.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_key<B: crate::surface::Runner>(
+    request: &crate::surface::Request<B>,
+    native: &crate::input::proof::Proof,
+    profile: &crate::profile::Proof,
+    semantic: &[u8; 32],
 ) -> Result<BuildRequestKey, request::Error> {
     let mut digest = Sha256::new();
     digest.update(b"rawr.import.build-request/v2");
@@ -158,7 +186,7 @@ pub(crate) fn build_request_key<B: crate::surface::Runner>(
     digest.update(request.fingerprint.as_bytes());
     digest.update(native.native()?.as_bytes());
     digest.update(profile.owner_fingerprint());
-    digest.update(generate::semantic_digest(request)?);
+    digest.update(semantic);
     let limits = request.allocation.limits();
     digest.update(u64::try_from(limits.0).unwrap_or(u64::MAX).to_le_bytes());
     digest.update(u64::try_from(limits.1).unwrap_or(u64::MAX).to_le_bytes());
@@ -169,13 +197,15 @@ pub(crate) fn build_request_key<B: crate::surface::Runner>(
 /// the native build, of which rendering reads only the harness's manifest
 /// and lock and the path packages a runner may name. A native edit that
 /// leaves them as they were, as a private field's does, renders the same
-/// sources, which the overlay this keys keeps (#1821).
+/// sources, which the overlay this keys keeps (#1821). `semantic` is the
+/// request's semantic digest, which the build request key holds too.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn rendering_key<B: crate::surface::Runner>(
     request: &crate::surface::Request<B>,
     native: &crate::input::proof::Proof,
     profile: &crate::profile::Proof,
-) -> Result<[u8; 32], request::Error> {
+    semantic: &[u8; 32],
+) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"rawr.import.rendering/v1");
     digest.update(REQUEST_SCHEMA.to_le_bytes());
@@ -191,12 +221,12 @@ pub(crate) fn rendering_key<B: crate::surface::Runner>(
         }
     }
     digest.update(profile.owner_fingerprint());
-    digest.update(generate::semantic_digest(request)?);
+    digest.update(semantic);
     digest.update([u8::from(crate::universe::enabled())]);
     let limits = request.allocation.limits();
     digest.update(u64::try_from(limits.0).unwrap_or(u64::MAX).to_le_bytes());
     digest.update(u64::try_from(limits.1).unwrap_or(u64::MAX).to_le_bytes());
-    Ok(digest.finalize().into())
+    digest.finalize().into()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -229,6 +259,11 @@ impl<B> GenerationRequestKey<B> {
         self.revision
     }
 
+    /// The request's semantic digest, which its keys share.
+    pub(crate) const fn semantic(&self) -> &[u8; 32] {
+        &self.semantic
+    }
+
     pub(crate) const fn application_semantic(&self) -> &[u8; 32] {
         self.profile.value().application_semantic()
     }
@@ -256,13 +291,19 @@ impl<B> GenerationRequestKey<B> {
         let native = &self.native;
         let profile = self.profile.value();
         let own = self.request.fingerprint;
+        // The widened request's keys, computed once for the widening and
+        // for the request it gives.
+        let mut widened = None;
         self.request = kept.widen(self.request, |request| {
-            build_request_key(request, native, profile).ok()
+            let (build, semantic) = keys(request, native, profile).ok()?;
+            widened = Some((build, semantic));
+            Some(build)
         });
         if self.request.fingerprint != own
-            && let Ok(build) = build_request_key(&self.request, native, profile)
+            && let Some((build, semantic)) = widened
         {
             self.build = build;
+            self.semantic = semantic;
         }
         self
     }
@@ -367,13 +408,14 @@ pub fn fixture_generation(
         crate::input::proof::Proof::fixture_runner_harness(project).map_err(request::misread)?;
     let profile =
         crate::profile::Proof::neutral_with_chain_application(chain, *snapshot.as_bytes());
-    let build = build_request_key(&request, &native, &profile)?;
+    let (build, semantic) = keys(&request, &native, &profile)?;
     Ok(GenerationRequestKey {
         request,
         native,
         profile: profile.into(),
         revision,
         build,
+        semantic,
     })
 }
 
@@ -421,13 +463,14 @@ pub fn fixture_lifecycle_generation_application<B: crate::surface::Runner>(
     let profile =
         crate::profile::Proof::fixture_lifecycle_with_chain_application(chain, application)
             .map_err(request::misread)?;
-    let build = build_request_key(&request, &native, &profile)?;
+    let (build, semantic) = keys(&request, &native, &profile)?;
     Ok(GenerationRequestKey {
         request,
         native,
         profile: profile.into(),
         revision,
         build,
+        semantic,
     })
 }
 
@@ -445,13 +488,14 @@ pub fn fixture_generation_from_demand<B: crate::surface::Runner>(
     let request = demand.into_request();
     let native =
         crate::input::proof::Proof::fixture_runner_harness(project).map_err(request::misread)?;
-    let build = build_request_key(&request, &native, &profile)?;
+    let (build, semantic) = keys(&request, &native, &profile)?;
     Ok(GenerationRequestKey {
         request,
         native,
         profile: profile.into(),
         revision,
         build,
+        semantic,
     })
 }
 

@@ -14,8 +14,10 @@ pub(crate) mod cached;
 mod family;
 mod frame;
 mod item;
+mod locked;
 pub(crate) mod member;
 mod object;
+mod opaques;
 mod place;
 mod program;
 
@@ -96,9 +98,11 @@ pub static RESTORES: std::sync::Mutex<Vec<(NativeHandle, Box<dyn Any + Send>)>> 
     std::sync::Mutex::new(Vec::new());
 
 thread_local! {
-    /// The handles the protocol gave out: a handle on the wire keeps its
-    /// value alive, as the caller may pass it back (review 5).
-    pub static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
+    /// The handles the protocol gave out, by their slots: a handle on the
+    /// wire keeps its value alive till the caller passes it back, which
+    /// moves its claim back into the program (review 5).
+    pub static EXPORTED: RefCell<std::collections::HashMap<([u8; 32], u32, u64), NativeHandle>> =
+        RefCell::new(std::collections::HashMap::new());
     /// Homes a call borrowed (`PointerLent`), back to their slots the next
     /// time the owner thread has the arena.
     pub static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
@@ -110,13 +114,17 @@ thread_local! {
 }
 
 /// Slots whose last handle was dropped, freed on the owner thread the next
-/// time it has the arena.
-pub static RELEASES: std::sync::Mutex<Vec<([u8; 32], u32, u64)>> = std::sync::Mutex::new(Vec::new());
+/// time it has the arena: one queue for each arena's epoch, so an arena
+/// takes its own and looks at no other's. Its lock is taken before
+/// [`CALL_EPOCHS`]'s where both are held.
+pub static RELEASES: std::sync::Mutex<std::collections::BTreeMap<[u8; 32], Vec<(u32, u64)>>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// How many entries [`RESTORES`] and [`RELEASES`] hold together, changed
 /// only under the lock of the queue that changes ([`enqueue`],
-/// [`dequeue`]). An arena that finds none, and nothing in this thread's own
-/// [`QUEUED_HERE`], releases nothing and looks at no queue. It is a count,
+/// [`dequeue`], [`take_releases`]). An arena that finds none, and nothing
+/// in this thread's own [`QUEUED_HERE`], releases nothing and looks at no
+/// queue. It is a count,
 /// not a mark the first arena to look clears: the entries another arena
 /// waits for keep it above zero till that arena takes them, so a call
 /// arena on one thread never misses its own releases because an arena on
@@ -148,6 +156,28 @@ pub fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> 
     taken
 }
 
+/// The releases of the arena of `epoch`, taken from [`RELEASES`] and
+/// uncounted in [`PENDING`]. With `past`, those of every arena that is
+/// neither a live call's ([`CALL_EPOCHS`]) nor `epoch`'s are dropped: a past
+/// program's arena is gone.
+pub fn take_releases(epoch: &[u8; 32], past: bool) -> Vec<(u32, u64)> {
+    let mut queues = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let taken = queues.remove(epoch).unwrap_or_default();
+    let mut count = taken.len();
+    if past && !queues.is_empty() {
+        let calls = CALL_EPOCHS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        queues.retain(|queued, queue| {
+            let live = calls.contains(queued);
+            if !live {
+                count += queue.len();
+            }
+            live
+        });
+    }
+    PENDING.fetch_sub(count, std::sync::atomic::Ordering::AcqRel);
+    taken
+}
+
 /// Mark [`QUEUED_HERE`] after an entry joins one of this thread's queues.
 pub fn queued_here() {
     let _ = QUEUED_HERE.try_with(|queued| queued.set(true));
@@ -155,7 +185,11 @@ pub fn queued_here() {
 
 impl Drop for Release {
     fn drop(&mut self) {
-        enqueue(&RELEASES, (self.epoch, self.slot, self.generation));
+        {
+            let mut queues = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            queues.entry(self.epoch).or_default().push((self.slot, self.generation));
+            PENDING.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
         // A handle may be dropped on any thread; the arena is the owner's.
         __rawr_internal::future::on_owner(|| {
             let _ = with_arena(|_| Ok(()));
@@ -1432,7 +1466,7 @@ impl Drop for CallArena {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|live| *live != epoch);
-        dequeue(&RELEASES, |(released, ..)| *released == epoch);
+        take_releases(&epoch, false);
         if let Some(kept) = kept
             && !std::thread::panicking()
         {
@@ -2369,24 +2403,18 @@ impl Arena {
         // Another live arena's releases wait for it: the owner's for the
         // owner, and a call arena's for that call (`CallArena`). Those of a
         // past program's arena are dropped.
-        let live = |epoch: &[u8; 32]| {
-            CALL_EPOCHS
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains(epoch)
-        };
-        let call = live(&self.epoch);
+        let call = CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&self.epoch);
         loop {
-            let batch = dequeue(&RELEASES, |(epoch, ..)| *epoch == self.epoch);
-            if !call {
-                dequeue(&RELEASES, |(epoch, ..)| !live(epoch));
-            }
+            let batch = take_releases(&self.epoch, !call);
             if batch.is_empty() {
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
             let mut homed = Vec::new();
-            for (_, slot, generation) in batch {
+            for (slot, generation) in batch {
                 let Some(entry) = self.slots.get_mut(slot as usize) else {
                     continue;
                 };
@@ -2709,7 +2737,7 @@ pub fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::display::register::<__rawr_internal::scope::Lent>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
     // A new program's arena: the handles the last one gave out are stale.
-    EXPORTED.with_borrow_mut(Vec::clear);
+    EXPORTED.with_borrow_mut(std::collections::HashMap::clear);
 }
 
 pub fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T, Error> {
@@ -3981,32 +4009,78 @@ pub fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bo
 /// as the runner lives: once for each content, however often it is given.
 #[allow(dead_code)]
 pub fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
-    static KEPT: std::sync::Mutex<Vec<&'static [u8]>> = std::sync::Mutex::new(Vec::new());
+    static KEPT: std::sync::Mutex<Option<std::collections::HashSet<&'static [u8]>>> = std::sync::Mutex::new(None);
     let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(found) = kept.iter().find(|kept| ***kept == *bytes) {
+    let kept = kept.get_or_insert_with(std::collections::HashSet::new);
+    if let Some(found) = kept.get(bytes.as_slice()) {
         return found;
     }
     let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-    kept.push(leaked);
+    kept.insert(leaked);
     leaked
 }
 
-/// Scalars a struct's field borrows for its lifetime, as iced's
-/// `LineDash::segments: &'a [f32]`, kept as [`static_bytes`] keeps bytes.
+/// A scalar a slice [`static_slice`] keeps holds: equal slices are those of
+/// the same bits, as a float's `NaN` is the `NaN` it was given.
 #[allow(dead_code)]
-pub fn static_slice<T: PartialEq + Send + Sync + 'static>(values: Vec<T>) -> &'static [T] {
-    static KEPT: std::sync::Mutex<Vec<&'static (dyn std::any::Any + Send + Sync)>> =
-        std::sync::Mutex::new(Vec::new());
+pub trait Scalar: Copy + Send + Sync + 'static {
+    fn bits(self) -> u64;
+}
+
+#[macro_export]
+macro_rules! scalar_bits {
+    ($($ty:ty => $bits:expr),* $(,)?) => {
+        $(impl Scalar for $ty {
+            fn bits(self) -> u64 {
+                let bits: fn($ty) -> u64 = $bits;
+                bits(self)
+            }
+        })*
+    };
+}
+
+scalar_bits! {
+    bool => <u64 as std::convert::From<bool>>::from,
+    char => |value| <u64 as std::convert::From<u32>>::from(<u32 as std::convert::From<char>>::from(value)),
+    u8 => <u64 as std::convert::From<u8>>::from,
+    u16 => <u64 as std::convert::From<u16>>::from,
+    u32 => <u64 as std::convert::From<u32>>::from,
+    u64 => |value| value,
+    usize => |value| value as u64,
+    i8 => |value| value as u64,
+    i16 => |value| value as u64,
+    i32 => |value| value as u64,
+    i64 => |value| value as u64,
+    isize => |value| value as u64,
+    f32 => |value| <u64 as std::convert::From<u32>>::from(value.to_bits()),
+    f64 => f64::to_bits,
+}
+
+/// Scalars a struct's field borrows for its lifetime, as iced's
+/// `LineDash::segments: &'a [f32]`, kept as [`static_bytes`] keeps bytes:
+/// by their type and the hash of their bits, so a slice given again is
+/// found without looking at any other.
+#[allow(dead_code)]
+pub fn static_slice<T: Scalar>(values: Vec<T>) -> &'static [T] {
+    type Kept = std::collections::HashMap<(std::any::TypeId, u64), Vec<&'static (dyn std::any::Any + Send + Sync)>>;
+    static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
+    let same = |kept: &[T]| kept.len() == values.len() && kept.iter().zip(&values).all(|(kept, value)| kept.bits() == value.bits());
+    let mut hasher = std::hash::DefaultHasher::new();
+    for value in &values {
+        std::hash::Hasher::write_u64(&mut hasher, value.bits());
+    }
+    let key = (std::any::TypeId::of::<T>(), std::hash::Hasher::finish(&hasher));
     let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(found) = kept
+    let bucket = kept.get_or_insert_with(Kept::new).entry(key).or_default();
+    if let Some(found) = bucket
         .iter()
         .filter_map(|kept| kept.downcast_ref::<&'static [T]>())
-        .find(|kept| ***kept == *values)
+        .find(|kept| same(kept))
     {
-        return *found;
+        return found;
     }
     let leaked: &'static [T] = Box::leak(values.into_boxed_slice());
-    kept.push(Box::leak(Box::new(leaked)));
+    bucket.push(Box::leak(Box::new(leaked)));
     leaked
 }
 
@@ -4089,14 +4163,11 @@ pub fn decode_value(input: &mut &[u8]) -> Result<Dynamic, Error> {
             let epoch = take_bytes(input, 32)?.try_into().map_err(|_| Error::Malformed)?;
             let slot = u32::from_le_bytes(take_bytes(input, 4)?.try_into().map_err(|_| Error::Malformed)?);
             let generation = u64::from_le_bytes(take_bytes(input, 8)?.try_into().map_err(|_| Error::Malformed)?);
-            // A handle the protocol gave out shares its claim (review 5).
-            let release = EXPORTED.with_borrow(|exported| {
-                exported
-                    .iter()
-                    .find(|handle| handle.epoch == epoch && handle.slot == slot && handle.generation == generation)
-                    .and_then(|handle| handle.release.clone())
-            });
-            Dynamic::from(NativeHandle { epoch, slot, generation, release })
+            // A handle the protocol gave out comes back with its claim, which
+            // the program then holds as Rust holds a value moved to it: the
+            // value is dropped with the program's last copy (review 5).
+            let given = EXPORTED.with_borrow_mut(|exported| exported.remove(&(epoch, slot, generation)));
+            Dynamic::from(given.unwrap_or(NativeHandle { epoch, slot, generation, release: None }))
         }
         7 => match take_bytes(input, 1)?[0] {
             0 => __rawr_internal::option::none(),
@@ -4144,11 +4215,11 @@ pub fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
         push_bytes(output, value.as_bytes())?;
     } else if value.is::<NativeHandle>() {
         let value = value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
-        EXPORTED.with_borrow_mut(|exported| exported.push(value.clone()));
         output.push(6);
         push_bytes(output, &value.epoch)?;
         push_bytes(output, &value.slot.to_le_bytes())?;
         push_bytes(output, &value.generation.to_le_bytes())?;
+        EXPORTED.with_borrow_mut(|exported| exported.insert((value.epoch, value.slot, value.generation), value));
     } else if __rawr_internal::option::is(&value) {
         let mut value = value;
         match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {
@@ -4282,11 +4353,17 @@ pub fn attest_within(
     let Ok(elements) = value.as_array_ref() else {
         return Ok(());
     };
+    if elements.is_empty() {
+        return Ok(());
+    }
+    // A tuple's members have a witness each; an array's elements share its
+    // argument's, issued once for them all.
+    let first = inner(0);
+    let shared = inner(1).is_none();
     for (index, element) in elements.iter().enumerate() {
-        // A tuple's members have a witness each; an array's elements share
-        // its argument's.
-        if let Some(witness) = inner(index).or_else(|| inner(0)) {
-            attest_within(element, &witness, arena)?;
+        let own = if shared || index == 0 { None } else { inner(index) };
+        if let Some(witness) = own.as_ref().or(first.as_ref()) {
+            attest_within(element, witness, arena)?;
         }
     }
     Ok(())
@@ -4508,13 +4585,30 @@ pub fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering
 /// The runner's own driver, in the final crate beside what only it holds:
 /// the adapter table, the bindings it installs and the programs it compiles.
 const DRIVER_SOURCE: &[u8] = br#"
+/// The adapters of the definition `identity` names, in the table's order:
+/// the table indexed once, so a call finds its adapter without a scan.
+fn adapters_of(identity: &[u8; 32]) -> &'static [&'static Adapter] {
+    type Index = std::collections::HashMap<[u8; 32], Vec<&'static Adapter>>;
+    static INDEX: std::sync::OnceLock<Index> = std::sync::OnceLock::new();
+    INDEX
+        .get_or_init(|| {
+            let mut index = Index::new();
+            for adapter in adapters() {
+                index.entry(adapter.identity).or_default().push(adapter);
+            }
+            index
+        })
+        .get(identity)
+        .map_or(&[], Vec::as_slice)
+}
+
 fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> {
     if payload.len() < 100 || &payload[..32] != key { return Err(Error::Stale); }
     payload = &payload[32..];
     let identity: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
     let signature: [u8; 32] = take_bytes(&mut payload, 32)?.try_into().map_err(|_| Error::Malformed)?;
     let count = u32::from_le_bytes(take_bytes(&mut payload, 4)?.try_into().map_err(|_| Error::Malformed)?);
-    let adapter = adapters().find(|adapter| adapter.identity == identity && adapter.signature == signature).ok_or(Error::MissingAdapter)?;
+    let adapter = adapters_of(&identity).iter().find(|adapter| adapter.signature == signature).ok_or(Error::MissingAdapter)?;
     if count != adapter.arguments { return Err(Error::Cardinality); }
     let count = usize::try_from(count).map_err(|_| Error::Cardinality)?;
     let mut values = Vec::new();
@@ -4581,9 +4675,10 @@ fn imported_runtime(
             builder.bind_imported_application(adapter.identity, move |call, values| runtime_invoke(adapter, call, values))?;
         }
         for proof in native.structural().iter().filter(|proof| proof.root() == definition.root()) {
-            let adapter = adapters()
+            let adapter = adapters_of(proof.identity())
+                .first()
                 .copied()
-                .find(|adapter| &adapter.identity == proof.identity())
+                .copied()
                 .ok_or_else(|| __rawr_internal::host::runtime::Error::profile("generated structural adapter identity"))?;
             builder.bind_imported_structural(proof, move |call, values| runtime_invoke(adapter, call, values))?;
         }
@@ -4879,6 +4974,33 @@ mod native_arena_tests {
             .try_cast::<NativeHandle>()
             .expect("a handle");
         assert_eq!(read(&decoded).expect("alive"), 6);
+    }
+
+    /// A value whose channel closes when its last copy is dropped.
+    #[derive(Clone)]
+    struct Closes(#[allow(dead_code)] std::sync::mpsc::Sender<()>);
+
+    fn clone_closes(value: &dyn Any) -> Option<Box<dyn Any>> {
+        value.downcast_ref::<Closes>().map(|value| Box::new(value.clone()) as Box<dyn Any>)
+    }
+
+    #[test]
+    fn a_handle_the_protocol_took_back_is_the_program_s_alone() {
+        install_arena([23; 32]);
+        let (sender, receiver) = std::sync::mpsc::channel::<()>();
+        let handle = with_arena(|arena| arena.insert_debug(Closes(sender), None, Some(clone_closes))).expect("insert");
+        let mut wire = Vec::new();
+        encode_value(Dynamic::from(handle), &mut wire).expect("encode");
+        let decoded = decode_value(&mut wire.as_slice())
+            .expect("decode")
+            .try_cast::<NativeHandle>()
+            .expect("a handle");
+        // Passed back, the program holds its only claim, so a call that
+        // takes it moves the value out, as Rust moves a value given to it,
+        // and nothing keeps a copy behind.
+        let taken = with_arena(|arena| arena.take::<Closes>(decoded)).expect("taken");
+        drop(taken);
+        assert!(matches!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)));
     }
 
     #[test]
@@ -6964,6 +7086,20 @@ pub(crate) struct Expected {
     entries: [u8; 32],
 }
 
+impl Expected {
+    /// Each file's digest and then the source map's, as an overlay keeps
+    /// them ([`expected_kept`]).
+    fn digests(&self) -> Box<[u8]> {
+        self.files
+            .iter()
+            .map(|(_, (digest, _))| digest)
+            .chain([&self.source_map.0])
+            .flatten()
+            .copied()
+            .collect()
+    }
+}
+
 struct Product {
     manifest: Vec<u8>,
     lock: Vec<u8>,
@@ -6972,12 +7108,33 @@ struct Product {
     spans: Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
 }
 
+/// A rendered runner's parts, borrowed from what holds them: a rendering,
+/// or the overlay that kept one.
+struct Parts<'a> {
+    lock: &'a [u8],
+    manifest: &'a [u8],
+    source: &'a [u8],
+    source_map: &'a [u8],
+}
+
+impl Product {
+    fn parts(&self) -> Parts<'_> {
+        Parts {
+            lock: &self.lock,
+            manifest: &self.manifest,
+            source: &self.source,
+            source_map: &self.source_map,
+        }
+    }
+}
+
 pub(crate) fn materialize<B: crate::surface::Runner>(
     key: super::GenerationRequestKey<B>,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, request::Error> {
-    let product = render(&key.request, &key.native, key.profile.value())?;
-    let actual = expected(&key.request, &product)?;
-    assemble(key, product, actual, None)
+    let signatures = Signatures::of(&key.request.plans)?;
+    let product = render(&key.request, &key.native, key.profile.value(), &signatures)?;
+    let actual = expected(&key.request, &product, &signatures)?;
+    assemble(key, product.parts(), actual, None, &signatures)
 }
 
 pub(crate) fn semantic_digest<B: crate::surface::Runner>(
@@ -7013,16 +7170,17 @@ pub(crate) fn semantic_digest<B: crate::surface::Runner>(
 
 fn assemble<B: crate::surface::Runner>(
     mut key: super::GenerationRequestKey<B>,
-    product: Product,
+    product: Parts<'_>,
     actual: Expected,
     chain: Option<crate::node::Chain>,
+    signatures: &Signatures,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, request::Error> {
     let mut contents = vec![
-        (LOCK_PATH, product.lock.as_slice()),
-        (MANIFEST_PATH, product.manifest.as_slice()),
+        (LOCK_PATH, product.lock),
+        (MANIFEST_PATH, product.manifest),
         (BUILD_PATH, BUILD_SCRIPT),
     ];
-    contents.extend(decode_sources(&product.source)?);
+    contents.extend(decode_sources(product.source)?);
     if contents.len() != actual.files.len() {
         return Err(request::drift("generated file cardinality"));
     }
@@ -7049,8 +7207,12 @@ fn assemble<B: crate::surface::Runner>(
     entries
         .try_reserve_exact(key.request.plans.len())
         .map_err(|_| request::Error::Allocation)?;
-    for plan in &key.request.plans {
-        entries.push(entry(plan)?);
+    for (plan, signature) in key.request.plans.iter().zip(signatures.iter()) {
+        entries.push(crate::runner::manifest::Entry::new(
+            *plan.identity().as_bytes(),
+            *signature,
+            arguments(plan)?,
+        ));
     }
     // The inventory receives the whole JSON target rather than the remainder
     // after `total`: the remainder is not a gate, and a generation
@@ -7063,11 +7225,11 @@ fn assemble<B: crate::surface::Runner>(
     )?;
     // Each variant's matchers, after the entries the inventory pairs with
     // plans one to one.
-    for plan in &key.request.plans {
+    for (plan, signature) in key.request.plans.iter().zip(signatures.iter()) {
         for matcher in matchers(plan) {
             entries.push(crate::runner::manifest::Entry::new(
                 matcher.identity(plan),
-                signature(plan)?,
+                *signature,
                 1,
             ));
         }
@@ -7075,7 +7237,7 @@ fn assemble<B: crate::surface::Runner>(
         if has_store(plan) {
             entries.push(crate::runner::manifest::Entry::new(
                 store_identity(plan),
-                signature(plan)?,
+                *signature,
                 2,
             ));
         }
@@ -7083,7 +7245,7 @@ fn assemble<B: crate::surface::Runner>(
         if has_lender(plan) {
             entries.push(crate::runner::manifest::Entry::new(
                 lender_identity(plan),
-                signature(plan)?,
+                *signature,
                 1,
             ));
         }
@@ -7093,7 +7255,7 @@ fn assemble<B: crate::surface::Runner>(
         file_records,
         entries.into_boxed_slice(),
         coverage,
-        product.source_map.into_boxed_slice(),
+        Box::from(product.source_map),
         actual.source_map.0,
     );
     generated.validate(&files).unwrap_or_else(|error| {
@@ -7112,6 +7274,7 @@ fn assemble<B: crate::surface::Runner>(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn entry(plan: &Plan) -> Result<crate::runner::manifest::Entry, request::Error> {
     Ok(crate::runner::manifest::Entry::new(
         *plan.identity().as_bytes(),
@@ -7124,10 +7287,13 @@ fn render<B: crate::surface::Runner>(
     request: &crate::surface::Request<B>,
     native: &crate::input::proof::Proof,
     profile: &crate::profile::Proof,
+    signatures: &Signatures,
 ) -> Result<Product, request::Error> {
     crate::progress::rendered();
     let harness = native.runner_harness(request.allocation.limits().1)?;
     let paths = native.runner_path_packages();
+    // Read once for every question of it.
+    let locked = locked::Locked::read(harness.lock())?;
     let mut hidden = Vec::new();
     let mut sources = Vec::new();
     let mut spans = Vec::new();
@@ -7136,16 +7302,17 @@ fn render<B: crate::surface::Runner>(
         .map_err(|_| request::Error::Allocation)?;
     let members = render_source(
         &request.plans,
+        signatures,
         request.fingerprint,
         profile,
         request.compile_snapshot(),
         request.facade_plan(),
-        (harness.manifest(), harness.lock(), &paths, &mut hidden),
+        (harness.manifest(), &locked, &paths, &mut hidden),
         &mut sources,
         &mut spans,
     )?;
     let unused = unused_patches(
-        harness.lock(),
+        &locked,
         &native.runner_path_manifests(request.allocation.limits().1)?,
     );
     let lock = member::runner_lock(
@@ -7154,12 +7321,17 @@ fn render<B: crate::surface::Runner>(
         &members.exclusions(),
     )?;
     let (manifest, aliases) =
-        runner_manifest_aliased(harness.manifest(), &hidden, harness.lock(), &unused)?;
+        runner_manifest_aliased(harness.manifest(), &hidden, &locked, &unused)?;
     let manifest = member::runner_manifest(&manifest, &members.list, members.binary.as_deref())?;
     let without = members.without();
+    // Read once for every member's manifest.
+    let runner = std::str::from_utf8(&manifest)
+        .map_err(request::misread)?
+        .parse::<DocumentMut>()
+        .map_err(request::misread)?;
     for member in &members.list {
         let path = format!("{}/{MANIFEST_PATH}", member.directory());
-        sources.push((path.into(), member.manifest(&manifest, &without)?));
+        sources.push((path.into(), member.manifest(&runner, &without)?));
     }
     alias_crates(&aliases, &members, &mut sources)?;
     // In path order, as the sources are framed.
@@ -7179,6 +7351,7 @@ fn render<B: crate::surface::Runner>(
 fn expected<B>(
     request: &crate::surface::Request<B>,
     product: &Product,
+    signatures: &Signatures,
 ) -> Result<Expected, request::Error> {
     if product.spans.len() != request.plans.len() {
         return Err(request::drift("adapter span cardinality"));
@@ -7189,6 +7362,7 @@ fn expected<B>(
         &product.manifest,
         &product.source,
         &product.source_map,
+        signatures,
     )
 }
 
@@ -7198,6 +7372,7 @@ fn expected_parts<B>(
     manifest: &[u8],
     source: &[u8],
     source_map_bytes: &[u8],
+    signatures: &Signatures,
 ) -> Result<Expected, request::Error> {
     let mut files: Vec<(Box<str>, FileDigest)> = vec![
         (LOCK_PATH.into(), digest(lock)),
@@ -7207,12 +7382,55 @@ fn expected_parts<B>(
     for (path, bytes) in decode_sources(source)? {
         files.push((path.into(), digest(bytes)));
     }
-    let source_map = digest(source_map_bytes);
+    expected_digested(request, files, digest(source_map_bytes), signatures)
+}
+
+/// [`expected_parts`] of the parts an overlay kept with the digests it kept
+/// of them (`Expected::digests`): each file's and then the source map's,
+/// which the store checked as it read them.
+fn expected_kept<B>(
+    request: &crate::surface::Request<B>,
+    parts: &Parts<'_>,
+    digests: &[u8],
+    signatures: &Signatures,
+) -> Result<Expected, request::Error> {
+    let mut lengths: Vec<(Box<str>, usize)> = vec![
+        (LOCK_PATH.into(), parts.lock.len()),
+        (MANIFEST_PATH.into(), parts.manifest.len()),
+        (BUILD_PATH.into(), BUILD_SCRIPT.len()),
+    ];
+    for (path, bytes) in decode_sources(parts.source)? {
+        lengths.push((path.into(), bytes.len()));
+    }
+    if digests.len() != (lengths.len() + 1) * 32 {
+        return Err(request::drift("cached generated file digests"));
+    }
+    let mut kept = digests.as_chunks::<32>().0.iter().copied();
+    let files = lengths
+        .into_iter()
+        .zip(kept.by_ref())
+        .map(|((path, length), digest)| (path, (digest, length)))
+        .collect();
+    let source_map = kept
+        .next()
+        .map(|digest| (digest, parts.source_map.len()))
+        .ok_or_else(|| request::drift("cached generated file digests"))?;
+    expected_digested(request, files, source_map, signatures)
+}
+
+/// What [`expected_parts`] measures, from each file's digest and length,
+/// the source map's, and each plan's signature.
+fn expected_digested<B>(
+    request: &crate::surface::Request<B>,
+    files: Vec<(Box<str>, FileDigest)>,
+    source_map: FileDigest,
+    signatures: &Signatures,
+) -> Result<Expected, request::Error> {
     let mut entry_hasher = Sha256::new();
     entry_hasher.update(b"rawr.import.generated-entries/v1");
-    for plan in &request.plans {
+    for (plan, signature) in request.plans.iter().zip(signatures.iter()) {
         entry_hasher.update(plan.identity().as_bytes());
-        entry_hasher.update(signature(plan)?);
+        entry_hasher.update(signature);
         entry_hasher.update(arguments(plan)?.to_le_bytes());
     }
     let entries: [u8; 32] = entry_hasher.finalize().into();
@@ -7254,30 +7472,24 @@ struct HiddenCrate {
 /// its name from a source a manifest can name: a registry, a git
 /// repository, or a path, which the lock leaves out and `paths` (each path
 /// package's name and directory) gives.
-fn hidden_crate(lock: &[u8], paths: &[(String, String)], segment: &str) -> Option<HiddenCrate> {
+fn hidden_crate(
+    lock: &locked::Locked,
+    paths: &[(String, String)],
+    segment: &str,
+) -> Option<HiddenCrate> {
     let name = segment
         .strip_prefix(crate::api::ledger::CRATE_SEGMENT)?
         .rsplit_once('_')?
         .0;
-    let document = std::str::from_utf8(lock)
-        .ok()?
-        .parse::<DocumentMut>()
-        .ok()?;
-    let packages = document.get("package")?.as_array_of_tables()?;
-    let mut found = packages.iter().filter(|package| {
-        package
-            .get("name")
-            .and_then(Item::as_str)
-            .is_some_and(|package| package.replace('-', "_") == name)
-    });
+    let mut found = lock.of_crate(name);
     let package = found.next()?;
     if found.next().is_some() {
         return None;
     }
-    let source = match package.get("source").and_then(Item::as_str) {
+    let source = match package.source() {
         Some(source) => source.to_owned(),
         None => {
-            let name = package.get("name").and_then(Item::as_str)?;
+            let name = package.name();
             let mut found = paths.iter().filter(|(package, _)| package == name);
             let (_, directory) = found.next()?;
             if found.next().is_some() {
@@ -7291,16 +7503,8 @@ fn hidden_crate(lock: &[u8], paths: &[(String, String)], segment: &str) -> Optio
         || source == "registry+https://github.com/rust-lang/crates.io-index")
         .then(|| HiddenCrate {
             segment: segment.to_owned(),
-            package: package
-                .get("name")
-                .and_then(Item::as_str)
-                .unwrap_or(name)
-                .to_owned(),
-            version: package
-                .get("version")
-                .and_then(Item::as_str)
-                .unwrap_or_default()
-                .to_owned(),
+            package: package.name().to_owned(),
+            version: package.version().to_owned(),
             source,
         })
 }
@@ -7333,30 +7537,16 @@ fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
 /// Whether the harness's `lock` reaches the path package `name` from its
 /// root through path packages alone: then the package is a member of the
 /// runner's workspace without a dependency of its own.
-fn path_reached(lock: &[u8], name: &str) -> bool {
-    let Some(document) = std::str::from_utf8(lock)
-        .ok()
-        .and_then(|text| text.parse::<DocumentMut>().ok())
-    else {
-        return false;
-    };
-    let Some(packages) = document.get("package").and_then(Item::as_array_of_tables) else {
-        return false;
-    };
+fn path_reached(lock: &locked::Locked, name: &str) -> bool {
     // Path packages have no source, so an edge names one by its name and,
     // when two share it, its version.
-    let paths = packages
+    let paths = lock
+        .packages()
         .iter()
-        .filter(|package| !package.contains_key("source"))
-        .filter_map(|package| {
-            let name = package.get("name").and_then(Item::as_str)?;
-            let version = package.get("version").and_then(Item::as_str)?;
-            let edges = package
-                .get("dependencies")
-                .and_then(Item::as_array)
-                .map(|edges| edges.iter().filter_map(|edge| edge.as_str()).collect())
-                .unwrap_or_else(Vec::new);
-            Some((name, version, edges))
+        .filter(|package| package.source().is_none())
+        .map(|package| {
+            let edges: Vec<&str> = package.dependencies().collect();
+            (package.name(), package.version(), edges)
         })
         .collect::<Vec<_>>();
     let mut reached = paths
@@ -7388,7 +7578,8 @@ fn path_reached(lock: &[u8], name: &str) -> bool {
 
 #[cfg(test)]
 fn runner_manifest(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
-    runner_manifest_aliased(bytes, hidden, &[], &Patches::new()).map(|(manifest, _)| manifest)
+    let lock = locked::Locked::read(&[])?;
+    runner_manifest_aliased(bytes, hidden, &lock, &Patches::new()).map(|(manifest, _)| manifest)
 }
 
 /// The crate names a dependency key gives Rust code.
@@ -7406,23 +7597,8 @@ fn dependency_package<'a>(key: &'a str, item: &'a Item) -> &'a str {
 
 /// Whether the lock holds exactly one package of this name: then every
 /// dependency on that name is the same package.
-fn single_locked(lock: &[u8], name: &str) -> bool {
-    let Some(document) = std::str::from_utf8(lock)
-        .ok()
-        .and_then(|text| text.parse::<DocumentMut>().ok())
-    else {
-        return false;
-    };
-    document
-        .get("package")
-        .and_then(Item::as_array_of_tables)
-        .is_some_and(|packages| {
-            packages
-                .iter()
-                .filter(|package| package.get("name").and_then(Item::as_str) == Some(name))
-                .count()
-                == 1
-        })
+fn single_locked(lock: &locked::Locked, name: &str) -> bool {
+    lock.single(name)
 }
 
 /// Make each extra name the runner needs for a crate the project already
@@ -7479,7 +7655,7 @@ type Aliases = Vec<(String, String)>;
 fn runner_manifest_aliased(
     bytes: &[u8],
     hidden: &[HiddenCrate],
-    lock: &[u8],
+    lock: &locked::Locked,
     unused: &Patches,
 ) -> Result<(Vec<u8>, Aliases), request::Error> {
     let mut aliases = Vec::new();
@@ -7631,13 +7807,7 @@ type Patches = std::collections::BTreeSet<String>;
 /// which the harness's isn't, and Cargo resolves a member's optional and
 /// target-specific dependencies into the lock, so a patch one of them names
 /// stays (#1833).
-fn unused_patches(lock: &[u8], manifests: &[Box<[u8]>]) -> Patches {
-    let Some(document) = std::str::from_utf8(lock)
-        .ok()
-        .and_then(|text| text.parse::<DocumentMut>().ok())
-    else {
-        return Patches::new();
-    };
+fn unused_patches(lock: &locked::Locked, manifests: &[Box<[u8]>]) -> Patches {
     let named = manifests
         .iter()
         .filter_map(|manifest| std::str::from_utf8(manifest).ok())
@@ -7646,29 +7816,16 @@ fn unused_patches(lock: &[u8], manifests: &[Box<[u8]>]) -> Patches {
             depended(manifest.as_table(), &mut named);
             named
         });
-    let name = |package: &toml_edit::Table| {
-        package
-            .get("name")
-            .and_then(Item::as_str)
-            .map(str::to_owned)
-    };
-    let locked = document
-        .get("package")
-        .and_then(Item::as_array_of_tables)
-        .map(|packages| packages.iter().filter_map(name).collect::<Vec<_>>())
-        .unwrap_or_default();
-    document
-        .get("patch")
-        .and_then(|patch| patch.get("unused"))
-        .and_then(Item::as_array_of_tables)
-        .map(|unused| {
-            unused
+    lock.unused_patches()
+        .filter(|package| {
+            !lock
+                .packages()
                 .iter()
-                .filter_map(name)
-                .filter(|package| !locked.contains(package) && !named.contains(package))
-                .collect()
+                .any(|locked| locked.name() == *package)
+                && !named.contains(*package)
         })
-        .unwrap_or_default()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Adds to `named` each package a dependency table of `manifest` names, its
@@ -7813,7 +7970,7 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
 /// path package's name and directory, and the hidden crates found so far.
 type Harness<'a> = (
     &'a [u8],
-    &'a [u8],
+    &'a locked::Locked,
     &'a [(String, String)],
     &'a mut Vec<HiddenCrate>,
 );
@@ -7832,6 +7989,7 @@ type Harness<'a> = (
 #[allow(clippy::too_many_arguments)]
 fn render_source(
     plans: &[Plan],
+    signatures: &Signatures,
     surface: crate::surface::Fingerprint,
     profile: &crate::profile::Proof,
     compile_snapshot: bool,
@@ -7910,6 +8068,9 @@ fn render_source(
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
     let _type_paths = TypePaths::install(facade.as_ref());
+    // Every adapter asks the cohort's opaque facts, which read the opaque
+    // types installed above; they are found once.
+    let _opaques = opaques::index(plans);
     // Every adapter that reaches a region's value of an opaque type names
     // how the region holds it (`family`), so each is declared first: a
     // call on what another such call gives is declared once that one is.
@@ -8074,7 +8235,11 @@ fn render_source(
     // Structural rows bind to installed facades; without a facade plan there
     // are none, so no row could be admitted.
     let mut written = std::collections::BTreeSet::new();
-    for plan in plans.iter().filter(|_| facade_plan.is_some()) {
+    for (plan, signature) in plans
+        .iter()
+        .zip(signatures.iter())
+        .filter(|_| facade_plan.is_some())
+    {
         let Some(kind) = structural_kind(plan) else {
             continue;
         };
@@ -8110,7 +8275,7 @@ fn render_source(
         output.write_all(b", ").map_err(request::unwritable)?;
         byte_array(output, plan.identity().as_bytes())?;
         output.write_all(b", ").map_err(request::unwritable)?;
-        byte_array(output, &signature(plan)?)?;
+        byte_array(output, signature)?;
         write!(output, ", {}, {kind})", arguments(plan)?).map_err(request::unwritable)?;
         render_structural_instance(plan, output)?;
         for matcher in matchers(plan) {
@@ -8125,7 +8290,7 @@ fn render_source(
             output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &matcher.identity(plan))?;
             output.write_all(b", ").map_err(request::unwritable)?;
-            byte_array(output, &signature(plan)?)?;
+            byte_array(output, signature)?;
             writeln!(
                 output,
                 ", 1, __rawr_internal::package::import::runner::StructuralKind::{})",
@@ -8146,7 +8311,7 @@ fn render_source(
             output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &store_identity(plan))?;
             output.write_all(b", ").map_err(request::unwritable)?;
-            byte_array(output, &signature(plan)?)?;
+            byte_array(output, signature)?;
             writeln!(
                 output,
                 ", 2, __rawr_internal::package::import::runner::StructuralKind::Store)"
@@ -8166,7 +8331,7 @@ fn render_source(
             output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &lender_identity(plan))?;
             output.write_all(b", ").map_err(request::unwritable)?;
-            byte_array(output, &signature(plan)?)?;
+            byte_array(output, signature)?;
             writeln!(
                 output,
                 ", 1, __rawr_internal::package::import::runner::StructuralKind::Borrow {{ field: 0 }})"
@@ -8203,7 +8368,11 @@ fn render_source(
     for modules in units.values() {
         for indices in modules.values() {
             for index in indices {
-                render_rows(&plans[*index], &mut rendered[*index].rows)?;
+                render_rows(
+                    &plans[*index],
+                    signatures.get(*index),
+                    &mut rendered[*index].rows,
+                )?;
             }
             for index in indices {
                 let plan = &plans[*index];
@@ -8744,11 +8913,15 @@ fn write_program(
 
 /// The adapter table's rows for `plan`: its own, each variant's matchers,
 /// each field's store and its lender.
-fn render_rows(plan: &Plan, file: &mut Vec<u8>) -> Result<(), request::Error> {
+fn render_rows(
+    plan: &Plan,
+    signature: &[u8; 32],
+    file: &mut Vec<u8>,
+) -> Result<(), request::Error> {
     write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
     byte_array(file, plan.identity().as_bytes())?;
     write!(file, ", signature: ").map_err(request::unwritable)?;
-    byte_array(file, &signature(plan)?)?;
+    byte_array(file, signature)?;
     write!(file, ", selector: ").map_err(request::unwritable)?;
     byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
     write!(file, ", instance: ").map_err(request::unwritable)?;
@@ -8774,7 +8947,7 @@ fn render_rows(plan: &Plan, file: &mut Vec<u8>) -> Result<(), request::Error> {
         write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
         byte_array(file, &matcher.identity(plan))?;
         write!(file, ", signature: ").map_err(request::unwritable)?;
-        byte_array(file, &signature(plan)?)?;
+        byte_array(file, signature)?;
         write!(file, ", selector: ").map_err(request::unwritable)?;
         byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
         write!(file, ", instance: ").map_err(request::unwritable)?;
@@ -8793,7 +8966,7 @@ fn render_rows(plan: &Plan, file: &mut Vec<u8>) -> Result<(), request::Error> {
         write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
         byte_array(file, &store_identity(plan))?;
         write!(file, ", signature: ").map_err(request::unwritable)?;
-        byte_array(file, &signature(plan)?)?;
+        byte_array(file, signature)?;
         write!(file, ", selector: ").map_err(request::unwritable)?;
         byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
         write!(file, ", instance: ").map_err(request::unwritable)?;
@@ -8810,7 +8983,7 @@ fn render_rows(plan: &Plan, file: &mut Vec<u8>) -> Result<(), request::Error> {
         write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
         byte_array(file, &lender_identity(plan))?;
         write!(file, ", signature: ").map_err(request::unwritable)?;
-        byte_array(file, &signature(plan)?)?;
+        byte_array(file, signature)?;
         write!(file, ", selector: ").map_err(request::unwritable)?;
         byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
         write!(file, ", instance: ").map_err(request::unwritable)?;
@@ -11661,10 +11834,14 @@ fn first_opaque(ty: &convert::Type) -> Option<&convert::Type> {
 
 /// The operand of `plan` whose type holds an opaque type, by its argument
 /// index, with that opaque type and the operand's whole type: the
-/// receiver, or an input.
-fn opaque_operand(
-    plan: &Plan,
-) -> Result<Option<(usize, convert::Type, convert::Type)>, request::Error> {
+/// receiver, or an input. A plan of the cohort being rendered has it found
+/// already (`opaques`).
+fn opaque_operand(plan: &Plan) -> Result<Option<opaques::Operand>, request::Error> {
+    opaques::operand(plan).map_or_else(|| find_opaque_operand(plan), Ok)
+}
+
+/// [`opaque_operand`], found from the plan's signature.
+fn find_opaque_operand(plan: &Plan) -> Result<Option<opaques::Operand>, request::Error> {
     let (signature, substitutions, receiver, functions) = match plan.operation() {
         Operation::Method {
             signature,
@@ -11755,6 +11932,9 @@ fn opaque_consumers<'p>(
     cohort: &'p [Plan],
     key: &convert::Type,
 ) -> Result<Vec<&'p Plan>, request::Error> {
+    if let Some(consumers) = opaques::consumers(cohort, key) {
+        return Ok(consumers);
+    }
     let mut consumers = Vec::new();
     for plan in cohort {
         if opaque_operand(plan)?.is_some_and(|(_, opaque, _)| same_opaque(&opaque, key)) {
@@ -11773,8 +11953,14 @@ fn by_handle(operand: &convert::Type, opaque: &convert::Type) -> bool {
     }
 }
 
-/// The opaque type the value `plan` gives holds, when it does.
+/// The opaque type the value `plan` gives holds, when it does. A plan of
+/// the cohort being rendered has it found already (`opaques`).
 fn produced_opaque(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
+    opaques::produced(plan).map_or_else(|| find_produced_opaque(plan), Ok)
+}
+
+/// [`produced_opaque`], found from the plan's signature.
+fn find_produced_opaque(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
     let returned = match plan.operation() {
         Operation::Function {
             signature,
@@ -11798,6 +11984,9 @@ fn opaque_producer<'p>(
     cohort: &'p [Plan],
     key: &convert::Type,
 ) -> Result<Option<&'p Plan>, request::Error> {
+    if let Some(producer) = opaques::producer(cohort, key) {
+        return Ok(producer);
+    }
     for plan in cohort {
         if opaque_operand(plan)?.is_none()
             && produced_opaque(plan)?.is_some_and(|produced| same_opaque(&produced, key))
@@ -24784,6 +24973,39 @@ fn same_opaque(this: &convert::Type, other: &convert::Type) -> bool {
     }
 }
 
+/// The type two types share exactly when [`same_opaque`] holds of them:
+/// `ty` with each argument of an opaque type that is an associated type its
+/// bounds bind left inferred.
+fn opaque_key(ty: &convert::Type) -> convert::Type {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return ty.clone();
+    };
+    OPAQUE_TYPES.with_borrow(|opaque| {
+        let associated = opaque
+            .get(definition.as_bytes())
+            .map_or(&[][..], |associated| &associated[..]);
+        convert::Type::Nominal {
+            definition: *definition,
+            arguments: arguments
+                .iter()
+                .enumerate()
+                .map(|(position, argument)| {
+                    if u32::try_from(position).is_ok_and(|position| associated.contains(&position))
+                    {
+                        convert::Type::Inferred
+                    } else {
+                        argument.clone()
+                    }
+                })
+                .collect(),
+        }
+    })
+}
+
 /// Whether `ty` holds an opaque `impl Trait` type a function gives.
 fn holds_opaque(ty: &convert::Type) -> bool {
     match ty {
@@ -25665,6 +25887,29 @@ fn signature(plan: &Plan) -> Result<[u8; 32], request::Error> {
     Ok(writer.0.finalize().into())
 }
 
+/// Each plan's [`signature`], in the request's order: a hash of its whole
+/// encoding, computed once for every row, entry and digest that carries it.
+pub(crate) struct Signatures(Box<[[u8; 32]]>);
+
+impl Signatures {
+    pub(crate) fn of(plans: &[Plan]) -> Result<Self, request::Error> {
+        plans
+            .iter()
+            .map(signature)
+            .collect::<Result<_, _>>()
+            .map(Self)
+    }
+
+    /// The signature of the plan at `index`.
+    fn get(&self, index: usize) -> &[u8; 32] {
+        &self.0[index]
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &[u8; 32]> {
+        self.0.iter()
+    }
+}
+
 fn digest(bytes: &[u8]) -> FileDigest {
     (Sha256::digest(bytes).into(), bytes.len())
 }
@@ -26108,10 +26353,19 @@ mod tests {
         assert!(cargo(false).contains("was not used in the crate graph"));
         let lock = std::fs::read(root.join("Cargo.lock")).unwrap();
         let used = std::fs::read(root.join("used/Cargo.toml")).unwrap();
-        let unused = super::unused_patches(&lock, &[used.into_boxed_slice()]);
+        let unused = super::unused_patches(
+            &super::locked::Locked::read(&lock).unwrap(),
+            &[used.into_boxed_slice()],
+        );
         assert!(unused.contains("ghost"));
         let harness = std::fs::read(root.join("Cargo.toml")).unwrap();
-        let (manifest, _) = super::runner_manifest_aliased(&harness, &[], &lock, &unused).unwrap();
+        let (manifest, _) = super::runner_manifest_aliased(
+            &harness,
+            &[],
+            &super::locked::Locked::read(&lock).unwrap(),
+            &unused,
+        )
+        .unwrap();
         let runner = super::runner_lock(&lock, &[], &unused).unwrap();
         assert!(!String::from_utf8_lossy(&manifest).contains("ghost"));
         assert!(!String::from_utf8_lossy(&runner).contains("ghost"));
@@ -26172,11 +26426,23 @@ mod tests {
         };
         assert!(cargo("harness").contains("was not used in the crate graph"));
         let lock = std::fs::read(root.join("harness/Cargo.lock")).unwrap();
-        assert!(super::unused_patches(&lock, &[]).contains("ghost"));
-        let unused = super::unused_patches(&lock, &[app.as_bytes().into()]);
+        assert!(
+            super::unused_patches(&super::locked::Locked::read(&lock).unwrap(), &[])
+                .contains("ghost")
+        );
+        let unused = super::unused_patches(
+            &super::locked::Locked::read(&lock).unwrap(),
+            &[app.as_bytes().into()],
+        );
         assert!(unused.is_empty());
         let harness = std::fs::read(root.join("harness/Cargo.toml")).unwrap();
-        let (manifest, _) = super::runner_manifest_aliased(&harness, &[], &lock, &unused).unwrap();
+        let (manifest, _) = super::runner_manifest_aliased(
+            &harness,
+            &[],
+            &super::locked::Locked::read(&lock).unwrap(),
+            &unused,
+        )
+        .unwrap();
         let runner = super::runner_lock(&lock, &[], &unused).unwrap();
         let manifest = String::from_utf8(manifest).unwrap();
         assert!(manifest.contains("ghost = { path = \"../ghost\" }"));
@@ -26211,7 +26477,7 @@ mod tests {
         let (manifest, _) = super::runner_manifest_aliased(
             harness,
             &[hidden("ui_shell"), hidden("local_macros")],
-            lock,
+            &super::locked::Locked::read(lock).unwrap(),
             &super::Patches::new(),
         )
         .unwrap();
@@ -26520,7 +26786,13 @@ mod tests {
             .require_runner_profile(&profile)
             .expect("exact facade in profile closure");
         let trusted_digest = super::semantic_digest(&trusted).expect("owned digest");
-        let trusted_render = super::render(&trusted, &native, &profile).expect("owned render");
+        let trusted_render = super::render(
+            &trusted,
+            &native,
+            &profile,
+            &super::Signatures::of(&trusted.plans).unwrap(),
+        )
+        .expect("owned render");
         assert_eq!(
             calls.get(),
             0,
@@ -26530,7 +26802,13 @@ mod tests {
             trusted_digest,
             super::semantic_digest(&ordinary).expect("ordinary digest")
         );
-        let ordinary_render = super::render(&ordinary, &native, &profile).expect("ordinary render");
+        let ordinary_render = super::render(
+            &ordinary,
+            &native,
+            &profile,
+            &super::Signatures::of(&ordinary.plans).unwrap(),
+        )
+        .expect("ordinary render");
         assert_eq!(
             calls.get(),
             4,
@@ -26541,7 +26819,13 @@ mod tests {
         assert_eq!(trusted_render.source, ordinary_render.source);
         assert_eq!(trusted_render.source_map, ordinary_render.source_map);
         super::semantic_digest(&ordinary).expect("repeated ordinary digest");
-        super::render(&ordinary, &native, &profile).expect("repeated ordinary rendering");
+        super::render(
+            &ordinary,
+            &native,
+            &profile,
+            &super::Signatures::of(&ordinary.plans).unwrap(),
+        )
+        .expect("repeated ordinary rendering");
         assert_eq!(
             calls.get(),
             8,
@@ -26563,9 +26847,14 @@ mod tests {
         );
         assert_ne!(
             trusted_render.source,
-            super::render(&alternate_mode, &native, &profile)
-                .expect("mode rendering")
-                .source
+            super::render(
+                &alternate_mode,
+                &native,
+                &profile,
+                &super::Signatures::of(&alternate_mode.plans).unwrap()
+            )
+            .expect("mode rendering")
+            .source
         );
         assert!(matches!(
             demand()

@@ -7,8 +7,10 @@ use crate::node;
 // v4: nor the native build, but for the harness's manifest and lock and the
 // path packages, so a native edit that leaves them reuses it too (#1821).
 const DOMAIN: &[u8] = b"rawr.generated.overlay/v4";
-const MAGIC: &[u8; 8] = b"RAWROVL1";
-const HEADER_BYTES: usize = 112;
+// 2: the product keeps each file's digest, so a hit hashes no file again
+// (#1831).
+const MAGIC: &[u8; 8] = b"RAWROVL2";
+const HEADER_BYTES: usize = 120;
 
 /// The overlay's store schema: its codec with the versions its action key
 /// carries through the generator and the rendering key (request schema,
@@ -17,7 +19,7 @@ const HEADER_BYTES: usize = 112;
 pub(crate) const SCHEMA: u32 = {
     let contract = crate::classify::contract_versions();
     node::reader_schema(
-        1,
+        2,
         &[
             super::super::generator_version(),
             super::super::request_schema(),
@@ -133,7 +135,12 @@ fn node_error(error: node::Error) -> super::request::Error {
 fn authority<B: crate::surface::Runner>(
     key: &super::super::GenerationRequestKey<B>,
 ) -> Result<Box<[u8]>, super::request::Error> {
-    let rendering = super::super::rendering_key(&key.request, &key.native, key.profile.value())?;
+    let rendering = super::super::rendering_key(
+        &key.request,
+        &key.native,
+        key.profile.value(),
+        key.semantic(),
+    );
     let mut authority = Vec::new();
     authority
         .try_reserve_exact(DOMAIN.len().saturating_add(4 + rendering.len()))
@@ -203,19 +210,25 @@ struct Product {
     manifest: Box<[u8]>,
     source: Box<[u8]>,
     source_map: Box<[u8]>,
+    /// Each file's digest and then the source map's (`Expected::digests`).
+    digests: Box<[u8]>,
 }
 
 impl Product {
     fn render<B: crate::surface::Runner>(
         key: &super::super::GenerationRequestKey<B>,
     ) -> Result<Self, node::Error> {
-        let rendered = super::render(&key.request, &key.native, key.profile.value())
-            .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-        let expected = super::expected(&key.request, &rendered)
-            .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
+        let transform = |error: super::request::Error| {
+            node::Error::Transform(error.to_string().into_boxed_str())
+        };
+        let signatures = super::Signatures::of(&key.request.plans).map_err(transform)?;
+        let rendered = super::render(&key.request, &key.native, key.profile.value(), &signatures)
+            .map_err(transform)?;
+        let expected = super::expected(&key.request, &rendered, &signatures).map_err(transform)?;
         Ok(Self {
             aggregate: expected.aggregate,
             entries: expected.entries,
+            digests: expected.digests(),
             lock: rendered.lock.into_boxed_slice(),
             manifest: rendered.manifest.into_boxed_slice(),
             source: rendered.source.into_boxed_slice(),
@@ -223,29 +236,30 @@ impl Product {
         })
     }
 
+    fn parts(&self) -> super::Parts<'_> {
+        super::Parts {
+            lock: &self.lock,
+            manifest: &self.manifest,
+            source: &self.source,
+            source_map: &self.source_map,
+        }
+    }
+
+    /// The runner this overlay kept, from its parts and the digests it kept
+    /// of them, which the store checked as it read them: nothing is hashed
+    /// or rendered again, and each file is copied once, into the manifest.
     fn assemble<B: crate::surface::Runner>(
         &self,
         key: super::super::GenerationRequestKey<B>,
         chain: node::Chain,
     ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, super::request::Error> {
-        let expected = super::expected_parts(
-            &key.request,
-            &self.lock,
-            &self.manifest,
-            &self.source,
-            &self.source_map,
-        )?;
+        let signatures = super::Signatures::of(&key.request.plans)?;
+        let parts = self.parts();
+        let expected = super::expected_kept(&key.request, &parts, &self.digests, &signatures)?;
         if expected.aggregate != self.aggregate || expected.entries != self.entries {
             return Err(super::request::drift("cached normalized generated product"));
         }
-        let rendered = super::Product {
-            manifest: clone_bytes(&self.manifest)?,
-            lock: clone_bytes(&self.lock)?,
-            source: clone_bytes(&self.source)?,
-            source_map: clone_bytes(&self.source_map)?,
-            spans: Vec::new(),
-        };
-        super::assemble(key, rendered, expected, Some(chain))
+        super::assemble(key, parts, expected, Some(chain), &signatures)
     }
 
     fn encoded_len(&self) -> usize {
@@ -254,6 +268,7 @@ impl Product {
             .saturating_add(self.manifest.len())
             .saturating_add(self.source.len())
             .saturating_add(self.source_map.len())
+            .saturating_add(self.digests.len())
     }
 }
 
@@ -271,19 +286,20 @@ impl node::Value for Product {
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&self.aggregate);
         bytes.extend_from_slice(&self.entries);
-        for part in [
+        let parts = [
             self.lock.as_ref(),
             self.manifest.as_ref(),
             self.source.as_ref(),
             self.source_map.as_ref(),
-        ] {
+            self.digests.as_ref(),
+        ];
+        for part in parts {
             bytes.extend_from_slice(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_le_bytes());
         }
         bytes.extend_from_slice(&[0; 8]);
-        bytes.extend_from_slice(&self.lock);
-        bytes.extend_from_slice(&self.manifest);
-        bytes.extend_from_slice(&self.source);
-        bytes.extend_from_slice(&self.source_map);
+        for part in parts {
+            bytes.extend_from_slice(part);
+        }
         if bytes.len() != length {
             return Err(node::Error::State("overlay encoder length drifted"));
         }
@@ -294,7 +310,7 @@ impl node::Value for Product {
         if bytes.len() < HEADER_BYTES {
             return Err(node::Error::Codec("cached overlay is truncated"));
         }
-        if bytes.get(..8) != Some(MAGIC) || bytes[104..112] != [0; 8] {
+        if bytes.get(..8) != Some(MAGIC) || bytes[112..120] != [0; 8] {
             return Err(node::Error::Codec("cached overlay header changed"));
         }
         let aggregate = array_at(bytes, 8, "cached overlay aggregate is truncated")?;
@@ -304,6 +320,7 @@ impl node::Value for Product {
             usize_at(bytes, 80, "cached overlay manifest length is truncated")?,
             usize_at(bytes, 88, "cached overlay source length is truncated")?,
             usize_at(bytes, 96, "cached overlay source-map length is truncated")?,
+            usize_at(bytes, 104, "cached overlay digests length is truncated")?,
         ];
         let expected = lengths
             .iter()
@@ -311,7 +328,7 @@ impl node::Value for Product {
             .ok_or(node::Error::Codec(
                 "cached overlay length is not addressable",
             ))?;
-        if expected != bytes.len() || lengths[..3].contains(&0) {
+        if expected != bytes.len() || lengths[..3].contains(&0) || lengths[4] % 32 != 0 {
             return Err(node::Error::Codec("cached overlay framing changed"));
         }
         let mut offset = HEADER_BYTES;
@@ -319,6 +336,7 @@ impl node::Value for Product {
         let manifest = take_part(bytes, &mut offset, lengths[1])?;
         let source = take_part(bytes, &mut offset, lengths[2])?;
         let source_map = take_part(bytes, &mut offset, lengths[3])?;
+        let digests = take_part(bytes, &mut offset, lengths[4])?;
         Ok(Self {
             aggregate,
             entries,
@@ -326,17 +344,9 @@ impl node::Value for Product {
             manifest,
             source,
             source_map,
+            digests,
         })
     }
-}
-
-fn clone_bytes(bytes: &[u8]) -> Result<Vec<u8>, super::request::Error> {
-    let mut retained = Vec::new();
-    retained
-        .try_reserve_exact(bytes.len())
-        .map_err(|_| super::request::Error::Allocation)?;
-    retained.extend_from_slice(bytes);
-    Ok(retained)
 }
 
 fn take_part(bytes: &[u8], offset: &mut usize, length: usize) -> Result<Box<[u8]>, node::Error> {
@@ -435,6 +445,7 @@ mod tests {
             manifest: Box::from(&b"manifest"[..]),
             source: Box::from(&b"source"[..]),
             source_map: Box::from(&b"map"[..]),
+            digests: Box::from(&[3; 64][..]),
         }
     }
 
@@ -449,6 +460,7 @@ mod tests {
             profile: crate::profile::Proof::neutral_with_chain(chain).into(),
             revision,
             build: crate::bridge::BuildRequestKey::fixture([0x4f; 32]),
+            semantic: [0x5e; 32],
         }
     }
 
@@ -459,12 +471,21 @@ mod tests {
         let source =
             crate::bridge::generate::encode_sources(&[("src/main.rs".into(), SOURCE.to_vec())])
                 .expect("the overlay runner sources frame");
-        let expected =
-            crate::bridge::generate::expected_parts(&key.request, LOCK, MANIFEST, &source, &[])
-                .expect("the overlay runner product measures");
+        let signatures = crate::bridge::generate::Signatures::of(&key.request.plans)
+            .expect("the overlay runner plans sign");
+        let expected = crate::bridge::generate::expected_parts(
+            &key.request,
+            LOCK,
+            MANIFEST,
+            &source,
+            &[],
+            &signatures,
+        )
+        .expect("the overlay runner product measures");
         Product {
             aggregate: expected.aggregate,
             entries: expected.entries,
+            digests: expected.digests(),
             lock: Box::from(LOCK),
             manifest: Box::from(MANIFEST),
             source: source.into_boxed_slice(),
@@ -501,7 +522,7 @@ mod tests {
         assert_eq!(decoded.source.as_ref(), b"source");
         assert!(Product::decode(&bytes[..bytes.len() - 1]).is_err());
         let mut reserved = bytes.into_vec();
-        reserved[104] = 1;
+        reserved[112] = 1;
         assert!(Product::decode(&reserved).is_err());
     }
 

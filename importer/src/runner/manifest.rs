@@ -274,11 +274,7 @@ impl GeneratedManifest {
         {
             return Err(Error::FileOrder);
         }
-        if self.entries.iter().enumerate().any(|(index, entry)| {
-            self.entries[index + 1..]
-                .iter()
-                .any(|later| later.identity == entry.identity)
-        }) {
+        if repeats_identity(&self.entries) {
             return Err(Error::EntryOrder);
         }
         self.coverage.validate(&self.entries)?;
@@ -402,11 +398,7 @@ impl Carrier {
             || generator != crate::bridge::generator_version()
             || runtime != RUNTIME_VERSION
             || profile != crate::profile::version()
-            || entries.iter().enumerate().any(|(index, entry)| {
-                entries[index + 1..]
-                    .iter()
-                    .any(|later| later.identity == entry.identity)
-            })
+            || repeats_identity(&entries)
         {
             return Err(Error::Carrier);
         }
@@ -476,6 +468,12 @@ pub enum Error {
     SourceMap,
     #[error("generated manifest carrier exceeded its deterministic bound")]
     Carrier,
+}
+
+/// Whether two of `entries` share an identity.
+fn repeats_identity(entries: &[Entry]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    entries.iter().any(|entry| !seen.insert(&entry.identity))
 }
 
 fn push_length(bytes: &mut Vec<u8>, value: usize) -> Result<(), Error> {
