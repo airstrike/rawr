@@ -952,7 +952,7 @@ impl Proof {
     }
 
     /// What this proof read, entry by entry.
-    #[cfg(feature = "rustc-driver")]
+    #[cfg(any(test, feature = "rustc-driver"))]
     pub(crate) fn entries(&self) -> &[Entry] {
         &self.entries
     }
