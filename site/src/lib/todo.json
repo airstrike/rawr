@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees.","issues":[1897],"refs":[1755]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.212",
@@ -4193,7 +4198,10 @@
     {"issue":1893,"title":"Assigning a field of a field that isn't Copy is refused as unsupported syntax","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1894,"title":"A method call through a field path is treated as a move of the field (false E0382)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1895,"title":"Struct-update syntax over a native type forces a native build, then hits an unsupported call ordering","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1896,"title":"`.into()` from a widget to Element fails as an unknown member Element::from","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1896,"title":"`.into()` from a widget to Element fails as an unknown member Element::from","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1897,"title":"A respawned runner reads its image's facade outline from disk","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1898,"title":"A respawned runner keeps each source's interface outline on disk","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5491,7 +5499,9 @@
             {"number":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open"},
             {"number":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"closed"},
             {"number":1877,"title":"Splice kept lowerings in as parsed pieces instead of reprinting and reparsing the whole script","state":"closed"},
-            {"number":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"closed"}
+            {"number":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"closed"},
+            {"number":1898,"title":"A respawned runner keeps each source's interface outline on disk","state":"open"},
+            {"number":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"open"}
           ]
         },
         {

@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees.","issues":[1897],"refs":[1755]}
+    ]
   },
   "releases": [
     {
