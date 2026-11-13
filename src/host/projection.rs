@@ -91,6 +91,21 @@ impl Site {
     pub(crate) fn symbol_id(&self) -> u64 {
         crate::program::schema::symbol_id(&(&self.key, &self.source, &self.target, self.span))
     }
+
+    /// This site with each program type's schema as `schema` gives it
+    /// (`Type::renewed`), bound again where it is first used.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn renewed(
+        &self,
+        schema: &dyn Fn(&crate::type_def::Identity) -> Option<crate::program::schema::Fingerprint>,
+    ) -> Option<Self> {
+        Some(Self::new(
+            self.key.clone(),
+            self.source.renewed(schema)?,
+            self.target.renewed(schema)?,
+            self.span,
+        ))
+    }
 }
 
 impl PartialEq for Site {

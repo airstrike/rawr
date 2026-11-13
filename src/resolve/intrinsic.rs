@@ -150,6 +150,29 @@ impl Proof {
         crate::program::schema::symbol_id(self)
     }
 
+    /// This proof with each program type's schema as `schema` gives it
+    /// (`Type::renewed`).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn renewed(
+        &self,
+        schema: &dyn Fn(&crate::type_def::Identity) -> Option<crate::program::schema::Fingerprint>,
+    ) -> Option<Self> {
+        Some(Self {
+            operands: self
+                .operands
+                .iter()
+                .map(|operand| {
+                    Some(Operand {
+                        ty: operand.ty.renewed(schema)?,
+                        ..operand.clone()
+                    })
+                })
+                .collect::<Option<_>>()?,
+            output: self.output.renewed(schema)?,
+            ..self.clone()
+        })
+    }
+
     pub(super) fn dependencies(&self) -> BTreeSet<host::facade::Dependency> {
         let mut dependencies = BTreeSet::from([self.owner.clone()]);
         for operand in &self.operands {
