@@ -40,7 +40,9 @@ use super::constant::{included, Place};
 use super::disk::{self, Disk};
 use super::entry::{Body, Lowered};
 use super::imported::ImplUse;
-use super::interface::{framed, Calls, Digests, Instances, Interface, Native, Outlined, Written};
+use super::interface::{
+    framed, Calls, Digests, Instanced, Instances, Interface, Native, Outlined, Written,
+};
 use super::models::Models;
 use super::op::ExecutableOp;
 use super::splice::Parsed;
@@ -234,6 +236,8 @@ pub(crate) struct Lowerings {
     outlines: Outlined,
     /// The digests of the items the last interface read (#1878).
     digests: Digests,
+    /// The digests of the instances the last reveal round read.
+    instanced: Instanced,
     /// What the last interface read of the native surface, by how many
     /// facades were registered when it was read: a runner's image doesn't
     /// change while it runs (#1725).
@@ -263,6 +267,7 @@ impl Lowerings {
             scanned: BTreeMap::new(),
             outlines: BTreeMap::new(),
             digests: Digests::new(),
+            instanced: Instanced::new(),
             native: None,
             lowered: 0,
             revealed: 0,
@@ -393,9 +398,12 @@ impl<'e> Readings<'e> {
     /// Begin a pass over `program` as it is now, whose bodies' readings
     /// read `models`.
     pub(super) fn begin(&mut self, program: &Program, models: &Models) {
+        let mut instanced = std::mem::replace(&mut lock(self.engine).instanced, Instanced::new());
+        let instances = Instances::new(program, &mut instanced);
+        lock(self.engine).instanced = instanced;
         self.pass = interface(self.engine, program, models)
             .zip(Calls::new(program))
-            .zip(Instances::new(program))
+            .zip(instances)
             .map(|((interface, calls), instances)| Pass {
                 interface,
                 calls,
