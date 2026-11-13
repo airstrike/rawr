@@ -1226,6 +1226,12 @@ pub(super) fn evaluate(
         })?;
         entries.push(entry(recipe, limits, allocation)?);
     }
+    seal(entries, allocation)
+}
+
+/// The proof of exactly `entries`, each once and in order: what
+/// [`evaluate`] gives the recipes that observed them.
+pub(super) fn seal(mut entries: Vec<Entry>, allocation: &mut Allocation) -> Result<Proof> {
     entries.sort_unstable();
     entries.dedup();
     let fingerprint = digest(&entries, allocation)?;

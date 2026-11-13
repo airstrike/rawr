@@ -657,9 +657,14 @@ impl Plan {
         // that changed makes this demand another build, whose tables no
         // replay here would answer.
         let entries = self.entries.iter().collect::<Vec<_>>();
-        let checked =
-            crate::parallel::map(&entries, |entry| Some(self.check_shared(entry, current)))
-                .ok_or(Unreplayed::Unanswered)?;
+        // Each worker observes a file many crates' inputs share once.
+        let (checked, _) = crate::parallel::try_map_with_on(
+            crate::parallel::workers(),
+            &entries,
+            crate::input::bindings::Observed::default,
+            |observed, entry| Ok::<_, ()>(self.check_shared(entry, current, observed)),
+        );
+        let checked = checked.map_err(|()| Unreplayed::Unanswered)?;
         if checked
             .iter()
             .any(|checked| matches!(checked, Checked::Changed))
@@ -769,6 +774,7 @@ impl Plan {
         &'plan self,
         entry: &'plan Entry<Prepared>,
         current: &crate::input::bindings::Current,
+        observed: &mut crate::input::bindings::Observed,
     ) -> Checked<'plan> {
         let Some(shared) = self.sharing.keys.get(&entry.unit_correlation) else {
             return Checked::Missing;
@@ -786,7 +792,7 @@ impl Plan {
                 continue;
             };
             recorded = true;
-            let Some(validated) = inputs.validate(current) else {
+            let Some(validated) = inputs.validate_observed(current, observed) else {
                 continue;
             };
             let Some(identity) = validated.identity() else {

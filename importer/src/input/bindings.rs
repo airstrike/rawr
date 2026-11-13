@@ -258,9 +258,8 @@ pub(crate) struct Capture<'build> {
     scripts: BTreeMap<&'build str, Vec<&'build build::Script>>,
     /// Every build script's `OUT_DIR`.
     out_directories: BTreeSet<&'build Path>,
-    /// Each input path's entry as it was observed, `None` when it could
-    /// not be: the same file reached by many closures is read once.
-    observed: BTreeMap<File, Option<proof::Entry>>,
+    /// Each input path's entry as this capture observed it.
+    observed: Observed,
 }
 
 impl<'build> Capture<'build> {
@@ -315,7 +314,7 @@ impl<'build> Capture<'build> {
             entries,
             scripts,
             out_directories,
-            observed: BTreeMap::new(),
+            observed: Observed::default(),
         }
     }
 
@@ -480,20 +479,31 @@ impl<'build> Capture<'build> {
     /// as this capture first observed it.
     fn fingerprint(&mut self, paths: &[File]) -> Option<[u8; 32]> {
         let limits = &self.current.limits;
-        for file in paths {
-            if !self.observed.contains_key(file) {
-                let mut allocation = Allocation::for_replay(limits);
-                let entry = proof::entry(&file.recipe(), limits, &mut allocation).ok();
-                self.observed.insert(file.clone(), entry);
-            }
-        }
-        let mut entries = paths
-            .iter()
-            .map(|file| self.observed[file].as_ref())
-            .collect::<Option<Vec<_>>>()?;
+        let mut entries = self.observed.entries(paths, limits)?;
         let mut allocation = Allocation::for_replay(limits);
         let fingerprint = proof::fingerprint(&mut entries, &mut allocation).ok()?;
         Some(*fingerprint.as_bytes())
+    }
+}
+
+/// Each input path's entry as one pass observed it, `None` when it could
+/// not be. A pass over many tables, a build's captures or a round's checks,
+/// observes a file their inputs share once, not once per table (#1846).
+#[derive(Default)]
+pub(crate) struct Observed(BTreeMap<File, Option<proof::Entry>>);
+
+impl Observed {
+    /// The entry of each of `paths`, observed now unless this pass already
+    /// did; `None` when one could not be.
+    fn entries(&mut self, paths: &[File], limits: &cargo::Limits) -> Option<Vec<&proof::Entry>> {
+        for file in paths {
+            if !self.0.contains_key(file) {
+                let mut allocation = Allocation::for_replay(limits);
+                let entry = proof::entry(&file.recipe(), limits, &mut allocation).ok();
+                self.0.insert(file.clone(), entry);
+            }
+        }
+        paths.iter().map(|file| self.0[file].as_ref()).collect()
     }
 }
 
@@ -549,6 +559,16 @@ impl Inputs {
         &'inputs self,
         current: &Current,
     ) -> Option<Validated<'inputs>> {
+        self.validate_observed(current, &mut Observed::default())
+    }
+
+    /// [`Inputs::validate`], taking the entry of each path `observed`
+    /// holds instead of observing it again.
+    pub(crate) fn validate_observed<'inputs>(
+        &'inputs self,
+        current: &Current,
+        observed: &mut Observed,
+    ) -> Option<Validated<'inputs>> {
         if self.schema != SCHEMA
             || self.compiler != current.compiler
             || self.config != current.config
@@ -559,7 +579,13 @@ impl Inputs {
         {
             return None;
         }
-        let filesystem = evaluate(&self.paths, &current.limits)?;
+        let limits = &current.limits;
+        let entries = observed
+            .entries(&self.paths, limits)?
+            .into_iter()
+            .cloned()
+            .collect();
+        let filesystem = proof::seal(entries, &mut Allocation::for_replay(limits)).ok()?;
         (*filesystem.fingerprint().as_bytes() == self.fingerprint).then_some(Validated {
             inputs: self,
             filesystem,
@@ -603,6 +629,7 @@ fn fingerprint(paths: &[File], limits: &cargo::Limits) -> Option<[u8; 32]> {
     Some(*evaluate(paths, limits)?.fingerprint().as_bytes())
 }
 
+#[cfg(test)]
 fn evaluate(paths: &[File], limits: &cargo::Limits) -> Option<proof::Proof> {
     let recipes = paths.iter().map(File::recipe).collect::<Vec<_>>();
     let mut allocation = Allocation::for_replay(limits);
@@ -778,6 +805,41 @@ mod tests {
         let mut read = observed();
         super::Reads::of(&baseline, &build).restrict(&mut read);
         assert_eq!(files(&read), ["generated.rs"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One capture serves every table of a build, and one pass of checks
+    /// every table of a round: a table captured or checked after another
+    /// that shares its files gets what it would alone, its fingerprint
+    /// the one its paths evaluate to (#1846).
+    #[test]
+    fn a_shared_capture_and_check_give_each_table_what_it_would_alone() {
+        let (root, baseline, build, current) = fixture();
+        let packages = [PACKAGE.to_owned()];
+        let alone = Capture::new(&baseline, &build, &current)
+            .inputs(&packages)
+            .unwrap();
+        let mut capture = Capture::new(&baseline, &build, &current);
+        let first = capture.inputs(&packages).unwrap();
+        let staged = capture.staged(&packages).unwrap();
+        assert_eq!(first, alone);
+        assert_eq!(staged, alone);
+        assert_eq!(
+            super::fingerprint(&alone.paths, &current.limits),
+            Some(alone.fingerprint)
+        );
+        let mut observed = super::Observed::default();
+        let checked = alone
+            .validate_observed(&current, &mut observed)
+            .unwrap()
+            .into_filesystem();
+        let again = first
+            .validate_observed(&current, &mut observed)
+            .unwrap()
+            .into_filesystem();
+        let fresh = alone.validate(&current).unwrap().into_filesystem();
+        assert!(checked.fingerprint() == fresh.fingerprint());
+        assert!(again.entries() == fresh.entries());
         fs::remove_dir_all(root).unwrap();
     }
 
