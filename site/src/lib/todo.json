@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A native save back to an earlier save's sources, or the launch's, reuses that bundle's parsed Cargo view instead of parsing it again, and the metadata probe resolves each loaded crate's paths once per run, not once for every crate rawr names. RAWR_VERBOSE also times a native save's harness preparation, output copy, input capture, seal, bundle replay and the program's check.","issues":[1835],"refs":[1794]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.201",
@@ -4040,7 +4045,11 @@
     {"issue":1831,"title":"An overlay hit's assembly re-hashes and copies every generated file","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1833,"title":"rawr's copy of the crate builds with the profile cargo build gives the crate","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.201"},
-    {"issue":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1835,"title":"A save back to earlier sources reuses that bundle's Cargo view; the probe resolves loaded crates' paths once","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1838,"title":"Three owner-stage unit tests fail on main","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5257,7 +5266,10 @@
             {"number":1830,"title":"An API-changing native edit renders only the adapters whose plans changed","state":"open"},
             {"number":1831,"title":"An overlay hit's assembly re-hashes and copies every generated file","state":"open"},
             {"number":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open"},
-            {"number":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open"}
+            {"number":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open"},
+            {"number":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"open"},
+            {"number":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"open"},
+            {"number":1838,"title":"Three owner-stage unit tests fail on main","state":"open"}
           ]
         },
         {

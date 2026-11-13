@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A native save back to an earlier save's sources, or the launch's, reuses that bundle's parsed Cargo view instead of parsing it again, and the metadata probe resolves each loaded crate's paths once per run, not once for every crate rawr names. RAWR_VERBOSE also times a native save's harness preparation, output copy, input capture, seal, bundle replay and the program's check. (#1835; part of #1794)
 
 ## 0.3.201 (2026-11-12)
 

@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A native save back to an earlier save's sources, or the launch's, reuses that bundle's parsed Cargo view instead of parsing it again, and the metadata probe resolves each loaded crate's paths once per run, not once for every crate rawr names. RAWR_VERBOSE also times a native save's harness preparation, output copy, input capture, seal, bundle replay and the program's check.","issues":[1835],"refs":[1794]}
+    ]
   },
   "releases": [
     {
