@@ -1392,6 +1392,55 @@ fn a_held_struct_s_handle_is_send_as_its_fields_are() {
     }
 }
 
+/// A native child module of the marked screen's module that starts reading
+/// one of its private fields, as rustc lets it, opens the screen (D961):
+/// the check of the copy that held it by its handle fails, and the check
+/// again with the real layout passes, so `rawr run` prints what `cargo run`
+/// prints.
+#[test]
+fn a_native_child_that_starts_reading_a_held_struct_s_field_checks_with_its_real_layout() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held-child");
+    copy(Path::new(HELD), &root);
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "use crate::editor;\n",
+        "use crate::editor;\n\npub mod peek;\n",
+    );
+    fs::create_dir_all(root.join("src/home")).unwrap();
+    fs::write(
+        root.join("src/home/peek.rs"),
+        "//! Native: a child of the marked screen's module, which sees its\n\
+         //! private fields.\n\n\
+         pub fn ticks(state: &super::State) -> usize {\n    state.ticks\n}\n",
+    )
+    .unwrap();
+    edit(
+        &root.join("src/main.rs"),
+        "    println!(\"{}\", workspace.home.title());\n",
+        "    println!(\"{}\", workspace.home.title());\n    \
+         println!(\"peeked {}\", home::peek::ticks(&workspace.home));\n",
+    );
+    let printed = cargo_prints(&root);
+    assert!(printed.contains("\npeeked 0\n"), "{printed}");
+    checks_and_prints(&root, &printed);
+}
+
 /// A save whose code panics on the running program's state, as a
 /// framework's own check of its hooks can, restarts the program with the
 /// save (D553.6), and the new program counts from the start, where the

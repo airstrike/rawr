@@ -79,6 +79,26 @@ pub fn opaque_in(rawr: &Path) -> Option<BTreeSet<String>> {
     read(&location_in(rawr)).map(|record| record.opaque)
 }
 
+/// Forget the opaque types the project whose Rawr directory is `rawr`
+/// kept, so its next copy holds every type by its real layout; whether
+/// there were any.
+///
+/// # Errors
+///
+/// The record can't be written.
+pub fn forget_opaque_in(rawr: &Path) -> io::Result<bool> {
+    let path = location_in(rawr);
+    let Some(mut record) = read(&path).filter(|record| !record.opaque.is_empty()) else {
+        return Ok(false);
+    };
+    record.opaque.clear();
+    fs::write(
+        &path,
+        serde_json::to_vec(&record).map_err(io::Error::other)?,
+    )?;
+    Ok(true)
+}
+
 /// The record at `path`.
 fn read(path: &Path) -> Option<Record> {
     let bytes = fs::read(path).ok()?;
@@ -176,6 +196,15 @@ mod tests {
         assert!(super::store(&root, &found).expect("the record is stored"));
         assert_eq!(super::opaque_in(&rawr).as_ref(), Some(&opaque));
         assert!(!super::store(&root, &found).expect("the record is stored"));
+        // A failed check of a copy with handles forgets them, once.
+        assert!(super::forget_opaque_in(&rawr).expect("the record is written"));
+        assert_eq!(super::opaque_in(&rawr), Some(BTreeSet::new()));
+        assert!(!super::forget_opaque_in(&rawr).expect("the record is written"));
+        assert_eq!(
+            super::kept(&root),
+            Some(named(&["home::heading", "home::view"]))
+        );
+        assert!(super::store(&root, &found).expect("the record is stored"));
         assert!(super::store(&root, &used(&view)).expect("the record is stored"));
         assert_eq!(super::opaque_in(&rawr), Some(BTreeSet::new()));
         std::fs::remove_file(super::location(&root)).expect("the record is removed");
