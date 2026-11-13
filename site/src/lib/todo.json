@@ -4185,7 +4185,15 @@
     {"issue":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"},
     {"issue":1887,"title":"A cold rawr run on a large program no longer stalls in reveal's instance digests","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.212"},
-    {"issue":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1889,"title":"A queued swap is applied only at the program's next input event, so an untouched window stays stale","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1890,"title":"rawr watches its own generated output and restarts the program when its store's Cargo.lock changes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1891,"title":"A type error in a marked file is found only by the native cargo build, minutes later and in generated code","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1892,"title":"Fixing a save whose native build failed needs another full native build and a restart that loses state","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1893,"title":"Assigning a field of a field that isn't Copy is refused as unsupported syntax","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1894,"title":"A method call through a field path is treated as a move of the field (false E0382)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1895,"title":"Struct-update syntax over a native type forces a native build, then hits an unsupported call ordering","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1896,"title":"`.into()` from a widget to Element fails as an unknown member Element::from","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5435,7 +5443,15 @@
             {"number":1883,"title":"The owner's check reuses kept unit resolutions","state":"open"},
             {"number":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"open"},
             {"number":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed"},
-            {"number":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open"}
+            {"number":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open"},
+            {"number":1889,"title":"A queued swap is applied only at the program's next input event, so an untouched window stays stale","state":"open"},
+            {"number":1890,"title":"rawr watches its own generated output and restarts the program when its store's Cargo.lock changes","state":"open"},
+            {"number":1891,"title":"A type error in a marked file is found only by the native cargo build, minutes later and in generated code","state":"open"},
+            {"number":1892,"title":"Fixing a save whose native build failed needs another full native build and a restart that loses state","state":"open"},
+            {"number":1893,"title":"Assigning a field of a field that isn't Copy is refused as unsupported syntax","state":"open"},
+            {"number":1894,"title":"A method call through a field path is treated as a move of the field (false E0382)","state":"open"},
+            {"number":1895,"title":"Struct-update syntax over a native type forces a native build, then hits an unsupported call ordering","state":"open"},
+            {"number":1896,"title":"`.into()` from a widget to Element fails as an unknown member Element::from","state":"open"}
           ]
         },
         {
