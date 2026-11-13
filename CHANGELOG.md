@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save or round that reads shared bindings no longer reads, hashes and parses every crate's table again: inputs are checked first, and a table replayed for the same demand is kept by the running owner. (#1845)
 
 ## 0.3.204 (2026-11-12)
 
