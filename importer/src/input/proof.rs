@@ -1031,7 +1031,15 @@ impl Proof {
     /// without it a harness of the same manifest and lock renders the same
     /// sources (#1821).
     pub(crate) fn runner_path_packages(&self) -> Vec<(String, String)> {
-        let harness = self.entries.iter().find_map(|entry| match entry {
+        let harness = self.harness_directory();
+        let mut packages = self.path_packages();
+        packages.retain(|(_, directory)| Some(Path::new(directory)) != harness);
+        packages
+    }
+
+    /// The directory of the harness's manifest.
+    fn harness_directory(&self) -> Option<&Path> {
+        self.entries.iter().find_map(|entry| match entry {
             Entry::File {
                 role: Role::Harness,
                 path,
@@ -1043,10 +1051,42 @@ impl Proof {
                     .flatten()
             }
             _ => None,
-        });
-        let mut packages = self.path_packages();
-        packages.retain(|(_, directory)| Some(Path::new(directory)) != harness);
-        packages
+        })
+    }
+
+    /// The manifest of each path package the harness built but its own, as
+    /// the proof recorded it. Under the runner's root each is a member of
+    /// its workspace (`runner::mirror`), and Cargo resolves a member's
+    /// lockfile entries with every optional and target-specific dependency
+    /// its manifest names.
+    pub(crate) fn runner_path_manifests(&self, limit: usize) -> Result<Vec<Box<[u8]>>> {
+        let harness = self.harness_directory();
+        let mut manifests = Vec::new();
+        for entry in &self.entries {
+            let Entry::File {
+                role: Role::PackageManifest,
+                package_id: Some(package_id),
+                path,
+                bytes,
+                digest,
+            } = entry
+            else {
+                continue;
+            };
+            let path = Path::new(path.as_ref());
+            if !package_id.starts_with("path+file://") || path.parent() == harness {
+                continue;
+            }
+            let retained = super::read_file("runner path package manifest", path, limit)?;
+            if retained.len() != *bytes || Sha256::digest(&retained).as_slice() != digest {
+                return Err(Error::ResolutionDrift {
+                    command: "runner generation",
+                    field: "path package manifest",
+                });
+            }
+            manifests.push(retained.into_boxed_slice());
+        }
+        Ok(manifests)
     }
 
     /// What [`Self::runner_harness`] reads, by content: the harness's
