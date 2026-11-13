@@ -190,7 +190,7 @@ pub(crate) fn repair_existing(
         path: bucket.clone(),
         source,
     })?;
-    super::entry::sync_directory(
+    super::entry::push_directory(
         bucket
             .parent()
             .ok_or(Error::State("candidate bucket has no kind directory"))?,
@@ -406,6 +406,7 @@ impl Inventory {
                         .checked_add(1)
                         .ok_or(Error::Allocation)?;
                     let row_path = row.path().join("row");
+                    crate::progress::store(crate::progress::Store::IndexRow, 1);
                     let bytes = super::entry::read_file(&row_path, ROW_BYTES)?;
                     let decoded = match decode_any(&bytes, observed_kind, lookup) {
                         Ok(decoded) => decoded,
@@ -560,6 +561,17 @@ impl Inventory {
     }
 }
 
+/// The most a project's rows can charge: its bounded buckets, and two
+/// members for each of its bounded references (`Inventory::project_charge`).
+pub(super) fn project_charge_bound() -> super::accounting::Charge {
+    let members = (2 * MAX_PROJECT_REFERENCES + MAX_PROJECT_BUCKETS) as u64;
+    super::accounting::Charge {
+        bytes: members * super::control::directory_charge().bytes,
+        allocations: 0,
+        members,
+    }
+}
+
 pub(super) fn project_charge(
     root: &Path,
     project: crate::node::Digest,
@@ -621,7 +633,7 @@ pub(crate) fn retire_action(
                     path: target.clone(),
                     source,
                 })?;
-                super::entry::sync_directory(&bucket.path())?;
+                super::entry::push_directory(&bucket.path())?;
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => {

@@ -219,7 +219,7 @@ pub(super) fn retire_released(
         source,
     })?;
     drop(lock);
-    super::super::entry::sync_directory(
+    super::super::entry::push_directory(
         temporary
             .parent()
             .ok_or(Error::State("released pin root has no temporary directory"))?,
@@ -543,7 +543,7 @@ impl Stale {
             path: temporary.clone(),
             source,
         })?;
-        super::super::entry::sync_directory(temporary.parent().ok_or(Error::State(
+        super::super::entry::push_directory(temporary.parent().ok_or(Error::State(
             "typed store pin root has no temporary directory",
         ))?)
     }

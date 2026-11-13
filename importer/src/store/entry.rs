@@ -398,12 +398,14 @@ pub(crate) fn publish_directory(
             path: temporary_file.clone(),
             source,
         })?;
-        let synced = output.sync_all();
-        synced.map_err(|source| Error::Io {
+        let pushed = push_file(&output);
+        pushed.map_err(|source| Error::Io {
             operation: "sync typed store temporary payload",
             path: temporary_file.clone(),
             source,
         })?;
+        // One flush makes the payload and its name last before the rename
+        // shows them (#1844).
         sync_directory(&temporary)?;
         if target.exists() {
             return Ok(Publication::Existing);
@@ -412,7 +414,7 @@ pub(crate) fn publish_directory(
         match renamed {
             Ok(()) => {
                 if let Some(parent) = target.parent() {
-                    sync_directory(parent)?;
+                    push_directory(parent)?;
                 }
                 Ok(Publication::Published)
             }
@@ -453,6 +455,13 @@ pub(crate) fn publish_sealed_directory<T>(
     publish_sealed_with(root, target, file_name, bytes, seal, sync_directory)
 }
 
+// What a sealed publication's syncs cost, and what each guarantees across a
+// crash (#1844). The payload and its seal are pushed to the drive, and one
+// flush of their temporary directory makes all three last before the rename
+// shows them: no crash leaves a torn entry in place. The rename is pushed;
+// the next flush, the next entry's or the ledger commit that registers it,
+// makes it last before anything that names it is written.
+
 fn publish_sealed_with<T>(
     root: &Path,
     target: &Path,
@@ -492,8 +501,8 @@ fn publish_sealed_with<T>(
             path: temporary_file.clone(),
             source,
         })?;
-        let synced = output.sync_all();
-        synced.map_err(|source| Error::Io {
+        let pushed = push_file(&output);
+        pushed.map_err(|source| Error::Io {
             operation: "sync sealed store temporary payload",
             path: temporary_file.clone(),
             source,
@@ -520,8 +529,8 @@ fn publish_sealed_with<T>(
             path: record_path.clone(),
             source,
         })?;
-        let synced = record_file.sync_all();
-        synced.map_err(|source| Error::Io {
+        let pushed = push_file(&record_file);
+        pushed.map_err(|source| Error::Io {
             operation: "sync sealed store allocation record",
             path: record_path,
             source,
@@ -534,7 +543,7 @@ fn publish_sealed_with<T>(
         match renamed {
             Ok(()) => {
                 if let Some(parent) = target.parent() {
-                    synchronize(parent)?;
+                    push_directory(parent)?;
                 }
                 Ok((Publication::Published, Some(retained)))
             }
@@ -565,14 +574,41 @@ fn publish_sealed_with<T>(
     result
 }
 
+/// How a file replacement lasts across a crash. Either way its bytes are
+/// flushed before the rename shows them, so no crash leaves a torn file in
+/// place (#1844).
+#[derive(Clone, Copy)]
+pub(crate) enum Durability {
+    /// The replacement lasts once it returns: the installation ledger's
+    /// commits, which register what a publication wrote, and its evictions.
+    Lasting,
+    /// The replacement's rename is pushed to the drive, and the next flush
+    /// makes it last before anything written after it: every later
+    /// publication and replacement flushes before its own rename. A crash
+    /// before then leaves the file as it was, a state as consistent: a
+    /// reservation, a plan or a pin that never happened.
+    Ordered,
+}
+
 pub(crate) fn replace_admitted_file(
     admitted: super::control::Admitted<'_>,
     publication: &super::lease::Publication<'_>,
     root: &Path,
     target: &Path,
     bytes: &[u8],
+    durability: Durability,
 ) -> Result<(), Error> {
-    replace_admitted_file_with(admitted, publication, root, target, bytes, sync_directory)
+    replace_admitted_file_with(
+        admitted,
+        publication,
+        root,
+        target,
+        bytes,
+        |parent| match durability {
+            Durability::Lasting => sync_directory(parent),
+            Durability::Ordered => push_directory(parent),
+        },
+    )
 }
 
 fn replace_admitted_file_with(
@@ -625,7 +661,7 @@ fn replace_admitted_file_with(
             path: temporary.clone(),
             source,
         })?;
-        let synced = output.sync_all();
+        let synced = sync_file(&output);
         synced.map_err(|source| Error::Io {
             operation: "sync typed store replacement file",
             path: temporary.clone(),
@@ -684,20 +720,55 @@ pub(crate) fn stage_admitted_retirement(
         path: target.to_path_buf(),
         source,
     })?;
-    sync_directory(
+    // A retirement lasts with the next flush. A crash before it brings the
+    // retired tree back, and recovery retires it again (#1844).
+    push_directory(
         target
             .parent()
             .ok_or(Error::State("typed store retirement has no source parent"))?,
     )?;
-    sync_directory(temporary.parent().ok_or(Error::State(
+    push_directory(temporary.parent().ok_or(Error::State(
         "typed store retirement has no temporary parent",
     ))?)?;
     Ok(temporary)
 }
 
+/// Push `file`'s writes to the drive without flushing its cache: they last
+/// with the next flush ([`sync_file`]), which flushes the whole drive. On
+/// Linux `fsync` flushes as well; off Unix this is a flush.
+pub(crate) fn push_file(file: &File) -> std::io::Result<()> {
+    crate::progress::store(crate::progress::Store::Push, 1);
+    #[cfg(unix)]
+    {
+        rustix::fs::fsync(file).map_err(std::io::Error::from)
+    }
+    #[cfg(not(unix))]
+    {
+        file.sync_all()
+    }
+}
+
+/// [`push_file`] for a directory's entries.
+pub(crate) fn push_directory(path: &Path) -> Result<(), Error> {
+    File::open(path)
+        .and_then(|directory| push_file(&directory))
+        .map_err(|source| Error::Io {
+            operation: "sync typed store directory",
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+/// Flush `file`'s writes to the drive, and the drive's cache to lasting
+/// storage, so they survive a crash: with them every write pushed before.
+pub(crate) fn sync_file(file: &File) -> std::io::Result<()> {
+    crate::progress::store(crate::progress::Store::FullSync, 1);
+    file.sync_all()
+}
+
 pub(crate) fn sync_directory(path: &Path) -> Result<(), Error> {
     File::open(path)
-        .and_then(|directory| directory.sync_all())
+        .and_then(|directory| sync_file(&directory))
         .map_err(|source| Error::Io {
             operation: "sync typed store directory",
             path: path.to_path_buf(),

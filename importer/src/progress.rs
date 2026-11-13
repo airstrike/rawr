@@ -478,6 +478,64 @@ pub fn read_set_walks() -> usize {
     READ_SET_WALKS.load(Ordering::Relaxed)
 }
 
+/// What this process's typed store did so far, one counter per cost that
+/// grows with the whole store (#1843, #1844).
+static STORE: [AtomicUsize; 6] = [const { AtomicUsize::new(0) }; 6];
+
+/// One cost of the typed store ([`StoreWork`]).
+#[derive(Clone, Copy)]
+pub(crate) enum Store {
+    /// It decoded the installation ledger from its file.
+    LedgerDecode,
+    /// It read one candidate index row while sizing the index.
+    IndexRow,
+    /// It flushed a file or directory to the drive, and the drive's cache
+    /// to lasting storage.
+    FullSync,
+    /// It pushed a file or directory's writes to the drive, to last with
+    /// the next flush.
+    Push,
+    /// It published one node.
+    Publication,
+    /// It checked one read-set entry against its storage.
+    EntryWalked,
+}
+
+/// Count `amount` of one store cost.
+pub(crate) fn store(cost: Store, amount: usize) {
+    STORE[cost as usize].fetch_add(amount, Ordering::Relaxed);
+}
+
+/// What this process's typed store did so far ([`store_work`]).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StoreWork([usize; 6]);
+
+impl StoreWork {
+    /// What the store did since `earlier`.
+    #[must_use]
+    pub fn since(self, earlier: Self) -> Self {
+        Self(std::array::from_fn(|at| self.0[at] - earlier.0[at]))
+    }
+}
+
+impl std::fmt::Display for StoreWork {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [decodes, rows, flushes, pushes, publications, entries] = self.0;
+        write!(
+            formatter,
+            "ledger decodes {decodes}, index rows read {rows}, flushes {flushes}, \
+             pushes {pushes}, node publications {publications}, \
+             read-set entries walked {entries}"
+        )
+    }
+}
+
+/// What this process's typed store did so far.
+#[must_use]
+pub fn store_work() -> StoreWork {
+    StoreWork(std::array::from_fn(|at| STORE[at].load(Ordering::Relaxed)))
+}
+
 /// Count one API table read from the store.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn loaded() {

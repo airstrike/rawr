@@ -266,6 +266,40 @@ impl<K: Value> Stored<K> {
 }
 
 impl<K: Value> Replayed<K> {
+    /// A direct value this process just published, as it computed it: the
+    /// store holds its encoding, whose digest and length the publication
+    /// returned, so reading it back, hashing and decoding it again would
+    /// prove nothing new (#1844).
+    pub(crate) fn published(
+        current: &Direct<K>,
+        value: K,
+        published: Option<crate::store::Published>,
+        graph: &super::GraphBudget,
+    ) -> Result<Self, Error> {
+        let published =
+            published.ok_or(Error::State("a node publication omitted what it wrote"))?;
+        Ok(Self {
+            envelope: Envelope::direct(current, published.content, published.length)?,
+            value: Arc::new(value),
+            bundled: false,
+            graph: graph.clone(),
+        })
+    }
+
+    /// The receipt of a value [`Self::published`] kept.
+    pub(crate) fn validate_published(self, current: &Direct<K>) -> Result<Validated<K>, Error> {
+        let witness = Witness::direct(current, self.content(), self.bundled);
+        let graph = self.graph.clone();
+        self.validate(current, witness, &graph)
+    }
+
+    /// The staged output of a value [`Self::published`] kept.
+    pub(crate) fn stage_published(self, current: &Direct<K>) -> Result<Staged<K>, Error> {
+        let witness = Witness::direct(current, self.content(), self.bundled);
+        let graph = self.graph.clone();
+        self.stage(current, witness, &graph)
+    }
+
     pub(crate) fn value(&self) -> &K {
         self.value.as_ref()
     }

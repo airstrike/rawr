@@ -4420,7 +4420,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             path: temporary.clone(),
             source,
         })?;
-    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    // A generated file is rewritten whenever it differs from what is
+    // generated, so a crash that tears it costs a rewrite, not a sync (#1844).
+    let result = file.write_all(bytes);
     if let Err(source) = result {
         let _ = fs::remove_file(&temporary);
         return Err(Error::Io {

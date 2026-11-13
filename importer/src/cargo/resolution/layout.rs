@@ -343,7 +343,9 @@ fn publish_config(path: PathBuf, bytes: &[u8]) -> Result<PathBuf, node::Error> {
             })
         }
     };
-    if let Err(source) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    // The bundle's one root sync orders its publication after its members,
+    // and a member a crash tore fails its validation and is rebuilt (#1844).
+    if let Err(source) = file.write_all(bytes) {
         return Err(node::Error::Io {
             operation: "publish reserved Cargo config",
             path,

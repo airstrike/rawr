@@ -102,19 +102,24 @@ impl<'a> Batch<'a> {
                     None,
                     || {
                         sink.node(K::KIND.metric(), crate::metrics::NodeEvent::ExecutedMiss);
-                        let payload = execute()?.into_payload()?;
+                        let value = execute()?;
+                        let payload = value.payload()?;
                         Ok(Reserved::Publish {
-                            result: (),
+                            result: value,
                             recipe: recipe.clone(),
                             payload,
                             bundle: None,
                         })
                     },
-                    |()| {
+                    |value, published| {
                         sink.node(K::KIND.metric(), crate::metrics::NodeEvent::Published);
-                        store
-                            .lookup_staged(recipe, store.graph_budget())?
-                            .ok_or(Error::State("published batch node disappeared"))
+                        crate::node::replay::Replayed::published(
+                            recipe,
+                            value,
+                            published,
+                            store.graph_budget(),
+                        )?
+                        .stage_published(recipe)
                     },
                 )?;
                 self.advance(value)

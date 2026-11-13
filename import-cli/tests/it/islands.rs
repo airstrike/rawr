@@ -2725,6 +2725,12 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         .filter_map(|line| line.strip_prefix("stderr: rawr-import: the round's phases took: "))
         .collect::<Vec<_>>();
     eprintln!("the saves' phases:\n{}", phases.join("\n"));
+    let store = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: a save's store work: "))
+        .collect::<Vec<_>>();
+    eprintln!("the saves' store work:\n{}", store.join("\n"));
     // Each of the four saves' nightly checks, the undo's too, goes on from
     // the last one: it compiles the project's copy and the harness, the
     // first after the start too (#1815).
