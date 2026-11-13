@@ -5236,10 +5236,8 @@ mod __rawr_profile {
     /// the program again (#1746).
     pub fn admit(mut program: super::Program) -> Result<(), String> {
         if let Some(reason) = __rawr_internal::island::admit(bind(&mut program)?) {
-            use std::io::Write as _;
             eprintln!("rawr: {reason}; restarting the program");
-            let _ = std::io::stdout().flush();
-            std::process::exit(__rawr_internal::island::REFUSED);
+            __rawr_internal::process::leave(__rawr_internal::island::REFUSED);
         }
         ADMITTED.set(Some(program));
         super::admitted();
@@ -5729,7 +5727,7 @@ fn serve_entry(
                 17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
                 12 if payload.as_slice() == key => {
                     send_frame(&mut stream, 13, &key)?;
-                    exit(0);
+                    __rawr_internal::process::leave(0);
                 }
                 _ => return Err(std::io::Error::other(format!("invalid protocol transition while the program runs (message {tag})"))),
             }
@@ -5973,10 +5971,12 @@ fn run_protocol(
     }
 }
 
-/// End the process when the protocol ends.
+/// End the process when the protocol ends. One the owner ended leaves at
+/// once, with no exit handlers: the owner starts the next runner when this
+/// one is gone.
 fn finish(result: std::io::Result<()>) -> ! {
     match result {
-        Ok(()) => exit(0),
+        Ok(()) => __rawr_internal::process::leave(0),
         Err(error) => {
             // The owner may be gone and its pipes with it: a print that
             // panics would end this thread, not the program.
@@ -6143,6 +6143,7 @@ fn admitted() {
 
 #[cfg(unix)]
 pub(super) fn main() {
+    __rawr_internal::process::unblock_signals();
     owner::main()
 }
 

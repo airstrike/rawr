@@ -428,7 +428,7 @@ pub fn run_tests(
     let program = rawr_import::process::Arguments {
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
-        prepare: Some(crate::signals::unblocked),
+        prepare: None,
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
@@ -465,10 +465,11 @@ pub fn run_tests(
     settled
 }
 
-/// What each runner's command gets before it spawns: no blocked signals,
-/// and the program's reload stream.
+/// What each runner's command gets before it spawns: the program's reload
+/// stream. No hook runs in the child, so std spawns it with `posix_spawn`
+/// and copies none of this process's memory. The runner clears the signal
+/// mask it inherits itself.
 fn prepare(command: &mut std::process::Command) {
-    crate::signals::unblocked(command);
     if let Some(path) = rawr_cli::events::reload::path() {
         command.env(rawr_cli::events::reload::VARIABLE, path);
     }

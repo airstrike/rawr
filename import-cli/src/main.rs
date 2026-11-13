@@ -13,7 +13,9 @@ fn main() -> ExitCode {
 /// Make SIGINT, SIGTERM and SIGHUP retire every child process group this
 /// process owns (a runner, a Cargo build) before it exits with the
 /// conventional status. Called before any thread starts: threads inherit
-/// the blocked mask, while spawned programs start with an empty one.
+/// the blocked mask, and so does each process this one spawns. A runner
+/// clears it first thing in its `main`, so the program it runs hears
+/// Ctrl-C as under `cargo run`.
 fn retire_on_termination() -> std::io::Result<()> {
     use nix::sys::signal::{SigSet, Signal};
 
