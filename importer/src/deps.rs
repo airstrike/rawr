@@ -167,14 +167,16 @@ fn rawr_units(shared: &Path) -> (Vec<PathBuf>, Vec<(String, String, PathBuf)>) {
             let Some((krate, hash)) = name
                 .strip_suffix(".d")
                 .and_then(|stem| stem.rsplit_once('-'))
+                .filter(|(krate, _)| own(krate))
             else {
                 continue;
             };
+            // Only Rawr's own units' dep-info is read (#1848).
             let source = fs::read_to_string(entry.path()).ok().and_then(|text| {
                 let (_, sources) = text.lines().next()?.split_once(": ")?;
                 sources.split(' ').next().map(PathBuf::from)
             });
-            if let (true, Some(source)) = (own(krate), source) {
+            if let Some(source) = source {
                 units.push((krate.to_owned(), hash.to_owned(), source));
             }
         }
