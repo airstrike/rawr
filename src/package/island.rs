@@ -7833,8 +7833,9 @@ mod tests {
     /// fields' types makes it `Send` and `Sync` as they are, and a new
     /// private field of a plain type leaves its shape as it was, though one
     /// of a type it didn't hold needs a native build. With no record, or with a field
-    /// native code sees, a derive the handle can't stand for, or a marked
-    /// type that holds it, it keeps its real layout.
+    /// native code sees, a derive the handle can't stand for, a marked
+    /// type that holds it, or a function that takes `&mut` of it beside a
+    /// receiver, it keeps its real layout.
     #[test]
     fn a_struct_native_code_holds_but_never_opens_is_the_handle_of_the_program_value() {
         let state = |fields: &str, derives: &str| {
@@ -7842,8 +7843,7 @@ mod tests {
                 "// rawr\nuse crate::ui;\n{derives}pub struct State {{\n{fields}}}\n\
                  impl State {{\n    pub fn new() -> Self {{ todo!() }}\n    \
                  pub fn edit(&mut self, text: &str) {{}}\n    \
-                 pub fn title(&self) -> &str {{ todo!() }}\n    \
-                 pub fn take(&self, other: &mut State) {{}}\n}}\n"
+                 pub fn title(&self) -> &str {{ todo!() }}\n}}\n"
             )
         };
         let opaque = BTreeSet::from(["physics::State".to_owned()]);
@@ -7867,9 +7867,7 @@ mod tests {
         }
         assert!(!text.contains("content: ui::Content"), "{text}");
         assert_eq!(handled.handles, ["physics::State"]);
-        // A `&mut` of it beside the receiver can't cross: a copy back
-        // can't replace the program's value.
-        assert!(text.contains("rawr: native code can't call `physics::State::take` yet"));
+        assert!(!text.contains("panic!"), "{text}");
         let grown = generate_with(
             &state(&format!("{fields}    held: u32,\n"), "#[derive(Debug)]\n"),
             None,
@@ -7905,6 +7903,25 @@ mod tests {
             ),
             generate_with(&state(fields, "#[derive(Hash)]\n"), None, Some(&opaque)),
             generate_with(&state(fields, "#[repr(C)]\n"), None, Some(&opaque)),
+            // A `&mut` of it beside a receiver, or inside another type,
+            // crosses as a copy taken back, which can't replace the
+            // program's value.
+            generate_with(
+                &format!(
+                    "{}pub fn update(state: &mut State) {{}}\n",
+                    state(fields, "")
+                ),
+                None,
+                Some(&opaque),
+            ),
+            generate_with(
+                &format!(
+                    "{}impl State {{\n    pub fn swap(&self, other: &mut Vec<Self>) {{}}\n}}\n",
+                    state(fields, "")
+                ),
+                None,
+                Some(&opaque),
+            ),
             generate_with(
                 &format!(
                     "{}pub struct Pane {{\n    state: State,\n}}\n",
