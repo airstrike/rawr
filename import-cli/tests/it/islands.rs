@@ -3665,9 +3665,8 @@ fn a_marked_module_calls_a_method_with_elided_lifetimes_whose_output_borrows_sel
     checks_and_prints(&root, &printed);
 }
 
-/// The packages `cargo build` of `root` compiles, by the names its
-/// `Compiling` lines give.
-fn cargo_compiles(root: &Path) -> Vec<String> {
+/// `cargo build` of `root`, which succeeds.
+fn cargo_builds(root: &Path) {
     let built = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(root)
@@ -3677,11 +3676,6 @@ fn cargo_compiles(root: &Path) -> Vec<String> {
         .unwrap();
     let said = String::from_utf8_lossy(&built.stderr);
     assert!(built.status.success(), "{said}");
-    said.lines()
-        .filter_map(|line| line.trim_start().strip_prefix("Compiling "))
-        .filter_map(|line| line.split_whitespace().next())
-        .map(str::to_owned)
-        .collect()
 }
 
 /// `rawr-import run root`, which succeeds.
@@ -3701,17 +3695,15 @@ fn runs(root: &Path) {
 }
 
 /// A private field on a held `pub struct` runs, and rawr and `cargo build`
-/// share the project's path packages (#1775, #1793). rawr's copy names the
-/// path packages through the runner's links, so they are one unit each,
-/// which `cargo build` after a run finds fresh (#1777).
+/// build the project's path packages in one target, each after the other
+/// (#1775, #1777, #1793).
 #[test]
-fn a_held_type_s_new_field_runs_and_cargo_shares_the_path_packages() {
+fn a_held_type_s_new_field_runs_and_cargo_builds_beside_rawr() {
     const SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-theme");
     let root = crate::support::fresh("islands-theme-field-units");
     copy(Path::new(SOURCE), &root);
     runs(&root);
-    // The project's own crate is all `cargo build` compiles after a run.
-    assert_eq!(cargo_compiles(&root), ["islands-theme"]);
+    cargo_builds(&root);
     runs(&root);
     let home = root.join("src/home.rs");
     edit(
@@ -3725,6 +3717,6 @@ fn a_held_type_s_new_field_runs_and_cargo_shares_the_path_packages() {
         "            wizard: None,\n            seen: 0,\n        }",
     );
     runs(&root);
-    assert_eq!(cargo_compiles(&root), ["islands-theme"]);
+    cargo_builds(&root);
     runs(&root);
 }

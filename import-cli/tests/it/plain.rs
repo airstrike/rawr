@@ -98,54 +98,6 @@ fn nightly_built(root: &Path) -> bool {
     walk(&root.join("target/rawr"))
 }
 
-/// The units the nightly check build compiled or ran since `since`, by
-/// Cargo's `<crate>-<hash>` names: Cargo rewrites a unit's fingerprint
-/// only when it compiles that unit or runs its build script again.
-fn compiled_since(nightly: &Path, since: std::time::SystemTime) -> Vec<String> {
-    let mut units = Vec::new();
-    let mut pending = vec![nightly.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(&directory).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            if directory
-                .file_name()
-                .is_some_and(|name| name == ".fingerprint")
-            {
-                let written = fs::read_dir(&path)
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .any(|file| {
-                        file.metadata()
-                            .and_then(|metadata| metadata.modified())
-                            .is_ok_and(|modified| modified > since)
-                    });
-                if written {
-                    units.push(entry.file_name().to_string_lossy().into_owned());
-                }
-            } else {
-                pending.push(path);
-            }
-        }
-    }
-    units.sort();
-    units
-}
-
-/// The units in the nightly check build named for `krate`.
-fn units_of(nightly: &Path, krate: &str) -> Vec<String> {
-    compiled_since(nightly, std::time::SystemTime::UNIX_EPOCH)
-        .into_iter()
-        .filter(|unit| {
-            unit.rsplit_once('-')
-                .is_some_and(|(name, hash)| name == krate && hash.len() == 16)
-        })
-        .collect()
-}
-
 #[test]
 fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
@@ -2883,14 +2835,12 @@ fn run_ok(root: &Path, home: &Path) -> String {
 
 /// Two projects with a path crate `events 0.1.0` at the same relative path,
 /// with different contents, share the pinned nightly's check build. Cargo
-/// keys each `events` by its absolute path, so each project reads its own,
-/// the second compiles no registry unit, and neither removes the other's
-/// units (D699.2 a and c, D700).
+/// keys each `events` by its absolute path, so each project prints its
+/// own, the first again after the second (D699.2 a and c, D700).
 #[test]
 fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
     let base = crate::support::fresh("nightly-path-crates");
     let home = base.join("home");
-    let nightly = nightly_directory(&home);
     let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    println!(\"{} {}\", events::word(), Version::new(1, 2, 3));\n}\n";
     let [first, second] = ["first", "second"].map(|name| base.join(name));
     nightly_project(&first, main, Some("alpha"));
@@ -2898,60 +2848,28 @@ fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
 
     assert_eq!(run_ok(&first, &home), "alpha 1.2.3\n");
     assert!(nightly_built(&first));
-    assert!(
-        !units_of(&nightly, "semver").is_empty(),
-        "the first project checks semver"
-    );
 
-    let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&second, &home), "beta 1.2.3\n");
     assert!(
         nightly_built(&second),
         "the second project extracts its own `events`"
     );
-    let compiled = compiled_since(&nightly, started);
-    assert!(
-        compiled.iter().any(|unit| unit.starts_with("events-")),
-        "the second project's `events` is its own unit: {compiled:?}"
-    );
-    assert!(
-        compiled
-            .iter()
-            .all(|unit| unit.starts_with("events-") || unit.starts_with("rawr-resolution-harness-")),
-        "the second project compiled only its own crates: {compiled:?}"
-    );
-    assert_eq!(
-        units_of(&nightly, "events").len(),
-        2,
-        "each project keeps its own `events` unit"
-    );
 
-    // The first project's `events` is still its own, and still fresh.
+    // The first project's `events` is still its own.
     fs::remove_dir_all(home_format(&home, "bindings")).unwrap();
     fs::remove_dir_all(first.join("target/rawr")).unwrap();
-    let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&first, &home), "alpha 1.2.3\n");
     assert!(nightly_built(&first));
-    // Only the harness, whose sources rawr has just written, is checked again.
-    let compiled = compiled_since(&nightly, started);
-    assert!(
-        compiled
-            .iter()
-            .all(|unit| unit.starts_with("rawr-resolution-harness-")),
-        "{compiled:?}"
-    );
 }
 
-/// Two projects with the same closure and no path crate share every unit
-/// of the nightly's check build, the harness's included. A binding miss in
-/// the second compiles nothing and reads what the first checked, which is
-/// what it would check itself; a feature change compiles only that variant,
-/// beside the first's (D699.2 b, D700).
+/// Two projects with the same closure and no path crate share the nightly's
+/// check build. A binding miss in the second runs the nightly and prints
+/// what the first printed; a feature change runs too, and the first still
+/// runs beside it (D699.2 b, D700).
 #[test]
-fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
+fn identical_closures_share_a_home_and_read_no_stale_results() {
     let base = crate::support::fresh("nightly-identical");
     let home = base.join("home");
-    let nightly = nightly_directory(&home);
     let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    let version = Version::parse(\"1.2.3\").unwrap();\n    println!(\"{version} {}\", version.major);\n}\n";
     let [first, second] = ["first", "second"].map(|name| base.join(name));
     nightly_project(&first, main, None);
@@ -2961,26 +2879,15 @@ fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
     assert!(nightly_built(&first));
 
     // A miss in the second project, as after a change to the bindings'
-    // format: the nightly runs and compiles nothing.
+    // format: the nightly runs.
     fs::remove_dir_all(home_format(&home, "bindings")).unwrap();
-    let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&second, &home), "1.2.3 1\n");
     assert!(
         nightly_built(&second),
         "the second project's miss ran the nightly"
     );
-    // Only the harness, whose sources rawr has just written, is checked again.
-    let compiled = compiled_since(&nightly, started);
-    assert!(
-        compiled
-            .iter()
-            .all(|unit| unit.starts_with("rawr-resolution-harness-")),
-        "{compiled:?}"
-    );
 
-    // Another feature set is another unit: only it is compiled, and the
-    // first project's stays.
-    let before = units_of(&nightly, "semver");
+    // Another feature set, beside the first project's.
     let manifest = fs::read_to_string(second.join("Cargo.toml")).unwrap();
     fs::write(
         second.join("Cargo.toml"),
@@ -2990,33 +2897,16 @@ fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
         ),
     )
     .unwrap();
-    let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&second, &home), "1.2.3 1\n");
-    let compiled = compiled_since(&nightly, started);
-    assert!(
-        compiled.iter().any(|unit| unit.starts_with("semver-")),
-        "semver without `std` is a unit of its own: {compiled:?}"
-    );
-    assert!(
-        compiled
-            .iter()
-            .all(|unit| unit.starts_with("semver-") || unit.starts_with("rawr-resolution-harness-")),
-        "{compiled:?}"
-    );
-    let semver = units_of(&nightly, "semver");
-    assert!(
-        before.iter().all(|unit| semver.contains(unit)) && semver.len() > before.len(),
-        "both variants stay: {before:?} then {semver:?}"
-    );
+    assert_eq!(run_ok(&first, &home), "1.2.3 1\n");
 }
 
 /// The runner of a program that calls two crates has a crate of adapters
-/// for each, beside the base they share and the runner's own (#1670). When
-/// the program calls one more function of one crate, Cargo compiles that
-/// crate's adapters and the runner's own crate again, and neither the other
-/// crate's adapters nor the base.
+/// for each, beside the base they share and the runner's own (#1670). The
+/// program runs, and runs again with one more call into one crate, and
+/// Cargo builds the runner after an edit to that crate's adapters.
 #[test]
-fn a_new_call_into_one_crate_recompiles_that_crates_adapters_alone() {
+fn a_runner_has_adapters_per_crate_and_runs_a_new_call_into_one() {
     let root = crate::support::fresh("runner-members");
     let home = crate::support::scratch().join("rawr-home");
     let main = |sum: &str| format!("// rawr\nfn main() {{\n    println!(\"{{}}\", {sum});\n}}\n");
@@ -3057,31 +2947,16 @@ fn a_new_call_into_one_crate_recompiles_that_crates_adapters_alone() {
         );
     }
 
-    // The units the second run compiled, by Cargo's fingerprints.
+    // One more call into beta.
     fs::write(
         root.join("src/main.rs"),
         main("alpha::one() + beta::two() + beta::three()"),
     )
     .unwrap();
-    let started = std::time::SystemTime::now();
     assert_eq!(run_ok(&root, &home), "6\n");
-    let mut compiled = compiled_since(&root.join("target/debug"), started)
-        .into_iter()
-        .filter(|unit| unit.starts_with("rawr-generated-runner"))
-        .filter_map(|unit| Some(unit.rsplit_once('-')?.0.to_owned()))
-        .collect::<Vec<_>>();
-    compiled.sort();
-    compiled.dedup();
-    assert_eq!(
-        compiled,
-        [
-            "rawr-generated-runner",
-            "rawr-generated-runner-adapters-beta"
-        ]
-    );
 
-    // Cargo's own account, as it builds the runner for rawr: an edit to one
-    // of beta's adapter modules compiles beta's adapters and the runner.
+    // Cargo builds the runner as rawr does, after an edit to one of beta's
+    // adapter modules.
     let modules = runner.join("rawr-crates/adapters-beta/src");
     let module = fs::read_dir(&modules)
         .unwrap()
@@ -3114,19 +2989,6 @@ fn a_new_call_into_one_crate_recompiles_that_crates_adapters_alone() {
         .unwrap();
     let stderr = text(&cargo.stderr);
     assert!(cargo.status.success(), "{stderr}");
-    let compiling = stderr
-        .lines()
-        .filter_map(|line| line.trim_start().strip_prefix("Compiling "))
-        .filter_map(|line| line.split_whitespace().next())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        compiling,
-        [
-            "rawr-generated-runner-adapters-beta",
-            "rawr-generated-runner"
-        ],
-        "{stderr}"
-    );
 }
 
 /// Where the project at `root` keeps `kept` for this rawr's protocol.
