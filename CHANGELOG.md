@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save does less repeated work in the runner build and the generator: the runner executable is hashed once, Cargo.lock and each manifest are parsed once, Cargo's messages are decoded once, and each plan's signature and opaque facts are computed once. (#1853)
+- A kept overlay of runner sources no longer re-hashes every generated file on a hit. (#1831)
 
 ## 0.3.206 (2026-11-12)
 

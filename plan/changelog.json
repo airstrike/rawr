@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A save does less repeated work in the runner build and the generator: the runner executable is hashed once, Cargo.lock and each manifest are parsed once, Cargo's messages are decoded once, and each plan's signature and opaque facts are computed once.","issues":[1853]},
+      {"text":"A kept overlay of runner sources no longer re-hashes every generated file on a hit.","issues":[1831]}
+    ]
   },
   "releases": [
     {
