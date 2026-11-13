@@ -22,7 +22,15 @@ thread_local! {
     /// last segment, which its bounds and impls carry.
     static WRITTEN: RefCell<BTreeMap<crate::ImmutableString, &'static str>> =
         const { RefCell::new(BTreeMap::new()) };
+
+    /// What each resolution under way that is kept wrote of `WRITTEN`,
+    /// innermost last (`writing`).
+    static WRITING: RefCell<Vec<Vec<Written>>> = const { RefCell::new(Vec::new()) };
 }
+
+/// One path's naming of a std trait: its last segment and the trait's
+/// definition.
+pub(crate) type Written = (crate::ImmutableString, &'static str);
 
 /// Start resolving a program: no std trait is named by a path yet.
 pub(crate) fn begin() {
@@ -32,9 +40,35 @@ pub(crate) fn begin() {
 /// The program names the std trait `definition` by a path whose last
 /// segment is `name`.
 pub(crate) fn written(name: &str, definition: &'static str) {
-    WRITTEN.with_borrow_mut(|written| {
-        written.entry(name.into()).or_insert(definition);
+    let name = crate::ImmutableString::from(name);
+    WRITING.with_borrow_mut(|writing| {
+        for frame in writing.iter_mut() {
+            frame.push((name.clone(), definition));
+        }
     });
+    WRITTEN.with_borrow_mut(|written| {
+        written.entry(name).or_insert(definition);
+    });
+}
+
+/// What `write` gives, with each naming it wrote, in order: a resolution
+/// that reuses it writes them again, as `write` would (#1876).
+pub(crate) fn writing<T>(write: impl FnOnce() -> T) -> (T, Vec<Written>) {
+    /// Takes the frame back off, as `write` ends or unwinds.
+    struct Frame;
+
+    impl Drop for Frame {
+        fn drop(&mut self) {
+            WRITING.with_borrow_mut(|writing| writing.pop());
+        }
+    }
+
+    WRITING.with_borrow_mut(|writing| writing.push(Vec::new()));
+    let frame = Frame;
+    let value = write();
+    let names = WRITING.with_borrow_mut(|writing| writing.last_mut().map(std::mem::take));
+    drop(frame);
+    (value, names.unwrap_or_default())
 }
 
 /// The stable std trait a program names `name` by, as rustc's scope has it:

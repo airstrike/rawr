@@ -1190,7 +1190,7 @@ enum AllocationOrder {
     Reverse,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Namespace {
     package: ImmutableString,
     modules: Box<[ImmutableString]>,
