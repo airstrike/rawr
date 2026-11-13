@@ -50,6 +50,7 @@ use std::sync::{Arc, Mutex};
 use super::watched::Recorded;
 use super::{bundle, cold, layout, replay};
 use crate::cargo::{self, Limits, Request};
+use crate::extract::plan::Unreplayed;
 use crate::input::{self, stored};
 use crate::{metrics, store};
 
@@ -431,6 +432,9 @@ struct Evaluation {
     /// probe: other instances than the request kept, or uses that have the
     /// crates written again.
     recorded: Mutex<Option<Stopped>>,
+    /// The request's authority as shared bindings check it, captured once
+    /// for every replay of this evaluation.
+    current: Option<input::bindings::Current>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
 }
@@ -607,6 +611,9 @@ fn evaluate(
             refused: false,
         },
     )?;
+    // One capture of the request's authority answers every shared replay
+    // of this evaluation: it runs the compiler for its identity.
+    let current = input::bindings::Current::capture(&request.project_root, &request.config, limits);
     let state = Arc::new(Evaluation {
         request,
         cached,
@@ -626,16 +633,12 @@ fn evaluate(
         settled: Mutex::new(Vec::new()),
         shared: Mutex::new(None),
         recorded: Mutex::new(None),
+        current,
     });
     // A shared resolution whose request, toolchain, files and entries are
     // as they were: no Cargo and no tables (`memo`).
     let attestation = state.cached.attestation.content().digest().as_bytes();
-    let current = input::bindings::Current::capture(
-        &state.request.project_root,
-        &state.request.config,
-        &state.limits,
-    );
-    if let Some(remembered) = current.as_ref().and_then(|current| {
+    if let Some(remembered) = state.current.as_ref().and_then(|current| {
         memo::recall(
             state.cached.context.rawr(),
             state.identity.as_bytes(),
@@ -1028,7 +1031,8 @@ impl Evaluation {
                 // first: a carried API in its place keys the check apart
                 // from the next run's (#400).
                 let attestation = self.cached.attestation.content().digest();
-                if let Some(parts) = self.carried_parts(&attestation.as_bytes())
+                let mut tables = self.request.tables().clone();
+                if let Some(parts) = self.carried_parts(&attestation.as_bytes(), &mut tables)
                     && let Ok(mut shared) = self.shared.lock()
                 {
                     *shared = Some(parts);
@@ -1049,7 +1053,7 @@ impl Evaluation {
                     let script = self
                         .script
                         .map(|factory| factory(&self.request, &self.cached, &layout));
-                    let run = || self.execute_in(layout, cargo_account, accounts, graph);
+                    let run = || self.execute_in(layout, cargo_account, accounts, graph, tables);
                     #[cfg(test)]
                     if let Some(script) = script {
                         return script.run_result(run).map_err(|error| {
@@ -1068,6 +1072,7 @@ impl Evaluation {
         cargo_account: cargo::unit::Allocation,
         accounts: &mut Accounts,
         graph: &node::GraphBudget,
+        mut tables: crate::extract::plan::replayed::Tables,
     ) -> Result<node::Bundled<Product>, node::Error> {
         let preparing = std::time::Instant::now();
         let harness = self.request.prepare_harness_in(
@@ -1090,7 +1095,7 @@ impl Evaluation {
             manifest: final_form.manifest(),
             lock: final_form.lock(),
         };
-        if let Some(parts) = self.shared_parts(&basis)
+        if let Ok(parts) = self.shared_parts(&basis, &mut tables)
             && let Ok(mut shared) = self.shared.lock()
         {
             *shared = Some(parts);
@@ -1321,6 +1326,9 @@ pub(crate) struct Shared {
     /// as the next run remembers them (`memo`).
     files: Vec<memo::File>,
     native: [u8; 32],
+    /// The tables' replays, for the next round of the owner that keeps
+    /// them.
+    tables: crate::extract::plan::replayed::Tables,
 }
 
 /// What the API is built from, when a consumer rebuilds it.
@@ -1334,18 +1342,34 @@ struct Materials {
 
 impl Evaluation {
     /// The shared bindings of every selected crate, when the home has them
-    /// all and they replay this demand. The final-form harness is kept under
-    /// the project's Rawr directory, where the runner reads it.
-    fn shared_parts(&self, harness: &carried::Basis<'_>) -> Option<Shared> {
+    /// all and they replay this demand. Each table `tables` holds a replay
+    /// of for this demand is not read again, and each one read is kept
+    /// there. The final-form harness is kept under the project's Rawr
+    /// directory, where the runner reads it.
+    fn shared_parts(
+        &self,
+        harness: &carried::Basis<'_>,
+        tables: &mut crate::extract::plan::replayed::Tables,
+    ) -> Result<Shared, Unreplayed> {
+        let current = self.current.as_ref().ok_or(Unreplayed::Unanswered)?;
+        let shared =
+            harness
+                .plan
+                .shared_document(harness.graph, harness.metadata, current, tables)?;
+        self.harnessed(harness, shared, tables)
+            .ok_or(Unreplayed::Unanswered)
+    }
+
+    /// The shared bindings `shared` gave, with the harness they were read
+    /// under kept where the runner reads it, and `tables` for the next
+    /// round.
+    fn harnessed(
+        &self,
+        harness: &carried::Basis<'_>,
+        shared: crate::extract::plan::SharedDocument,
+        tables: &mut crate::extract::plan::replayed::Tables,
+    ) -> Option<Shared> {
         use sha2::{Digest as _, Sha256};
-        let current = input::bindings::Current::capture(
-            &self.request.project_root,
-            &self.request.config,
-            &self.limits,
-        )?;
-        let shared = harness
-            .plan
-            .shared_document(harness.graph, harness.metadata, &current)?;
         let kept = self.cached.context.rawr().join("shared");
         std::fs::create_dir_all(&kept).ok()?;
         let mut entries = Vec::new();
@@ -1431,6 +1455,7 @@ impl Evaluation {
             ),
             files,
             native,
+            tables: std::mem::take(tables),
         })
     }
 }
@@ -1449,6 +1474,15 @@ enum Parts {
 }
 
 impl SharedReady {
+    /// The replays of the shared tables this run read, for its owner's next
+    /// round: none when an earlier run's resolution was remembered.
+    pub(crate) fn take_tables(&mut self) -> Option<crate::extract::plan::replayed::Tables> {
+        match &mut self.parts {
+            Parts::Read(parts) => Some(std::mem::take(&mut parts.tables)),
+            Parts::Remembered(_) => None,
+        }
+    }
+
     /// The shared tables this run used, whose build scripts the runner's
     /// build settles.
     pub(crate) fn settlement(&mut self) -> crate::bindings::Settlement {

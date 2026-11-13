@@ -235,6 +235,11 @@ pub struct Request {
     /// before its probe (#1807). It is no input of the product either.
     #[cfg(feature = "rustc-driver")]
     bodies: Option<crate::uses::Bodies>,
+    /// The shared tables' replays the owner of this request kept from its
+    /// last round (#1845). They are no input of the product: a replay is
+    /// taken only for the same table and demand.
+    #[cfg(feature = "rustc-driver")]
+    tables: crate::extract::plan::replayed::Tables,
 }
 
 /// A currently validated semantic resolution owner ready for API publication.
@@ -316,6 +321,16 @@ impl Prepared {
             }
             resolution::owner::Resolved::Shared(_) => Ok(None),
             resolution::owner::Resolved::Recorded(stopped) => Ok(stopped.uses.clone()),
+        }
+    }
+
+    /// Keep in `kept` the shared tables' replays this preparation read,
+    /// for its next round (#1845).
+    pub fn keep_tables(&mut self, kept: &mut crate::api::Kept) {
+        if let resolution::owner::Resolved::Shared(shared) = &mut self.owner
+            && let Some(tables) = shared.take_tables()
+        {
+            kept.set_tables(tables);
         }
     }
 
@@ -983,6 +998,21 @@ impl Request {
     pub fn kept_bodies(mut self, bodies: crate::uses::Bodies) -> Self {
         self.bodies = Some(bodies);
         self
+    }
+
+    /// This request, replaying the shared tables `kept` holds replays of
+    /// for the same demand from them, not from the tables (#1845).
+    #[cfg(feature = "rustc-driver")]
+    #[must_use]
+    pub fn kept_tables(mut self, kept: &crate::api::Kept) -> Self {
+        self.tables = kept.tables().clone();
+        self
+    }
+
+    /// The shared tables' replays this request's owner kept.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) const fn tables(&self) -> &crate::extract::plan::replayed::Tables {
+        &self.tables
     }
 
     /// Prepare the complete semantic owner before extraction, reusing an
@@ -2553,6 +2583,8 @@ impl Builder {
             kept: None,
             #[cfg(feature = "rustc-driver")]
             bodies: None,
+            #[cfg(feature = "rustc-driver")]
+            tables: crate::extract::plan::replayed::Tables::default(),
         })
     }
 }
@@ -4448,7 +4480,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             path: temporary.clone(),
             source,
         })?;
-    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    // A generated file is rewritten whenever it differs from what is
+    // generated, so a crash that tears it costs a rewrite, not a sync (#1844).
+    let result = file.write_all(bytes);
     if let Err(source) = result {
         let _ = fs::remove_file(&temporary);
         return Err(Error::Io {

@@ -635,10 +635,19 @@ fn prepare_resolving(
                 rawr_import::uses::Bodies::Named,
             ))
         };
+        // The shared tables' replays the owner kept: a table read for the
+        // same demand last round is not read again (#1845).
+        let request = match kept.as_deref() {
+            Some(kept) => request.kept_tables(kept),
+            None => request,
+        };
         rawr_import::progress::phase("resolving");
         let mut prepared = request
             .prepare_cached_in(&limits, scope)
             .map_err(Error::import)?;
+        if let Some(kept) = kept.as_deref_mut() {
+            prepared.keep_tables(kept);
+        }
         settlement.absorb(prepared.settlement());
         // The instances native code calls marked generics at, as this check
         // recorded them (D866): a record the shadow crate's table doesn't

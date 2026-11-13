@@ -194,6 +194,9 @@ pub struct Kept {
     held: Option<(Key, Held)>,
     /// The classification of the kept graph's API the last save replayed.
     classification: crate::classify::kept::Kept,
+    /// The shared tables' replays the last round read, which a round of
+    /// the same tables and demand takes in place of reading them (#1845).
+    tables: crate::extract::plan::replayed::Tables,
 }
 
 /// An API product's action and content.
@@ -203,6 +206,16 @@ impl Kept {
     /// The classification this owner keeps beside its graph.
     pub(crate) fn classification(&mut self) -> &mut crate::classify::kept::Kept {
         &mut self.classification
+    }
+
+    /// The shared tables' replays this owner keeps.
+    pub(crate) const fn tables(&self) -> &crate::extract::plan::replayed::Tables {
+        &self.tables
+    }
+
+    /// Keep `tables` in place of the replays this owner held.
+    pub(crate) fn set_tables(&mut self, tables: crate::extract::plan::replayed::Tables) {
+        self.tables = tables;
     }
 
     /// Build the graph a warm launch deferred off this thread, so the next

@@ -60,33 +60,38 @@ pub(super) fn enroll_project(
     project: Digest,
     budget: &mut super::recovery::Budget,
 ) -> Result<(), Error> {
-    with_publication(root, |publication| {
-        let name = format!("{}.lock", project.directory());
-        let owner = root.join("locks/owners").join(&name);
-        let project_lock = root.join("locks/projects").join(&name);
-        let pending = root
-            .join("locks/projects")
-            .join(format!("{}.pending", project.directory()));
-        let exists = |path: &Path| -> Result<bool, Error> {
-            match fs::symlink_metadata(path) {
-                Ok(metadata) => {
-                    validate_file_with(path)?;
-                    if metadata.len() != 0 {
-                        return Err(Error::Corrupt {
-                            path: path.to_path_buf(),
-                            reason: "project enrollment control bytes changed",
-                        });
-                    }
-                    Ok(true)
+    let name = format!("{}.lock", project.directory());
+    let owner = root.join("locks/owners").join(&name);
+    let project_lock = root.join("locks/projects").join(&name);
+    let pending = root
+        .join("locks/projects")
+        .join(format!("{}.pending", project.directory()));
+    let exists = |path: &Path| -> Result<bool, Error> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                validate_file_with(path)?;
+                if metadata.len() != 0 {
+                    return Err(Error::Corrupt {
+                        path: path.to_path_buf(),
+                        reason: "project enrollment control bytes changed",
+                    });
                 }
-                Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
-                Err(source) => Err(Error::Io {
-                    operation: "inspect project enrollment",
-                    path: path.to_path_buf(),
-                    source,
-                }),
+                Ok(true)
             }
-        };
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(Error::Io {
+                operation: "inspect project enrollment",
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    };
+    // An enrolled project's controls are validated without the publication
+    // lease: enrolling never removes one, so what is there stays (#1827).
+    if exists(&owner)? && exists(&project_lock)? && !exists(&pending)? {
+        return Ok(());
+    }
+    with_publication(root, |publication| {
         let owner_present = exists(&owner)?;
         let project_present = exists(&project_lock)?;
         let pending_present = exists(&pending)?;
@@ -155,6 +160,11 @@ pub(crate) fn with_bootstrap<T>(
                 })
             }
         }?;
+    }
+    // Only a fresh store's bootstrap excludes another: an existing one's is
+    // validated as it is, with no lease (#1827).
+    if !fresh {
+        return evaluate();
     }
     with_file(&path, "acquire typed store bootstrap lease", evaluate)
 }
@@ -548,7 +558,7 @@ pub(super) fn ensure_control_file(
         .open(path)
         .inspect(|_| {})
         .inspect_err(|_source| {})
-        .and_then(|file| file.sync_all())
+        .and_then(|file| super::entry::sync_file(&file))
         .map_err(|source| Error::Io {
             operation: "create store control",
             path: path.to_path_buf(),
@@ -610,7 +620,7 @@ fn ensure_keyed(root: &Path, path: &Path) -> Result<(), Error> {
                 path: path.to_path_buf(),
                 source,
             })?;
-        super::entry::sync_directory(
+        super::entry::push_directory(
             path.parent()
                 .ok_or(Error::State("typed store keyed lease has no parent"))?,
         )

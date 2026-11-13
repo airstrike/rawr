@@ -262,7 +262,7 @@ fn recover_garbage(store: &Path, budget: &mut recovery::Budget) -> Result<bool, 
             path: temporary.clone(),
             source,
         })?;
-        entry::sync_directory(temporary.parent().ok_or(Error::State(
+        entry::push_directory(temporary.parent().ok_or(Error::State(
             "typed store garbage has no temporary directory",
         ))?)?;
         Ok(true)
@@ -514,12 +514,17 @@ pub(super) fn recover_excess(
     kept: &[(Kind, usize)],
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
+    let settled = Settled::of(store, requesting, kept)?;
+    if cfg!(unix) && SETTLED.with_borrow(|last| last.as_ref() == Some(&settled)) {
+        return Ok(false);
+    }
     let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
         excess(store, &snapshot, &registrations, requesting, kept)
     })?;
     let Some(selected) = selected else {
+        SETTLED.set(Some(settled));
         return Ok(false);
     };
     let mut evictions = Vec::new();
@@ -550,6 +555,72 @@ pub(super) fn recover_excess(
         accounting::finish_eviction(publication, store, budget)?;
         Ok(true)
     })
+}
+
+/// What a project's kept kinds were when this thread last found none of
+/// them in excess: each kind's count of the project's actions with its
+/// newest seal, the project's pin ledger and the pin roots recorded. Only
+/// an action of a kept kind published or retired, or a pin bound, released
+/// or retired, can put one in excess, so a reservation that finds the same
+/// reads no pin (#1843). Off Unix nothing is the same, and every
+/// reservation looks.
+#[derive(PartialEq)]
+struct Settled {
+    store: PathBuf,
+    project: Digest,
+    kinds: Vec<(Kind, usize, u64)>,
+    pins: Option<crate::file_digest::Identity>,
+    roots: [Option<(i64, i64)>; 4],
+}
+
+thread_local! {
+    static SETTLED: std::cell::RefCell<Option<Settled>> = const { std::cell::RefCell::new(None) };
+}
+
+impl Settled {
+    fn of(store: &Path, project: Digest, kept: &[(Kind, usize)]) -> Result<Self, Error> {
+        let registrations = accounting::registered(store)?;
+        let kinds = kept
+            .iter()
+            .map(|(kind, _)| {
+                registrations
+                    .iter()
+                    .filter(|registered| {
+                        registered.allocation().class == Class::Action
+                            && registered.allocation().kind == *kind
+                            && registered.publisher() == project
+                    })
+                    .fold((*kind, 0, 0), |(kind, count, newest), registered| {
+                        (kind, count + 1, newest.max(registered.sequence()))
+                    })
+            })
+            .collect();
+        Ok(Self {
+            store: store.to_path_buf(),
+            project,
+            kinds,
+            pins: pins::ledger_identity(store, project),
+            roots: ["live", "last-good", "prepared", "in-flight"]
+                .map(|role| changed(&store.join("pins").join(role))),
+        })
+    }
+}
+
+/// When a directory's entries last changed: a pin root recorded or retired
+/// under it changes it.
+fn changed(directory: &Path) -> Option<(i64, i64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        fs::symlink_metadata(directory)
+            .ok()
+            .map(|metadata| (metadata.ctime(), metadata.ctime_nsec()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        None
+    }
 }
 
 fn excess(
@@ -821,6 +892,14 @@ pub(super) fn recover_unreadable(
     store: &Path,
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
+    // Without an unreadable entry, as almost always, there is nothing to
+    // lease: one look at the ledger this thread keeps (#1843).
+    if !accounting::registered(store)?
+        .iter()
+        .any(|registered| unreadable(registered.allocation()))
+    {
+        return Ok(false);
+    }
     let units = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         if !registrations
@@ -1556,7 +1635,7 @@ fn retire_action(
         path: temporary.clone(),
         source,
     })?;
-    entry::sync_directory(temporary.parent().ok_or(Error::State(
+    entry::push_directory(temporary.parent().ok_or(Error::State(
         "typed store action has no temporary directory",
     ))?)?;
     index::retire_action(
@@ -1621,7 +1700,7 @@ fn retire_content(
         path: temporary.clone(),
         source,
     })?;
-    entry::sync_directory(temporary.parent().ok_or(Error::State(
+    entry::push_directory(temporary.parent().ok_or(Error::State(
         "typed store content has no temporary directory",
     ))?)
 }

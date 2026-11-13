@@ -553,23 +553,26 @@ impl<'store> Evaluator<'store> {
                 || {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
-                    let payload = execute().map_err(Error::fresh)?.into_payload()?;
+                    let value = execute().map_err(Error::fresh)?;
+                    let payload = value.payload()?;
                     Ok(crate::store::Reserved::Publish {
-                        result: (),
+                        result: value,
                         recipe: recipe.clone(),
                         payload,
                         bundle: None,
                     })
                 },
-                |()| {
+                |value, published| {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::Published);
-                    self.store
-                        .lookup_staged(recipe, self.store.graph_budget())?
-                        .ok_or(Error::State(
-                            "published staged node disappeared before promotion",
-                        ))?
-                        .validate_current(self.store)
+                    replay::Replayed::published(
+                        recipe,
+                        value,
+                        published,
+                        self.store.graph_budget(),
+                    )?
+                    .stage_published(recipe)?
+                    .validate_current(self.store)
                 },
             )
         })
@@ -655,28 +658,32 @@ impl<'store> Evaluator<'store> {
             }
 
             let in_flight = recipe.in_flight(self.store)?;
-            self.store
-                .with_action_reservation(ownership, recipe, in_flight.as_ref(), || {
+            let (value, published) = self.store.with_action_reservation(
+                ownership,
+                recipe,
+                in_flight.as_ref(),
+                || {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
                     let transform = execute.take().ok_or(Error::State(
                         "direct node executor was consumed before the final miss",
                     ))?;
-                    let payload = transform().map_err(Error::fresh)?.into_payload()?;
+                    let value = transform().map_err(Error::fresh)?;
+                    let payload = value.payload()?;
                     Ok(crate::store::Reserved::Publish {
-                        result: (),
+                        result: value,
                         recipe: recipe.clone(),
                         payload,
                         bundle: None,
                     })
-                })?;
+                },
+            )?;
             self.metrics
                 .node(K::KIND.metric(), metrics::NodeEvent::Published);
-            self.store
-                .lookup(recipe, self.store.graph_budget())?
-                .ok_or(Error::State(
-                    "published direct node was absent during exact revalidation",
-                ))
+            // The value as it was computed, with the digest its publication
+            // wrote: no read back, hash or decode of what was just written.
+            replay::Replayed::published(recipe, value, published, self.store.graph_budget())?
+                .validate_published(recipe)
         })
     }
 

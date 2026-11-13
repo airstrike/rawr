@@ -78,14 +78,21 @@ impl Capacity {
             ));
         }
         reservation.charge = charge;
-        self.ledger.enforce_with_index(root)?;
+        self.ledger.enforce()?;
         let bytes = self.ledger.encode()?;
         if bytes.len() != self.length {
             return Err(Error::State(
                 "project reservation changed its admitted ledger length",
             ));
         }
-        super::entry::replace_admitted_file(admitted, publication, root, &self.target, &bytes)?;
+        super::entry::replace_admitted_file(
+            admitted,
+            publication,
+            root,
+            &self.target,
+            &bytes,
+            super::entry::Durability::Ordered,
+        )?;
         Ok(Reservation {
             key: self.key,
             charge,
@@ -594,8 +601,10 @@ pub(crate) fn reserve(
     charge: Charge,
 ) -> Result<Reservation, Error> {
     let mut ledger = Ledger::read_or_empty(root, project)?;
+    // `reserve` enforces the ledger's own bounds. The index's are enforced
+    // as each row is published, so a reservation reads none of its rows
+    // (#1843).
     ledger.reserve(key, charge)?;
-    ledger.enforce_with_index(root)?;
     save(publication, root, &ledger)?;
     Ok(Reservation { key, charge })
 }
@@ -611,7 +620,7 @@ pub(crate) fn available(root: &Path, project: Digest, key: LeaseKey) -> Result<C
         key,
         charge: Charge::zero(),
     });
-    ledger.enforce_with_index(root)?;
+    ledger.enforce()?;
     let target = ledger_path(root, project);
     let length = ledger.encode()?.len();
     Ok(Capacity {
@@ -1112,12 +1121,22 @@ pub(crate) fn usage(root: &Path, project: Digest) -> Result<(Charge, usize, usiz
 
 /// The project size target is an eviction trigger, never a refusal.
 pub(super) fn over_cap(root: &Path, project: Digest, additional: Charge) -> Result<bool, Error> {
-    let charge = Ledger::read_or_empty(root, project)?
-        .enforce_with_index(root)?
-        .checked_add(additional)?;
-    Ok(charge.bytes > PROJECT_BYTES
-        || charge.allocations > PROJECT_ALLOCATIONS
-        || charge.members > PROJECT_MEMBERS)
+    let over = |charge: Charge| {
+        charge.bytes > PROJECT_BYTES
+            || charge.allocations > PROJECT_ALLOCATIONS
+            || charge.members > PROJECT_MEMBERS
+    };
+    let ledger = Ledger::read_or_empty(root, project)?;
+    let charge = ledger.enforce()?.checked_add(additional)?;
+    // The index's bounds cap what its rows can charge: a project under its
+    // target with all of them is under it whatever the rows are, and reads
+    // none of them (#1843).
+    if !over(charge.checked_add(super::index::project_charge_bound())?) {
+        return Ok(false);
+    }
+    Ok(over(charge.checked_add(super::index::project_charge(
+        root, project,
+    )?)?))
 }
 
 fn save(
@@ -1149,7 +1168,7 @@ fn save_or_retire(
                 path: temporary.clone(),
                 source,
             })?;
-            super::entry::sync_directory(temporary.parent().ok_or(Error::State(
+            super::entry::push_directory(temporary.parent().ok_or(Error::State(
                 "empty project logical ledger has no temporary directory",
             ))?)
         }
@@ -1174,7 +1193,14 @@ fn save_bytes(
         root,
         super::control::Plan::replacement(&target, bytes.len()),
     )?;
-    super::entry::replace_admitted_file(admitted, publication, root, &target, bytes)
+    super::entry::replace_admitted_file(
+        admitted,
+        publication,
+        root,
+        &target,
+        bytes,
+        super::entry::Durability::Ordered,
+    )
 }
 
 /// Whether a project other than `project` has a ledger: one directory
@@ -1186,6 +1212,16 @@ pub(super) fn others(root: &Path, project: Digest) -> bool {
             .flatten()
             .any(|entry| entry.file_name().to_str().is_some_and(|other| other != own))
     })
+}
+
+/// The physical identity of `project`'s ledger, `None` while it has none.
+pub(super) fn ledger_identity(
+    root: &Path,
+    project: Digest,
+) -> Option<crate::file_digest::Identity> {
+    fs::symlink_metadata(ledger_path(root, project))
+        .ok()
+        .and_then(|metadata| crate::file_digest::Identity::of(&metadata))
 }
 
 fn ledger_path(root: &Path, project: Digest) -> PathBuf {

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use sha2::{Digest as _, Sha256};
 
 use crate::cargo::{self, unit, Request};
-use crate::extract::plan::{Plan, Reprobe};
+use crate::extract::plan::{Plan, Reprobe, Unreplayed};
 
 /// The parts of one harness a shared replay reads.
 pub(super) struct Basis<'a> {
@@ -92,27 +92,27 @@ impl Carried {
 impl super::Evaluation {
     /// The shared bindings of this demand round, when an earlier round of
     /// this process completed its build: its staged tables, grown first by
-    /// its probe run again when they lack a unit this demand reaches.
-    pub(super) fn carried_parts(&self, attestation: &[u8; 32]) -> Option<super::Shared> {
+    /// its probe run again when they lack a unit this demand reaches. Only
+    /// the tables the probe grew are replayed again: `tables` keeps the
+    /// others' replays.
+    pub(super) fn carried_parts(
+        &self,
+        attestation: &[u8; 32],
+        tables: &mut crate::extract::plan::replayed::Tables,
+    ) -> Option<super::Shared> {
         let carried = carried(&key(&self.request, attestation)?)?;
         let plan = carried
             .plan()
             .carry(&self.limits)
             .demand(&self.request.demand)
             .ok()?;
-        if let Some(parts) = self.shared_parts(&carried.basis(&plan)) {
-            return Some(parts);
-        }
-        // The carried round's key names Cargo's view, not the crates'
-        // files: after an edit to the project the key holds, but the build
-        // is another, which its harness probes once (#1794).
-        let current = crate::input::bindings::Current::capture(
-            &self.request.project_root,
-            &self.request.config,
-            &self.limits,
-        )?;
-        if !plan.shared_inputs_hold(&current) {
-            return None;
+        match self.shared_parts(&carried.basis(&plan), tables) {
+            Ok(parts) => return Some(parts),
+            // The carried round's key names Cargo's view, not the crates'
+            // files: after an edit to the project the key holds, but the
+            // build is another, which its harness probes once (#1794).
+            Err(Unreplayed::Changed) => return None,
+            Err(Unreplayed::Unanswered) => {}
         }
         let rawr = self.cached.context.rawr();
         let native = crate::process::Native::from_attestation(&self.cached.attestation);
@@ -126,7 +126,7 @@ impl super::Evaluation {
             )
             .ok()?;
         crate::bindings::restage(&crate::bindings::staged(rawr), &plan.shared_keys());
-        self.shared_parts(&carried.basis(&plan))
+        self.shared_parts(&carried.basis(&plan), tables).ok()
     }
 }
 

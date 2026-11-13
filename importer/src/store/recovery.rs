@@ -192,7 +192,7 @@ pub(super) fn recover_temporaries(
         })?;
     }
     if recovered {
-        super::entry::sync_directory(&temporary_root)?;
+        super::entry::push_directory(&temporary_root)?;
     }
     Ok(recovered)
 }
