@@ -30,7 +30,7 @@
 
 use super::constant::{included, Place};
 use super::disk::{self, Disk};
-use super::entry::Lowered;
+use super::entry::{Body, Lowered};
 use super::imported::ImplUse;
 use super::interface::{framed, Interface, Native, Outlined, Written};
 use super::models::Models;
@@ -539,33 +539,33 @@ impl<'e> Session<'e> {
         })
     }
 
-    /// The key of `part` of `source`, whose bodies' texts are `texts`:
-    /// `None` when nothing is kept.
+    /// The key of `part` of `source`, whose bodies are `bodies`: `None`
+    /// when nothing is kept. Their texts are the source's, by where each
+    /// body is, so none is built for the key (#1850).
     pub(super) fn key<'p>(
         &self,
         part: Part,
         source: source::Id,
         program: &'p Program,
-        texts: &[&str],
+        bodies: &[Body<'_>],
     ) -> Option<Key<'p>> {
         let interface = self.interface.as_ref()?;
         let mut written = Written(Sha256::new());
-        written.0.update(b"rawr.lowering.source/v4");
+        written.0.update(b"rawr.lowering.source/v5");
         written.0.update(interface.of(source));
         // A level's `Debug` can't fail to write.
         let _ = write!(written, "{:?}", self.level);
-        let mut digest = written.0;
-        digest.update([u8::from(part == Part::Script)]);
-        digest.update(source.index().to_le_bytes());
-        framed(&mut digest, program.source.text_at(source));
-        for text in texts {
-            framed(&mut digest, text);
+        written.0.update([u8::from(part == Part::Script)]);
+        written.0.update(source.index().to_le_bytes());
+        framed(&mut written.0, program.source.text_at(source));
+        for body in bodies {
+            body.write_key(&mut written);
         }
         Some(Key {
             part,
             source,
             identity: program.source.identity_at(source),
-            digest: digest.finalize().into(),
+            digest: written.0.finalize().into(),
         })
     }
 
@@ -688,23 +688,24 @@ impl<'e> Checks<'e> {
 
     /// The key `source` is checked at, whose bodies are `bodies`, in the
     /// order the check lowers them: each its item's key (`None` for the
-    /// source's statements outside its items) and its text.
+    /// source's statements outside its items) and the body, whose text is
+    /// the source's by where it is (`Session::key`).
     pub(super) fn key<'b>(
         &self,
         source: source::Id,
         program: &Program,
-        bodies: impl Iterator<Item = (Option<&'b crate::item::Key>, &'b str)>,
+        bodies: impl Iterator<Item = (Option<&'b crate::item::Key>, &'b Body<'b>)>,
     ) -> [u8; 32] {
         let mut written = Written(Sha256::new());
-        written.0.update(b"rawr.check.source/v1");
+        written.0.update(b"rawr.check.source/v2");
         written.0.update(self.interface.of(source));
         written.0.update(self.applied);
         written.0.update(source.index().to_le_bytes());
         framed(&mut written.0, program.source.text_at(source));
-        for (key, text) in bodies {
+        for (key, body) in bodies {
             // A key's `Debug` can't fail to write.
             let _ = write!(written, "{key:?}");
-            framed(&mut written.0, text);
+            body.write_key(&mut written);
         }
         written.0.finalize().into()
     }

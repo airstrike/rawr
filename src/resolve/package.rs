@@ -336,15 +336,24 @@ impl<'a> Resolver<'a> {
         Ok(resolver)
     }
 
+    /// Declare each unit's items and imports. Each unit's items are read
+    /// where the unit holds them, never copied (#1850).
     fn predeclare(&mut self) -> Result<(), Failure> {
+        let mut units = std::mem::take(&mut self.units);
+        let declared = self.predeclare_units(&mut units);
+        self.units = units;
+        declared
+    }
+
+    fn predeclare_units(&mut self, units: &mut [Unit]) -> Result<(), Failure> {
         let mut next_item = 0_usize;
 
-        for unit_index in 0..self.units.len() {
-            let context = self.units[unit_index].context.clone();
-            let items = self.units[unit_index].parsed.items().to_vec();
+        for unit in units {
+            let context = &unit.context;
+            let items = unit.parsed.items();
             let mut slots = Vec::with_capacity(items.len());
             let mut blocks = BlockItems::new();
-            let ordinals = super::block::ordinals(&items);
+            let ordinals = super::block::ordinals(items);
 
             for (index, parsed) in items.iter().enumerate() {
                 if let crate::item::Parsed::Module(module) = parsed {
@@ -366,7 +375,7 @@ impl<'a> Resolver<'a> {
                     let target = Target::Type(super::unresolved_alias(alias));
                     match parsed.scope() {
                         Some(block) => {
-                            declare_in_block(&mut blocks, block, &context, &alias.name, target)?;
+                            declare_in_block(&mut blocks, block, context, &alias.name, target)?;
                         }
                         None => self.insert_declaration(
                             context.address(&alias.name.text),
@@ -434,9 +443,7 @@ impl<'a> Resolver<'a> {
                         None => Target::Item(key),
                     };
                     match parsed.scope() {
-                        Some(block) => {
-                            declare_in_block(&mut blocks, block, &context, name, target)?
-                        }
+                        Some(block) => declare_in_block(&mut blocks, block, context, name, target)?,
                         None => self.insert_declaration(
                             context.address(&name.text),
                             Declaration {
@@ -452,7 +459,7 @@ impl<'a> Resolver<'a> {
                 slots.push(Some(slot));
             }
 
-            for parsed in &items {
+            for parsed in items {
                 let crate::item::Parsed::Use(use_item) = parsed else {
                     continue;
                 };
@@ -513,8 +520,8 @@ impl<'a> Resolver<'a> {
                 }
             }
 
-            self.units[unit_index].slots = slots;
-            self.units[unit_index].blocks = blocks;
+            unit.slots = slots;
+            unit.blocks = blocks;
         }
         Ok(())
     }
@@ -1095,25 +1102,31 @@ impl<'a> Resolver<'a> {
     /// An alias may name one another module declares, so the modules
     /// resolve theirs until every alias has its target or none more does.
     fn resolve_aliases(&mut self) -> Result<(), Failure> {
+        let units = std::mem::take(&mut self.units);
+        let resolved = self.resolve_aliases_of(&units);
+        self.units = units;
+        resolved
+    }
+
+    /// [`Self::resolve_aliases`] of `units`, each one's items read where
+    /// it holds them (#1850).
+    fn resolve_aliases_of(&mut self, units: &[Unit]) -> Result<(), Failure> {
         let declares = |unit: &Unit| {
             unit.parsed
                 .items()
                 .iter()
                 .any(|parsed| matches!(parsed, crate::item::Parsed::TypeAlias(_)))
         };
-        if !self.units.iter().any(declares) {
+        if !units.iter().any(declares) {
             return Ok(());
         }
         loop {
             let mut resolved = false;
             let mut first = None;
-            for index in 0..self.units.len() {
-                if !declares(&self.units[index]) {
-                    continue;
-                }
-                let context = self.units[index].context.clone();
-                let items = self.units[index].parsed.items().to_vec();
-                let (_, mut types, _) = self.resolve_unit_bindings(&context, &items)?;
+            for unit in units.iter().filter(|unit| declares(unit)) {
+                let context = &unit.context;
+                let items = unit.parsed.items();
+                let (_, mut types, _) = self.resolve_unit_bindings(context, items)?;
                 let before = items
                     .iter()
                     .filter(|parsed| {
@@ -1122,8 +1135,8 @@ impl<'a> Resolver<'a> {
                                 Some(type_ref::Target::Alias(type_ref::Alias { target: None, .. }))))
                     })
                     .count();
-                let error = super::resolve_aliases(&items, &mut types, self.host);
-                for parsed in &items {
+                let error = super::resolve_aliases(items, &mut types, self.host);
+                for parsed in items {
                     let crate::item::Parsed::TypeAlias(alias) = parsed else {
                         continue;
                     };
@@ -1316,20 +1329,15 @@ impl<'a> Resolver<'a> {
     /// and, from inside it, its private items and imports too.
     fn module_names(&self, context: &Context, modules: &[ImmutableString]) -> Vec<ImmutableString> {
         let inside = context.namespace.modules.starts_with(modules);
-        let at = |address: &Address| {
-            address.package == context.namespace.package && *address.modules == *modules
-        };
-        let declared = self
-            .declarations
-            .iter()
-            .filter(|(address, declaration)| at(address) && (declaration.public || inside))
+        let package = &context.namespace.package;
+        let declared = in_module(&self.declarations, package, modules)
+            .filter(|(_, declaration)| declaration.public || inside)
             .map(|(address, _)| address);
-        let exported = self.exports.keys().filter(|address| at(address));
-        let imported = self
-            .aliases
-            .keys()
-            .chain(self.globs.keys())
-            .filter(|address| inside && at(address));
+        let exported = in_module(&self.exports, package, modules).map(|(address, _)| address);
+        let imported = in_module(&self.aliases, package, modules)
+            .chain(in_module(&self.globs, package, modules))
+            .filter(|_| inside)
+            .map(|(address, _)| address);
         declared
             .chain(exported)
             .chain(imported)
@@ -1513,29 +1521,30 @@ impl<'a> Resolver<'a> {
         // bound it: two imports are rustc's E0252.
         let mut bound =
             BTreeMap::<(ImmutableString, item::Namespace), (source::Id, Span, bool)>::new();
-        for (address, declaration) in &self.declarations {
-            if address.package == context.namespace.package
-                && address.modules == context.namespace.modules
-            {
-                let namespace = match declaration.target {
-                    Target::Module | Target::Trait(_) => item::Namespace::Type,
-                    Target::Item(_) => item::Namespace::Value,
-                    _ => item::Namespace::Both,
-                };
-                for side in namespace.sides() {
-                    bound.insert(
-                        (address.name.clone(), *side),
-                        (declaration.source, declaration.span, false),
-                    );
-                }
-                if matches!(declaration.target, Target::Module) {
-                    modules.insert(address.name.clone(), (declaration.source, declaration.span));
-                    continue;
-                }
-                occupied.insert(address.name.clone(), (declaration.source, declaration.span));
-                if let Target::Type(target) = &declaration.target {
-                    types.insert(address.name.clone(), target.clone());
-                }
+        let declared = in_module(
+            &self.declarations,
+            &context.namespace.package,
+            &context.namespace.modules,
+        );
+        for (address, declaration) in declared {
+            let namespace = match declaration.target {
+                Target::Module | Target::Trait(_) => item::Namespace::Type,
+                Target::Item(_) => item::Namespace::Value,
+                _ => item::Namespace::Both,
+            };
+            for side in namespace.sides() {
+                bound.insert(
+                    (address.name.clone(), *side),
+                    (declaration.source, declaration.span, false),
+                );
+            }
+            if matches!(declaration.target, Target::Module) {
+                modules.insert(address.name.clone(), (declaration.source, declaration.span));
+                continue;
+            }
+            occupied.insert(address.name.clone(), (declaration.source, declaration.span));
+            if let Target::Type(target) = &declaration.target {
+                types.insert(address.name.clone(), target.clone());
             }
         }
 
@@ -3113,6 +3122,22 @@ fn last_segment(reference: Span, name: &str) -> Span {
         }
         _ => reference,
     }
+}
+
+/// The entries of `map` at the module `modules` of `package`, in the
+/// order of their names: a range of the map, never a scan of it (#1850).
+fn in_module<'m, V>(
+    map: &'m BTreeMap<Address, V>,
+    package: &'m ImmutableString,
+    modules: &'m [ImmutableString],
+) -> impl Iterator<Item = (&'m Address, &'m V)> + 'm {
+    let from = Address {
+        package: package.clone(),
+        modules: modules.into(),
+        name: ImmutableString::new(),
+    };
+    map.range(from..)
+        .take_while(move |(address, _)| address.package == *package && *address.modules == *modules)
 }
 
 /// Rust privacy: a private item declared in a module is visible from that

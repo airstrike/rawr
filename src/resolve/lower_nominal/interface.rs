@@ -98,13 +98,12 @@ impl Interface {
             native,
         )?;
         let mut sources = BTreeMap::new();
+        let mut walk = Walk::new(&declarations);
         for (index, outline) in outlines.sources.iter().enumerate() {
             let source = source::Id::from_index(index);
             let mut written = Written(Sha256::new());
             written.0.update(every);
-            for declaration in declarations.reached(&outline.mentioned) {
-                written.0.update(declaration);
-            }
+            declarations.reached(&outline.mentioned, &mut walk, &mut written.0);
             // What the program resolved of the source's own names.
             let aliases = program
                 .aliases
@@ -191,7 +190,7 @@ fn every(
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v9");
+    written.0.update(b"rawr.lowering.interface/v10");
     // The compiler: the facades its host registry holds, and its options.
     if let Some(registered) = registered {
         write!(written, "{registered}").ok()?;
@@ -478,34 +477,83 @@ impl<'p> Declarations<'p> {
         })
     }
 
-    /// The digest of each declaration a text that writes the names
-    /// `mentioned` reaches, in the program's order.
-    fn reached<'a>(&'a self, mentioned: &[Box<str>]) -> impl Iterator<Item = &'a [u8; 32]> {
-        let mut seen = vec![false; self.declaring.len()];
-        let mut reached = vec![false; self.declarations.len()];
-        let mut next = mentioned
-            .iter()
-            .filter_map(|name| self.names.get(name.as_ref()).copied())
-            .collect::<Vec<_>>();
-        for name in &next {
-            seen[*name] = true;
+    /// Write into `digest` the declarations a text that writes the names
+    /// `mentioned` reaches: how many, and their digests summed lane by
+    /// lane, which no order of the walk changes. The walk touches only
+    /// what it reaches, and no digest is digested again (#1850).
+    fn reached(&self, mentioned: &[Box<str>], walk: &mut Walk, digest: &mut Sha256) {
+        let mut sum = [0_u64; 4];
+        let mut count = 0_u64;
+        for name in mentioned {
+            if let Some(&name) = self.names.get(name.as_ref()) {
+                walk.see(name);
+            }
         }
-        while let Some(name) = next.pop() {
+        while let Some(name) = walk.next.pop() {
             for &index in &self.declaring[name] {
-                if std::mem::replace(&mut reached[index], true) {
+                if std::mem::replace(&mut walk.reached[index], true) {
                     continue;
                 }
+                walk.found.push(index);
+                count += 1;
+                let (lanes, _) = self.declarations[index].digest.as_chunks::<8>();
+                for (lane, bytes) in sum.iter_mut().zip(lanes) {
+                    *lane = lane.wrapping_add(u64::from_le_bytes(*bytes));
+                }
                 for &written in &self.declarations[index].writes {
-                    if !std::mem::replace(&mut seen[written], true) {
-                        next.push(written);
-                    }
+                    walk.see(written);
                 }
             }
         }
-        self.declarations
-            .iter()
-            .zip(reached)
-            .filter_map(|(declaration, reached)| reached.then_some(&declaration.digest))
+        walk.clear();
+        digest.update(count.to_le_bytes());
+        for lane in sum {
+            digest.update(lane.to_le_bytes());
+        }
+    }
+}
+
+/// What one walk over the declarations marked (`Declarations::reached`),
+/// unmarked after it, so the next walk marks only what it reaches.
+struct Walk {
+    /// Whether the walk saw each declared name, by its number.
+    seen: Vec<bool>,
+    /// Whether it reached each declaration, by its number.
+    reached: Vec<bool>,
+    /// The names it saw, and those it has yet to follow.
+    names: Vec<usize>,
+    next: Vec<usize>,
+    /// The declarations it reached.
+    found: Vec<usize>,
+}
+
+impl Walk {
+    fn new(declarations: &Declarations<'_>) -> Self {
+        Self {
+            seen: vec![false; declarations.declaring.len()],
+            reached: vec![false; declarations.declarations.len()],
+            names: Vec::new(),
+            next: Vec::new(),
+            found: Vec::new(),
+        }
+    }
+
+    /// Follow the name `name` next, unless the walk saw it.
+    fn see(&mut self, name: usize) {
+        if !std::mem::replace(&mut self.seen[name], true) {
+            self.names.push(name);
+            self.next.push(name);
+        }
+    }
+
+    /// Unmark what the walk marked.
+    fn clear(&mut self) {
+        for name in self.names.drain(..) {
+            self.seen[name] = false;
+        }
+        for index in self.found.drain(..) {
+            self.reached[index] = false;
+        }
     }
 }
 

@@ -2,6 +2,8 @@
 //! and instantiating the generic crate items and impls they reach.
 
 #[cfg(feature = "rust-import")]
+use super::entry::Body;
+#[cfg(feature = "rust-import")]
 use super::models::Models;
 use super::ty::Ty;
 #[cfg(feature = "rust-import")]
@@ -61,7 +63,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
                     bodies
                         .iter()
                         .filter(|other| other.source == body.source)
-                        .map(|other| (other.key, &*other.text)),
+                        .map(|other| (other.key, &other.body)),
                 )
             });
         }
@@ -97,7 +99,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
                 charges: Vec::new(),
             };
             let lowered = checked.lower(
-                engine,
+                (engine, program),
                 &models,
                 offset,
                 recover,
@@ -178,19 +180,10 @@ struct Finding {
 /// One body the check of the program lowers (`imported`).
 #[cfg(feature = "rust-import")]
 struct CheckedBody<'p> {
-    kind: Checking<'p>,
+    body: Body<'p>,
     source: crate::program::source::Id,
     /// Its item's key; `None` for the entry's statements outside its items.
     key: Option<&'p crate::item::Key>,
-    /// The text its lowering reads.
-    text: std::borrow::Cow<'p, str>,
-}
-
-#[cfg(feature = "rust-import")]
-enum Checking<'p> {
-    Function(&'p item::Function),
-    Method(&'p method::Definition),
-    Script,
 }
 
 /// The bodies the check of `program` lowers, in the order it lowers them:
@@ -210,19 +203,10 @@ fn checked_bodies(program: &Program) -> Vec<CheckedBody<'_>> {
         if program.instances.templates.contains_key(key) {
             return None;
         }
-        let text = body_source(
-            definition
-                .body
-                .text
-                .as_deref()
-                .unwrap_or_else(|| program.source.text_at(shell.source)),
-            &definition.body,
-        );
         Some(CheckedBody {
-            kind: Checking::Function(definition),
+            body: Body::Function(shell, definition),
             source: shell.source,
             key: Some(key),
-            text: text.into(),
         })
     });
     // An impl for a crate's or a builtin type is checked as the crate's own
@@ -232,19 +216,10 @@ fn checked_bodies(program: &Program) -> Vec<CheckedBody<'_>> {
         .iter()
         .chain(&program.builtin_methods)
         .filter(|definition| !program.instances.templates.contains_key(definition.key()))
-        .map(|definition| {
-            let text = source_span(
-                definition
-                    .body_text()
-                    .unwrap_or_else(|| program.source.text_at(definition.source())),
-                definition.body(),
-            );
-            CheckedBody {
-                kind: Checking::Method(definition),
-                source: definition.source(),
-                key: Some(definition.key()),
-                text: text.into(),
-            }
+        .map(|definition| CheckedBody {
+            body: Body::Method(definition),
+            source: definition.source(),
+            key: Some(definition.key()),
         });
     let script = program
         .scripts
@@ -254,31 +229,34 @@ fn checked_bodies(program: &Program) -> Vec<CheckedBody<'_>> {
     functions
         .chain(methods)
         .chain(std::iter::once(CheckedBody {
-            kind: Checking::Script,
+            body: Body::Script(script),
             source: script.source,
             key: None,
-            text: script.text.as_str().into(),
         }))
         .collect()
 }
 
 #[cfg(feature = "rust-import")]
 impl CheckedBody<'_> {
-    /// Lower the body for its uses alone, its ops numbered after
-    /// `offset`, going on past each miss when `recover`s (#662).
-    fn lower<'a>(
-        &'a self,
-        engine: &Engine,
+    /// Lower the body of `program` for its uses alone, its ops numbered
+    /// after `offset`, going on past each miss when `recover`s (#662).
+    /// Its text is built here, for a source the check lowers again, and
+    /// never for its key (#1850).
+    fn lower(
+        &self,
+        (engine, program): (&Engine, &Program),
         models: &Models,
         offset: usize,
         recover: bool,
-        context: ImportedContext<'a>,
+        mut context: ImportedContext<'_>,
     ) -> (Result<super::entry::Lowered, Error>, Vec<Error>) {
         let models = models.for_source(self.source);
-        let mut parser = match self.kind {
-            Checking::Function(definition) => Parser::for_function(
+        let text = self.body.text(program);
+        let context = Some(context.for_source(self.source));
+        let mut parser = match self.body {
+            Body::Function(_, definition) => Parser::for_function(
                 engine,
-                &self.text,
+                &text,
                 models,
                 definition,
                 self.key
@@ -286,32 +264,22 @@ impl CheckedBody<'_> {
                     .expect("resolved functions retain stable item keys"),
                 offset,
                 0,
-                Some(context),
+                context,
             ),
-            Checking::Method(definition) => {
-                match Parser::for_method(
-                    engine,
-                    &self.text,
-                    models,
-                    definition,
-                    offset,
-                    0,
-                    Some(context),
-                ) {
+            Body::Method(definition) => {
+                match Parser::for_method(engine, &text, models, definition, offset, 0, context) {
                     Ok(parser) => parser,
                     Err(error) => return (Err(error), Vec::new()),
                 }
             }
-            Checking::Script => {
-                Parser::new_with_offset(engine, &self.text, models, offset, 0, Some(context))
-            }
+            Body::Script(_) => Parser::new_with_offset(engine, &text, models, offset, 0, context),
         };
         parser.symbolic_only = true;
         parser.recover_misses = recover;
-        let lowered = match self.kind {
-            Checking::Function(definition) => parser.parse_function_body(definition),
-            Checking::Method(definition) => parser.parse_method_body(definition),
-            Checking::Script => parser.parse(),
+        let lowered = match self.body {
+            Body::Function(_, definition) => parser.parse_function_body(definition),
+            Body::Method(definition) => parser.parse_method_body(definition),
+            Body::Script(_) => parser.parse(),
         };
         (lowered, std::mem::take(&mut parser.recovered))
     }

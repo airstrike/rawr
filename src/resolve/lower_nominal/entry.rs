@@ -109,7 +109,7 @@ pub(super) enum Body<'a> {
     Script(&'a crate::resolve::Script),
 }
 
-impl Body<'_> {
+impl<'a> Body<'a> {
     /// Where the program writes the body: its source, then its place there.
     pub(super) fn written_at(&self) -> (usize, Position) {
         match self {
@@ -142,7 +142,7 @@ impl Body<'_> {
     }
 
     /// The text the body's lowering reads.
-    fn text(&self, program: &Program) -> String {
+    pub(super) fn text(&self, program: &Program) -> std::borrow::Cow<'a, str> {
         match self {
             Self::Function(shell, definition) => body_source(
                 definition
@@ -151,14 +151,44 @@ impl Body<'_> {
                     .as_deref()
                     .unwrap_or_else(|| program.source.text_at(shell.source)),
                 &definition.body,
-            ),
+            )
+            .into(),
             Self::Method(definition) => source_span(
                 definition
                     .body_text()
                     .unwrap_or_else(|| program.source.text_at(definition.source())),
                 definition.body(),
-            ),
-            Self::Script(script) => script.text.clone(),
+            )
+            .into(),
+            Self::Script(script) => script.text.as_str().into(),
+        }
+    }
+
+    /// What its text holds beside its source's, which a key that writes
+    /// this writes too: where the body is, what of it is elided, and the
+    /// text Rawr wrote for it. A key never builds the text (#1850).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn write_key(&self, written: &mut super::interface::Written) {
+        use std::fmt::Write as _;
+        // A span's `Debug` can't fail to write.
+        match self {
+            Self::Function(_, definition) => {
+                let _ = write!(
+                    written,
+                    "f{:?}|{:?}|",
+                    definition.body.span, definition.body.elide
+                );
+                if let Some(text) = &definition.body.text {
+                    super::interface::framed(&mut written.0, text);
+                }
+            }
+            Self::Method(definition) => {
+                let _ = write!(written, "m{:?}|", definition.body());
+                if let Some(text) = definition.body_text() {
+                    super::interface::framed(&mut written.0, text);
+                }
+            }
+            Self::Script(script) => super::interface::framed(&mut written.0, &script.text),
         }
     }
 }
@@ -321,21 +351,17 @@ impl Assembly {
 fn lower_part(
     unit: &Unit<'_>,
     assembly: &mut Assembly,
-    bodies: &[(Body<'_>, String)],
+    bodies: &[Body<'_>],
     #[cfg(feature = "rust-import")] imported: Option<&mut ImportedContext<'_>>,
     #[cfg(feature = "rust-import")] session: Option<(&mut kept::Session<'_>, kept::Part)>,
 ) -> Result<(), LoweringFailure> {
     let mut counts = Counts::default();
     #[cfg(feature = "rust-import")]
     if let Some(imported) = imported {
-        let texts = bodies
-            .iter()
-            .map(|(_, text)| text.as_str())
-            .collect::<Vec<_>>();
         let mut session = session;
         let key = session
             .as_ref()
-            .and_then(|(session, part)| session.key(*part, unit.source, unit.program, &texts));
+            .and_then(|(session, part)| session.key(*part, unit.source, unit.program, bodies));
         if let (Some((session, _)), Some(key)) = (session.as_mut(), key)
             && let Some(reused) = session.reuse(key, unit.models)
             && let Some(renewed) = reused
@@ -353,7 +379,7 @@ fn lower_part(
             imported
                 .dependencies
                 .extend(reused.dependencies.iter().cloned());
-            for ((body, _), lowered) in bodies.iter().zip(renewed) {
+            for (body, lowered) in bodies.iter().zip(renewed) {
                 assembly.place(unit, &mut counts, *body, lowered);
             }
             return Ok(());
@@ -376,12 +402,13 @@ fn lower_part(
                 uses: &mut uses,
                 dependencies: &mut dependencies,
             };
-            for (body, text) in bodies {
+            for body in bodies {
+                let text = body.text(unit.program);
                 let lowered = lower_body(
                     unit,
                     &counts,
                     *body,
-                    text,
+                    &text,
                     Some(context.for_source(unit.source)),
                 )?;
                 if key.is_some() {
@@ -404,12 +431,13 @@ fn lower_part(
         imported.dependencies.append(&mut dependencies);
         return Ok(());
     }
-    for (body, text) in bodies {
+    for body in bodies {
+        let text = body.text(unit.program);
         let lowered = lower_body(
             unit,
             &counts,
             *body,
-            text,
+            &text,
             #[cfg(feature = "rust-import")]
             None,
         )?;
@@ -610,9 +638,9 @@ pub(super) fn lower_with_context(
         let lowerable = group
             .iter()
             .filter(|body| !body.is_template(program))
-            .map(|body| (*body, body.text(program)))
+            .copied()
             .collect::<Vec<_>>();
-        let Some((first, _)) = lowerable.first() else {
+        let Some(first) = lowerable.first() else {
             continue;
         };
         let source = first.source();
@@ -655,7 +683,7 @@ pub(super) fn lower_with_context(
             numbering: format!("{}s", script.source.index()).into(),
         },
         &mut assembly,
-        &[(Body::Script(script), script.text.clone())],
+        &[Body::Script(script)],
         #[cfg(feature = "rust-import")]
         imported.as_mut(),
         #[cfg(feature = "rust-import")]

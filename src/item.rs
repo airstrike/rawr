@@ -1014,8 +1014,11 @@ pub struct Function {
     pub span: Span,
 }
 
+/// The tokens of a body that resolution reads. They are shared: a copy of
+/// an item, as resolution and each lowering's interface make, copies none
+/// of them (#1850).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BodySyntax(Box<[BodyToken]>);
+pub(crate) struct BodySyntax(crate::Shared<[BodyToken]>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BodyToken {
@@ -1063,7 +1066,7 @@ pub(crate) enum BodyTokenKind {
 
 impl BodySyntax {
     pub(crate) fn new(tokens: Vec<BodyToken>) -> Self {
-        Self(tokens.into_boxed_slice())
+        Self(tokens.into())
     }
 
     pub(crate) fn tokens(&self) -> &[BodyToken] {
