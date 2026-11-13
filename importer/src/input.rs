@@ -1331,6 +1331,9 @@ impl Baseline {
                     },
                 )?;
             }
+            // The entry of each dep-info recipe, from the parse its own
+            // recipes take: the proof reads no dep-info again (#1846).
+            let mut known = BTreeMap::new();
             for (index, artifact) in build.evidence.artifacts.iter().enumerate() {
                 let package = build
                     .evidence
@@ -1362,6 +1365,7 @@ impl Baseline {
                     allocation.path(&script.out_dir)?;
                     out_directories.push(script.out_dir.clone());
                 }
+                let position = recipes.len();
                 recipe!(Recipe::dep_info(
                     &artifact.package_id,
                     &artifact.dep_info,
@@ -1375,6 +1379,16 @@ impl Baseline {
                     &package.root,
                     &mut allocation,
                 )?;
+                known.insert(
+                    position,
+                    replay::dep_info_entry_of(
+                        &dependency,
+                        &artifact.package_id,
+                        &artifact.dep_info,
+                        &out_directories,
+                        &mut allocation,
+                    )?,
+                );
                 native
                     .observe(
                         index,
@@ -1444,7 +1458,7 @@ impl Baseline {
                 ));
             }
             let recipe_allocation = allocation.usage();
-            let mut proof = proof::evaluate(&recipes, limits, &mut allocation)?;
+            let mut proof = proof::evaluate_known(&recipes, known, limits, &mut allocation)?;
             if !proof.contains_workspace(&workspace_expected) {
                 return Err(Error::ResolutionDrift {
                     command: "input publication",

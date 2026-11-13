@@ -1,5 +1,6 @@
 //! Canonical content proof and bounded filesystem evaluation.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -1217,14 +1218,30 @@ pub(super) fn evaluate(
     limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Proof> {
+    evaluate_known(recipes, BTreeMap::new(), limits, allocation)
+}
+
+/// [`evaluate`], taking the entry `known` holds for a recipe at its
+/// position instead of observing that recipe again: a capture that parsed
+/// a dep-info file for its own recipes gives its entry (#1846).
+pub(super) fn evaluate_known(
+    recipes: &[Recipe],
+    mut known: BTreeMap<usize, Entry>,
+    limits: &cargo::Limits,
+    allocation: &mut Allocation,
+) -> Result<Proof> {
     let mut entries = Vec::new();
-    for recipe in recipes {
+    for (index, recipe) in recipes.iter().enumerate() {
         allocation.items(1)?;
         entries.try_reserve(1).map_err(|error| Error::Input {
             code: "input-proof-allocation",
             reason: error.to_string().into_boxed_str(),
         })?;
-        entries.push(entry(recipe, limits, allocation)?);
+        let entry = match known.remove(&index) {
+            Some(entry) => entry,
+            None => entry(recipe, limits, allocation)?,
+        };
+        entries.push(entry);
     }
     seal(entries, allocation)
 }
