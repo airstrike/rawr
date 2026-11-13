@@ -258,7 +258,7 @@
     },
     "release": {
       "type": "object",
-      "description": "Release the Unreleased entries: bump every crate with scripts/bump-version.sh, move the entries into a section, and close or comment each entry's issue with \"Shipped in x.y.z\". With \"bump\": false the crates must already be at the version.",
+      "description": "Release the Unreleased entries: bump every crate with scripts/bump-version.sh, move the entries into a section, and record each entry's item as closed and shipped in the version. Local only: `sync` later closes the issues on GitHub, puts them in their milestone and sets the Project's fields. With \"bump\": false the crates must already be at the version.",
       "required": ["op"],
       "additionalProperties": false,
       "properties": {
