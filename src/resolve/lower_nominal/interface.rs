@@ -213,9 +213,47 @@ impl Interface {
 /// bind is as it was then (#1755).
 pub(super) struct Instances(BTreeMap<crate::item::Key, [u8; 32]>);
 
+/// The digests of the instances the last [`Instances`] read, each with
+/// what it was digested from, so the next, a reveal round's or a later
+/// save's, digests again only the instances a round added or revealed the
+/// output of.
+pub(super) struct Instanced(BTreeMap<crate::item::Key, Instance>);
+
+/// One instance's digest, and what it was digested from: the types its
+/// template's parameters take and its signature.
+struct Instance {
+    names: Box<[ImmutableString]>,
+    function: Option<item::Function>,
+    method: Option<crate::method::Definition>,
+    digest: [u8; 32],
+}
+
+impl Instanced {
+    /// None digested yet.
+    pub(super) const fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl Instance {
+    /// Whether it is the digest of the instance whose types are `names`
+    /// and whose signature is `function` or `method`.
+    fn of(
+        &self,
+        names: &[ImmutableString],
+        function: Option<&item::Function>,
+        method: Option<&crate::method::Definition>,
+    ) -> bool {
+        *self.names == *names
+            && self.function.as_ref() == function
+            && self.method.as_ref() == method
+    }
+}
+
 impl Instances {
-    /// Each template's instances in `program`.
-    pub(super) fn new(program: &Program) -> Option<Self> {
+    /// Each template's instances in `program`. An instance `instanced`
+    /// digested as it is now isn't digested again.
+    pub(super) fn new(program: &Program, instanced: &mut Instanced) -> Option<Self> {
         let functions = program
             .items
             .iter()
@@ -232,21 +270,40 @@ impl Instances {
             .filter(|definition| program.instances.types.contains_key(definition.key()))
             .map(|definition| (definition.key(), definition))
             .collect::<BTreeMap<_, _>>();
+        let mut earlier = std::mem::take(&mut instanced.0);
         let mut templates = BTreeMap::new();
         for (template, instances) in &program.instances.templates {
-            let digest = digest(None, |written| {
-                for (names, key) in instances {
-                    write!(written, "{names:?}|{key:?}|")?;
-                    if let Some(definition) = functions.get(key) {
-                        write!(written, "{definition:?}|")?;
-                    }
-                    if let Some(definition) = methods.get(key) {
-                        write!(written, "{definition:?}|")?;
-                    }
-                }
-                Ok(())
-            })?;
-            templates.insert(template.clone(), digest);
+            let mut written = Sha256::new();
+            for (names, key) in instances {
+                let function = functions.get(key).copied();
+                let method = methods.get(key).copied();
+                let instance = match earlier.remove(key) {
+                    Some(instance) if instance.of(names, function, method) => instance,
+                    _ => Instance {
+                        names: names.clone(),
+                        function: function.cloned(),
+                        method: method.cloned(),
+                        // A facade a signature names is written as its
+                        // root, as the interface writes it: what a reading
+                        // reads of a facade is the entries a name reaches.
+                        digest: crate::host::facade::Fingerprint::rooted(|| {
+                            digest(None, |written| {
+                                write!(written, "{names:?}|{key:?}|")?;
+                                if let Some(definition) = function {
+                                    write!(written, "{definition:?}|")?;
+                                }
+                                if let Some(definition) = method {
+                                    write!(written, "{definition:?}|")?;
+                                }
+                                Ok(())
+                            })
+                        })?,
+                    },
+                };
+                written.update(instance.digest);
+                instanced.0.insert(key.clone(), instance);
+            }
+            templates.insert(template.clone(), written.finalize().into());
         }
         Some(Self(templates))
     }
