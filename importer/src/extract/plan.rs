@@ -2,6 +2,7 @@
 
 mod candidate;
 pub(crate) mod namespace;
+pub(crate) mod replayed;
 mod reprobe;
 mod search;
 
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use super::{protocol, Allocation, ExternalBinding, Invocations};
+use super::{engine, protocol, Allocation, ExternalBinding, Invocations};
 use crate::cargo::{self, resolution, toolchain, unit};
 use crate::process::{self, Program};
 use crate::{Error, Result};
@@ -64,11 +65,53 @@ pub(crate) struct SharedDocument {
     pub(crate) identity: [u8; 32],
 }
 
+/// Why shared bindings gave no document for a plan's demand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Unreplayed {
+    /// A selected crate's recorded inputs no longer hold: the demand is of
+    /// another build, which its own harness probes (#1794).
+    Changed,
+    /// The inputs hold, but a crate has no entry, or its table lacks a unit
+    /// the demand reaches or could not be read: a probe run again over the
+    /// same artifacts may grow it.
+    Unanswered,
+}
+
+/// A selected crate's shared entry, checked against the current inputs.
+enum Checked<'plan> {
+    Held(Box<Held<'plan>>),
+    /// An entry recorded inputs, and none of them hold.
+    Changed,
+    /// No entry recorded inputs, or the table of one whose inputs hold
+    /// could not be read.
+    Missing,
+}
+
+/// A selected crate whose shared entry's inputs hold, its table not read
+/// yet. The entry stays leased until the document is built.
+struct Held<'plan> {
+    entry: &'plan Entry<Prepared>,
+    shared: &'plan crate::extract::shared::Shared,
+    bindings: &'plan PathBuf,
+    opened: crate::bindings::Opened,
+    /// Its table's stamp, as the inputs were checked.
+    stamp: crate::bindings::Stamp,
+    /// The identity of the inputs that hold.
+    identity: [u8; 32],
+    inputs: crate::input::bindings::Inputs,
+    filesystem: crate::input::proof::Proof,
+}
+
+/// Whether a crate's replay read its table or took a kept one.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Fresh {
+    Read,
+    Kept,
+}
+
 /// One selected crate replayed from its shared table, before the crates
 /// are bound together into a [`SharedDocument`].
-struct SharedReplay<'plan> {
-    key: &'plan str,
-    bindings: &'plan PathBuf,
+struct SharedReplay {
     /// Its handshake around the body its table replays.
     fragment: Vec<u8>,
     /// Each external crate it names, by crate name and stable crate id,
@@ -77,10 +120,7 @@ struct SharedReplay<'plan> {
     /// Its part of the document's identity: its key, inputs, build
     /// scripts, table and replayed body.
     identity: Vec<u8>,
-    inputs: crate::input::bindings::Inputs,
-    filesystem: crate::input::proof::Proof,
-    /// The entry, leased until the document is built.
-    read: crate::bindings::Entry,
+    table: Arc<replayed::Table>,
 }
 
 /// The selected crates whose extraction tables are shared per machine, by
@@ -594,25 +634,72 @@ impl Plan {
     /// The sidecar document shared bindings give, as the probe would write
     /// it: each selected crate's handshake around the body its table
     /// replays for this plan's demand, and the external crates the tables
-    /// name, bound through this project's unit `graph`. `None` when a
-    /// selected crate is not shared, its entry is not in the home, or its
-    /// table lacks a unit the demand needs: the probe extracts then.
+    /// name, bound through this project's unit `graph`. A table `tables`
+    /// holds a replay of for the same demand is not read; each one read is
+    /// kept there, even when another crate's is not. No document when a
+    /// selected crate is not shared, its entry is not in the home, its
+    /// inputs changed, or its table lacks a unit the demand needs: the
+    /// probe extracts then.
     pub(crate) fn shared_document(
         &self,
         graph: &unit::BuildGraph,
         metadata: &unit::Metadata,
         current: &crate::input::bindings::Current,
-    ) -> Option<SharedDocument> {
-        if self.entries.is_empty() || self.sharing.keys.len() != self.entries.len() {
-            return None;
+        tables: &mut replayed::Tables,
+    ) -> std::result::Result<SharedDocument, Unreplayed> {
+        if self.entries.is_empty()
+            || self.sharing.keys.len() != self.entries.len()
+            || self.sharing.bindings.is_none()
+        {
+            return Err(Unreplayed::Unanswered);
         }
-        self.sharing.bindings.as_ref()?;
+        // Every crate's inputs are checked before any table is read: one
+        // that changed makes this demand another build, whose tables no
+        // replay here would answer.
+        let entries = self.entries.iter().collect::<Vec<_>>();
+        let checked =
+            crate::parallel::map(&entries, |entry| Some(self.check_shared(entry, current)))
+                .ok_or(Unreplayed::Unanswered)?;
+        if checked
+            .iter()
+            .any(|checked| matches!(checked, Checked::Changed))
+        {
+            return Err(Unreplayed::Changed);
+        }
+        let held = checked
+            .into_iter()
+            .enumerate()
+            .map(|(index, checked)| match checked {
+                Checked::Held(held) => Some((index, held)),
+                Checked::Changed | Checked::Missing => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or(Unreplayed::Unanswered)?;
         // Each crate's table replays on its own, across the cores; what binds
         // them together is folded in the entries' order below.
-        let entries = self.entries.iter().enumerate().collect::<Vec<_>>();
-        let replayed = crate::parallel::map(&entries, |(index, entry)| {
-            self.replay_shared(*index, entry, graph, metadata, current)
-        })?;
+        let artifacts = graph
+            .artifacts()
+            .iter()
+            .map(|output| (output.semantic_key(), output))
+            .collect::<BTreeMap<_, _>>();
+        let kept: &replayed::Tables = tables;
+        let replayed = crate::parallel::map(&held, |(index, held)| {
+            Some(self.replay_shared(*index, held, &artifacts, metadata, kept))
+        })
+        .ok_or(Unreplayed::Unanswered)?;
+        // A table replayed is kept even when another crate's is not: the
+        // probe run again grows only the tables that lack a unit.
+        for ((_, held), (replay, fresh)) in held.iter().zip(&replayed) {
+            if let Some(replay) = replay
+                && *fresh == Fresh::Read
+            {
+                tables.keep(&held.shared.key, Arc::clone(&replay.table));
+            }
+        }
+        if replayed.iter().any(|(replay, _)| replay.is_none()) {
+            return Err(Unreplayed::Unanswered);
+        }
+        tables.retain(&self.shared_keys());
         let mut fragments = Vec::new();
         let mut external = BTreeMap::new();
         let mut settled = Vec::new();
@@ -620,28 +707,36 @@ impl Plan {
         let mut generations = Vec::new();
         let mut witnesses = Vec::new();
         let mut leases = Vec::new();
-        for replayed in replayed {
+        for ((_, held), (replayed, _)) in held.into_iter().zip(replayed) {
+            let replayed = replayed.ok_or(Unreplayed::Unanswered)?;
             // The first crate that names an external crate binds it, as
             // each later one would through the same unit graph.
             for (crate_id, binding) in replayed.externals {
                 if external.contains_key(&crate_id) {
                     continue;
                 }
-                external.insert(crate_id, binding?);
+                external.insert(crate_id, binding.ok_or(Unreplayed::Unanswered)?);
             }
             identity.update(&replayed.identity);
             fragments.push(replayed.fragment);
-            let read = replayed.read;
+            let Held {
+                shared,
+                bindings,
+                opened,
+                inputs,
+                filesystem,
+                ..
+            } = *held;
             settled.push(crate::bindings::Settled::Read {
-                directory: replayed.bindings.clone(),
-                key: replayed.key.to_string(),
-                crate_name: read.meta.crate_name.clone(),
-                scripts: read.meta.scripts.clone(),
-                inputs: replayed.inputs,
+                directory: bindings.clone(),
+                key: shared.key.to_string(),
+                crate_name: opened.meta.crate_name.clone(),
+                scripts: opened.meta.scripts.clone(),
+                inputs,
             });
-            witnesses.push(replayed.filesystem);
-            generations.push((replayed.key.to_string(), read.generation().to_owned()));
-            leases.push(read);
+            witnesses.push(filesystem);
+            generations.push((shared.key.to_string(), opened.generation().to_owned()));
+            leases.push(opened);
         }
         let mut document =
             format!("{{\"schema\":{},\"fragments\":[", protocol::SCHEMA).into_bytes();
@@ -653,7 +748,7 @@ impl Plan {
         }
         document.extend_from_slice(b"]}");
         drop(leases);
-        Some(SharedDocument {
+        Ok(SharedDocument {
             document,
             external: external.into_values().collect(),
             settled,
@@ -663,68 +758,79 @@ impl Plan {
         })
     }
 
-    /// Whether a probe run again could answer this plan's demand from the
-    /// artifacts its build sealed: no selected crate has a table whose
-    /// recorded inputs no longer hold. A crate whose files changed since,
-    /// as after an edit to the project, is another build, which its own
-    /// harness probes; a probe of the old artifacts would only be read
-    /// past (#1794).
-    pub(crate) fn shared_inputs_hold(&self, current: &crate::input::bindings::Current) -> bool {
-        self.entries.iter().all(|entry| {
-            let Some(shared) = self.sharing.keys.get(&entry.unit_correlation) else {
-                return true;
+    /// The selected crate `entry`'s shared entry whose recorded inputs
+    /// hold: the settled one, or one this project extracted and has not
+    /// settled yet. Inputs are a path crate's files, as a git crate's
+    /// declared ones (#398). A settled entry whose inputs don't hold leaves
+    /// the staged one this project made under its own (#1754). Only the
+    /// entries' metadata is read, and their tables' files looked at: one
+    /// whose table is gone, or is not the copy it names, holds nothing.
+    fn check_shared<'plan>(
+        &'plan self,
+        entry: &'plan Entry<Prepared>,
+        current: &crate::input::bindings::Current,
+    ) -> Checked<'plan> {
+        let Some(shared) = self.sharing.keys.get(&entry.unit_correlation) else {
+            return Checked::Missing;
+        };
+        let mut recorded = false;
+        let mut unread = false;
+        for bindings in [self.sharing.directory(shared), self.sharing.staged.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let Some(opened) = crate::bindings::open(bindings, &shared.key) else {
+                continue;
             };
-            let recorded = [self.sharing.directory(shared), self.sharing.staged.as_ref()]
-                .into_iter()
-                .flatten()
-                .filter_map(|bindings| crate::bindings::meta(bindings, &shared.key)?.inputs)
-                .collect::<Vec<_>>();
-            recorded.is_empty()
-                || recorded
-                    .iter()
-                    .any(|inputs| inputs.validate(current).is_some())
-        })
+            let Some(inputs) = &opened.meta.inputs else {
+                continue;
+            };
+            recorded = true;
+            let Some(validated) = inputs.validate(current) else {
+                continue;
+            };
+            let Some(identity) = validated.identity() else {
+                continue;
+            };
+            let Some(stamp) = opened.stamp() else {
+                unread = true;
+                continue;
+            };
+            let inputs = validated.inputs().clone();
+            let filesystem = validated.into_filesystem();
+            return Checked::Held(Box::new(Held {
+                entry,
+                shared,
+                bindings,
+                opened,
+                stamp,
+                identity,
+                inputs,
+                filesystem,
+            }));
+        }
+        if recorded && !unread {
+            Checked::Changed
+        } else {
+            Checked::Missing
+        }
     }
 
-    /// The selected crate at `index`, replayed from its shared table for
-    /// this plan's demand: its sidecar fragment, the external crates it
-    /// names, and what the replayed API is a function of. `None` when its
-    /// entry is not in the home, its inputs changed, or its table lacks a
-    /// unit the demand needs.
-    fn replay_shared(
-        &self,
+    /// The selected crate `held` checked, at `index`, replayed from its
+    /// shared table for this plan's demand: its sidecar fragment, the
+    /// external crates it names, and what the replayed API is a function
+    /// of. Its table is read only when `kept` has no replay of the same
+    /// table for the same demand. `None` when its table lacks a unit the
+    /// demand needs, or could not be read.
+    fn replay_shared<'plan>(
+        &'plan self,
         index: usize,
-        entry: &Entry<Prepared>,
-        graph: &unit::BuildGraph,
+        held: &Held<'plan>,
+        artifacts: &BTreeMap<&str, &unit::Output>,
         metadata: &unit::Metadata,
-        current: &crate::input::bindings::Current,
-    ) -> Option<SharedReplay<'_>> {
-        use crate::extract::engine;
-        let shared = self.sharing.keys.get(&entry.unit_correlation)?;
-        // The settled table, or one this project extracted and has not
-        // settled yet, whose inputs hold. Inputs are checked before any
-        // replay: a path crate's files, as a git crate's declared ones
-        // (#398). A settled table whose inputs don't hold leaves the staged
-        // one this project made under its own (#1754).
-        let (bindings, read, witness) =
-            [self.sharing.directory(shared), self.sharing.staged.as_ref()]
-                .into_iter()
-                .flatten()
-                .find_map(|bindings| {
-                    let read = crate::bindings::read(bindings, &shared.key)?;
-                    let validated = read.meta.inputs.as_ref()?.validate(current)?;
-                    let identity = validated.identity()?;
-                    let inputs = validated.inputs().clone();
-                    let witness = (identity, inputs, validated.into_filesystem());
-                    Some((bindings, read, witness))
-                })?;
-        let (inputs_identity, replayed_inputs, filesystem) = witness;
-        let table = crate::extract::sidecar::read::<engine::Table>(&read.table).ok()?;
-        if table.schema != engine::TABLE_SCHEMA {
-            return None;
-        }
-        let root = table.root.clone();
-        let memo = engine::Memo::from_table(table);
+        kept: &replayed::Tables,
+    ) -> (Option<SharedReplay>, Fresh) {
+        let entry = held.entry;
         let Root::Selected { aliases } = &entry.root;
         let aliases = aliases.iter().map(ToString::to_string).collect::<Vec<_>>();
         let demand = self
@@ -736,25 +842,82 @@ impl Plan {
             })
             .map(|path| path.iter().map(ToString::to_string).collect::<Vec<_>>())
             .collect::<Vec<_>>();
-        // Each crate's units are its own, as the driver records them.
+        let seed = engine::Seed::of(&self.demand, &demand);
+        let question = replayed::Question::new(
+            held.bindings,
+            held.stamp.clone(),
+            &entry.unit_key,
+            &aliases,
+            seed,
+        );
+        let (table, fresh) = match kept.answer(&held.shared.key, &question) {
+            Some(table) => (Some(table), Fresh::Kept),
+            None => (
+                self.replay_table(held, question, aliases.clone(), seed)
+                    .map(Arc::new),
+                Fresh::Read,
+            ),
+        };
+        let replay = table
+            .and_then(|table| self.bind_shared(index, held, table, artifacts, metadata, aliases));
+        (replay, fresh)
+    }
+
+    /// Read `held`'s table and replay it for `seed`, from the units of its
+    /// crate's own unit, as the driver records them.
+    fn replay_table(
+        &self,
+        held: &Held<'_>,
+        question: replayed::Question,
+        aliases: Vec<String>,
+        seed: engine::Seed<'_>,
+    ) -> Option<replayed::Table> {
+        let (bytes, digest) = held.opened.table()?;
+        let table = crate::extract::sidecar::read::<engine::Table>(&bytes).ok()?;
+        if table.schema != engine::TABLE_SCHEMA {
+            return None;
+        }
+        let root = table.root.clone();
+        let memo = engine::Memo::from_table(table);
         let extracted = engine::Engine::new(
             &mut engine::Replay(&memo),
             root,
-            aliases.clone(),
-            engine::session_key([entry.unit_key.as_ref()]),
+            aliases,
+            engine::session_key([held.entry.unit_key.as_ref()]),
         )
-        .run(engine::Seed::of(&self.demand, &demand))
+        .run(seed)
         .ok()?;
         let body = extracted.body().ok()?;
-        let entry_root = bindings.join(shared.key.as_ref());
-        let artifact = read.path.to_str()?.to_owned();
-        let profile = graph
-            .artifacts()
-            .iter()
-            .find(|output| output.semantic_key() == entry.unit_key.as_ref())
+        Some(replayed::Table::new(
+            question,
+            &bytes,
+            digest,
+            body,
+            extracted.crates.into_iter().collect(),
+        ))
+    }
+
+    /// `held`'s crate, at `index`, as its replayed `table` binds it into
+    /// this plan's document: its handshake around the replayed body, and
+    /// each external crate it names as this build's units bind it.
+    fn bind_shared<'plan>(
+        &'plan self,
+        index: usize,
+        held: &Held<'plan>,
+        table: Arc<replayed::Table>,
+        artifacts: &BTreeMap<&str, &unit::Output>,
+        metadata: &unit::Metadata,
+        aliases: Vec<String>,
+    ) -> Option<SharedReplay> {
+        let entry = held.entry;
+        let shared = held.shared;
+        let entry_root = held.bindings.join(shared.key.as_ref());
+        let artifact = held.opened.path().to_str()?.to_owned();
+        let profile = artifacts
+            .get(entry.unit_key.as_ref())
             .and_then(|output| std::str::from_utf8(output.artifact_profile().as_bytes()).ok())?
             .to_owned();
-        let meta = &read.meta;
+        let meta = &held.opened.meta;
         let path_of = |crate_name: &str, stable_crate_id: &str| {
             if crate_name == meta.crate_name && stable_crate_id == meta.stable_crate_id {
                 artifact.clone()
@@ -767,7 +930,7 @@ impl Plan {
         };
         let mut sysroot = Vec::new();
         let mut externals = Vec::new();
-        for krate in &extracted.crates {
+        for krate in table.crates() {
             if krate.sysroot {
                 sysroot.push(serde_json::json!({
                     "compiler_commit": self.compiler_commit.as_ref(),
@@ -813,10 +976,7 @@ impl Plan {
                     .and_then(|recorded| {
                         let authority = match &recorded.unit_key {
                             Some(unit_key) => {
-                                let output = graph
-                                    .artifacts()
-                                    .iter()
-                                    .find(|output| output.semantic_key() == unit_key.as_str())?;
+                                let output = artifacts.get(unit_key.as_str())?;
                                 Some(crate::input::ArtifactAuthority {
                                     semantic_key: output.semantic_key().into(),
                                     package_id: output.package_id().into(),
@@ -846,7 +1006,6 @@ impl Plan {
                 ((name.clone(), id.clone()), binding)
             })
             .collect::<Vec<_>>();
-        let digest = engine::hex(&Sha256::digest(&read.table));
         let handshake = serde_json::json!({
             "schema": protocol::SCHEMA,
             "package": {
@@ -875,8 +1034,8 @@ impl Plan {
             "dependencies": entry.dependencies,
             "artifact": {
                 "path": artifact,
-                "length": read.table.len(),
-                "digest": digest,
+                "length": table.length(),
+                "digest": table.digest(),
                 "profile": profile,
                 "fresh": true,
                 "crate_hash": meta.crate_hash,
@@ -890,21 +1049,17 @@ impl Plan {
         let mut fragment = b"{\"handshake\":".to_vec();
         fragment.extend(serde_json::to_vec(&handshake).ok()?);
         fragment.push(b',');
-        fragment.extend_from_slice(body.get(1..)?);
+        fragment.extend_from_slice(table.body().get(1..)?);
         let mut identity = shared.key.as_bytes().to_vec();
-        identity.extend(inputs_identity);
+        identity.extend(held.identity);
         identity.extend(meta.scripts_identity()?);
-        identity.extend(digest.as_bytes());
-        identity.extend(Sha256::digest(&body));
+        identity.extend(table.digest().as_bytes());
+        identity.extend(table.body_digest());
         Some(SharedReplay {
-            key: &shared.key,
-            bindings,
             fragment,
             externals: bound,
             identity,
-            inputs: replayed_inputs,
-            filesystem,
-            read,
+            table,
         })
     }
 
