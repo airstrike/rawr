@@ -184,7 +184,7 @@ pub(crate) fn from_owner_parts(
     reason = "materialization consumes the complete owner observations"
 )]
 pub(crate) fn materialize_owner(
-    stored: Option<&api::cached::Product>,
+    basis: api::retained::Basis<'_>,
     metadata: &cargo::unit::Metadata,
     build_unit: &cargo::unit::BuildGraph,
     selected: &[cargo::Selection],
@@ -206,8 +206,17 @@ pub(crate) fn materialize_owner(
         Some(universe),
         capture.allocation_mut(),
     )?;
+    // A graph of the same content kept under another build needs only
+    // this build's invocations, which the handshakes name.
+    if let api::retained::Basis::Kept { graph, .. } = basis {
+        let invocations = capture.invocations()?;
+        if let Some(framed) = graph.framed(&context, invocations, capture.allocation_mut())? {
+            crate::progress::framed_graph();
+            return Ok(framed);
+        }
+    }
     let (document, invocations) = capture.into_parts(limits)?;
-    materialize_document(stored, document, invocations, policy, &context, limits)
+    materialize_document(basis, document, invocations, policy, &context, limits)
 }
 
 /// Retain the API from the owner; a current API hit defers `materialize`.
@@ -221,7 +230,7 @@ pub(crate) fn retain_from_owner_parts(
     input: crate::input::stored::Completed,
     policy: &Policy,
     memo: impl FnOnce(&[u8; 32]) -> Option<[u8; 32]>,
-    materialize: impl FnOnce(Option<&api::cached::Product>) -> Result<api::Graph<api::Captured>>
+    materialize: impl FnOnce(api::retained::Basis<'_>) -> Result<api::Graph<api::Captured>>
         + Send
         + 'static,
 ) -> Result<api::Continuation> {
@@ -249,7 +258,7 @@ pub(crate) fn retain_from_owner_parts(
 /// project's unit graph instead of a build (`crate::bindings`).
 #[cfg(feature = "rustc-driver")]
 pub(crate) fn materialize_shared(
-    stored: Option<&api::cached::Product>,
+    basis: api::retained::Basis<'_>,
     document: &[u8],
     external: Vec<ExternalBinding>,
     context: &api::Context,
@@ -260,7 +269,7 @@ pub(crate) fn materialize_shared(
     let document = protocol::decode_accounted(document, limits, &mut allocation)?;
     let invocations = Invocations::seal_document_with_allocation(&document, allocation)?
         .bind_external(external)?;
-    materialize_document(stored, document, invocations, policy, context, limits)
+    materialize_document(basis, document, invocations, policy, context, limits)
 }
 
 /// The API context of a run that replayed shared bindings, from its
@@ -305,7 +314,7 @@ pub(crate) fn retain_shared(
     proof: crate::input::proof::Proof,
     policy: &Policy,
     limits: &cargo::Limits,
-    materialize: impl FnOnce(Option<&api::cached::Product>) -> Result<api::Graph<api::Captured>>
+    materialize: impl FnOnce(api::retained::Basis<'_>) -> Result<api::Graph<api::Captured>>
         + Send
         + 'static,
 ) -> Result<api::Continuation> {
@@ -2632,15 +2641,27 @@ pub(crate) fn canonicalize(
 /// Stored bodies carry no authority for the exact current compiler header.
 #[cfg(feature = "rustc-driver")]
 fn materialize_document(
-    stored: Option<&api::cached::Product>,
+    basis: api::retained::Basis<'_>,
     document: protocol::Document,
     invocations: Invocations,
     policy: &Policy,
     context: &api::Context,
     limits: &cargo::Limits,
 ) -> Result<api::Graph<api::Captured>> {
-    let Some(stored) = stored else {
-        return canonicalize_document_borrowed(document, invocations, policy, context, limits);
+    let resolved;
+    let stored = match basis {
+        api::retained::Basis::Sidecars => {
+            return canonicalize_document_borrowed(document, invocations, policy, context, limits);
+        }
+        api::retained::Basis::Stored(stored) => stored,
+        api::retained::Basis::Kept { product, .. } => {
+            crate::progress::unframed_graph();
+            resolved = product.resolve().map_err(|source| Error::Node {
+                operation: "read back the stored API",
+                source: Box::new(source),
+            })?;
+            resolved.as_ref().unwrap_or(product)
+        }
     };
     let Invocations {
         authority,

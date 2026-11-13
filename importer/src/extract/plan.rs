@@ -1833,6 +1833,21 @@ impl Capture {
         &mut self.invocations.allocation
     }
 
+    /// The invocation each sidecar's handshake names, in canonical order:
+    /// what a graph of this capture holds beside its API, read without
+    /// decoding any sidecar's body (#1787).
+    pub(super) fn invocations(&mut self) -> Result<Vec<crate::api::Invocation>> {
+        let allocation = &mut self.invocations.allocation;
+        let mut invocations = Vec::new();
+        allocation.reserve(&mut invocations, self.document.fragments.len())?;
+        for fragment in &self.document.fragments {
+            invocations.push(super::invocation(fragment, allocation)?);
+        }
+        allocation.sort_keys(invocations.len());
+        invocations.sort_unstable();
+        Ok(invocations)
+    }
+
     /// Borrow the artifact inputs in the order used by baseline capture.
     pub(crate) fn input_artifacts(&self) -> impl ExactSizeIterator<Item = (&Path, &[u8; 32])> {
         self.artifacts

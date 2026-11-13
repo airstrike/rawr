@@ -6,6 +6,7 @@ use crate::cargo::resolution::BuildProduct;
 use crate::node::{self, Parent};
 use crate::{context::Context, metrics};
 
+use super::retained::Basis;
 use super::{
     header, Captured, Graph, StoredGraph, Usage, CANONICALIZER_VERSION, HEADER_BYTES, MAGIC,
 };
@@ -38,7 +39,7 @@ pub(crate) fn evaluate(
     policy: &[u8; 32],
     build: &node::Validated<BuildProduct>,
     sink: &dyn metrics::Sink,
-    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
+    materialize: impl FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>>,
 ) -> Result<(node::Validated<Product>, Graph<Captured>), node::Error> {
     let parents = [Parent::validated(build)];
     evaluate_with_parents(context, request, policy, &parents, sink, materialize)
@@ -53,7 +54,7 @@ pub(crate) fn evaluate_owner(
     owner: &node::Validated<crate::cargo::resolution::owner::Product>,
     retention: &node::read_set::Retention,
     sink: &dyn metrics::Sink,
-    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
+    materialize: impl FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>>,
 ) -> Result<(node::Validated<Product>, Graph<Captured>), node::Error> {
     let recipe = recipe(context, request, policy, &[Parent::validated(owner)])?;
     let mut materialize = Some(materialize);
@@ -75,7 +76,7 @@ pub(crate) fn retain_owner<O>(
     owner: node::Validated<crate::cargo::resolution::owner::Product>,
     retention: &node::read_set::Retention,
     memo: impl FnOnce() -> Option<[u8; 32]>,
-    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + Send + 'static,
+    materialize: impl FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>> + Send + 'static,
     finish: impl FnOnce(
         node::Validated<crate::cargo::resolution::owner::Product>,
         node::staging::Owned<Product>,
@@ -107,7 +108,7 @@ pub(crate) fn retain_under<O>(
     parent: Parent,
     retention: &node::read_set::Retention,
     memo: impl FnOnce() -> Option<[u8; 32]>,
-    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>> + Send + 'static,
+    materialize: impl FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>> + Send + 'static,
     finish: impl FnOnce(
         node::staging::Owned<Product>,
         node::read_set::Retention,
@@ -178,7 +179,7 @@ fn evaluate_with_parents(
     policy: &[u8; 32],
     parents: &[Parent],
     sink: &dyn metrics::Sink,
-    materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
+    materialize: impl FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>>,
 ) -> Result<(node::Validated<Product>, Graph<Captured>), node::Error> {
     let recipe = recipe(context, request, policy, parents)?;
     let mut materialize = Some(materialize);
@@ -196,12 +197,12 @@ fn capture<F>(
     current: &mut Option<Graph<Captured>>,
 ) -> Result<Product, node::Error>
 where
-    F: FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
+    F: FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>>,
 {
     let materialize = materialize
         .take()
         .ok_or(node::Error::Codec("API capture was already consumed"))?;
-    let mut graph = materialize(None)?;
+    let mut graph = materialize(Basis::Sidecars)?;
     let stored = graph.take_stored()?;
     *current = Some(graph);
     Ok(Product {
@@ -215,7 +216,7 @@ fn current_graph<F>(
     product: &Product,
 ) -> Result<Graph<Captured>, node::Error>
 where
-    F: FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
+    F: FnOnce(Basis<'_>) -> crate::Result<Graph<Captured>>,
 {
     match current {
         Some(graph) => Ok(graph),
@@ -223,7 +224,9 @@ where
             let resolved = product.resolve()?;
             Ok(materialize.take().ok_or(node::Error::Codec(
                 "API capture was already consumed",
-            ))?(Some(resolved.as_ref().unwrap_or(product)))?)
+            ))?(Basis::Stored(
+                resolved.as_ref().unwrap_or(product),
+            ))?)
         }
     }
 }
@@ -643,7 +646,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Graph::raw_pair(raw.clone(), semantic, Some(universe)),
+            Graph::raw_pair(raw.clone(), semantic, Some(universe), None),
             &mut allocation,
         )
         .expect("the pre-policy raw graph seals");

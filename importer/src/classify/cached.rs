@@ -101,7 +101,7 @@ impl Product {
     ) -> Result<Self, Error> {
         let (parts, _) = graph.classify_parts(policy, Authority::production(limits))?;
         Ok(Self {
-            canonical: parts.canonical,
+            canonical: Box::from(&*parts.canonical),
         })
     }
 
@@ -306,7 +306,7 @@ mod tests {
         let (parts, _) = graph
             .classify_parts(&policy, Authority::production(&limits))
             .expect("the source classification completes");
-        let expected = parts.canonical.clone();
+        let expected = Box::<[u8]>::from(&*parts.canonical);
         let product = Product {
             canonical: expected.clone(),
         };

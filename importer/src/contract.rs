@@ -34,10 +34,10 @@ impl Phase for Classified {}
 /// ```
 pub struct Contract<P: Phase> {
     graph: api::Graph<api::Extracted>,
-    support: crate::classify::SupportLedger,
-    definitions: Box<[crate::classify::DefinitionPlan]>,
-    outcomes: Box<[crate::classify::OutcomeRecord]>,
-    canonical: Box<[u8]>,
+    support: std::sync::Arc<crate::classify::SupportLedger>,
+    definitions: std::sync::Arc<[crate::classify::DefinitionPlan]>,
+    outcomes: std::sync::Arc<[crate::classify::OutcomeRecord]>,
+    canonical: std::sync::Arc<[u8]>,
     fingerprint: fingerprint::Fingerprint,
     allocation: Usage,
     chain: Option<crate::node_parts::Chain>,
@@ -63,10 +63,10 @@ impl Contract<Classified> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn seal(
         graph: api::Graph<api::Extracted>,
-        definitions: Box<[crate::classify::DefinitionPlan]>,
-        outcomes: Box<[crate::classify::OutcomeRecord]>,
-        support: crate::classify::SupportLedger,
-        canonical: Box<[u8]>,
+        definitions: std::sync::Arc<[crate::classify::DefinitionPlan]>,
+        outcomes: std::sync::Arc<[crate::classify::OutcomeRecord]>,
+        support: std::sync::Arc<crate::classify::SupportLedger>,
+        canonical: std::sync::Arc<[u8]>,
         fingerprint: fingerprint::Fingerprint,
         allocation: Usage,
         chain: Option<crate::node_parts::Chain>,
@@ -285,7 +285,7 @@ impl Contract<Classified> {
     }
 
     #[cfg(test)]
-    pub(crate) const fn support_ledger(&self) -> &crate::classify::SupportLedger {
+    pub(crate) fn support_ledger(&self) -> &crate::classify::SupportLedger {
         &self.support
     }
 

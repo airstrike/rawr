@@ -2,11 +2,24 @@
 
 use crate::node;
 
-/// Rebuild the captured graph from its stored API product, only when asked.
-pub(crate) type Materialize = Box<
-    dyn FnOnce(Option<&super::cached::Product>) -> crate::Result<super::Graph<super::Captured>>
-        + Send,
->;
+/// Build the captured graph from what `Basis` names, only when asked.
+pub(crate) type Materialize =
+    Box<dyn FnOnce(Basis<'_>) -> crate::Result<super::Graph<super::Captured>> + Send>;
+
+/// What a captured graph is built from.
+pub(crate) enum Basis<'a> {
+    /// The compiler sidecars the capture read.
+    Sidecars,
+    /// The stored API product, its parts read back.
+    Stored(&'a super::cached::Product),
+    /// The graph an owner kept of the same semantic content under another
+    /// build, which this build's context and invocations frame; the stored
+    /// `product` when they don't.
+    Kept {
+        graph: &'a super::Graph<super::Captured>,
+        product: &'a super::cached::Product,
+    },
+}
 
 /// The captured graph, or the deferred rebuild of a current stored API hit.
 // Ready is the usual result and is matched at once; boxing it would allocate per hit.
@@ -179,19 +192,27 @@ enum Held {
 #[derive(Default)]
 pub struct Kept {
     held: Option<(Key, Held)>,
+    /// The classification of the kept graph's API the last save replayed.
+    classification: crate::classify::kept::Kept,
 }
 
 /// An API product's action and content.
 type Key = (node::ActionKey, node::Digest);
 
 impl Kept {
+    /// The classification this owner keeps beside its graph.
+    pub(crate) fn classification(&mut self) -> &mut crate::classify::kept::Kept {
+        &mut self.classification
+    }
+
     /// Build the graph a warm launch deferred off this thread, so the next
     /// save that changes Rawr source finds it built. One already kept or
-    /// building for the same API is not built again.
+    /// building for an API of the same content is not built again: a save
+    /// under this build frames it ([`Kept::graph`]).
     pub fn keep(&mut self, deferred: Deferred) {
         let Deferred { product, graph } = deferred;
         let key = product.identity();
-        if self.held.as_ref().is_some_and(|(held, _)| *held == key) {
+        if self.held.as_ref().is_some_and(|(held, _)| held.1 == key.1) {
             return;
         }
         let held = match graph {
@@ -210,24 +231,34 @@ impl Kept {
     /// one a background build of it is finishing, or one built now. The
     /// graph is kept for the next save. A background build of another API
     /// is not waited for.
+    ///
+    /// A new build whose API has the content of the kept one, as after a
+    /// native edit that changes no crate's API, frames the kept graph with
+    /// its own context and invocations: it decodes and seals nothing.
     pub fn graph(&mut self, mut api: Continuation) -> Result<Continuation, node::Error> {
         let key = api.product.identity();
         let held = match self.held.take() {
-            Some((held, graph)) if held == key => Some(graph),
+            Some((held, graph)) if held.1 == key.1 => Some((held == key, graph)),
             _ => None,
         };
         let graph = match (api.graph, held) {
             (Lazy::Ready(graph), _) => graph,
-            (Lazy::Pending(_), Some(Held::Built(graph))) => graph,
-            (Lazy::Pending(materialize), Some(Held::Building(building))) => {
-                let began = std::time::Instant::now();
-                let built = building.join();
-                crate::progress::waited_for_graph(began.elapsed());
-                match built {
-                    Ok(Ok(graph)) => graph,
-                    // The background build failed or panicked: this build
-                    // reports the failure as its own.
-                    Ok(Err(_)) | Err(_) => rebuild(&api.product, materialize)?,
+            (Lazy::Pending(materialize), Some((exact, held))) => {
+                let graph = match held {
+                    Held::Built(graph) => Some(graph),
+                    Held::Building(building) => {
+                        let began = std::time::Instant::now();
+                        let built = building.join();
+                        crate::progress::waited_for_graph(began.elapsed());
+                        // A background build that failed or panicked is
+                        // built here, which reports the failure as its own.
+                        built.ok().and_then(Result::ok)
+                    }
+                };
+                match graph {
+                    Some(graph) if exact => graph,
+                    Some(graph) => frame(&api.product, materialize, &graph)?,
+                    None => rebuild(&api.product, materialize)?,
                 }
             }
             (Lazy::Pending(materialize), None) => rebuild(&api.product, materialize)?,
@@ -236,6 +267,19 @@ impl Kept {
         self.held = Some((key, Held::Built(graph)));
         Ok(api)
     }
+}
+
+/// The graph of `product` under its own build, framed from `kept`, a graph
+/// of the same content under another build (#1786).
+fn frame(
+    product: &node::staging::Owned<super::cached::Product>,
+    materialize: Materialize,
+    kept: &super::Graph<super::Captured>,
+) -> Result<super::Graph<super::Captured>, node::Error> {
+    Ok(materialize(Basis::Kept {
+        graph: kept,
+        product: product.value(),
+    })?)
 }
 
 /// The graph of `product`: the captured one, or one rebuilt from the
@@ -258,7 +302,7 @@ fn rebuild(
     let began = std::time::Instant::now();
     let product = product.value();
     let resolved = product.resolve()?;
-    let graph = materialize(Some(resolved.as_ref().unwrap_or(product)))?;
+    let graph = materialize(Basis::Stored(resolved.as_ref().unwrap_or(product)))?;
     crate::progress::rebuilt_graph(began.elapsed());
     Ok(graph)
 }

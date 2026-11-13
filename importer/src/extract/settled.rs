@@ -45,7 +45,14 @@ impl Settled {
     ) -> Result<api::Graph<api::Captured>> {
         allocation.category(EvidenceCategory::Raw);
         let (canonical, semantic) = raw_pair(context, &invocations, &self.body, allocation)?;
-        let raw = api::Graph::raw_pair(canonical, semantic, context.resolution_universe());
+        // Each encoding is its head, then the body after its opening brace.
+        let head = api::frame::Head::new(Some(3), canonical.len() + 1 - self.body.len());
+        let raw = api::Graph::raw_pair(
+            canonical,
+            semantic,
+            context.resolution_universe(),
+            Some(head),
+        );
         allocation.category(EvidenceCategory::Graph);
         allocation.final_graph(
             invocations.len(),

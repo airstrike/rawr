@@ -197,12 +197,14 @@ impl Serialize for Current<'_> {
     }
 }
 
+/// The current encoding of the stored semantic `bytes` under `context`
+/// and `invocations`, with the schema its head names.
 pub(super) fn current(
     bytes: &[u8],
     context: &super::Context,
     invocations: &[super::Invocation],
     allocation: &mut crate::extract::Allocation,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Option<u32>)> {
     let sections: Sections<'_> =
         serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
             code: "semantic-api-sections",
@@ -213,14 +215,16 @@ pub(super) fn current(
         sections.invocations.get().as_bytes(),
         &Invocations(invocations),
     )?;
-    encode(
+    let schema = sections.schema;
+    let current = encode(
         &Current {
             sections,
             context,
             invocations,
         },
         allocation,
-    )
+    )?;
+    Ok((current, schema))
 }
 
 fn require(expected: &[u8], value: &impl Serialize) -> Result<()> {

@@ -390,11 +390,38 @@ pub(crate) fn waited_for_graph(took: Duration) {
 /// graph again from its stored product (#1815).
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn rebuilt_graph(took: Duration) {
+    count_round(|round| &mut round.rebuilt, 1);
     if verbose() && !UNCOUNTED.get() {
         say(&format!(
             "rawr-import: the round built the API graph from the store in {:.1} s",
             took.as_secs_f64()
         ));
+    }
+}
+
+/// Count one API graph a round framed from a kept graph of the same
+/// content under another build, in place of building it from the store
+/// (#1786).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn framed_graph() {
+    count_round(|round| &mut round.framed, 1);
+}
+
+/// Count one stored classification a round decoded, as the one an owner
+/// kept was of another API or another classification (#1786).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn replayed_classification() {
+    count_round(|round| &mut round.replayed, 1);
+}
+
+/// Count one API graph a round built from the store because the kept graph
+/// of the same content could not be framed by its build; with
+/// `RAWR_VERBOSE`, say so.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn unframed_graph() {
+    count_round(|round| &mut round.rebuilt, 1);
+    if verbose() && !UNCOUNTED.get() {
+        say("rawr-import: the round could not frame the kept API graph, so it built it from the store");
     }
 }
 
@@ -523,6 +550,9 @@ pub fn work() -> Work {
 /// answered counts nothing. Last, what its replays of a stored Cargo view
 /// did: how many parsed the view's metadata, how many read and hashed its
 /// recorded inputs again, and how many took what this process kept (#1759).
+/// And how many API graphs it built from the store, and how many it framed
+/// from a kept graph of the same content under another build, and how many
+/// stored classifications it decoded (#1786).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Round {
     harnessed: usize,
@@ -536,6 +566,9 @@ pub struct Round {
     generated: usize,
     parsed: usize,
     views: Views,
+    rebuilt: usize,
+    framed: usize,
+    replayed: usize,
 }
 
 /// What one round's replays of a stored Cargo view did ([`View`]).
@@ -552,7 +585,8 @@ impl std::fmt::Display for Round {
             formatter,
             "harnesses {}, compiled {}, copied {}, sealed {}, probes {}, read {}, \
              canonicalized {}, classified {}, generated {}, parsed {}, \
-             Cargo views parsed {}, compared {}, kept {}",
+             Cargo views parsed {}, compared {}, kept {}, \
+             API graphs rebuilt {}, framed {}, classifications replayed {}",
             self.harnessed,
             self.compiled,
             self.copied,
@@ -566,6 +600,9 @@ impl std::fmt::Display for Round {
             self.views.parsed,
             self.views.compared,
             self.views.kept,
+            self.rebuilt,
+            self.framed,
+            self.replayed,
         )
     }
 }

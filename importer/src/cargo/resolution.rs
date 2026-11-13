@@ -1577,7 +1577,7 @@ mod tests {
                             let limits = super::super::Limits::standard();
                             let mut allocation = crate::extract::Allocation::new(&limits);
                             let context = crate::api::Context::fixture();
-                            if let Some(stored) = stored {
+                            if let crate::api::retained::Basis::Stored(stored) = stored {
                                 return stored.replay(
                                     &context,
                                     Vec::new(),
