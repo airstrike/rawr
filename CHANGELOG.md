@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A restart that needs no native build starts the program sooner: the new runner skips its walk of the program's dependencies when the file watcher saw none change, unchanged source files aren't read again, and the runner looks up its adapters instead of scanning for them. (#1879; part of #1755)
+- A restart starts the new runner sooner: the runner is spawned with posix_spawn, so the owner's memory is no longer copied at each runner start, and the runner clears its own signal mask; a runner the owner ends for a restart or a refusal leaves at once, without the GPU and windowing teardown. A program's own exit still runs its teardown, and Ctrl-C still reaches it as under cargo run. (#1880; part of #1755)
+- A save in a running program parses again only the lowered text of the parts that changed, and hashes again only the declarations that changed, so a save of one file no longer reparses the whole program. (#1877, #1878)
+- A marked function that takes `&mut` of a native type with an elided lifetime, as ratatui's `&mut Frame`, builds again (it failed with E0521), and a whole new value it gives that place, also for a type with a named lifetime, comes back to native code. (#1881)
 
 ## 0.3.209 (2026-11-13)
 
