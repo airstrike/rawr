@@ -637,8 +637,8 @@ fn prepare_resolving(
         };
         // The shared tables' replays the owner kept: a table read for the
         // same demand last round is not read again (#1845).
-        let request = match kept.as_deref() {
-            Some(kept) => request.kept_tables(kept),
+        let request = match kept.as_deref_mut() {
+            Some(kept) => request.kept_tables(kept.api()),
             None => request,
         };
         rawr_import::progress::phase("resolving");
@@ -646,7 +646,7 @@ fn prepare_resolving(
             .prepare_cached_in(&limits, scope)
             .map_err(Error::import)?;
         if let Some(kept) = kept.as_deref_mut() {
-            prepared.keep_tables(kept);
+            prepared.keep_tables(kept.api());
         }
         settlement.absorb(prepared.settlement());
         // The instances native code calls marked generics at, as this check
