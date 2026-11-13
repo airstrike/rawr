@@ -183,6 +183,10 @@ pub struct Shape {
     /// leaves out. Native code built without a derive's impl never calls
     /// it, so a new derive alone needs no new native build (#1737).
     derives: BTreeMap<String, BTreeSet<String>>,
+    /// The types of the fields of each struct native code holds by its
+    /// handle (D961), by its path, as rustc builds them: the handle is
+    /// `Send`, `Sync` and `Unpin` as they are, which no other text shows.
+    autos: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -242,6 +246,9 @@ impl Shape {
     pub fn change(&self, newer: &Self) -> Option<String> {
         if self == newer {
             return None;
+        }
+        if let Some(line) = self.auto_change(newer, |_| true) {
+            return Some(line);
         }
         let what = |kind: Kind| match kind {
             Kind::Type => "its fields",
@@ -725,7 +732,10 @@ pub(crate) fn shadow<'a>(
     Shadow {
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         files,
-        shape: Shape::built(shape),
+        shape: Shape {
+            autos: generator.autos.take(),
+            ..Shape::built(shape)
+        },
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
         refused,
         #[cfg(any(test, all(feature = "rust-import", not(target_arch = "wasm32"))))]
@@ -769,6 +779,9 @@ struct Generator<'a> {
     /// The structs of `crossing` native code holds by the handle of the
     /// program value, which keeps their fields and parts (`handle`, D961).
     handles: BTreeSet<String>,
+    /// The fields' types of each of `handles` written so far, which the
+    /// shape keeps apart ([`Shape::autos`]).
+    autos: std::cell::RefCell<BTreeMap<String, BTreeSet<String>>>,
     /// Each generic function a trampoline stands for, which has an
     /// instance entry ([`generic_trampoline`], D869), by its call's path,
     /// with the entry's path.
@@ -844,8 +857,9 @@ impl Std {
 
     /// The stand-in `stand_in`'s impl of the trait, each function asking
     /// the interpreter for the program value's own (`island::Object`), the
-    /// type at `owner`'s.
-    fn implementation(self, stand_in: &str, owner: &str) -> String {
+    /// type at `owner`'s. `rest` is what a stand-in holds after the handle,
+    /// written as its fields are built.
+    fn implementation(self, stand_in: &str, owner: &str, rest: &str) -> String {
         let island = format!("crate::{MODULE}");
         let body = match self {
             Self::Debug | Self::Display => {
@@ -856,7 +870,7 @@ impl Std {
                 )
             }
             Self::Clone => format!(
-                "    fn clone(&self) -> Self {{\n        Self(self.0.duplicate({owner:?}))\n    }}\n"
+                "    fn clone(&self) -> Self {{\n        Self(self.0.duplicate({owner:?}){rest})\n    }}\n"
             ),
             Self::PartialEq => format!(
                 "    fn eq(&self, other: &Self) -> bool {{\n        self.0.equal(&other.0, {owner:?})\n    }}\n"
@@ -867,7 +881,7 @@ impl Std {
                  state.write_u64(self.0.hash({owner:?}))\n    }}\n"
             ),
             Self::Default => format!(
-                "    fn default() -> Self {{\n        Self({island}::Object::default_of({owner:?}))\n    }}\n"
+                "    fn default() -> Self {{\n        Self({island}::Object::default_of({owner:?}){rest})\n    }}\n"
             ),
             Self::PartialOrd => format!(
                 "    fn partial_cmp(&self, other: &Self) -> ::std::option::Option<::std::cmp::Ordering> {{\n        \
@@ -986,6 +1000,7 @@ impl<'a> Generator<'a> {
             implemented,
             holding: BTreeSet::new(),
             handles: BTreeSet::new(),
+            autos: std::cell::RefCell::default(),
             generic: std::cell::RefCell::default(),
             entries: std::cell::RefCell::default(),
             parameters: std::cell::RefCell::default(),
@@ -2440,7 +2455,7 @@ impl<'a> Generator<'a> {
             // Each std trait the marked type implements, as a supertrait of
             // the native trait may require (#1301).
             for std in self.implemented.get(name).into_iter().flatten() {
-                text.push_str(&std.implementation(&full, &path));
+                text.push_str(&std.implementation(&full, &path, ""));
             }
         }
         let written = slice(file.text, trait_.span);
@@ -7812,8 +7827,10 @@ mod tests {
     /// A struct the last check found native code holding but never opening
     /// is the handle of the program value (D961): its methods take the
     /// handle as their receiver, a `&str` of it comes back pinned with the
-    /// value, its derived `Debug` asks the program's, and a new private
-    /// field leaves its shape as it was. With no record, or with a field
+    /// value, its derived `Debug` asks the program's, a marker of its
+    /// fields' types makes it `Send` and `Sync` as they are, and a new
+    /// private field of a plain type leaves its shape as it was, though one
+    /// of a type it didn't hold needs a native build. With no record, or with a field
     /// native code sees, a derive the handle can't stand for, or a marked
     /// type that holds it, it keeps its real layout.
     #[test]
@@ -7834,8 +7851,10 @@ mod tests {
             panic!("{:?}", handled.files);
         };
         for expected in [
-            "pub struct State(crate::__rawr_island::Object);\n",
-            "Self(crate::__rawr_island::Object::new(input.handle()))",
+            "struct __RawrFieldsState(ui::Content, String);\n",
+            "pub struct State(crate::__rawr_island::Object, \
+             ::std::marker::PhantomData<__RawrFieldsState>);\n",
+            "Self(crate::__rawr_island::Object::new(input.handle()), ::std::marker::PhantomData)",
             "impl ::std::fmt::Debug for crate::physics::State {",
             "    self.0.release();\n",
             "    __call.object(&self.0);\n",
@@ -7855,6 +7874,25 @@ mod tests {
             Some(&opaque),
         );
         assert_eq!(handled.shape.change(&grown.shape), None);
+        // A field of a type it didn't hold, not one of std's plain ones,
+        // may change whether it is `Send` or `Sync`, which native code is
+        // built against.
+        let shared = generate_with(
+            &state(
+                &format!("{fields}    shared: std::rc::Rc<str>,\n"),
+                "#[derive(Debug)]\n",
+            ),
+            None,
+            Some(&opaque),
+        );
+        assert_eq!(
+            handled.shape.change(&shared.shape).as_deref(),
+            Some(
+                "`physics::State` holds a `std::rc::Rc<str>` now, which may change whether it \
+                 is `Send` or `Sync`"
+            )
+        );
+        assert_eq!(shared.shape.change(&handled.shape), None);
         // Each keeps the real layout.
         for kept in [
             generate_with(&state(fields, "#[derive(Debug)]\n"), None, None),

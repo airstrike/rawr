@@ -1381,6 +1381,64 @@ fn a_held_struct_whose_layout_native_code_reads_keeps_its_real_layout() {
     checks_and_prints(&root, &printed);
 }
 
+/// A struct native code holds by its handle is `Send` and `Sync` as its
+/// fields are (D961): once it holds an `Rc`, the screen native code moves
+/// to another thread is rustc's E0277 under `rawr check`, as under `cargo
+/// check`, where before the check passed with the handle.
+#[test]
+fn a_held_struct_s_handle_is_send_as_its_fields_are() {
+    const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
+    let root = crate::support::fresh("islands-held-send");
+    copy(Path::new(HELD), &root);
+    let check = |tool: &str| {
+        let mut command = match tool {
+            "cargo check" => {
+                let mut cargo = std::process::Command::new("cargo");
+                cargo.arg("check").current_dir(&root);
+                cargo
+            }
+            _ => {
+                let mut rawr = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+                rawr.arg("check")
+                    .arg(&root)
+                    .env("RAWR_HOME", crate::support::runtime_home());
+                rawr
+            }
+        };
+        command
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap()
+    };
+    // The first check records the screen as one native code holds but
+    // never opens, and checks again with its handle.
+    let first = check("rawr check");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "    ticks: usize,\n}",
+        "    ticks: usize,\n    shared: std::rc::Rc<str>,\n}",
+    );
+    edit(
+        &home,
+        "            ticks: 0,\n",
+        "            ticks: 0,\n            shared: std::rc::Rc::from(\"home\"),\n",
+    );
+    for tool in ["cargo check", "rawr check"] {
+        let checked = check(tool);
+        let stderr = String::from_utf8_lossy(&checked.stderr);
+        assert!(!checked.status.success(), "{tool}: {stderr}");
+        assert!(stderr.contains("error[E0277]"), "{tool}: {stderr}");
+    }
+}
+
 /// A save whose code panics on the running program's state, as a
 /// framework's own check of its hooks can, restarts the program with the
 /// save (D553.6). It needs no native build: a new process of the running

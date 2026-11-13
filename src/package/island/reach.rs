@@ -26,6 +26,9 @@ impl Shape {
         if self == newer {
             return None;
         }
+        if let Some(line) = self.auto_change(newer, |path| uses.holds(path) || uses.names(path)) {
+            return Some(line);
+        }
         for (path, entry) in &newer.entries {
             let line = match self.entries.get(path) {
                 Some(old) if old != entry && self.reaches(path, old, uses) => {
