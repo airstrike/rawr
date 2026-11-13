@@ -7144,12 +7144,17 @@ fn render<B: crate::surface::Runner>(
         &mut sources,
         &mut spans,
     )?;
+    let unused = unused_patches(
+        harness.lock(),
+        &native.runner_path_manifests(request.allocation.limits().1)?,
+    );
     let lock = member::runner_lock(
-        &runner_lock(harness.lock(), &hidden)?,
+        &runner_lock(harness.lock(), &hidden, &unused)?,
         &members.list,
         &members.exclusions(),
     )?;
-    let (manifest, aliases) = runner_manifest_aliased(harness.manifest(), &hidden, harness.lock())?;
+    let (manifest, aliases) =
+        runner_manifest_aliased(harness.manifest(), &hidden, harness.lock(), &unused)?;
     let manifest = member::runner_manifest(&manifest, &members.list, members.binary.as_deref())?;
     let without = members.without();
     for member in &members.list {
@@ -7383,7 +7388,7 @@ fn path_reached(lock: &[u8], name: &str) -> bool {
 
 #[cfg(test)]
 fn runner_manifest(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
-    runner_manifest_aliased(bytes, hidden, &[]).map(|(manifest, _)| manifest)
+    runner_manifest_aliased(bytes, hidden, &[], &Patches::new()).map(|(manifest, _)| manifest)
 }
 
 /// The crate names a dependency key gives Rust code.
@@ -7475,6 +7480,7 @@ fn runner_manifest_aliased(
     bytes: &[u8],
     hidden: &[HiddenCrate],
     lock: &[u8],
+    unused: &Patches,
 ) -> Result<(Vec<u8>, Aliases), request::Error> {
     let mut aliases = Vec::new();
     let text = std::str::from_utf8(bytes).map_err(request::misread)?;
@@ -7583,7 +7589,6 @@ fn runner_manifest_aliased(
     // project's `cargo build` compiles (D609.1). A patch for a package only
     // the rest of the project's workspace reaches changes nothing here, and
     // Cargo would warn that it is unused.
-    let unused = unused_patches(lock);
     if !unused.is_empty()
         && let Some(patch) = document.get_mut("patch").and_then(Item::as_table_like_mut)
     {
@@ -7616,16 +7621,31 @@ fn runner_manifest_aliased(
     Ok((normalize(document.to_string().as_bytes()), aliases))
 }
 
+/// The packages whose `[patch]` entries the runner leaves out.
+type Patches = std::collections::BTreeSet<String>;
+
 /// The packages the harness `lock` lists as unused patches and nowhere in
-/// its graph: no `[patch]` of that name is used through any source, so the
-/// runner leaves every one out.
-fn unused_patches(lock: &[u8]) -> std::collections::BTreeSet<String> {
+/// its graph, and that none of the path packages' `manifests` names: no
+/// `[patch]` of that name is used through any source, so the runner leaves
+/// every one out. Each path package is a member of the runner's workspace,
+/// which the harness's isn't, and Cargo resolves a member's optional and
+/// target-specific dependencies into the lock, so a patch one of them names
+/// stays (#1833).
+fn unused_patches(lock: &[u8], manifests: &[Box<[u8]>]) -> Patches {
     let Some(document) = std::str::from_utf8(lock)
         .ok()
         .and_then(|text| text.parse::<DocumentMut>().ok())
     else {
-        return std::collections::BTreeSet::new();
+        return Patches::new();
     };
+    let named = manifests
+        .iter()
+        .filter_map(|manifest| std::str::from_utf8(manifest).ok())
+        .filter_map(|text| text.parse::<DocumentMut>().ok())
+        .fold(Patches::new(), |mut named, manifest| {
+            depended(manifest.as_table(), &mut named);
+            named
+        });
     let name = |package: &toml_edit::Table| {
         package
             .get("name")
@@ -7645,13 +7665,47 @@ fn unused_patches(lock: &[u8]) -> std::collections::BTreeSet<String> {
             unused
                 .iter()
                 .filter_map(name)
-                .filter(|package| !locked.contains(package))
+                .filter(|package| !locked.contains(package) && !named.contains(package))
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
+/// Adds to `named` each package a dependency table of `manifest` names, its
+/// `target.<cfg>` tables' included.
+fn depended(manifest: &toml_edit::Table, named: &mut Patches) {
+    const TABLES: [&str; 3] = [
+        "dependencies",
+        crate::cargo::BUILD_DEPENDENCIES,
+        "dev-dependencies",
+    ];
+    let mut tables: Vec<&dyn toml_edit::TableLike> = vec![manifest];
+    if let Some(targets) = manifest.get("target").and_then(Item::as_table_like) {
+        tables.extend(
+            targets
+                .iter()
+                .filter_map(|(_, target)| target.as_table_like()),
+        );
+    }
+    for table in tables {
+        for dependencies in TABLES
+            .iter()
+            .filter_map(|name| table.get(name).and_then(Item::as_table_like))
+        {
+            named.extend(
+                dependencies
+                    .iter()
+                    .map(|(key, item)| dependency_package(key, item).to_owned()),
+            );
+        }
+    }
+}
+
+fn runner_lock(
+    bytes: &[u8],
+    hidden: &[HiddenCrate],
+    unused: &Patches,
+) -> Result<Vec<u8>, request::Error> {
     let text = std::str::from_utf8(bytes).map_err(request::misread)?;
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut document = normalized
@@ -7659,7 +7713,6 @@ fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request:
         .map_err(request::misread)?;
     // The runner's manifest leaves these patches out, so its lock lists
     // them nowhere.
-    let unused = unused_patches(bytes);
     if !unused.is_empty()
         && let Some(patch) = document.get_mut("patch").and_then(Item::as_table_like_mut)
     {
@@ -25649,6 +25702,7 @@ mod tests {
         let _ = super::runner_lock(
             b"version = 4\n\n[[package]]\nname = \"other\"\nversion = \"0.1.0\"\n",
             &[],
+            &super::Patches::new(),
         );
     }
 
@@ -26053,16 +26107,89 @@ mod tests {
         };
         assert!(cargo(false).contains("was not used in the crate graph"));
         let lock = std::fs::read(root.join("Cargo.lock")).unwrap();
-        assert!(super::unused_patches(&lock).contains("ghost"));
+        let used = std::fs::read(root.join("used/Cargo.toml")).unwrap();
+        let unused = super::unused_patches(&lock, &[used.into_boxed_slice()]);
+        assert!(unused.contains("ghost"));
         let harness = std::fs::read(root.join("Cargo.toml")).unwrap();
-        let (manifest, _) = super::runner_manifest_aliased(&harness, &[], &lock).unwrap();
-        let runner = super::runner_lock(&lock, &[]).unwrap();
+        let (manifest, _) = super::runner_manifest_aliased(&harness, &[], &lock, &unused).unwrap();
+        let runner = super::runner_lock(&lock, &[], &unused).unwrap();
         assert!(!String::from_utf8_lossy(&manifest).contains("ghost"));
         assert!(!String::from_utf8_lossy(&runner).contains("ghost"));
         std::fs::write(root.join("Cargo.toml"), &manifest).unwrap();
         std::fs::write(root.join("Cargo.lock"), &runner).unwrap();
         assert!(!cargo(true).contains("was not used"));
         assert_eq!(std::fs::read(root.join("Cargo.lock")).unwrap(), runner);
+    }
+
+    /// A project crate's optional dependency the harness never turns on
+    /// leaves its `[patch]` unused in the harness, where the crate is
+    /// outside the workspace. Under the runner's root the crate is a member,
+    /// whose optional dependencies Cargo resolves into the lock, so the
+    /// runner keeps the patch and its lock settles (#1833).
+    #[test]
+    fn a_patch_a_runner_member_s_optional_dependency_names_stays_in_the_runner() {
+        let project = crate::store::TestProject::new("rawr-optional-patch");
+        let root = project.path();
+        let app = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nghost = { version = \"0.1\", optional = true }\n";
+        for (path, text) in [
+            (
+                "harness/Cargo.toml",
+                "[workspace]\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[patch.crates-io]\nghost = { path = \"../ghost\" }\n\n[dependencies]\napp = { path = \"../app\" }\n",
+            ),
+            ("harness/src/lib.rs", ""),
+            ("harness/src/main.rs", "fn main() {}\n"),
+            ("harness/build.rs", "fn main() {}\n"),
+            ("app/Cargo.toml", app),
+            ("app/src/lib.rs", ""),
+            // The runner's member copy of `app`, as `runner::mirror` places it.
+            ("runner/app/Cargo.toml", app),
+            ("runner/app/src/lib.rs", ""),
+            ("runner/src/main.rs", "fn main() {}\n"),
+            ("runner/build.rs", "fn main() {}\n"),
+            (
+                "ghost/Cargo.toml",
+                "[package]\nname = \"ghost\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            ),
+            ("ghost/src/lib.rs", ""),
+        ] {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let cargo = |directory: &str| {
+            let output = std::process::Command::new("cargo")
+                .args(["metadata", "--offline", "--format-version=1"])
+                .current_dir(root.join(directory))
+                .env("CARGO_TARGET_DIR", root.join("target"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stderr).unwrap()
+        };
+        assert!(cargo("harness").contains("was not used in the crate graph"));
+        let lock = std::fs::read(root.join("harness/Cargo.lock")).unwrap();
+        assert!(super::unused_patches(&lock, &[]).contains("ghost"));
+        let unused = super::unused_patches(&lock, &[app.as_bytes().into()]);
+        assert!(unused.is_empty());
+        let harness = std::fs::read(root.join("harness/Cargo.toml")).unwrap();
+        let (manifest, _) = super::runner_manifest_aliased(&harness, &[], &lock, &unused).unwrap();
+        let runner = super::runner_lock(&lock, &[], &unused).unwrap();
+        let manifest = String::from_utf8(manifest).unwrap();
+        assert!(manifest.contains("ghost = { path = \"../ghost\" }"));
+        std::fs::write(
+            root.join("runner/Cargo.toml"),
+            manifest.replace("path = \"../app\"", "path = \"app\""),
+        )
+        .unwrap();
+        std::fs::write(root.join("runner/Cargo.lock"), &runner).unwrap();
+        let settled = cargo("runner");
+        assert!(!settled.contains("was not used"), "{settled}");
+        let settled = std::fs::read_to_string(root.join("runner/Cargo.lock")).unwrap();
+        assert!(settled.contains("name = \"ghost\""));
     }
 
     /// A path crate a macro's `$crate` names, which the project reaches only
@@ -26085,6 +26212,7 @@ mod tests {
             harness,
             &[hidden("ui_shell"), hidden("local_macros")],
             lock,
+            &super::Patches::new(),
         )
         .unwrap();
         let document = std::str::from_utf8(&manifest)
