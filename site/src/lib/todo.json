@@ -12,7 +12,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A save or round that reads shared bindings no longer reads, hashes and parses every crate's table again: inputs are checked first, and a table replayed for the same demand is kept by the running owner.","issues":[1845]}
+        {"text":"A save or round that reads shared bindings no longer reads, hashes and parses every crate's table again: inputs are checked first, and a table replayed for the same demand is kept by the running owner.","issues":[1845]},
+        {"text":"A save no longer reads every file of rawr's copy of the crate to compare it: the owner remembers what it wrote and reads and writes only copies whose text changed. The program the save loaded is checked without loading it again, and the rawr directory is resolved once per run.","issues":[1863],"refs":[1849]}
       ]
     },
     "releases": [
@@ -4098,7 +4099,9 @@
     {"issue":1859,"title":"About 20 s pass between the program's check and the runner build on an inboard start","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1860,"title":"One ledger transaction and one root sync per save","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1863,"title":"The owner remembers the copies it wrote and hands its loaded program to the preparation","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5339,7 +5342,8 @@
             {"number":1859,"title":"About 20 s pass between the program's check and the runner build on an inboard start","state":"open"},
             {"number":1860,"title":"One ledger transaction and one root sync per save","state":"open"},
             {"number":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open"},
-            {"number":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open"}
+            {"number":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open"},
+            {"number":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open"}
           ]
         },
         {

@@ -5,7 +5,8 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A save or round that reads shared bindings no longer reads, hashes and parses every crate's table again: inputs are checked first, and a table replayed for the same demand is kept by the running owner.","issues":[1845]}
+      {"text":"A save or round that reads shared bindings no longer reads, hashes and parses every crate's table again: inputs are checked first, and a table replayed for the same demand is kept by the running owner.","issues":[1845]},
+      {"text":"A save no longer reads every file of rawr's copy of the crate to compare it: the owner remembers what it wrote and reads and writes only copies whose text changed. The program the save loaded is checked without loading it again, and the rawr directory is resolved once per run.","issues":[1863],"refs":[1849]}
     ]
   },
   "releases": [
