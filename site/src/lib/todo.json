@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A native value the runner protocol handed out is dropped once the program that took it back drops it, not kept until the next program; repeated calls find their adapter, kept slices, releases and pinned strings without a scan, and a crossing call's witnesses no longer copy their types.","issues":[1852]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.207",
@@ -4107,7 +4112,7 @@
     {"issue":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.207"},
     {"issue":1854,"title":"The admitting replay still compares every input the build just captured","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open","category":"Shared dependency cache (D607)"},
@@ -4122,7 +4127,9 @@
     {"issue":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1866,"title":"A start whose API is current reads it, its classification and its facade once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.206"},
-    {"issue":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1868,"title":"A native pull from a program's kept iterator removes its first item, O(n) per pull","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5354,7 +5361,7 @@
             {"number":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open"},
             {"number":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open"},
             {"number":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open"},
-            {"number":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"open"},
+            {"number":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"closed"},
             {"number":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"closed"},
             {"number":1854,"title":"The admitting replay still compares every input the build just captured","state":"open"},
             {"number":1855,"title":"Probe tables are keyed by the crate hash, so an edit re-extracts every downstream path crate","state":"open"},
@@ -5365,7 +5372,9 @@
             {"number":1861,"title":"Discoverable and bundled misses read back what they just published","state":"open"},
             {"number":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open"},
             {"number":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open"},
-            {"number":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open"}
+            {"number":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open"},
+            {"number":1868,"title":"A native pull from a program's kept iterator removes its first item, O(n) per pull","state":"open"},
+            {"number":1869,"title":"A witness's element and argument witnesses copy their type subtree on each call","state":"open"}
           ]
         },
         {
