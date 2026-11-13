@@ -1563,14 +1563,25 @@ pub struct Pins {
     /// The regions of the calls lent these pins, kept past each call
     /// ([`Region::keep`]). First, so they drop before what they borrow.
     regions: std::sync::Mutex<Vec<KeptRegion>>,
-    strings: std::sync::Mutex<Vec<crate::ImmutableString>>,
-    values: std::sync::Mutex<Vec<Kept>>,
+    /// The strings held, by the address of their text, or by their text
+    /// where a string equal to one held is that one.
+    strings: std::sync::Mutex<std::collections::BTreeMap<StringKey, crate::ImmutableString>>,
+    /// The native values held, by the address of each.
+    values: std::sync::Mutex<std::collections::BTreeMap<usize, Vec<Kept>>>,
     /// Slices of pinned strings ([`Pins::pin_strs`]).
-    slices: std::sync::Mutex<Vec<&'static [&'static str]>>,
+    slices: std::sync::Mutex<std::collections::BTreeSet<&'static [&'static str]>>,
     /// Whether a string equal to one held is that one ([`Pins::constant`]).
     by_text: bool,
     /// Whether they are never let go ([`Pins::lasting`]).
     lasting: bool,
+}
+
+/// How [`Pins`] find a string they hold: by where its text is, which is
+/// that string's own allocation, or by its text.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum StringKey {
+    Address(usize),
+    Text(crate::ImmutableString),
 }
 
 /// A native value [`Pins::hold`] keeps, with the thread whose `Rc` it is.
@@ -1621,9 +1632,9 @@ impl Pins {
     const fn made(by_text: bool, lasting: bool) -> Self {
         Self {
             regions: std::sync::Mutex::new(Vec::new()),
-            strings: std::sync::Mutex::new(Vec::new()),
-            values: std::sync::Mutex::new(Vec::new()),
-            slices: std::sync::Mutex::new(Vec::new()),
+            strings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            values: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            slices: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             by_text,
             lasting,
         }
@@ -1648,23 +1659,18 @@ impl Pins {
             .strings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let index = match pinned
-            .iter()
-            .position(|held| held.ptr_eq(&text) || (self.by_text && held.as_str() == text.as_str()))
-        {
-            Some(index) => index,
-            None => {
-                pinned.push(text);
-                pinned.len() - 1
-            }
+        let key = if self.by_text {
+            StringKey::Text(text.clone())
+        } else {
+            StringKey::Address(text.as_str().as_ptr().addr())
         };
-        let text: *const str = pinned[index].as_str();
+        let text: *const str = pinned.entry(key).or_insert(text).as_str();
         // SAFETY: the text lives in the string's shared allocation, which a
         // handle in `pinned` keeps alive until `clear` takes `&mut self`
         // or the pins drop, and neither can happen while `&self` is
-        // borrowed. Moving a handle within the vector doesn't move the
+        // borrowed. Moving a handle within the map doesn't move the
         // allocation. Nothing writes a held string in place: only this
-        // vector reaches its handle, and `ImmutableString::make_mut` of any
+        // map reaches its handle, and `ImmutableString::make_mut` of any
         // other handle copies while this one shares the allocation.
         unsafe { &*text }
     }
@@ -1681,10 +1687,9 @@ impl Pins {
             .values
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !kept.iter().any(|held| {
-            held.thread == thread && std::ptr::addr_eq(std::rc::Rc::as_ptr(&held.value), pointer)
-        }) {
-            kept.push(Kept {
+        let held = kept.entry(pointer.addr()).or_default();
+        if !held.iter().any(|held| held.thread == thread) {
+            held.push(Kept {
                 thread,
                 value: std::mem::ManuallyDrop::new(value),
             });
@@ -1693,7 +1698,7 @@ impl Pins {
         // in these pins keeps alive until `clear` takes `&mut self` or the
         // pins drop, and neither can happen while `&self` is borrowed; a
         // `Kept` dropped on another thread leaks it. Moving a `Kept` within
-        // the vector doesn't move the allocation. Nothing writes the value
+        // the map doesn't move the allocation. Nothing writes the value
         // while the pins share it: `Rc::get_mut` and `Rc::try_unwrap` fail
         // while they hold a count, and a `&T` allows only what `T`'s own
         // interior mutability allows.
@@ -1710,11 +1715,11 @@ impl Pins {
             .values
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !kept
-            .iter()
-            .any(|held| held.thread == thread && std::rc::Rc::ptr_eq(&held.value, &keeper))
-        {
-            kept.push(Kept {
+        let held = kept
+            .entry(std::rc::Rc::as_ptr(&keeper).cast::<()>().addr())
+            .or_default();
+        if !held.iter().any(|held| held.thread == thread) {
+            held.push(Kept {
                 thread,
                 value: std::mem::ManuallyDrop::new(keeper),
             });
@@ -1739,17 +1744,13 @@ impl Pins {
             .slices
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(held) = slices.iter().find(|held| {
-            held.len() == pinned.len()
-                && held
-                    .iter()
-                    .zip(&pinned)
-                    .all(|(held, text)| std::ptr::eq(*held, *text))
-        }) {
+        // A slice of equal texts is the one held: every string it points
+        // to stays pinned, as these pins never let go.
+        if let Some(held) = slices.get(pinned.as_slice()) {
             return held;
         }
         let slice: &'static [&'static str] = Box::leak(pinned.into_boxed_slice());
-        slices.push(slice);
+        slices.insert(slice);
         slice
     }
 
@@ -1785,7 +1786,9 @@ impl Pins {
                 .values
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .len()
+                .values()
+                .map(Vec::len)
+                .sum::<usize>()
     }
 
     /// Whether nothing is pinned, and no region is kept in them.
