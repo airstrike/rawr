@@ -89,7 +89,12 @@ struct Present {
 /// where `incremental-directories` lists rawr's incremental directories.
 /// Best effort; the caller holds rawr's build lock, and a build of Cargo's
 /// own that holds the directory leaves it for the next runner build.
-pub(crate) fn prune(shared: &Path, messages: &[u8], before: &Before, work: &Path) {
+pub(crate) fn prune(
+    shared: &Path,
+    messages: &crate::cargo::messages::Messages<'_>,
+    before: &Before,
+    work: &Path,
+) {
     let profiles = super::profiles(shared);
     let rawr = work.parent();
     let named = Named::read(messages, &profiles, rawr);
@@ -526,7 +531,12 @@ mod tests {
             artifact(&old_program[0], program, false),
         ]
         .join("\n");
-        super::prune(&shared, first.as_bytes(), &before, &work);
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(first.as_bytes()),
+            &before,
+            &work,
+        );
         let exists = |paths: &[PathBuf]| paths.iter().all(|path| path.exists());
         let removed = |paths: &[PathBuf]| paths.iter().all(|path| !path.exists());
         assert!(removed(&legacy), "a generated unit no build names");
@@ -555,7 +565,12 @@ mod tests {
             artifact(&cargo_located[0], located_id, true),
         ]
         .join("\n");
-        super::prune(&shared, second.as_bytes(), &before, &work);
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(second.as_bytes()),
+            &before,
+            &work,
+        );
         assert!(
             exists(&serde) && exists(&cargo_user) && exists(&cargo_located),
             "Cargo's units stay"
@@ -575,17 +590,32 @@ mod tests {
             artifact(&made_located[0], located_id, false),
         ]
         .join("\n");
-        super::prune(&shared, third.as_bytes(), &before, &work);
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(third.as_bytes()),
+            &before,
+            &work,
+        );
         let dependent = unit(&profile, "app", '6', &user, (16, &[17]));
         let fourth = artifact(&new_program[0], program, true);
         let before = later();
-        super::prune(&shared, fourth.as_bytes(), &before, &work);
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(fourth.as_bytes()),
+            &before,
+            &work,
+        );
         assert!(
             exists(&made_located) && exists(&dependent),
             "Cargo's unit depends on it"
         );
         fs::remove_dir_all(&dependent[2]).unwrap();
-        super::prune(&shared, fourth.as_bytes(), &before, &work);
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(fourth.as_bytes()),
+            &before,
+            &work,
+        );
         assert!(removed(&made_located), "nothing depends on it any more");
         assert!(exists(&new_program) && exists(&serde) && exists(&cargo_user));
 
@@ -660,7 +690,12 @@ mod tests {
             copy.display(),
             copy.display()
         );
-        super::prune(&shared, messages.as_bytes(), &before, &work);
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(messages.as_bytes()),
+            &before,
+            &work,
+        );
         assert!(new_objects.exists() && binary.exists());
         assert!(
             !old_objects.exists(),

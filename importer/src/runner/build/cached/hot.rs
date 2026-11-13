@@ -258,7 +258,7 @@ fn build_fixture(
         &recipe,
         move |value, budget| value.revalidate(&validation_store, &validation, budget),
         |attempt| {
-            materialize(&manifest, &attempt)?;
+            materialize(&manifest, &inputs.carrier, &attempt)?;
             let path = executable(&attempt.target());
             fs::create_dir(path.parent().unwrap()).unwrap();
             fs::write(&path, b"deterministic executable").unwrap();

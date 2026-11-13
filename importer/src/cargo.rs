@@ -26,6 +26,7 @@ use crate::{Error, Result};
 pub mod config;
 pub(crate) mod execution;
 pub(crate) mod internal;
+pub(crate) mod messages;
 pub mod resolution;
 pub mod toolchain;
 pub mod unit;

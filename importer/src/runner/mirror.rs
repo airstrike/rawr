@@ -28,7 +28,7 @@
 //! profile `cargo build` gives it, not with the project's settings for
 //! packages outside the workspace (#1789).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -128,10 +128,11 @@ impl<'a> Root<'a> {
     /// names it so ([`inherit`]).
     fn closure(
         &self,
+        manifests: &mut Manifests,
         mut pending: Vec<PathBuf>,
         beyond: &mut Vec<PathBuf>,
     ) -> Option<BTreeSet<PathBuf>> {
-        let root = read(&self.workspace.join("Cargo.toml"))?;
+        let root = manifests.of(&self.workspace)?;
         if let Some(dependencies) = root
             .get("workspace")
             .and_then(|workspace| workspace.get("dependencies"))
@@ -154,11 +155,11 @@ impl<'a> Root<'a> {
                 continue;
             }
             let directory = self.workspace.join(&relative);
-            let Some(mut package) = read(&directory.join("Cargo.toml")) else {
+            let Some(package) = manifests.of(&directory) else {
                 continue;
             };
             let mut reached = Vec::new();
-            for_each_dependency(package.as_table_mut(), &mut |dependency| {
+            visit_dependencies(package.as_table(), &mut |dependency| {
                 if let Some(path) = relative_path(dependency) {
                     reached.push(normalize(&directory.join(path)));
                 }
@@ -200,11 +201,15 @@ impl<'a> Root<'a> {
 
     /// `generated`, packages rawr generates beside the runner, and those
     /// they reach beside it.
-    fn generated(&self, mut generated: Vec<PathBuf>) -> Option<Vec<PathBuf>> {
+    fn generated(
+        &self,
+        manifests: &mut Manifests,
+        mut generated: Vec<PathBuf>,
+    ) -> Option<Vec<PathBuf>> {
         let mut pending = generated.clone();
         while let Some(directory) = pending.pop() {
-            let mut package = read(&directory.join("Cargo.toml"))?;
-            for_each_dependency(package.as_table_mut(), &mut |dependency| {
+            let package = manifests.of(&directory)?;
+            visit_dependencies(package.as_table(), &mut |dependency| {
                 let Some(path) = dependency.get("path").and_then(Item::as_str) else {
                     return;
                 };
@@ -229,7 +234,12 @@ impl<'a> Root<'a> {
     /// runner's links to the packages of `linked`, and every other entry of
     /// its directory a link to the original, so its sources, build script
     /// and assets are the original's. A copy no package needs goes.
-    fn write_copies(&self, generated: &[PathBuf], linked: &BTreeSet<PathBuf>) -> Option<()> {
+    fn write_copies(
+        &self,
+        manifests: &mut Manifests,
+        generated: &[PathBuf],
+        linked: &BTreeSet<PathBuf>,
+    ) -> Option<()> {
         let copies = self.runner.join(COPIES);
         fs::create_dir_all(&copies).ok()?;
         let named = generated
@@ -242,7 +252,8 @@ impl<'a> Root<'a> {
             }
         }
         for directory in generated {
-            let mut package = read(&directory.join("Cargo.toml"))?;
+            // The copy's own, which its rewrite makes of the original's.
+            let mut package = manifests.of(directory)?.clone();
             // Each path from the copy's directory: another copy, a link, or
             // the absolute path.
             for_each_dependency(package.as_table_mut(), &mut |dependency| {
@@ -296,15 +307,16 @@ impl<'a> Root<'a> {
 
 fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
     let root = Root::new(workspace, runner)?;
-    linked(&root, manifest).or_else(|| copied(&root, manifest))
+    let document = manifest.parse::<DocumentMut>().ok()?;
+    let mut manifests = Manifests::default();
+    linked(&root, &mut manifests, document.clone())
+        .or_else(|| copied(&root, &mut manifests, document))
 }
 
 /// `manifest` with its path dependencies under the project's workspace named
 /// through the runner's links, and the packages rawr generates beside the
 /// runner through their copies. `None` when any can't be placed.
-fn linked(root: &Root<'_>, manifest: &str) -> Option<String> {
-    let mut document = manifest.parse::<DocumentMut>().ok()?;
-
+fn linked(root: &Root<'_>, manifests: &mut Manifests, mut document: DocumentMut) -> Option<String> {
     // The runner's path dependencies under the project's workspace, and the
     // packages rawr generates beside the runner.
     let mut placed = Vec::new();
@@ -358,10 +370,10 @@ fn linked(root: &Root<'_>, manifest: &str) -> Option<String> {
     }
 
     // The generated packages' own path dependencies are placed too.
-    let generated = root.generated(generated)?;
+    let generated = root.generated(manifests, generated)?;
     for directory in &generated {
-        let mut package = read(&directory.join("Cargo.toml"))?;
-        for_each_dependency(package.as_table_mut(), &mut |dependency| {
+        let package = manifests.of(directory)?;
+        visit_dependencies(package.as_table(), &mut |dependency| {
             let Some(path) = dependency.get("path").and_then(Item::as_str) else {
                 return;
             };
@@ -373,17 +385,17 @@ fn linked(root: &Root<'_>, manifest: &str) -> Option<String> {
             }
         });
     }
-    let seen = root.closure(placed, &mut unplaced)?;
+    let seen = root.closure(manifests, placed, &mut unplaced)?;
 
     // Any other package the runner names by its own path that names a
     // placed one by its absolute path would make Cargo see that package at
     // two paths.
     for directory in &unplaced {
-        let Some(mut package) = read(&directory.join("Cargo.toml")) else {
+        let Some(package) = manifests.of(directory) else {
             continue;
         };
         let mut named = false;
-        for_each_dependency(package.as_table_mut(), &mut |dependency| {
+        visit_dependencies(package.as_table(), &mut |dependency| {
             let Some(path) = dependency.get("path").and_then(Item::as_str) else {
                 return;
             };
@@ -397,8 +409,8 @@ fn linked(root: &Root<'_>, manifest: &str) -> Option<String> {
     }
 
     root.link(&seen)?;
-    root.write_copies(&generated, &seen)?;
-    inherit(root, &mut document)?;
+    root.write_copies(manifests, &generated, &seen)?;
+    inherit(root, manifests, &mut document)?;
     Some(document.to_string())
 }
 
@@ -410,8 +422,7 @@ fn linked(root: &Root<'_>, manifest: &str) -> Option<String> {
 /// the program's crate, never with the `[profile.*.package."*"]` settings
 /// for the dependencies outside it (#1789). `None` when the runner names no
 /// generated package.
-fn copied(root: &Root<'_>, manifest: &str) -> Option<String> {
-    let mut document = manifest.parse::<DocumentMut>().ok()?;
+fn copied(root: &Root<'_>, manifests: &mut Manifests, mut document: DocumentMut) -> Option<String> {
     let mut generated = Vec::new();
     for_each_dependency(document.as_table_mut(), &mut |dependency| {
         let Some(path) = dependency
@@ -430,10 +441,10 @@ fn copied(root: &Root<'_>, manifest: &str) -> Option<String> {
     if generated.is_empty() {
         return None;
     }
-    let generated = root.generated(generated)?;
+    let generated = root.generated(manifests, generated)?;
     let none = BTreeSet::new();
     root.link(&none)?;
-    root.write_copies(&generated, &none)?;
+    root.write_copies(manifests, &generated, &none)?;
     Some(document.to_string())
 }
 
@@ -448,8 +459,8 @@ fn copy_path(root: &Root<'_>, path: &Path) -> Option<String> {
 /// the project's workspace has them. A workspace dependency outside the
 /// project's workspace is named by its absolute path, which Cargo would
 /// otherwise join to the runner's root.
-fn inherit(root: &Root<'_>, document: &mut DocumentMut) -> Option<()> {
-    let project = read(&root.workspace.join("Cargo.toml"))?;
+fn inherit(root: &Root<'_>, manifests: &mut Manifests, document: &mut DocumentMut) -> Option<()> {
+    let project = manifests.of(&root.workspace)?;
     let Some(inherited) = project.get("workspace").and_then(Item::as_table_like) else {
         return Some(());
     };
@@ -506,6 +517,39 @@ fn for_each_dependency(table: &mut dyn TableLike, visit: &mut dyn FnMut(&mut dyn
     }
 }
 
+/// Calls `visit` on each dependency entry [`for_each_dependency`] visits,
+/// without changing them.
+fn visit_dependencies(table: &dyn TableLike, visit: &mut dyn FnMut(&dyn TableLike)) {
+    let mut each = |item: Option<&Item>| {
+        let Some(entries) = item.and_then(Item::as_table_like) else {
+            return;
+        };
+        for (_, entry) in entries.iter() {
+            if let Some(entry) = entry.as_table_like() {
+                visit(entry);
+            }
+        }
+    };
+    for name in DEPENDENCIES {
+        each(table.get(name));
+    }
+    each(table.get("replace"));
+    if let Some(patches) = table.get("patch").and_then(Item::as_table_like) {
+        for (_, patch) in patches.iter() {
+            each(Some(patch));
+        }
+    }
+    if let Some(targets) = table.get("target").and_then(Item::as_table_like) {
+        for (_, target) in targets.iter() {
+            if let Some(target) = target.as_table_like() {
+                for name in DEPENDENCIES {
+                    each(target.get(name));
+                }
+            }
+        }
+    }
+}
+
 /// Calls `visit` on each entry of a table of dependencies.
 fn entries(item: Option<&mut Item>, visit: &mut dyn FnMut(&mut dyn TableLike)) {
     if let Some(entries) = item.and_then(Item::as_table_like_mut) {
@@ -525,8 +569,25 @@ fn relative_path(dependency: &dyn TableLike) -> Option<&str> {
         .filter(|path| Path::new(path).is_relative())
 }
 
-fn read(manifest: &Path) -> Option<DocumentMut> {
-    fs::read_to_string(manifest).ok()?.parse().ok()
+/// The manifests one placement reads, each read and parsed once.
+#[derive(Default)]
+struct Manifests {
+    read: BTreeMap<PathBuf, Option<DocumentMut>>,
+}
+
+impl Manifests {
+    /// The manifest of the package in `directory`, when it reads and parses.
+    fn of(&mut self, directory: &Path) -> Option<&DocumentMut> {
+        self.read
+            .entry(directory.to_path_buf())
+            .or_insert_with(|| {
+                fs::read_to_string(directory.join("Cargo.toml"))
+                    .ok()?
+                    .parse()
+                    .ok()
+            })
+            .as_ref()
+    }
 }
 
 /// `path` with `.` and `..` resolved by name, as Cargo joins a dependency's

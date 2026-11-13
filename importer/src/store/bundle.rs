@@ -2339,6 +2339,21 @@ pub(crate) fn hard_linked(_metadata: &fs::Metadata) -> bool {
     false
 }
 
+/// Give a regular file the mode its bundle's freeze gives it, so it is
+/// written frozen: the freeze then leaves its status-change time, and the
+/// digest memoized for its identity, as they are.
+pub(crate) fn freeze_file(path: &Path) -> Result<(), Error> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
+        operation: "inspect runner bundle member before freezing",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() || hard_linked(&metadata) {
+        return Err(Error::Shape(path.to_path_buf()));
+    }
+    set_frozen(path, &metadata, false)
+}
+
 #[cfg(unix)]
 fn set_frozen(path: &Path, metadata: &fs::Metadata, directory: bool) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt as _;

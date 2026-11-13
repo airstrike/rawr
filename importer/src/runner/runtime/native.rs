@@ -34,28 +34,14 @@ struct Package {
 impl Link {
     /// Every static library the build scripts in cargo's JSON `messages`
     /// link.
-    pub(crate) fn all_in(messages: &[u8]) -> BTreeSet<Self> {
+    pub(crate) fn all_in(messages: &crate::cargo::messages::Messages<'_>) -> BTreeSet<Self> {
         let mut links = BTreeSet::new();
-        for line in messages.split(|byte| *byte == b'\n') {
-            let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
-                continue;
-            };
-            if message.get("reason").and_then(serde_json::Value::as_str)
-                != Some("build-script-executed")
-            {
+        for message in messages.iter() {
+            if message.reason() != Some("build-script-executed") {
                 continue;
             }
-            let package = message
-                .get("package_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(Package::parse);
-            for library in message
-                .get("linked_libs")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-            {
+            let package = message.package_id().and_then(Package::parse);
+            for library in message.linked_libs() {
                 if let Some((kind, name)) = library.split_once('=')
                     && kind.starts_with("static")
                 {
@@ -187,7 +173,10 @@ mod tests {
     }
 
     fn only(messages: &str) -> Link {
-        let mut links = Link::all_in(messages.as_bytes()).into_iter();
+        let mut links = Link::all_in(&crate::cargo::messages::Messages::parse(
+            messages.as_bytes(),
+        ))
+        .into_iter();
         let link = links.next().expect("the messages link one static library");
         assert_eq!(links.next(), None, "the messages link one static library");
         link

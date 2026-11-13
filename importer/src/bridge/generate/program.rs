@@ -39,7 +39,7 @@ impl Program {
     /// runner depends on the script's crate, `krate`.
     pub(super) fn find(
         manifest: &[u8],
-        lock: &[u8],
+        lock: &super::locked::Locked,
         hidden: &[HiddenCrate],
         krate: &str,
         proxies: impl Iterator<Item = String>,
@@ -52,42 +52,25 @@ impl Program {
         let (_, script) = dependencies.iter().find(|(key, _)| key == krate)?;
         let mut packages = BTreeSet::from([script.clone()]);
         // Each path package that depends on one of them is the program's too.
-        let lock = std::str::from_utf8(lock)
-            .ok()?
-            .parse::<DocumentMut>()
-            .ok()?;
         let locked = lock
-            .get("package")
-            .and_then(Item::as_array_of_tables)
-            .map(|packages| {
-                packages
-                    .iter()
-                    .filter(|package| !package.contains_key("source"))
-                    .filter_map(|package| {
-                        let name = package.get("name")?.as_str()?.to_owned();
-                        let needs = package
-                            .get("dependencies")
-                            .and_then(Item::as_array)
-                            .map(|needs| {
-                                needs
-                                    .iter()
-                                    .filter_map(|need| need.as_str()?.split_whitespace().next())
-                                    .map(str::to_owned)
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        Some((name, needs))
-                    })
-                    .collect::<Vec<_>>()
+            .packages()
+            .iter()
+            .filter(|package| package.source().is_none())
+            .map(|package| {
+                let needs: Vec<&str> = package
+                    .dependencies()
+                    .filter_map(|need| need.split_whitespace().next())
+                    .collect();
+                (package.name(), needs)
             })
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
         loop {
             let grown = locked
                 .iter()
                 .filter(|(name, needs)| {
-                    !packages.contains(name) && needs.iter().any(|need| packages.contains(need))
+                    !packages.contains(*name) && needs.iter().any(|need| packages.contains(*need))
                 })
-                .map(|(name, _)| name.clone())
+                .map(|(name, _)| (*name).to_owned())
                 .collect::<Vec<_>>();
             if grown.is_empty() {
                 break;
@@ -232,7 +215,7 @@ mod tests {
     fn items_that_name_the_program_s_crates_proxies_or_items_are_the_program_s() {
         let mut program = Program::find(
             MANIFEST.as_bytes(),
-            LOCK.as_bytes(),
+            &super::super::locked::Locked::read(LOCK.as_bytes()).unwrap(),
             &[],
             "app",
             ["sidebar::Message".to_owned()].into_iter(),

@@ -125,6 +125,7 @@ fn product() -> Product {
         manifest: Box::from(&b"manifest"[..]),
         source: Box::from(&b"source"[..]),
         source_map: Box::from(&b"map"[..]),
+        digests: Box::from(&[3; 64][..]),
     }
 }
 
