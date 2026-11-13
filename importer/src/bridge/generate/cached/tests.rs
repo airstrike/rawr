@@ -202,8 +202,16 @@ fn retained_overlay_rejects_mutation_during_render_and_later_current_use() {
         Ok(product())
     });
     let (_, overlay) = result.expect("changed inputs cannot grant current output authority");
+    // The union seals with no walk. The walk that admission runs, before any
+    // runner uses the closure, rejects the changed ancestor (#1760).
+    let prepared = crate::runner::overlay::prepare_union(&fixture.chain, Some(&overlay))
+        .expect("the union seals without walking its closure");
     assert!(matches!(
-        crate::runner::overlay::prepare_union(&fixture.chain, Some(&overlay)),
+        prepared.revalidate_complete(),
+        Err(node::Error::StaleReadSet { action }) if action == fixture.ancestor
+    ));
+    assert!(matches!(
+        prepared.revalidate(),
         Err(node::Error::StaleReadSet { action }) if action == fixture.ancestor
     ));
     assert_eq!(executions.load(Ordering::Relaxed), 1);
