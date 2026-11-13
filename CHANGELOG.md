@@ -8,6 +8,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `rawr run` no longer fails to settle the runner's lockfile when the program's crate has an optional dependency the project patches (inboard's `iced_test`). The runner drops a `[patch]` only when no package of its workspace names it, optional and target-specific dependencies included. (#1840)
 - A save that builds no longer parses Cargo's metadata and unit graph a third time: the replay that admits the new bundle takes what the build parsed. (#1836)
 - A save whose Cargo view is remembered no longer runs or parses the provisional `cargo metadata`. (#1837)
+- A save that changes one private field checks again only the sources it changed: the owner keeps the compiler that checks the program, and each source's uses under what its lowering reads. On the islands-theme fixture a private-field save lowers 1 of 5 sources and its check's lowering takes 0.6 s instead of 1.4 s. With RAWR_VERBOSE each round says how many sources its check lowered and how long each step of the check took, and a start says how long each of its rounds' phases took. (#1857; part of #1850, #1815)
 
 ## 0.3.202 (2026-11-12)
 
