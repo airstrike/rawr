@@ -639,13 +639,13 @@ mod tests {
             .expect("raw bytes fit");
         let graph = Graph::seal_with_raw(
             Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
+            std::sync::Arc::default(),
             Graph::raw_pair(raw.clone(), semantic, Some(universe), None),
             &mut allocation,
         )

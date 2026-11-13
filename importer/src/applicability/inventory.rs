@@ -200,7 +200,8 @@ pub(super) type RelativeExport = (Box<[Box<str>]>, identity::Namespace, identity
 
 /// The format of a shared crate entry.
 /// 2: an entry keeps the nightly's build-script outputs (#403).
-const ENTRY_SCHEMA: u32 = 2;
+/// 3: identities order by their definition-path hash first (#1851).
+const ENTRY_SCHEMA: u32 = 3;
 
 /// One crate's complete intrinsic facts, shared per machine under a key the
 /// crate's own native inputs set before any nightly build (D609.3). Its
@@ -328,20 +329,23 @@ impl Acquired {
     pub fn entries(&self, key: impl Fn(&str) -> Option<[u8; 32]>) -> Vec<Entry> {
         let definitions = &self.facts.definitions;
         let implementations = &self.facts.implementations;
-        // Both are sorted by identity, whose unit comes first: a crate's
-        // own facts are one run of each.
-        let own_definitions = |unit: &identity::Unit| {
-            let start = definitions.partition_point(|definition| definition.id().unit() < unit);
-            let end = definitions.partition_point(|definition| definition.id().unit() <= unit);
-            &definitions[start..end]
-        };
-        let own_implementations = |unit: &identity::Unit| {
-            let start =
-                implementations.partition_point(|implementation| implementation.id().unit() < unit);
-            let end = implementations
-                .partition_point(|implementation| implementation.id().unit() <= unit);
-            &implementations[start..end]
-        };
+        // Each crate's own facts, by its unit, in identity order, read in
+        // one pass over each.
+        let mut own_definitions = BTreeMap::<&identity::Unit, Vec<&model::Definition>>::new();
+        for definition in definitions.iter() {
+            own_definitions
+                .entry(definition.id().unit())
+                .or_default()
+                .push(definition);
+        }
+        let mut own_implementations =
+            BTreeMap::<&identity::Unit, Vec<model::Implementation>>::new();
+        for implementation in implementations.iter() {
+            own_implementations
+                .entry(implementation.id().unit())
+                .or_default()
+                .push(implementation.clone());
+        }
         let definition = |id: &identity::Definition| {
             definitions
                 .binary_search_by(|definition| definition.id().cmp(id))
@@ -370,7 +374,7 @@ impl Acquired {
                 .iter()
                 .filter_map(|link| link.declaration.as_ref());
             let foreign = self.foreign.get(unit).into_iter().flatten();
-            let mut read = own_definitions(unit).iter().collect::<Vec<_>>();
+            let mut read = own_definitions.remove(unit).unwrap_or_default();
             read.extend(declarations.chain(foreign).filter_map(definition));
             read.sort_unstable_by(|left, right| left.id().cmp(right.id()));
             read.dedup_by(|left, right| left.id() == right.id());
@@ -385,7 +389,7 @@ impl Acquired {
                 exports: exports.into_boxed_slice(),
                 facts: Facts {
                     definitions: read.into_iter().cloned().collect(),
-                    implementations: own_implementations(unit).into(),
+                    implementations: own_implementations.remove(unit).unwrap_or_default().into(),
                     partitions: Box::new([partition.clone()]),
                 },
                 scripts: self.scripts.clone(),
@@ -459,6 +463,14 @@ impl Facts {
             .iter()
             .map(|item| (item.id(), item))
             .collect::<BTreeMap<_, _>>();
+        // Each partition's own definitions, by its unit.
+        let mut own_definitions = BTreeMap::<&identity::Unit, Vec<&model::Definition>>::new();
+        for definition in self.definitions.iter() {
+            own_definitions
+                .entry(definition.id().unit())
+                .or_default()
+                .push(definition);
+        }
         let mut declared = BTreeSet::new();
         for partition in &self.partitions {
             if let Some(lookup) = &partition.deref {
@@ -585,17 +597,10 @@ impl Facts {
                 &definitions,
                 &implementations,
             )?;
-            // Sorted by identity, whose unit comes first, the partition's
-            // own definitions are one run.
-            let unit = &partition.unit;
-            let start = self
-                .definitions
-                .partition_point(|definition| definition.id().unit() < unit);
-            let end = self
-                .definitions
-                .partition_point(|definition| definition.id().unit() <= unit);
-            let nominal_owners = self.definitions[start..end]
-                .iter()
+            let nominal_owners = own_definitions
+                .get(&partition.unit)
+                .into_iter()
+                .flatten()
                 .filter(|definition| {
                     matches!(
                         definition.kind(),
@@ -604,7 +609,7 @@ impl Facts {
                             | model::Kind::Union { .. }
                     )
                 })
-                .map(model::Definition::id)
+                .map(|definition| definition.id())
                 .collect::<BTreeSet<_>>();
             if nominal_owners
                 != partition

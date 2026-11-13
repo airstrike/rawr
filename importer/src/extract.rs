@@ -676,7 +676,7 @@ impl Publication {
             recorded.sort_unstable();
             recorded.dedup();
             allocation.unit(unit)?;
-            foreign.insert(unit.clone(), recorded.into_boxed_slice());
+            foreign.insert(identity::Unit::clone(unit), recorded.into_boxed_slice());
             let mut inherent = Vec::new();
             allocation.reserve(&mut inherent, manifest.inherent.len())?;
             for domain in &manifest.inherent {
@@ -722,7 +722,7 @@ impl Publication {
                             .get(&key)
                             .expect("the catalog holds each fragment's own crate");
                         allocation.unit(dependency)?;
-                        dependencies.push(dependency.clone());
+                        dependencies.push(identity::Unit::clone(dependency));
                     }
                     None => missing_dependencies.push(allocation.owned(key)?),
                 }
@@ -745,6 +745,8 @@ impl Publication {
                         methods: methods.into_boxed_slice(),
                     });
                 }
+                // In identity order, which the driver's order is not.
+                traits.sort_unstable_by(|left, right| left.id.cmp(&right.id));
                 preludes.push(inventory::Prelude {
                     module: inventory_id(&prelude.module, &catalog, &mut allocation)?,
                     edition: allocation.owned(&prelude.edition)?,
@@ -788,6 +790,8 @@ impl Publication {
                             implementations: implementations.into_boxed_slice(),
                         });
                     }
+                    // In identity order, which the driver's order is not.
+                    domains.sort_unstable_by(|left, right| left.root.cmp(&right.root));
                     Ok::<_, crate::Error>(inventory::Lookup {
                         trait_id: inventory_id(&lookup.trait_id, &catalog, &mut allocation)?,
                         domains: domains.into_boxed_slice(),
@@ -795,7 +799,7 @@ impl Publication {
                 })
                 .transpose()?;
             partitions.push(inventory::Partition {
-                unit: unit.clone(),
+                unit: identity::Unit::clone(unit),
                 native_unit: allocation.owned(&fragment.handshake.unit_key)?,
                 native_inputs: input
                     .partition(&fragment.handshake.unit_key)
@@ -1085,8 +1089,9 @@ struct Exclusion {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Catalog {
-    units: BTreeMap<CompilerKey, identity::Unit>,
-    sysroots: BTreeMap<CompilerKey, identity::Unit>,
+    /// Each unit, shared by every definition it owns.
+    units: BTreeMap<CompilerKey, std::sync::Arc<identity::Unit>>,
+    sysroots: BTreeMap<CompilerKey, std::sync::Arc<identity::Unit>>,
     /// The crate names of each loaded crate with no authority, by stable
     /// crate id: each id an API names is looked up, never compared against
     /// every such crate, which a large closure has hundreds of.
@@ -1239,10 +1244,6 @@ struct SupportKey {
     role: ledger::SupportRole,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "support closure carries one inline canonical rejection proof; boxing its reason would add allocation and weaken proof locality"
-)]
 #[cfg(test)]
 enum PendingSupport {
     Present {
@@ -2779,6 +2780,8 @@ fn inventory_ids(
     for raw in raw {
         ids.push(inventory_id(raw, catalog, allocation)?);
     }
+    // In identity order, which the driver's order is not.
+    ids.sort_unstable();
     Ok(ids.into_boxed_slice())
 }
 
@@ -3223,7 +3226,13 @@ fn validate_external_crates(label: &'static str, crates: &[protocol::ExternalCra
 impl Catalog {
     /// The captured and the sysroot unit `key` names, each looked up once
     /// rather than compared against every unit.
-    fn lookup(&self, key: &CompilerKey) -> (Option<&identity::Unit>, Option<&identity::Unit>) {
+    fn lookup(
+        &self,
+        key: &CompilerKey,
+    ) -> (
+        Option<&std::sync::Arc<identity::Unit>>,
+        Option<&std::sync::Arc<identity::Unit>>,
+    ) {
         (self.units.get(key), self.sysroots.get(key))
     }
 
@@ -3234,7 +3243,7 @@ impl Catalog {
     ) -> Result<Self> {
         let mut packages = BTreeMap::<&str, (&str, &str, &str)>::new();
         let mut units = BTreeMap::new();
-        let mut sysroots = BTreeMap::new();
+        let mut sysroots = BTreeMap::<CompilerKey, std::sync::Arc<identity::Unit>>::new();
         let mut unavailable = BTreeMap::<Box<str>, BTreeSet<Box<str>>>::new();
         let mut unit_keys = BTreeSet::<&str>::new();
         let mut captured_ids = BTreeMap::<&str, &str>::new();
@@ -3306,7 +3315,7 @@ impl Catalog {
                 ));
             }
             allocation.items(1)?;
-            units.insert(key, unit);
+            units.insert(key, std::sync::Arc::new(unit));
             nonempty("unit key", &fragment.handshake.unit_key)?;
             if unit_keys.contains(fragment.handshake.unit_key.as_str()) {
                 return Err(extraction(
@@ -3349,13 +3358,13 @@ impl Catalog {
                     allocation.owned(&key.stable_crate_id)?,
                 );
                 match sysroots.get(&key) {
-                    Some(previous) if previous != &unit => {
+                    Some(previous) if **previous != unit => {
                         return Err(extraction("conflicting-sysroot-identity", &raw.crate_name));
                     }
                     Some(_) => {}
                     None => {
                         allocation.items(1)?;
-                        sysroots.insert(key, unit);
+                        sysroots.insert(key, std::sync::Arc::new(unit));
                     }
                 }
             }
@@ -3397,7 +3406,7 @@ impl Catalog {
                 allocation.owned(&key.stable_crate_id)?,
             );
             match units.get(key) {
-                Some(previous) if previous != &unit => {
+                Some(previous) if **previous != unit => {
                     return Err(extraction(
                         "conflicting-external-unit",
                         &external.package_id,
@@ -3411,7 +3420,7 @@ impl Catalog {
                             crate_name: allocation.owned(&key.crate_name)?,
                             stable_crate_id: allocation.owned(&key.stable_crate_id)?,
                         },
-                        unit,
+                        std::sync::Arc::new(unit),
                     );
                 }
             }
@@ -4087,14 +4096,14 @@ impl Candidate {
         allocation.reserve(&mut anonymous, self.anonymous.len())?;
         anonymous.extend(self.anonymous);
         let settled = settled::Settled {
-            body,
-            definitions,
-            paths,
-            implementations,
-            scalar_predicate_proofs: self.scalar_predicate_proofs,
-            support: support_values,
-            anonymous,
-            index: self.index,
+            body: body.into(),
+            definitions: definitions.into(),
+            paths: paths.into(),
+            implementations: implementations.into(),
+            scalar_predicate_proofs: self.scalar_predicate_proofs.into(),
+            support: support_values.into(),
+            anonymous: anonymous.into(),
+            index: self.index.into(),
         };
         Ok((settled, self.invocations))
     }

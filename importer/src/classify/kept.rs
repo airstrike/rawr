@@ -1,7 +1,7 @@
 //! The classification a long-running owner keeps between saves.
 //!
-//! Replaying a stored classification decodes every outcome and encodes it
-//! twice more to prove the bytes canonical. It is a function of the stored
+//! Replaying a stored classification decodes every outcome and checks its
+//! support ledger against the API. It is a function of the stored
 //! product and the API's semantic content alone: a save whose API and
 //! classification are the last one's, as after a private field, takes the
 //! parts the last replay gave, and only re-seats the API graph's usage they
@@ -61,7 +61,7 @@ impl Kept {
 impl ClassifiedParts {
     /// These parts again, sharing every ledger, charged on an API graph
     /// whose usage is `now` in place of `then`.
-    fn share(&self, then: api::Usage, now: api::Usage) -> Result<Self, Error> {
+    pub(super) fn share(&self, then: api::Usage, now: api::Usage) -> Result<Self, Error> {
         let reseat = |charged: usize, then: usize, now: usize| {
             charged
                 .checked_sub(then)
