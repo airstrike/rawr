@@ -128,7 +128,7 @@ impl crate::Profile for Plain {
         mut graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
-        mut kept: Option<&mut rawr_import::api::Kept>,
+        mut kept: Option<&mut crate::Kept>,
     ) -> Result<crate::Prepared, crate::Error> {
         crate::again_while_stale(|| {
             prepare(
@@ -499,7 +499,7 @@ fn prepare(
     graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
-    kept: Option<&mut rawr_import::api::Kept>,
+    kept: Option<&mut crate::Kept>,
 ) -> Result<crate::Prepared, crate::Error> {
     prepare_resolving(build, target, graph, revision, scope, Resolve::Last, kept)
 }
@@ -512,7 +512,7 @@ fn prepare_resolving(
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
     resolve: Resolve,
-    mut kept: Option<&mut rawr_import::api::Kept>,
+    mut kept: Option<&mut crate::Kept>,
 ) -> Result<crate::Prepared, crate::Error> {
     use crate::Error;
     // The program's parses, read from its cells and remembered: each round's
@@ -575,6 +575,8 @@ fn prepare_resolving(
     // Why the call a check stopped at has no application, when the check
     // tried to prove it in place.
     let mut unproved = None;
+    // The compiler that checks the program when no owner keeps one.
+    let mut own_checker = None;
     // A cache entry that goes stale while this run uses it is `Error::Stale`,
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
@@ -700,20 +702,38 @@ fn prepare_resolving(
                 // The graph the next save that changes Rawr source needs,
                 // built off the start's path.
                 if let Some(kept) = kept.as_deref_mut() {
-                    kept.keep(warm.graph);
+                    kept.api().keep(warm.graph);
                 }
                 (warm.demand, warm.profile, warm.checked, warm.native)
             }
             Err(api) => {
                 // The graph the owner kept or is building for this API,
                 // shared, and kept for the next save (#1822).
-                let api = match kept.as_deref_mut() {
-                    Some(kept) => kept.graph(api).map_err(Error::cache)?,
-                    None => api,
+                // The compiler the owner keeps checks the program, so a
+                // save lowers again only the sources it changed; else this
+                // preparation's own, so a round lowers again only the
+                // sources a proof or a demand changed.
+                let (kept_api, checker) = match kept.as_deref_mut() {
+                    Some(kept) => {
+                        let (api, checker) = kept.split(build);
+                        (Some(api), checker)
+                    }
+                    None => (
+                        None,
+                        &*own_checker.get_or_insert_with(|| {
+                            let mut engine = rawr_cli::base::engine(build);
+                            engine.keep_lowerings();
+                            engine
+                        }),
+                    ),
+                };
+                let (api, kept_api) = match kept_api {
+                    Some(kept) => (kept.graph(api).map_err(Error::cache)?, Some(kept)),
+                    None => (api, None),
                 };
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
-                    kept.as_deref_mut(),
+                    kept_api,
                     adapter,
                     &policy,
                     expected,
@@ -730,9 +750,9 @@ fn prepare_resolving(
                             // program as Cargo builds it: with everything
                             // (D683.4). `rawr test` reads it as `cargo
                             // test` builds it.
-                            let engine = rawr_cli::base::engine(build);
                             let parsed = cells.counts().parsed;
-                            let compiled = engine.compile_imported_with_applications(
+                            let lowered = checker.checked_sources();
+                            let compiled = checker.compile_imported_with_applications(
                                 contract,
                                 facade,
                                 snapshot,
@@ -740,6 +760,7 @@ fn prepare_resolving(
                                 &cells,
                             );
                             rawr_import::progress::parsed(cells.counts().parsed - parsed);
+                            rawr_import::progress::lowered(checker.checked_sources() - lowered);
                             let error = match compiled {
                                 Ok(demand) => {
                                     let checked =

@@ -1637,7 +1637,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
         let stages = round(number);
         assert!(stages.contains(", probes 1, read "), "{said}");
         assert!(!stages.contains("read 0,"), "{said}");
-        assert!(stages.contains(", parsed 0, Cargo views "), "{said}");
+        assert!(stages.contains(", parsed 0, lowered "), "{said}");
         if number > 2 {
             assert!(
                 stages.starts_with("harnesses 0, compiled 0, copied 0, sealed 0, probes 1,"),
@@ -2603,7 +2603,8 @@ fn a_new_runner_lowers_only_the_files_that_name_a_new_native_function() {
 /// rendering of the same inputs kept, the launch's too (#1821). A save
 /// whose API has the last save's content frames the graph that save kept
 /// and takes its classification: it builds no graph from the store and
-/// decodes no classification (#1786).
+/// decodes no classification (#1786). Its check lowers again only the
+/// source the save changed (#1850).
 #[test]
 fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     let root = THEME.project();
@@ -2703,6 +2704,11 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
     // The second's API has the first's content under a new build: it frames
     // the graph the first kept, decoding and sealing none, and takes the
     // classification the first replayed (#1786).
+    // The owner keeps the compiler that checks the program: the first
+    // save's check lowers each of the five sources with bodies, as the
+    // start's warm launch checked nothing, and the second lowers again
+    // only `home.rs`, whose struct changed; the others' uses are the
+    // first's (#1850).
     let found = "harnesses 0, compiled 0, copied 0, sealed 0, probes 0, read 0, ";
     let unparsed = ", Cargo views parsed 0, compared 1, ";
     assert!(
@@ -2710,6 +2716,8 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
             && rounds[0].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
             && rounds[1].contains(", probes 1, read 0, canonicalized 0, classified 0, ")
             && rounds[1].ends_with(", API graphs rebuilt 0, framed 1, classifications replayed 0")
+            && rounds[0].contains(", lowered 5, ")
+            && rounds[1].contains(", lowered 1, ")
             && rounds[2].starts_with(found)
             && rounds[2].contains(unparsed)
             && rounds[4].starts_with(found)
@@ -2719,6 +2727,12 @@ fn a_held_pub_type_s_private_field_reads_only_the_project_crate_s_api() {
         "{rounds:?}\n{seen}"
     );
     eprintln!("the saves' rounds:\n{}", rounds.join("\n"));
+    let checks = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr-import: the program's check took: "))
+        .collect::<Vec<_>>();
+    eprintln!("the saves' checks:\n{}", checks.join("\n"));
     let phases = run
         .seen
         .iter()

@@ -113,6 +113,22 @@ impl Engine {
         lock(&self.resident_lowerings).revealed()
     }
 
+    /// Keep what this compiler's checks of a program lower, as a
+    /// runner's compiler does: an owner that checks the program again on
+    /// each save checks again only the sources whose check reads
+    /// something that changed.
+    #[doc(hidden)]
+    pub fn keep_lowerings(&mut self) {
+        self.keeps_lowerings = true;
+    }
+
+    /// How many sources this compiler's checks of a program lowered so
+    /// far, rather than reusing an earlier check's lowering.
+    #[doc(hidden)]
+    pub fn checked_sources(&self) -> usize {
+        lock(&self.resident_lowerings).checked()
+    }
+
     /// Keep this runner's compiles in `directory`, its project's
     /// `target/rawr`, for the next runner: each source's lowering and
     /// reveal's readings of its bodies. Its first compile reuses what an

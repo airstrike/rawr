@@ -43,13 +43,47 @@ pub trait Profile {
         graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
-        kept: Option<&mut rawr_import::api::Kept>,
+        kept: Option<&mut crate::Kept>,
     ) -> Result<Prepared, Error>;
 
     /// A socket under the project's build directory that the host's window
     /// listens on, which the owner removes when the run ends.
     fn socket(&self, _project: &Path) -> Option<PathBuf> {
         None
+    }
+}
+
+/// What an owner that prepares again on each save keeps from one
+/// preparation to the next: the API graph its saves share, and the
+/// compiler that checks the program, which lowers again only the sources
+/// whose check reads something a save changed.
+#[derive(Default)]
+pub struct Kept {
+    api: rawr_import::api::Kept,
+    check: Option<(rawr_cli::base::Build, rawr::Engine)>,
+}
+
+impl Kept {
+    /// The API graph the saves share.
+    pub fn api(&mut self) -> &mut rawr_import::api::Kept {
+        &mut self.api
+    }
+
+    /// The API graph, and the compiler that checks the program as `build`
+    /// builds it: the last check's, when it was of the same build.
+    pub fn split(
+        &mut self,
+        build: rawr_cli::base::Build,
+    ) -> (&mut rawr_import::api::Kept, &rawr::Engine) {
+        if self.check.as_ref().is_some_and(|(kept, _)| *kept != build) {
+            self.check = None;
+        }
+        let (_, engine) = self.check.get_or_insert_with(|| {
+            let mut engine = rawr_cli::base::engine(build);
+            engine.keep_lowerings();
+            (build, engine)
+        });
+        (&mut self.api, engine)
     }
 }
 

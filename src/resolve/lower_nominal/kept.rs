@@ -20,6 +20,13 @@
 //!
 //! Reveal's readings of each body for the templates it calls are kept the
 //! same way, under what each pass over the program reads of it.
+//!
+//! An owner's check of the program, which checks it again on each save,
+//! keeps the same way what each source's check found: the crates' items
+//! its bodies use and the facades they depend on (`Checks`). Its key is
+//! what the source's lowering reads, and the applications the check's
+//! registry admits, so a save that changes one source's private field
+//! lowers again only that source and those that name the type.
 
 use super::constant::{included, Place};
 use super::disk::{self, Disk};
@@ -210,6 +217,11 @@ pub(crate) struct Lowerings {
     /// How many sources' bodies this compiler's reveals read rather than
     /// reusing what an earlier reveal read.
     revealed: usize,
+    /// What each source's check of the program found (`Checks`).
+    checks: BTreeMap<source::Id, Checked>,
+    /// How many sources this compiler's checks lowered rather than
+    /// reusing what an earlier check found.
+    checked: usize,
     /// Where a runner keeps them for the next runner (#1638).
     disk: Option<Disk>,
 }
@@ -224,6 +236,8 @@ impl Lowerings {
             native: None,
             lowered: 0,
             revealed: 0,
+            checks: BTreeMap::new(),
+            checked: 0,
             disk: None,
         }
     }
@@ -243,6 +257,17 @@ impl Lowerings {
     pub(crate) fn revealed(&self) -> usize {
         self.revealed
     }
+
+    /// How many sources this compiler's checks lowered so far.
+    pub(crate) fn checked(&self) -> usize {
+        self.checked
+    }
+}
+
+/// Whether `engine` keeps its lowerings from one compile to the next: a
+/// runner's compiler, or an owner's check of the program (#1646).
+fn keeps(engine: &Engine) -> bool {
+    engine.imported_native.is_some() || engine.keeps_lowerings
 }
 
 /// One reveal's use of its compiler's kept readings (`Scanned`). What it
@@ -285,10 +310,12 @@ pub(super) enum Purpose {
 }
 
 impl<'e> Readings<'e> {
-    /// The readings of a runner's compiler, which compiles the program
-    /// again on each save; `None` for any other compiler.
+    /// The readings of a compiler that compiles or checks the program
+    /// again on each save (`keeps`); `None` for any other compiler.
     pub(super) fn open(engine: &'e Engine) -> Option<Self> {
-        engine.imported_native.as_ref()?;
+        if !keeps(engine) {
+            return None;
+        }
         let earlier = std::mem::take(&mut lock(engine).scanned);
         Some(Self {
             engine,
@@ -484,8 +511,8 @@ impl Key<'_> {
 }
 
 impl<'e> Session<'e> {
-    /// The session of a runner's compiler, which compiles the program
-    /// again on each save; `None` for any other compiler.
+    /// The session of a compiler that compiles or checks the program
+    /// again on each save (`keeps`); `None` for any other compiler.
     pub(super) fn open(
         engine: &'e Engine,
         program: &Program,
@@ -493,7 +520,9 @@ impl<'e> Session<'e> {
         scope: Option<&Scope>,
         optimization_level: crate::OptimizationLevel,
     ) -> Option<Self> {
-        engine.imported_native.as_ref()?;
+        if !keeps(engine) {
+            return None;
+        }
         let earlier = std::mem::take(&mut lock(engine).kept);
         let interface = scope
             .is_none_or(Scope::is_empty)
@@ -606,6 +635,134 @@ impl Drop for Session<'_> {
         lowerings.kept = kept;
         lowerings.lowered += self.lowered.len();
     }
+}
+
+/// What one source's check found (`imported`): the crates' items its
+/// bodies use, the facades they depend on, and what the check did outside
+/// the program, under the key it was checked at.
+pub(super) struct Checked {
+    key: [u8; 32],
+    pub(super) uses: Box<[ImportedUse]>,
+    pub(super) dependencies: BTreeSet<host::facade::Dependency>,
+    pub(super) outside: Outside,
+}
+
+/// One check's use of its compiler's kept checks: a source is lowered
+/// again only when something its check reads changed, as a runner's
+/// compile lowers a source again (`Session`). What it keeps goes back to
+/// the compiler when it drops: on a failed check, with what the earlier
+/// check kept of the sources it didn't reach.
+pub(super) struct Checks<'e> {
+    engine: &'e Engine,
+    /// What each source's check reads of the program.
+    interface: Interface,
+    /// What every source's check reads besides: the applications the
+    /// registry admits, which answer calls nothing else does (D650).
+    applied: [u8; 32],
+    earlier: BTreeMap<source::Id, Checked>,
+    kept: BTreeMap<source::Id, Checked>,
+}
+
+impl<'e> Checks<'e> {
+    /// The checks of a compiler that keeps its lowerings; `None` for any
+    /// other compiler, or when what the sources read can't be written.
+    pub(super) fn open(engine: &'e Engine, program: &Program, models: &Models) -> Option<Self> {
+        if !keeps(engine) {
+            return None;
+        }
+        let interface = interface(engine, program, models)?;
+        let mut applied = Written(Sha256::new());
+        applied.0.update(b"rawr.check.applied/v1");
+        for (key, item) in models.host.applications() {
+            write!(applied, "{key:?}|{item:?}|").ok()?;
+        }
+        let earlier = std::mem::take(&mut lock(engine).checks);
+        Some(Self {
+            engine,
+            interface,
+            applied: applied.0.finalize().into(),
+            earlier,
+            kept: BTreeMap::new(),
+        })
+    }
+
+    /// The key `source` is checked at, whose bodies are `bodies`, in the
+    /// order the check lowers them: each its item's key (`None` for the
+    /// source's statements outside its items) and its text.
+    pub(super) fn key<'b>(
+        &self,
+        source: source::Id,
+        program: &Program,
+        bodies: impl Iterator<Item = (Option<&'b crate::item::Key>, &'b str)>,
+    ) -> [u8; 32] {
+        let mut written = Written(Sha256::new());
+        written.0.update(b"rawr.check.source/v1");
+        written.0.update(self.interface.of(source));
+        written.0.update(self.applied);
+        written.0.update(source.index().to_le_bytes());
+        framed(&mut written.0, program.source.text_at(source));
+        for (key, text) in bodies {
+            // A key's `Debug` can't fail to write.
+            let _ = write!(written, "{key:?}");
+            framed(&mut written.0, text);
+        }
+        written.0.finalize().into()
+    }
+
+    /// What the earlier check found of `source` under `key`, when each of
+    /// its reads outside the program reads the same.
+    pub(super) fn reuse(
+        &mut self,
+        source: source::Id,
+        key: [u8; 32],
+        models: &Models,
+    ) -> Option<&Checked> {
+        let earlier = self
+            .earlier
+            .remove(&source)
+            .filter(|earlier| earlier.key == key && earlier.outside.holds(&models.access))?;
+        Some(self.kept.entry(source).or_insert(earlier))
+    }
+
+    /// Keep what the check of `source` found under `key`.
+    pub(super) fn keep(
+        &mut self,
+        source: source::Id,
+        key: [u8; 32],
+        uses: Vec<ImportedUse>,
+        dependencies: BTreeSet<host::facade::Dependency>,
+        outside: Outside,
+    ) {
+        self.kept.insert(
+            source,
+            Checked {
+                key,
+                uses: uses.into_boxed_slice(),
+                dependencies,
+                outside,
+            },
+        );
+    }
+
+    /// The check succeeded: what the earlier one kept and this one didn't
+    /// reuse is gone.
+    pub(super) fn succeeded(&mut self) {
+        self.earlier.clear();
+    }
+}
+
+impl Drop for Checks<'_> {
+    fn drop(&mut self) {
+        let mut kept = std::mem::take(&mut self.earlier);
+        kept.append(&mut self.kept);
+        lock(self.engine).checks = kept;
+    }
+}
+
+/// Count `sources` a check of the program lowered, rather than reusing an
+/// earlier check's lowering, toward `engine`'s.
+pub(super) fn checked(engine: &Engine, sources: usize) {
+    lock(engine).checked += sources;
 }
 
 /// Each adapter the ops of `lowered` call, once.
