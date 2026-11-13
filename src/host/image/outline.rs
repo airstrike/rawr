@@ -15,13 +15,20 @@
 //! path it writes. What no name reaches is every source's: the modules,
 //! derives, macros, re-exported modules and type aliases, and each impl of
 //! a type parameter.
+//!
+//! An outline is a function of its facades' images alone, which their
+//! digests name (`Key`), so a runner keeps it on disk for the next runner
+//! of the same image (#1755). A body is read as it lies: each string it
+//! holds, borrowed, never a tree of values.
 
 use super::Held;
+use serde::de::{self, DeserializeSeed as _, IgnoredAny};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The entries of a program's own facades, and what every source reads of
 /// them.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Outline {
     entries: Box<[Entry]>,
     everywhere: [u8; 32],
@@ -29,6 +36,7 @@ pub(crate) struct Outline {
 
 /// One entry of a facade: a type, the items at one path, a re-export, a
 /// trait header or an impl.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Entry {
     digest: [u8; 32],
     /// The names that reach it.
@@ -96,6 +104,30 @@ impl Outline {
     }
 }
 
+/// What an outline is made of: its facades, in order, each by its root
+/// and the digest of everything its image holds. Two sets of facades with
+/// one key have one outline.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Key([u8; 32]);
+
+impl Key {
+    /// The key of the outline of `facades`.
+    pub(crate) fn of(facades: &[&Held]) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"rawr.image.outline/v1");
+        for held in facades {
+            let view = held.view();
+            framed(&mut digest, view.root().as_bytes());
+            digest.update(view.digest());
+        }
+        Self(digest.finalize().into())
+    }
+
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// The facades' types and traits: their names, by their identities as an
 /// image writes them, 64 hex digits, and their paths.
 struct Named {
@@ -119,13 +151,13 @@ impl Named {
                 names.extend(identities.types().map(|ty| last(view.type_path(ty)).into()));
             }
             for index in 0..view.trait_headers() {
-                let header =
-                    serde_json::from_slice::<serde_json::Value>(view.trait_header_bytes(index));
-                if let Ok(header) = header
-                    && let Some(identity) = header.get("identity").and_then(|value| value.as_str())
+                let header = serde_json::from_slice::<Header<'_>>(view.trait_header_bytes(index));
+                if let Ok(Header {
+                    identity: Some(identity),
+                }) = header
                 {
                     named
-                        .entry(identity.to_owned())
+                        .entry(identity.into_owned())
                         .or_default()
                         .insert(last(view.trait_header_path(index)).into());
                 }
@@ -158,27 +190,17 @@ impl Named {
     /// names, its fields', its variants' and its parameters', reach
     /// nothing. `None` when the body isn't JSON, which every source reads.
     fn written(&self, bytes: &[u8], writes: &mut BTreeSet<Box<str>>) -> Option<()> {
-        let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
-        self.walk(&value, writes);
-        Some(())
-    }
-
-    fn walk(&self, value: &serde_json::Value, writes: &mut BTreeSet<Box<str>>) {
-        match value {
-            serde_json::Value::String(text) => self.text(text, writes),
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    self.walk(value, writes);
-                }
-            }
-            serde_json::Value::Object(fields) => {
-                for value in fields.values() {
-                    self.walk(value, writes);
-                }
-            }
-            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
-            }
+        let mut found = BTreeSet::new();
+        let mut json = serde_json::Deserializer::from_slice(bytes);
+        Walk {
+            named: self,
+            writes: &mut found,
         }
+        .deserialize(&mut json)
+        .and_then(|()| json.end())
+        .ok()?;
+        writes.append(&mut found);
+        Some(())
     }
 
     fn text(&self, text: &str, writes: &mut BTreeSet<Box<str>>) {
@@ -261,10 +283,8 @@ impl Held {
         // trait's. An impl of a type parameter is every source's.
         for index in 0..view.impls() {
             let bytes = view.impl_bytes(index);
-            let blanket = serde_json::from_slice::<serde_json::Value>(bytes)
-                .ok()
-                .and_then(|header| header.get("self_type").cloned())
-                .is_none_or(|ty| ty.get("Parameter").is_some());
+            let blanket = serde_json::from_slice::<Impl>(bytes)
+                .map_or(true, |header| header.self_type.blanket());
             if blanket {
                 framed(everywhere, bytes);
                 continue;
@@ -280,6 +300,167 @@ impl Held {
         {
             everywhere.update(entry.digest);
         }
+    }
+}
+
+/// The strings a stored body holds, each as `Named::text` reads it: a
+/// value's, never a field's name.
+struct Walk<'n, 'w> {
+    named: &'n Named,
+    writes: &'w mut BTreeSet<Box<str>>,
+}
+
+impl Walk<'_, '_> {
+    /// The walk of a value inside this one.
+    fn inner(&mut self) -> Walk<'_, '_> {
+        Walk {
+            named: self.named,
+            writes: self.writes,
+        }
+    }
+}
+
+impl<'de> de::DeserializeSeed<'de> for Walk<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> de::Visitor<'de> for Walk<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a stored body")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, text: &str) -> Result<(), E> {
+        self.named.text(text, self.writes);
+        Ok(())
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(mut self, mut values: A) -> Result<(), A::Error> {
+        while values.next_element_seed(self.inner())?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(mut self, mut fields: A) -> Result<(), A::Error> {
+        while fields.next_key::<IgnoredAny>()?.is_some() {
+            fields.next_value_seed(self.inner())?;
+        }
+        Ok(())
+    }
+}
+
+/// What a trait header's names read of it: its identity, as text.
+#[derive(serde::Deserialize)]
+struct Header<'a> {
+    #[serde(default, borrow)]
+    identity: Option<std::borrow::Cow<'a, str>>,
+}
+
+/// What an outline reads of an impl's header: whether its self type is a
+/// type parameter.
+#[derive(serde::Deserialize)]
+struct Impl {
+    #[serde(default)]
+    self_type: SelfType,
+}
+
+/// An impl header's self type, as far as an outline reads it.
+#[derive(Default)]
+enum SelfType {
+    /// The header has none.
+    #[default]
+    Missing,
+    /// A type parameter: an object with a `Parameter` field.
+    Parameter,
+    /// Any other value.
+    Other,
+}
+
+impl SelfType {
+    /// Whether an impl of it is every source's.
+    const fn blanket(&self) -> bool {
+        matches!(self, Self::Missing | Self::Parameter)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SelfType {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(SelfTypeVisitor)
+    }
+}
+
+/// Reads a `SelfType` from any value.
+struct SelfTypeVisitor;
+
+impl<'de> de::Visitor<'de> for SelfTypeVisitor {
+    type Value = SelfType;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an impl's self type")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<SelfType, E> {
+        Ok(SelfType::Other)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<SelfType, E> {
+        Ok(SelfType::Other)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<SelfType, E> {
+        Ok(SelfType::Other)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<SelfType, E> {
+        Ok(SelfType::Other)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<SelfType, E> {
+        Ok(SelfType::Other)
+    }
+
+    fn visit_unit<E>(self) -> Result<SelfType, E> {
+        Ok(SelfType::Other)
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(self, mut values: A) -> Result<SelfType, A::Error> {
+        while values.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(SelfType::Other)
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, mut fields: A) -> Result<SelfType, A::Error> {
+        let mut ty = SelfType::Other;
+        while let Some(field) = fields.next_key::<std::borrow::Cow<'de, str>>()? {
+            fields.next_value::<IgnoredAny>()?;
+            if field == "Parameter" {
+                ty = SelfType::Parameter;
+            }
+        }
+        Ok(ty)
     }
 }
 
@@ -398,4 +579,92 @@ fn hex(identity: &[u8; 32]) -> String {
 fn framed(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(bytes.len().to_le_bytes());
     digest.update(bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Key, Named, Outline};
+    use crate::host::image::{Held, Plan};
+    use std::collections::BTreeSet;
+
+    /// The facades of a runner's image with crate types, items and
+    /// headers.
+    fn image() -> Vec<Held> {
+        let image = Box::leak(rawr_import::test_fixture::runner_foreign_facade_plan());
+        let plan = Plan::read(image, &[]).unwrap();
+        Plan::held(&plan).collect()
+    }
+
+    /// What a body writes, read as a tree of values: what `Named::written`
+    /// read before it read a body as it lies.
+    fn walked(named: &Named, value: &serde_json::Value, writes: &mut BTreeSet<Box<str>>) {
+        match value {
+            serde_json::Value::String(text) => named.text(text, writes),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    walked(named, value, writes);
+                }
+            }
+            serde_json::Value::Object(fields) => {
+                for value in fields.values() {
+                    walked(named, value, writes);
+                }
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            }
+        }
+    }
+
+    /// A body read as it lies writes what it writes read as a tree of
+    /// values, and a body that isn't JSON writes nothing (#1755).
+    #[test]
+    fn a_body_read_as_it_lies_writes_what_its_values_write() {
+        let held = image();
+        let facades = held.iter().collect::<Vec<_>>();
+        let named = Named::new(&facades);
+        let mut bodies = Vec::new();
+        for held in &held {
+            let view = held.view();
+            let image = view.image();
+            bodies.extend((0..view.types()).map(|ty| image.type_body_bytes(view.type_body(ty))));
+            for index in 0..view.groups() {
+                bodies.extend(
+                    view.group(index)
+                        .bodies()
+                        .map(|body| image.item_body_bytes(body)),
+                );
+            }
+            bodies.extend((0..view.trait_headers()).map(|index| view.trait_header_bytes(index)));
+            bodies.extend((0..view.impls()).map(|index| view.impl_bytes(index)));
+        }
+        assert!(!bodies.is_empty());
+        for bytes in bodies {
+            let mut lying = BTreeSet::new();
+            named.written(bytes, &mut lying).unwrap();
+            let mut values = BTreeSet::new();
+            walked(&named, &serde_json::from_slice(bytes).unwrap(), &mut values);
+            assert_eq!(lying, values);
+        }
+        let mut writes = BTreeSet::new();
+        assert!(named
+            .written(b"{\"a\": \"x::y\"} trailing", &mut writes)
+            .is_none());
+        assert!(writes.is_empty());
+    }
+
+    /// The outline a runner keeps for the next, decoded as a file holds
+    /// it, is the one made fresh of the same facades, at the same key.
+    #[test]
+    fn a_kept_outline_is_the_one_made_fresh() {
+        let held = image();
+        let facades = held.iter().collect::<Vec<_>>();
+        let made = Outline::new(&facades);
+        assert!(!made.entries().is_empty());
+        let kept = rmp_serde::from_slice::<Outline>(&rmp_serde::to_vec(&made).unwrap()).unwrap();
+        let again = image();
+        let fresh = again.iter().collect::<Vec<_>>();
+        assert_eq!(kept, Outline::new(&fresh));
+        assert!(Key::of(&facades) == Key::of(&fresh));
+        assert!(Key::of(&facades) != Key::of(&facades[1..]));
+    }
 }
