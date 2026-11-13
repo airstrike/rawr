@@ -4040,11 +4040,11 @@ macro_rules! scalar_bits {
 }
 
 scalar_bits! {
-    bool => u64::from,
-    char => |value| u64::from(u32::from(value)),
-    u8 => u64::from,
-    u16 => u64::from,
-    u32 => u64::from,
+    bool => <u64 as std::convert::From<bool>>::from,
+    char => |value| <u64 as std::convert::From<u32>>::from(<u32 as std::convert::From<char>>::from(value)),
+    u8 => <u64 as std::convert::From<u8>>::from,
+    u16 => <u64 as std::convert::From<u16>>::from,
+    u32 => <u64 as std::convert::From<u32>>::from,
     u64 => |value| value,
     usize => |value| value as u64,
     i8 => |value| value as u64,
@@ -4052,7 +4052,7 @@ scalar_bits! {
     i32 => |value| value as u64,
     i64 => |value| value as u64,
     isize => |value| value as u64,
-    f32 => |value| u64::from(value.to_bits()),
+    f32 => |value| <u64 as std::convert::From<u32>>::from(value.to_bits()),
     f64 => f64::to_bits,
 }
 
