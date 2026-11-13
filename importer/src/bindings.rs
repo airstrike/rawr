@@ -324,20 +324,80 @@ impl Meta {
     }
 }
 
-/// A shared entry, as a run reads it from the home.
-pub(crate) struct Entry {
+/// A shared entry, opened from the home under its lease: its metadata,
+/// and where its table is, not read yet. Its inputs are checked first,
+/// and its table read only when they hold and no kept replay answers it.
+pub(crate) struct Opened {
     pub(crate) meta: Meta,
-    pub(crate) table: Vec<u8>,
     /// Where the table is: the entry's own, or the copy a staged entry
     /// names.
-    pub(crate) path: PathBuf,
-    _lease: home::Lease,
+    path: PathBuf,
+    /// The record of that copy, for a staged entry.
+    copy: Option<Copy>,
+    lease: home::Lease,
 }
 
-impl Entry {
+/// What names a shared table's bytes without reading them: its entry's
+/// publication, and its file by length and modification time. The driver
+/// replaces a table whole, which changes its time.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Stamp {
+    generation: String,
+    path: PathBuf,
+    length: u64,
+    modified: (u64, u32),
+}
+
+impl Opened {
     pub(crate) fn generation(&self) -> &str {
-        self._lease.generation()
+        self.lease.generation()
     }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The table's stamp as it is now. A staged entry's copy has one only
+    /// while its file is the one the entry names.
+    pub(crate) fn stamp(&self) -> Option<Stamp> {
+        let (length, modified) = file_time(&self.path)?;
+        if let Some(copy) = &self.copy
+            && (copy.length, copy.modified) != (length, modified)
+        {
+            return None;
+        }
+        Some(Stamp {
+            generation: self.lease.generation().to_owned(),
+            path: self.path.clone(),
+            length,
+            modified,
+        })
+    }
+
+    /// The table's bytes and their hex digest. A staged entry's copy is
+    /// read only while it is still the one the entry named.
+    pub(crate) fn table(&self) -> Option<(Vec<u8>, String)> {
+        let table = fs::read(&self.path).ok()?;
+        let digest = crate::extract::engine::hex(&Sha256::digest(&table));
+        match &self.copy {
+            Some(copy) if table.len() as u64 != copy.length || digest != copy.digest => None,
+            _ => Some((table, digest)),
+        }
+    }
+}
+
+/// The length and modification time of the file at `path`.
+fn file_time(path: &Path) -> Option<(u64, (u64, u32))> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some((
+        metadata.len(),
+        (modified.as_secs(), modified.subsec_nanos()),
+    ))
 }
 
 /// Beside a staged entry's metadata, the one copy of its table: the file
@@ -356,14 +416,7 @@ impl Copy {
     /// `previous`'s digest: the driver replaces a table whole, which
     /// changes its time.
     fn of(path: &Path, previous: Option<&Self>) -> Option<Self> {
-        let metadata = fs::metadata(path).ok()?;
-        let modified = metadata
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        let length = metadata.len();
-        let modified = (modified.as_secs(), modified.subsec_nanos());
+        let (length, modified) = file_time(path)?;
         let digest = match previous {
             Some(previous)
                 if previous.path == path
@@ -403,29 +456,24 @@ fn meta_in(entry: &Path) -> Option<Meta> {
     (meta.schema == META_SCHEMA).then_some(meta)
 }
 
-/// Read `key`'s entry from the home, leased while this run holds it. A
-/// staged entry's table is the copy it names, read only while that copy
-/// is still the one it named.
-pub(crate) fn read(bindings: &Path, key: &str) -> Option<Entry> {
+/// Open `key`'s entry in the home, leased while this run holds it, without
+/// reading its table.
+pub(crate) fn open(bindings: &Path, key: &str) -> Option<Opened> {
     let lease = home::hold(bindings, key)?;
     let entry = bindings.join(key);
     let meta = meta_in(&entry)?;
     let own = entry.join(home::TABLE);
-    let (path, table) = match fs::read(&own) {
-        Ok(table) => (own, table),
-        Err(_) => {
-            let copy = serde_json::from_slice::<Copy>(&fs::read(entry.join(COPY)).ok()?).ok()?;
-            let table = fs::read(&copy.path).ok()?;
-            let digest = crate::extract::engine::hex(&Sha256::digest(&table));
-            (table.len() as u64 == copy.length && digest == copy.digest)
-                .then_some((copy.path, table))?
-        }
+    let (path, copy) = if own.is_file() {
+        (own, None)
+    } else {
+        let copy = serde_json::from_slice::<Copy>(&fs::read(entry.join(COPY)).ok()?).ok()?;
+        (copy.path.clone(), Some(copy))
     };
-    Some(Entry {
+    Some(Opened {
         meta,
-        table,
         path,
-        _lease: lease,
+        copy,
+        lease,
     })
 }
 
@@ -1254,6 +1302,26 @@ mod tests {
 
     use super::{home, External, Meta, Publish, Script, Settled, Settlement, META_SCHEMA};
 
+    /// `key`'s entry opened and its table read, as a replay reads them,
+    /// leased while held.
+    struct Read {
+        meta: Meta,
+        table: Vec<u8>,
+        path: PathBuf,
+        _opened: super::Opened,
+    }
+
+    fn read_entry(bindings: &Path, key: &str) -> Option<Read> {
+        let opened = super::open(bindings, key)?;
+        let (table, _) = opened.table()?;
+        Some(Read {
+            meta: opened.meta.clone(),
+            table,
+            path: opened.path().to_path_buf(),
+            _opened: opened,
+        })
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
             .join(format!("rawr-bindings-{name}-{}", std::process::id()));
@@ -1544,7 +1612,7 @@ mod tests {
         }
         .settle()
         .unwrap();
-        let entry = super::read(&bindings, "demo").unwrap();
+        let entry = read_entry(&bindings, "demo").unwrap();
         assert_eq!(entry.table, b"units");
         let externals = entry
             .meta
@@ -1572,7 +1640,7 @@ mod tests {
         }
         .settle()
         .unwrap();
-        assert!(super::read(&bindings, "demo").is_some());
+        assert!(read_entry(&bindings, "demo").is_some());
         // A project whose build gives other results stops the run, names
         // the crate, and removes the table.
         let second = runner(
@@ -1589,7 +1657,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(refused.contains("`demo`"), "{refused}");
-        assert!(super::read(&bindings, "demo").is_none());
+        assert!(read_entry(&bindings, "demo").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1662,7 +1730,7 @@ mod tests {
         assert!(["a", "b", "c", "d"].into_iter().all(present));
         assert!(!present("older-protocol"));
         // A fifth plan leaves the first unnamed, but its reader keeps it.
-        let reader = super::read(&staged, "a").unwrap();
+        let reader = read_entry(&staged, "a").unwrap();
         let entry = driver_table(&extraction, &bindings, "e", b"e");
         super::stage(&staged, &["e"], &[(&entry, inputs())]);
         assert!(["a", "b", "c", "d", "e"].into_iter().all(present));
@@ -1672,6 +1740,38 @@ mod tests {
         assert!(["b", "c", "d", "e"].into_iter().all(present));
         let records = fs::read_dir(staged.join(super::PLANS)).unwrap().count();
         assert_eq!(records, super::KEPT_PLANS);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A table's stamp names its publication and its file without reading
+    /// it: the same entry opened again has the same stamp, a table the
+    /// driver wrote again and staged has another, and a copy changed
+    /// behind staging's back has none (#1845).
+    #[test]
+    fn an_opened_table_s_stamp_changes_with_its_publication_or_its_file() {
+        if !home::alone(
+            "bindings::tests::an_opened_table_s_stamp_changes_with_its_publication_or_its_file",
+        ) {
+            return;
+        }
+        let root = scratch("stamp");
+        let rawr = runner(&root, &BTreeMap::new());
+        let staged = super::staged(&rawr);
+        let extraction = super::format::project(&rawr, super::format::Kept::Extraction);
+        let bindings = root.join("bindings");
+        let inputs = crate::input::bindings::Inputs::fixture;
+        let stamp = || super::open(&staged, "demo").and_then(|opened| opened.stamp());
+        let entry = driver_table(&extraction, &bindings, "demo", b"units");
+        super::stage(&staged, &["demo"], &[(&entry, inputs())]);
+        let first = stamp().unwrap();
+        assert_eq!(stamp(), Some(first.clone()));
+        let entry = driver_table(&extraction, &bindings, "demo", b"more units");
+        super::stage(&staged, &["demo"], &[(&entry, inputs())]);
+        let second = stamp().unwrap();
+        assert_ne!(second, first);
+        assert_eq!(read_entry(&staged, "demo").unwrap().table, b"more units");
+        fs::write(extraction.join("demo"), b"other units, and more").unwrap();
+        assert_eq!(stamp(), None);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1697,7 +1797,7 @@ mod tests {
         let entry = driver_table(&extraction, &bindings, "demo", b"units");
         super::stage(&staged, &["demo"], &[(&entry, inputs())]);
         assert!(!staged.join("demo").join("table.json").exists());
-        let read = super::read(&staged, "demo").unwrap();
+        let read = read_entry(&staged, "demo").unwrap();
         assert_eq!(read.table, b"units");
         assert_eq!(read.path, extraction.join("demo"));
         drop(read);
@@ -1711,9 +1811,9 @@ mod tests {
         let entry = driver_table(&extraction, &bindings, "demo", b"more units");
         super::stage(&staged, &["demo"], &[(&entry, inputs())]);
         assert_ne!(home::generation(&staged, "demo").unwrap(), generation);
-        assert_eq!(super::read(&staged, "demo").unwrap().table, b"more units");
+        assert_eq!(read_entry(&staged, "demo").unwrap().table, b"more units");
         fs::write(extraction.join("demo"), b"other units").unwrap();
-        assert!(super::read(&staged, "demo").is_none());
+        assert!(read_entry(&staged, "demo").is_none());
         let settle = |entry: Settled| {
             Settlement {
                 entries: vec![entry],
@@ -1727,7 +1827,7 @@ mod tests {
         // Settling moves the driver's table into the entry, and the table
         // is staged no more.
         settle(driver_table(&extraction, &bindings, "demo", b"units"));
-        assert_eq!(super::read(&bindings, "demo").unwrap().table, b"units");
+        assert_eq!(read_entry(&bindings, "demo").unwrap().table, b"units");
         assert!(!extraction.join("demo").exists());
         assert!(!staged.join("demo").exists());
         let generation = home::generation(&bindings, "demo").unwrap();
@@ -1795,8 +1895,8 @@ mod tests {
         // replayed.
         let unscripted = extracted("no-nightly", "first", None);
         super::stage(&staged, &["demo"], &[(&unscripted, inputs())]);
-        assert!(super::read(&staged, "no-nightly").is_none());
-        let entry = super::read(&staged, "demo").unwrap();
+        assert!(read_entry(&staged, "no-nightly").is_none());
+        let entry = read_entry(&staged, "demo").unwrap();
         assert_eq!(entry.table, b"units");
         assert_eq!(entry.meta.scripts, nightly);
         assert_eq!(entry.meta.inputs, Some(inputs()));
@@ -1824,8 +1924,8 @@ mod tests {
         }
         .settle()
         .unwrap();
-        assert!(super::read(&staged, "demo").is_some());
-        assert!(super::read(&home, "demo").is_none());
+        assert!(read_entry(&staged, "demo").is_some());
+        assert!(read_entry(&home, "demo").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1889,7 +1989,7 @@ mod tests {
             }
             settlement.settle().unwrap();
             assert!(
-                super::read(&bindings, &key).is_none(),
+                read_entry(&bindings, &key).is_none(),
                 "mismatch {index} was published"
             );
         }
@@ -1914,7 +2014,7 @@ mod tests {
         }
         .settle()
         .unwrap();
-        assert!(super::read(&bindings, "missing-project").is_none());
+        assert!(read_entry(&bindings, "missing-project").is_none());
         // A crate with no scripts has no script evidence to require.
         Settlement {
             entries: vec![Settled::Extracted {
@@ -1935,7 +2035,7 @@ mod tests {
         }
         .settle()
         .unwrap();
-        assert!(super::read(&bindings, "no-scripts").is_some());
+        assert!(read_entry(&bindings, "no-scripts").is_some());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1987,7 +2087,7 @@ mod tests {
                 error.contains("`fixture`") && error.contains("`demo`"),
                 "{error}"
             );
-            assert!(super::read(&bindings, "key").is_none());
+            assert!(read_entry(&bindings, "key").is_none());
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -2125,7 +2225,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
             );
             settlement.settle().unwrap();
             assert_eq!(
-                super::read(&bindings, mode).is_some(),
+                read_entry(&bindings, mode).is_some(),
                 mode == "match",
                 "{mode}"
             );
@@ -2229,19 +2329,19 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         // The first project publishes.
         let first = super::Observed::read(&build("first", "match"));
         settle(extracted("shared"), &first).unwrap();
-        let recorded = super::read(&bindings, "shared").unwrap().meta.scripts;
+        let recorded = read_entry(&bindings, "shared").unwrap().meta.scripts;
         assert_eq!(recorded, nightly);
         // The second, in its own target directory, reads them.
         let second = super::Observed::read(&build("second", "match"));
-        let read_entry = || Settled::Read {
+        let read = || Settled::Read {
             directory: bindings.clone(),
             key: "shared".to_owned(),
             crate_name: "per-build-paths".to_owned(),
             scripts: recorded.clone(),
             inputs: crate::input::bindings::Inputs::fixture(),
         };
-        settle(read_entry(), &second).unwrap();
-        assert!(super::read(&bindings, "shared").is_some());
+        settle(read(), &second).unwrap();
+        assert!(read_entry(&bindings, "shared").is_some());
         // A project whose script writes another `generated.rs` shares
         // nothing: its extraction is not published, and the shared table
         // is refused, naming the file.
@@ -2255,10 +2355,10 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
             Some(super::Difference::File("generated.rs".to_owned()))
         );
         settle(extracted("differs"), &differs).unwrap();
-        assert!(super::read(&bindings, "differs").is_none());
-        let refused = settle(read_entry(), &differs).unwrap_err().to_string();
+        assert!(read_entry(&bindings, "differs").is_none());
+        let refused = settle(read(), &differs).unwrap_err().to_string();
         assert!(refused.contains("`generated.rs`"), "{refused}");
-        assert!(super::read(&bindings, "shared").is_none());
+        assert!(read_entry(&bindings, "shared").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2313,12 +2413,12 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                 crate::input::bindings::Inputs::fixture(),
             )],
         );
-        assert!(super::read(&staged, "demo").is_some());
+        assert!(read_entry(&staged, "demo").is_some());
         let rerun = settlement(extracted("other")).settle().unwrap_err();
         assert!(rerun.is_stale());
         assert!(rerun.to_string().contains("`demo`"), "{rerun}");
         assert!(
-            super::read(&staged, "demo").is_none(),
+            read_entry(&staged, "demo").is_none(),
             "the stale table stayed staged"
         );
         assert_eq!(stale.pending(), ["demo"]);
@@ -2328,7 +2428,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         for _ in 0..2 {
             settlement(extracted("other")).settle().unwrap();
             assert!(stale.pending().is_empty());
-            assert!(super::read(&bindings, "demo").is_none());
+            assert!(read_entry(&bindings, "demo").is_none());
         }
         // A shared table made where the script gave yet another output may
         // be a stale run: it goes, and the run prepares again.
@@ -2348,7 +2448,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         // The run again agrees: the table publishes, and the difference
         // is forgotten.
         settlement(extracted("project")).settle().unwrap();
-        assert!(super::read(&bindings, "demo").is_some());
+        assert!(read_entry(&bindings, "demo").is_some());
         assert!(!rawr.join(super::rerun::RECORD).exists());
         // A failed build asks for the rerun once, then names the drift.
         let failed = settlement(extracted("fourth"));
