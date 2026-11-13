@@ -36,15 +36,19 @@ impl Prelude {
         Self { dependencies }
     }
 
-    /// `name`, a path's first segment at `at`, as a crate this prelude
-    /// holds: rustc's E0433 when it holds none of that name.
-    pub(crate) fn reach(&self, name: &str, at: Span) -> Result<(), Error> {
-        if ALWAYS.contains(&name)
+    /// Whether it holds a crate named `name`.
+    pub(crate) fn holds(&self, name: &str) -> bool {
+        ALWAYS.contains(&name)
             || self
                 .dependencies
                 .iter()
                 .any(|dependency| dependency.as_str() == name)
-        {
+    }
+
+    /// `name`, a path's first segment at `at`, as a crate this prelude
+    /// holds: rustc's E0433 when it holds none of that name.
+    pub(crate) fn reach(&self, name: &str, at: Span) -> Result<(), Error> {
+        if self.holds(name) {
             return Ok(());
         }
         Err(Error::UnknownType {

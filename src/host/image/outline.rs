@@ -35,6 +35,13 @@ pub(crate) struct Entry {
     names: Box<[Box<str>]>,
     /// The names it writes, which a source that reaches it reaches too.
     writes: Box<[Box<str>]>,
+    /// The module its paths are in, a method's owner's, when they are all
+    /// in one and its paths' names reach it: a source outside that module
+    /// names it only through a path or an import (#1886).
+    module: Option<Box<str>>,
+    /// Whether its paths' names reach it, rather than each name it writes,
+    /// as an impl's do.
+    declared: bool,
 }
 
 impl Entry {
@@ -48,6 +55,18 @@ impl Entry {
 
     pub(crate) fn writes(&self) -> impl Iterator<Item = &str> {
         self.writes.iter().map(AsRef::as_ref)
+    }
+
+    /// The module its paths are in, when its paths' names reach it and
+    /// they are all in one.
+    pub(crate) fn module(&self) -> Option<&str> {
+        self.module.as_deref()
+    }
+
+    /// Whether its paths' names reach it: an impl is reached by each name
+    /// it writes.
+    pub(crate) const fn declared(&self) -> bool {
+        self.declared
     }
 }
 
@@ -279,6 +298,8 @@ struct Made {
     digest: Sha256,
     names: BTreeSet<Box<str>>,
     writes: BTreeSet<Box<str>>,
+    /// The modules its paths are in (`Entry::module`).
+    modules: BTreeSet<Box<str>>,
     /// Whether a body wasn't JSON.
     unread: bool,
 }
@@ -294,6 +315,7 @@ impl Made {
         framed(&mut self.digest, path.as_bytes());
         self.names.insert(last(path).into());
         self.writes.extend(named.owner(path).map(Into::into));
+        self.modules.insert(module(path).into());
     }
 
     /// The entry writes `path`: the names the path writes (`Named::path`)
@@ -311,6 +333,8 @@ impl Made {
         if let Some(owner) = named.owner(path) {
             self.names.clear();
             self.names.insert(owner.into());
+            self.modules.clear();
+            self.modules.insert(module(module(path)).into());
         }
     }
 
@@ -327,6 +351,7 @@ impl Made {
             digest,
             names,
             writes,
+            modules,
             unread,
         } = std::mem::take(self);
         let names = match (unread, reached) {
@@ -334,12 +359,23 @@ impl Made {
             (false, Reached::Declared) => names,
             (false, Reached::Written) => writes.clone(),
         };
+        let module = match reached {
+            Reached::Declared if modules.len() == 1 => modules.into_iter().next(),
+            _ => None,
+        };
         Entry {
             digest: digest.finalize().into(),
             names: names.into_iter().collect(),
             writes: writes.into_iter().collect(),
+            module,
+            declared: matches!(reached, Reached::Declared),
         }
     }
+}
+
+/// The path `path` is below: its module, or its owner's for a method's.
+fn module(path: &str) -> &str {
+    path.rsplit_once("::").map_or("", |(module, _)| module)
 }
 
 /// The last segment of the path `path`.

@@ -21,6 +21,18 @@
 //! A name that no declaration declares reaches the one a later save adds.
 //! An impl of a type parameter (`impl<T> Trait for T`) is every source's.
 //!
+//! A name reaches only the declarations it can name (#1886, `Scopes`): a
+//! name a source writes alone names its own module's items, what its
+//! `use`s import and what its glob `use`s bring in; one below a path
+//! names what the path's first name leads to. So a widget's own `State`
+//! never reaches a screen's, and a field the screen's gains keeps the
+//! widget's key. A path through `crate`, `self`, `super`, a module or a
+//! name the source doesn't know may lead to any module's; one through a
+//! crate of the extern prelude reaches only what any name reaches: an
+//! impl of another module's or a crate's type, a `macro_rules!`, a
+//! mirror. A facade entry whose paths are in one source's module is that
+//! source's.
+//!
 //! Each `macro_rules!` definition is one more declaration, reached by its
 //! name, as a call writes it, and digested by its own tokens' places, so a
 //! declaration a save adds above it keeps every other source's key
@@ -49,7 +61,7 @@ use crate::tokenizer::Token;
 use crate::types::position::Places;
 use crate::{Engine, ImmutableString, Position, Span};
 use sha2::{Digest as _, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
 /// What each source's lowering reads of the program, the other sources'
@@ -97,7 +109,8 @@ impl Interface {
         native: &Native,
     ) -> Option<Self> {
         let outlines = outlines(engine, program, outlined);
-        let declarations = Declarations::new(program, &outlines, native, digests)?;
+        let scopes = Scopes::new(program, &outlines, native);
+        let declarations = Declarations::new(program, &outlines, &scopes, native, digests)?;
         let own = own(program)?;
         let calls = Calls::by_source(program)?;
         // A runner's compiler reads the facades registered in the process
@@ -151,7 +164,14 @@ impl Interface {
             let resolved: [u8; 32] = written.0.finalize().into();
             let mut lowering = Sha256::new();
             lowering.update(every);
-            declarations.reached(&outline.mentioned, &mut walk, &mut lowering, None);
+            declarations.reached(
+                source,
+                &scopes,
+                &outline.mentioned,
+                &mut walk,
+                &mut lowering,
+                None,
+            );
             lowering.update(resolved);
             lowering.update(calls.get(&Some(source)).unwrap_or(&[0; 32]));
             sources.insert(source, lowering.finalize().into());
@@ -167,7 +187,14 @@ impl Interface {
             };
             let mut reading = Sha256::new();
             reading.update(every_revealed);
-            declarations.reached(&outline.mentioned, &mut walk, &mut reading, Some(&outside));
+            declarations.reached(
+                source,
+                &scopes,
+                &outline.mentioned,
+                &mut walk,
+                &mut reading,
+                Some(&outside),
+            );
             reading.update(resolved);
             revealed.insert(source, reading.finalize().into());
         }
@@ -342,7 +369,7 @@ fn every(
     native: &Native,
 ) -> Option<[u8; 32]> {
     let mut written = Written(Sha256::new());
-    written.0.update(b"rawr.lowering.interface/v11");
+    written.0.update(b"rawr.lowering.interface/v12");
     // The compiler: the facades its host registry holds, and its options.
     if let Some(registered) = registered {
         write!(written, "{registered}").ok()?;
@@ -444,8 +471,12 @@ fn write_held(
 struct Declarations<'p> {
     /// Each name some declaration declares, by its number.
     names: HashMap<&'p str, usize>,
-    /// The declarations that declare each name, by its number.
-    declaring: Vec<Vec<usize>>,
+    /// The declarations that declare each name, by its number, each with
+    /// which texts' names reach it (`Declared`).
+    declaring: Vec<Vec<(usize, Declared)>>,
+    /// Each source with each declared name its own items declare, which a
+    /// `Declared::Native` entry of that name may be the native side of.
+    declares: HashSet<(source::Id, usize)>,
     declarations: Vec<Declaration>,
     /// What every source reads of them: the impls of a type parameter, and
     /// what the program holds of no item.
@@ -487,8 +518,51 @@ struct Declaration {
     /// its private fields.
     source: Option<source::Id>,
     /// The numbers of the declared names its declaration writes, which a
-    /// source that reaches it reaches too.
-    writes: Vec<usize>,
+    /// source that reaches it reaches too, each as its text names it
+    /// (`By`).
+    writes: Vec<(usize, By)>,
+}
+
+/// Which texts' names reach a declaration that declares them (#1886).
+#[derive(Clone, Copy)]
+enum Declared {
+    /// A name its source writes alone, or one any text names through a
+    /// path or an import that may lead there: an item, or an impl of its
+    /// source's own type.
+    In(source::Id),
+    /// An entry of a facade outside every source's module: a name a source
+    /// writes alone reaches it only when one of its own items declares the
+    /// name, as the entry may be that item's native side.
+    Native,
+    /// Any name: an impl of another module's or a crate's type or trait, a
+    /// `macro_rules!`, which a call names in any module, a mirror, or an
+    /// impl entry of a facade.
+    Any,
+}
+
+/// How a text names a declared name (`Scopes::reach`).
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+enum By {
+    /// Through a path or an import that may lead to any module.
+    Open,
+    /// Alone in this source, or through a path that stays in it.
+    Local(source::Id),
+    /// Through a crate of the extern prelude, the program's own and its
+    /// path crates aside: it reaches only what any name reaches.
+    Foreign,
+}
+
+impl Declared {
+    /// Whether a name written as `by` reaches a declaration of it declared
+    /// so; `declares` says whether a source's own items declare it.
+    fn reached(self, by: By, declares: impl FnOnce(source::Id) -> bool) -> bool {
+        match (by, self) {
+            (By::Open, _) | (_, Self::Any) => true,
+            (By::Local(source), Self::In(declared)) => source == declared,
+            (By::Local(source), Self::Native) => declares(source),
+            (By::Foreign, _) => false,
+        }
+    }
 }
 
 impl<'p> Declarations<'p> {
@@ -498,6 +572,7 @@ impl<'p> Declarations<'p> {
     fn new(
         program: &'p Program,
         outlines: &'p Outlines,
+        scopes: &Scopes<'p>,
         native: &'p Native,
         digests: &mut Digests,
     ) -> Option<Self> {
@@ -569,30 +644,31 @@ impl<'p> Declarations<'p> {
         }
 
         let mut names = HashMap::<&str, usize>::new();
-        let mut declaring = Vec::<Vec<usize>>::new();
+        let mut declaring = Vec::<Vec<(usize, Declared)>>::new();
         let mut everywhere = Written(Sha256::new());
         let mut revealed = Written(Sha256::new());
         let mut unnamed = Vec::with_capacity(items.len());
         for (index, shell) in items.iter().enumerate() {
-            let named = declared_names(&shell.kind);
-            for name in &named {
+            let named = declared_names(&shell.kind, shell.source, scopes.namespace(shell.source));
+            for (name, declared) in &named {
                 let number = *names.entry(name).or_insert_with(|| {
                     declaring.push(Vec::new());
                     declaring.len() - 1
                 });
-                declaring[number].push(index);
+                declaring[number].push((index, *declared));
             }
             unnamed.push(named.is_empty());
         }
         // Each entry of the program's own facades, after the items. One no
         // name reaches is in what every source reads of them.
         for (offset, entry) in native.entries().iter().enumerate() {
+            let declared = scopes.entry(entry);
             for name in entry.names() {
                 let number = *names.entry(name).or_insert_with(|| {
                     declaring.push(Vec::new());
                     declaring.len() - 1
                 });
-                declaring[number].push(items.len() + offset);
+                declaring[number].push((items.len() + offset, declared));
             }
         }
         // Each marked type the runner holds as its mirror, after them: by
@@ -606,7 +682,7 @@ impl<'p> Declarations<'p> {
                     declaring.push(Vec::new());
                     declaring.len() - 1
                 });
-                declaring[number].push(mirrors + offset);
+                declaring[number].push((mirrors + offset, Declared::Any));
             }
         }
         // Each `macro_rules!` definition, after them: by its name, as a
@@ -617,8 +693,9 @@ impl<'p> Declarations<'p> {
                 declaring.push(Vec::new());
                 declaring.len() - 1
             });
-            declaring[number].push(macros + offset);
+            declaring[number].push((macros + offset, Declared::Any));
         }
+        let declares = scopes.declares(&names);
         let mut declarations = Vec::with_capacity(macros + program.macros.definitions().count());
         digests.begin();
         for ((index, shell), held) in items.iter().enumerate().zip(&held) {
@@ -659,13 +736,13 @@ impl<'p> Declarations<'p> {
                     outside,
                 })
             })?;
-            let mut writes = outline
-                .into_iter()
-                .flat_map(|outline| outline.identifiers(shell.span))
-                .filter_map(|name| names.get(name).copied())
-                .collect::<Vec<_>>();
-            writes.sort_unstable();
-            writes.dedup();
+            let writes = scopes.writes(
+                shell.source,
+                outline
+                    .into_iter()
+                    .flat_map(|outline| outline.identifiers(shell.span)),
+                &names,
+            );
             if unnamed[index] {
                 everywhere.0.update(found.lowering);
                 revealed.0.update(found.revealed.unwrap_or(found.lowering));
@@ -677,12 +754,7 @@ impl<'p> Declarations<'p> {
             });
         }
         for entry in native.entries() {
-            let mut writes = entry
-                .writes()
-                .filter_map(|name| names.get(name).copied())
-                .collect::<Vec<_>>();
-            writes.sort_unstable();
-            writes.dedup();
+            let writes = open(entry.writes(), &names);
             declarations.push(Declaration {
                 digest: Digest::plain(*entry.digest()),
                 source: None,
@@ -714,13 +786,15 @@ impl<'p> Declarations<'p> {
                 program.macros.write_definition(definition, written)?;
                 write!(written, "{}|{text}", text.len())
             })?;
-            let mut writes = outline
-                .into_iter()
-                .flat_map(|outline| outline.identifiers(span))
-                .filter_map(|name| names.get(name).copied())
-                .collect::<Vec<_>>();
-            writes.sort_unstable();
-            writes.dedup();
+            // A call expands it in its own module: what it writes may name
+            // any module's.
+            let writes = open(
+                outline
+                    .into_iter()
+                    .flat_map(|outline| outline.identifiers(span))
+                    .map(|(name, _)| name),
+                &names,
+            );
             declarations.push(Declaration {
                 digest: Digest::plain(digest),
                 source: Some(definition.source()),
@@ -736,6 +810,7 @@ impl<'p> Declarations<'p> {
         Some(Self {
             names,
             declaring,
+            declares,
             declarations,
             everywhere: everywhere.0.finalize().into(),
             revealed: revealed.0.finalize().into(),
@@ -751,23 +826,28 @@ impl<'p> Declarations<'p> {
     /// items of as `Digest::outside`.
     fn reached(
         &self,
-        mentioned: &[Box<str>],
+        source: source::Id,
+        scopes: &Scopes<'_>,
+        mentioned: &[(Box<str>, Head)],
         walk: &mut Walk,
         digest: &mut Sha256,
         reveal: Option<&dyn Fn(source::Id) -> bool>,
     ) {
         let mut sum = [0_u64; 4];
         let mut count = 0_u64;
-        for name in mentioned {
-            if let Some(&name) = self.names.get(name.as_ref()) {
-                walk.see(name);
+        for (name, head) in mentioned {
+            if let Some(&number) = self.names.get(name.as_ref()) {
+                walk.see(number, scopes.reach(source, name, head).by(source));
             }
         }
-        while let Some(name) = walk.next.pop() {
-            for &index in &self.declaring[name] {
-                if std::mem::replace(&mut walk.reached[index], true) {
+        while let Some((name, by)) = walk.next.pop() {
+            for &(index, declared) in &self.declaring[name] {
+                if walk.reached[index]
+                    || !declared.reached(by, |source| self.declares.contains(&(source, name)))
+                {
                     continue;
                 }
+                walk.reached[index] = true;
                 walk.found.push(index);
                 count += 1;
                 let declaration = &self.declarations[index];
@@ -784,8 +864,8 @@ impl<'p> Declarations<'p> {
                 for (lane, bytes) in sum.iter_mut().zip(lanes) {
                     *lane = lane.wrapping_add(u64::from_le_bytes(*bytes));
                 }
-                for &written in &self.declarations[index].writes {
-                    walk.see(written);
+                for &(written, by) in &self.declarations[index].writes {
+                    walk.see(written, by);
                 }
             }
         }
@@ -800,13 +880,12 @@ impl<'p> Declarations<'p> {
 /// What one walk over the declarations marked (`Declarations::reached`),
 /// unmarked after it, so the next walk marks only what it reaches.
 struct Walk {
-    /// Whether the walk saw each declared name, by its number.
-    seen: Vec<bool>,
+    /// Each declared name the walk saw, by its number, with how.
+    seen: HashSet<(usize, By)>,
     /// Whether it reached each declaration, by its number.
     reached: Vec<bool>,
-    /// The names it saw, and those it has yet to follow.
-    names: Vec<usize>,
-    next: Vec<usize>,
+    /// The names it has yet to follow.
+    next: Vec<(usize, By)>,
     /// The declarations it reached.
     found: Vec<usize>,
 }
@@ -814,27 +893,24 @@ struct Walk {
 impl Walk {
     fn new(declarations: &Declarations<'_>) -> Self {
         Self {
-            seen: vec![false; declarations.declaring.len()],
+            seen: HashSet::new(),
             reached: vec![false; declarations.declarations.len()],
-            names: Vec::new(),
             next: Vec::new(),
             found: Vec::new(),
         }
     }
 
-    /// Follow the name `name` next, unless the walk saw it.
-    fn see(&mut self, name: usize) {
-        if !std::mem::replace(&mut self.seen[name], true) {
-            self.names.push(name);
-            self.next.push(name);
+    /// Follow the name `name`, written as `by`, next, unless the walk saw
+    /// it so.
+    fn see(&mut self, name: usize, by: By) {
+        if self.seen.insert((name, by)) {
+            self.next.push((name, by));
         }
     }
 
     /// Unmark what the walk marked.
     fn clear(&mut self) {
-        for name in self.names.drain(..) {
-            self.seen[name] = false;
-        }
+        self.seen.clear();
         for index in self.found.drain(..) {
             self.reached[index] = false;
         }
@@ -1102,32 +1178,58 @@ impl Within {
     }
 }
 
-/// The names `kind` declares, which a text that writes one reaches it by:
-/// none for an impl of a type parameter, which every text reaches.
-fn declared_names(kind: &item::Kind) -> Vec<&str> {
+/// The names `kind`, an item of `source` in the module `namespace`,
+/// declares, which a text that writes one reaches it by, each with which
+/// texts' names reach it: none for an impl of a type parameter, which
+/// every text reaches. An impl of its own module's type is that module's,
+/// as the type is; any other impl is any text's that names its type or
+/// its trait.
+fn declared_names<'k>(
+    kind: &'k item::Kind,
+    source: source::Id,
+    namespace: Option<&crate::resolve::Namespace>,
+) -> Vec<(&'k str, Declared)> {
+    let own = |name: &'k str| (name, Declared::In(source));
     match kind {
         item::Kind::Use(declaration) => declaration
             .bindings
             .iter()
-            .map(|binding| binding.name.text.as_str())
+            .map(|binding| own(binding.name.text.as_str()))
             .collect(),
-        item::Kind::Struct(declaration) => vec![declaration.name.text.as_str()],
-        item::Kind::Enum(declaration) => vec![declaration.name.text.as_str()],
-        item::Kind::Function(function) => vec![function.name.text.as_str()],
+        item::Kind::Struct(declaration) => vec![own(declaration.name.text.as_str())],
+        item::Kind::Enum(declaration) => vec![own(declaration.name.text.as_str())],
+        item::Kind::Function(function) => vec![own(function.name.text.as_str())],
         item::Kind::Trait(declaration) => std::iter::once(&declaration.name)
             .chain(declaration.functions.iter().map(|function| &function.name))
             .chain(&declaration.associated)
-            .map(|name| name.text.as_str())
+            .map(|name| own(name.text.as_str()))
             .collect(),
         item::Kind::Impl(implementation) => {
-            let mut names = Vec::new();
-            type_names(&implementation.owner, &mut names);
-            if names.is_empty() {
-                return names;
+            let mut types = Vec::new();
+            type_names(&implementation.owner, &mut types);
+            if types.is_empty() {
+                return Vec::new();
             }
+            let mut names = types
+                .into_iter()
+                .map(|(name, key)| {
+                    let here = key.zip(namespace).is_some_and(|(key, namespace)| {
+                        key.package() == namespace.package.as_str()
+                            && key.modules() == &*namespace.modules
+                    });
+                    (
+                        name,
+                        if here {
+                            Declared::In(source)
+                        } else {
+                            Declared::Any
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
             match &implementation.trait_ {
                 Some(item::TraitImpl::User { name, .. } | item::TraitImpl::Native { name, .. }) => {
-                    names.push(last(&name.text));
+                    names.push((last(&name.text), Declared::Any));
                 }
                 None => {}
             }
@@ -1136,8 +1238,12 @@ fn declared_names(kind: &item::Kind) -> Vec<&str> {
     }
 }
 
-/// The names of the types `ty` writes, a type parameter's aside.
-fn type_names<'t>(ty: &'t type_ref::Type, names: &mut Vec<&'t str>) {
+/// The names of the types `ty` writes, a type parameter's aside, each with
+/// the key of the program's type it names, when it names one.
+fn type_names<'t>(
+    ty: &'t type_ref::Type,
+    names: &mut Vec<(&'t str, Option<&'t crate::type_def::Key>)>,
+) {
     match ty {
         type_ref::Type::Unit(_) => {}
         type_ref::Type::Tuple { members, .. } => {
@@ -1152,8 +1258,8 @@ fn type_names<'t>(ty: &'t type_ref::Type, names: &mut Vec<&'t str>) {
                 type_ref::Target::Script {
                     identity: crate::type_def::Identity::Script(key),
                     ..
-                } => names.push(key.name()),
-                _ => names.push(last(&path.name)),
+                } => names.push((key.name(), Some(key))),
+                _ => names.push((last(&path.name), None)),
             }
             for argument in &path.arguments {
                 if let type_ref::Argument::Type(argument) = argument {
@@ -1161,6 +1267,281 @@ fn type_names<'t>(ty: &'t type_ref::Type, names: &mut Vec<&'t str>) {
                 }
             }
         }
+    }
+}
+
+/// The numbers of the declared names among `written`, each named through
+/// a path that may lead to any module.
+fn open<'n>(
+    written: impl Iterator<Item = &'n str>,
+    names: &HashMap<&str, usize>,
+) -> Vec<(usize, By)> {
+    let mut writes = written
+        .filter_map(|name| names.get(name).map(|number| (*number, By::Open)))
+        .collect::<Vec<_>>();
+    writes.sort_unstable_by_key(|(number, _)| *number);
+    writes.dedup_by_key(|(number, _)| *number);
+    writes
+}
+
+/// What a name a text writes can name (#1886): a declaration of its own
+/// source, one of any module, or neither, a crate's alone.
+#[derive(Clone, Copy, Default)]
+struct Reach {
+    local: bool,
+    open: bool,
+}
+
+impl Reach {
+    const NONE: Self = Self {
+        local: false,
+        open: false,
+    };
+    const LOCAL: Self = Self {
+        local: true,
+        open: false,
+    };
+    const OPEN: Self = Self {
+        local: false,
+        open: true,
+    };
+
+    /// How a name `source` writes so names a declared name.
+    const fn by(self, source: source::Id) -> By {
+        match self {
+            Self { open: true, .. } => By::Open,
+            Self { local: true, .. } => By::Local(source),
+            _ => By::Foreign,
+        }
+    }
+}
+
+impl std::ops::BitOr for Reach {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self {
+            local: self.local || other.local,
+            open: self.open || other.open,
+        }
+    }
+}
+
+/// What each source's names can name (#1886). A name a source writes
+/// alone names its own item, an import, or one a glob `use` brings in; one
+/// below a path names what the path's first name leads to. So a name
+/// reaches another module's declaration only through a path or an import
+/// that may lead there, and a widget's `State` never reaches a screen's.
+/// Each test errs toward reaching more: a path whose start the text
+/// doesn't spell, `crate`, `self`, `super`, a module, or a name the source
+/// doesn't know may lead to any module.
+struct Scopes<'p> {
+    sources: Vec<Names<'p>>,
+    namespaces: BTreeMap<source::Id, &'p crate::resolve::Namespace>,
+    /// The crates of the extern prelude, the program's own and its path
+    /// crates aside, which name no source's declaration.
+    foreign: Option<&'p crate::resolve::extern_prelude::Prelude>,
+    /// The program's own crates and its path crates, by the names a path
+    /// starts with.
+    native: HashSet<String>,
+    /// The source of each module, by its path from each of the program's
+    /// own crates' roots, as a facade's entries are; `None` for a path two
+    /// sources have.
+    modules: HashMap<String, Option<source::Id>>,
+}
+
+/// What one source's names can name.
+struct Names<'p> {
+    /// The names its own structs, enums, traits and functions have.
+    declared: HashSet<&'p str>,
+    /// The modules its `mod`s declare.
+    modules: HashSet<&'p str>,
+    /// What each name its `use`s write reaches.
+    imports: HashMap<&'p str, Reach>,
+    /// What its glob `use`s bring in.
+    globbed: Reach,
+}
+
+impl<'p> Scopes<'p> {
+    fn new(program: &'p Program, outlines: &'p Outlines, native: &Native) -> Self {
+        let mut declared = vec![HashSet::new(); outlines.sources.len()];
+        for shell in program.items.iter() {
+            let name = match &shell.kind {
+                item::Kind::Struct(declaration) => &declaration.name,
+                item::Kind::Enum(declaration) => &declaration.name,
+                item::Kind::Trait(declaration) => &declaration.name,
+                item::Kind::Function(function) => &function.name,
+                item::Kind::Use(_) | item::Kind::Impl(_) => continue,
+            };
+            if let Some(declared) = declared.get_mut(shell.source.index()) {
+                declared.insert(name.text.as_str());
+            }
+        }
+        let crates = program
+            .own
+            .iter()
+            .map(|own| own.as_str())
+            .chain(native.roots.iter().map(AsRef::as_ref))
+            .map(str::to_owned);
+        let roots = program
+            .own
+            .iter()
+            .map(|own| own.replace('-', "_"))
+            .collect::<Vec<_>>();
+        let mut modules = HashMap::<String, Option<source::Id>>::new();
+        for script in &program.scripts {
+            for root in &roots {
+                let path = std::iter::once(root.as_str())
+                    .chain(
+                        script
+                            .namespace
+                            .modules
+                            .iter()
+                            .map(|module| module.as_str()),
+                    )
+                    .collect::<Vec<_>>()
+                    .join("::");
+                let found = modules.entry(path).or_insert(Some(script.source));
+                if *found != Some(script.source) {
+                    *found = None;
+                }
+            }
+        }
+        let mut scopes = Self {
+            sources: Vec::with_capacity(outlines.sources.len()),
+            namespaces: program
+                .scripts
+                .iter()
+                .map(|script| (script.source, &script.namespace))
+                .collect(),
+            foreign: program.crates.as_ref(),
+            native: crates
+                .flat_map(|name| [name.replace('-', "_"), name])
+                .collect(),
+            modules,
+        };
+        for (outline, declared) in outlines.sources.iter().zip(declared) {
+            let mut names = Names {
+                declared,
+                modules: outline.modules.iter().map(AsRef::as_ref).collect(),
+                imports: HashMap::new(),
+                globbed: Reach::NONE,
+            };
+            for (name, head) in outline.imports.iter() {
+                let reach = scopes.start(&names, head, false);
+                let entry = names.imports.entry(name).or_default();
+                *entry = *entry | reach;
+            }
+            for head in outline.globs.iter() {
+                names.globbed = names.globbed | scopes.start(&names, head, false);
+            }
+            scopes.sources.push(names);
+        }
+        scopes
+    }
+
+    /// The module of `source`.
+    fn namespace(&self, source: source::Id) -> Option<&crate::resolve::Namespace> {
+        self.namespaces.get(&source).copied()
+    }
+
+    /// What the name `name`, which `source` writes below `head`, can name.
+    fn reach(&self, source: source::Id, name: &str, head: &Head) -> Reach {
+        let Some(names) = self.sources.get(source.index()) else {
+            return Reach::LOCAL | Reach::OPEN;
+        };
+        match head {
+            Head::Bare => {
+                let imported = names.imports.get(name).copied().unwrap_or_default();
+                Reach::LOCAL | imported | names.globbed
+            }
+            path => self.start(names, path, true),
+        }
+    }
+
+    /// What a path that starts below `head` leads to in the source of
+    /// `names`, through its imports when `imports` says so.
+    fn start(&self, names: &Names<'_>, head: &Head, imports: bool) -> Reach {
+        let start = match head {
+            Head::Bare => return Reach::LOCAL,
+            Head::Unknown => return Reach::LOCAL | Reach::OPEN,
+            Head::Path(start) => start.as_ref(),
+        };
+        match start {
+            "crate" | "self" | "super" => return Reach::OPEN,
+            "Self" => return Reach::LOCAL,
+            _ => {}
+        }
+        let imported = imports.then(|| names.imports.get(start)).flatten();
+        let mut reach = imported.copied().unwrap_or_default();
+        if names.declared.contains(start) {
+            reach = reach | Reach::LOCAL;
+        }
+        if names.modules.contains(start) {
+            reach = reach | Reach::OPEN;
+        }
+        let known =
+            imported.is_some() || names.declared.contains(start) || names.modules.contains(start);
+        if known || self.is_foreign(start) {
+            reach
+        } else {
+            Reach::OPEN
+        }
+    }
+
+    /// Whether a path that starts with `start` names a crate of the extern
+    /// prelude that holds no declaration of the program.
+    fn is_foreign(&self, start: &str) -> bool {
+        let prelude = match self.foreign {
+            Some(prelude) => prelude.holds(start),
+            None => matches!(start, "std" | "core"),
+        };
+        prelude && !self.native.contains(start)
+    }
+
+    /// Which texts' names reach `entry`: the source whose module its paths
+    /// are in, when one is.
+    fn entry(&self, entry: &image::outline::Entry) -> Declared {
+        let source = entry
+            .module()
+            .and_then(|module| self.modules.get(module).copied().flatten());
+        match source {
+            Some(source) => Declared::In(source),
+            None if entry.declared() => Declared::Native,
+            None => Declared::Any,
+        }
+    }
+
+    /// Each source with each of `names` its own items declare.
+    fn declares(&self, names: &HashMap<&str, usize>) -> HashSet<(source::Id, usize)> {
+        self.sources
+            .iter()
+            .enumerate()
+            .flat_map(|(index, source)| {
+                source.declared.iter().filter_map(move |name| {
+                    Some((source::Id::from_index(index), *names.get(name)?))
+                })
+            })
+            .collect()
+    }
+
+    /// The numbers of the declared names among `written`, which `source`
+    /// writes, each as it names it.
+    fn writes<'n>(
+        &self,
+        source: source::Id,
+        written: impl Iterator<Item = (&'n str, &'n Head)>,
+        names: &HashMap<&str, usize>,
+    ) -> Vec<(usize, By)> {
+        let mut writes = written
+            .filter_map(|(name, head)| {
+                let number = *names.get(name)?;
+                Some((number, self.reach(source, name, head).by(source)))
+            })
+            .collect::<Vec<_>>();
+        writes.sort_unstable_by_key(|(number, by)| (*number, *by == By::Open));
+        writes.dedup();
+        writes
     }
 }
 
@@ -1329,14 +1710,36 @@ pub(super) struct Outline {
     key: [u8; 32],
     tokens: [u8; 32],
     places: Places,
-    /// Each name its tokens write, with where it starts, but the names a
-    /// declaration gives (a function, a field, a parameter).
-    identifiers: crate::Shared<[(Box<str>, Position)]>,
-    /// Each name its whole text writes, its bodies' too, once.
-    mentioned: crate::Shared<[Box<str>]>,
+    /// Each name its tokens write, with where it starts and the path it is
+    /// below, but the names a declaration gives (a function, a field, a
+    /// parameter).
+    identifiers: crate::Shared<[(Box<str>, Position, Head)]>,
+    /// Each name its whole text writes, its bodies' too, with the path it
+    /// is below, once.
+    mentioned: crate::Shared<[(Box<str>, Head)]>,
+    /// Each name a `use` writes, with the path the `use` starts with.
+    imports: crate::Shared<[(Box<str>, Head)]>,
+    /// The path each glob `use` starts with.
+    globs: crate::Shared<[Head]>,
+    /// Each module a `mod` declares.
+    modules: crate::Shared<[Box<str>]>,
     /// Where each name no visibility marks starts, in order: a struct's
     /// private fields' among them (`outside`).
     private: crate::Shared<[Position]>,
+}
+
+/// The path a name is below, as a text writes it (#1886): what the name
+/// can name follows from it (`Names::reach`).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Head {
+    /// Written alone: `State`.
+    Bare,
+    /// Below a path that starts with this name: `home` of `home::State`,
+    /// or of each name a `use` statement writes.
+    Path(Box<str>),
+    /// Below a path whose start the text doesn't spell as names:
+    /// `Vec::<T>::new`, `<T as Trait>::N`, `::std::mem::take`.
+    Unknown,
 }
 
 impl Outline {
@@ -1357,6 +1760,7 @@ impl Outline {
         }
         let tokens = super::lex_rust(engine, text);
         let private = private_names(&tokens);
+        let paths = Paths::new(&tokens);
         let mut starts = Vec::new();
         let mut identifiers = Vec::new();
         let mut mentioned = Vec::new();
@@ -1368,7 +1772,7 @@ impl Outline {
                 break;
             }
             if let Token::Identifier(name) = token {
-                mentioned.push(Box::<str>::from(name.as_str()));
+                mentioned.push((Box::<str>::from(name.as_str()), paths.heads[index].clone()));
             }
             while merged.get(next).is_some_and(|(_, end)| end <= position) {
                 next += 1;
@@ -1394,7 +1798,11 @@ impl Outline {
             if let Token::Identifier(name) = token
                 && !given
             {
-                identifiers.push((Box::<str>::from(name.as_str()), *position));
+                identifiers.push((
+                    Box::<str>::from(name.as_str()),
+                    *position,
+                    paths.heads[index].clone(),
+                ));
             }
             index += 1;
         }
@@ -1406,23 +1814,129 @@ impl Outline {
             places: Places::new(starts),
             identifiers: identifiers.into(),
             mentioned: mentioned.into(),
+            imports: paths.imports.into(),
+            globs: paths.globs.into(),
+            modules: paths.modules.into(),
             private,
         }
     }
 
-    /// The names its tokens within `span` write.
-    fn identifiers(&self, span: Span) -> impl Iterator<Item = &str> {
+    /// The names its tokens within `span` write, each with the path it is
+    /// below.
+    fn identifiers(&self, span: Span) -> impl Iterator<Item = (&str, &Head)> {
         let from = self
             .identifiers
-            .partition_point(|(_, at)| *at < span.start());
+            .partition_point(|(_, at, _)| *at < span.start());
         let to = self
             .identifiers
-            .partition_point(|(_, at)| *at <= span.end())
+            .partition_point(|(_, at, _)| *at <= span.end())
             .max(from);
         self.identifiers[from..to]
             .iter()
-            .map(|(name, _)| name.as_ref())
+            .map(|(name, _, head)| (name.as_ref(), head))
     }
+}
+
+/// The paths a text's names are below (`Head`), and what its `use` and
+/// `mod` statements write.
+struct Paths {
+    /// Each token's head, by its index: `Bare` for a token not a name.
+    heads: Vec<Head>,
+    imports: Vec<(Box<str>, Head)>,
+    globs: Vec<Head>,
+    modules: Vec<Box<str>>,
+}
+
+impl Paths {
+    fn new(tokens: &[(Token, Position)]) -> Self {
+        let mut paths = Self {
+            heads: vec![Head::Bare; tokens.len()],
+            imports: Vec::new(),
+            globs: Vec::new(),
+            modules: Vec::new(),
+        };
+        // The tokens but comments, by their indices.
+        let read = (0..tokens.len())
+            .filter(|index| !matches!(tokens[*index].0, Token::Comment(_)))
+            .collect::<Vec<_>>();
+        let token = |at: usize| &tokens[read[at]].0;
+        // Within a `use` statement: the path it starts with, once read, and
+        // how many groups deep it is.
+        let mut statement: Option<(Option<Box<str>>, usize)> = None;
+        for at in 0..read.len() {
+            let current = token(at);
+            if let Some((start, depth)) = &mut statement {
+                match current {
+                    Token::SemiColon | Token::EOF if *depth == 0 => statement = None,
+                    Token::LeftBrace => *depth += 1,
+                    Token::RightBrace => *depth = depth.saturating_sub(1),
+                    Token::Multiply => paths.globs.push(head(start.as_deref())),
+                    _ => {
+                        if let Some(name) = word(current) {
+                            let start = start.get_or_insert_with(|| name.into());
+                            paths.heads[read[at]] = Head::Path(start.clone());
+                            if let Token::Identifier(name) = current {
+                                paths
+                                    .imports
+                                    .push((name.as_str().into(), Head::Path(start.clone())));
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            match current {
+                Token::Use => statement = Some((None, 0)),
+                Token::Mod => {
+                    if let Some(Token::Identifier(name)) = read.get(at + 1).map(|_| token(at + 1)) {
+                        paths.modules.push(name.as_str().into());
+                    }
+                }
+                Token::Identifier(_) => paths.heads[read[at]] = Self::head(at, &token),
+                _ => {}
+            }
+        }
+        paths
+    }
+
+    /// The head of the name at `at` among the read tokens `token` gives:
+    /// the first name of the `a::b::` it follows, if any.
+    fn head<'t>(at: usize, token: &impl Fn(usize) -> &'t Token) -> Head {
+        let follows = |at: usize| at.checked_sub(1).map(token);
+        if !matches!(follows(at), Some(Token::DoubleColon)) {
+            return Head::Bare;
+        }
+        // The `::` before the name.
+        let mut colons = at - 1;
+        loop {
+            let Some(start) = colons.checked_sub(1) else {
+                return Head::Unknown;
+            };
+            let Some(name) = word(token(start)) else {
+                return Head::Unknown;
+            };
+            match follows(start) {
+                Some(Token::DoubleColon) => colons = start - 1,
+                _ => return Head::Path(name.into()),
+            }
+        }
+    }
+}
+
+/// The name `token` writes as a path segment: a name, a keyword the lexer
+/// keeps as written (`crate`, `super`), or `self`.
+fn word(token: &Token) -> Option<&str> {
+    match token {
+        Token::Identifier(name) | Token::Reserved(name) => Some(name.as_str()),
+        Token::SelfValue => Some("self"),
+        _ => None,
+    }
+}
+
+/// The head of a path that starts with `start`: `Unknown` when the text
+/// doesn't spell it.
+fn head(start: Option<&str>) -> Head {
+    start.map_or(Head::Unknown, |start| Head::Path(start.into()))
 }
 
 /// Where each name in `tokens` that no visibility marks and a `:` follows
