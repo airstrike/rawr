@@ -57,23 +57,22 @@ impl Output {
         let sources = graph.diagnostic_sources();
         let source = reload::source::Graph::from_package(&graph);
         let native = resolve::native::Capture::from_graph(&graph, allocation)?;
-        let program =
-            resolve::package::resolve_captured(graph, &engine.host_registry, native.clone())
-                .map_err(|failure| {
-                    // A crate derive whose item changed is expanded again
-                    // by preparation, as a native miss is answered (#593).
-                    let missed = matches!(failure.error, resolve::Error::ExpansionRequired { .. })
-                        || native.matches(
-                            crate::program::source::Id::from_index(failure.primary.index()),
-                            &failure.error,
-                        );
-                    let error = package::Error::resolution(sources.clone(), failure);
-                    if missed {
-                        Error::NativeMiss(error)
-                    } else {
-                        Error::Source(error)
-                    }
-                })?;
+        let program = resolve::lower_nominal::kept::resolve(engine, graph, native.clone())
+            .map_err(|failure| {
+                // A crate derive whose item changed is expanded again
+                // by preparation, as a native miss is answered (#593).
+                let missed = matches!(failure.error, resolve::Error::ExpansionRequired { .. })
+                    || native.matches(
+                        crate::program::source::Id::from_index(failure.primary.index()),
+                        &failure.error,
+                    );
+                let error = package::Error::resolution(sources.clone(), failure);
+                if missed {
+                    Error::NativeMiss(error)
+                } else {
+                    Error::Source(error)
+                }
+            })?;
         let (executable, imported) = resolve::lower_package_with_uses(
             engine,
             program,

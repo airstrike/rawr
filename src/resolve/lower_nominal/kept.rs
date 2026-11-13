@@ -39,6 +39,7 @@ use super::splice::Parsed;
 use super::surface::ImportedUse;
 use super::ty::Ty;
 use crate::program::source;
+use crate::resolve::package::Resolutions;
 use crate::resolve::Program;
 use crate::{host, Engine, Scope, Span};
 use sha2::{Digest as _, Sha256};
@@ -231,6 +232,8 @@ pub(crate) struct Lowerings {
     checked: usize,
     /// Where a runner keeps them for the next runner (#1638).
     disk: Option<Disk>,
+    /// What this compiler's compiles resolved of each unit (#1876).
+    resolutions: Resolutions,
 }
 
 impl Lowerings {
@@ -247,6 +250,7 @@ impl Lowerings {
             checks: BTreeMap::new(),
             checked: 0,
             disk: None,
+            resolutions: Resolutions::new(),
         }
     }
 
@@ -276,6 +280,28 @@ impl Lowerings {
 /// runner's compiler, or an owner's check of the program (#1646).
 fn keeps(engine: &Engine) -> bool {
     engine.imported_native.is_some() || engine.keeps_lowerings
+}
+
+/// `graph` resolved, misses against native code recorded in `native`: a
+/// compiler that keeps its lowerings reuses each unit's resolution its
+/// last compile kept while what it reads is as it was (#1876).
+pub(crate) fn resolve(
+    engine: &Engine,
+    graph: crate::package::Graph,
+    native: std::sync::Arc<crate::resolve::native::Capture>,
+) -> Result<Program, crate::resolve::package::Failure> {
+    if !keeps(engine) {
+        return crate::resolve::package::resolve_captured(graph, &engine.host_registry, native);
+    }
+    let mut resolutions = std::mem::take(&mut lock(engine).resolutions);
+    let resolved = crate::resolve::package::resolve_kept(
+        graph,
+        &engine.host_registry,
+        Some(native),
+        &mut resolutions,
+    );
+    lock(engine).resolutions = resolutions;
+    resolved
 }
 
 /// One reveal's use of its compiler's kept readings (`Scanned`). What it
