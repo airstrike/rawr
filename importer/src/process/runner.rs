@@ -110,8 +110,9 @@ pub struct Arguments {
     /// The arguments after `--`.
     pub arguments: Vec<std::ffi::OsString>,
     /// What the owner adds to each runner's command before it spawns, such
-    /// as clearing a signal mask its own threads keep, which a spawned
-    /// program would otherwise inherit.
+    /// as the program's reload stream. It sets no hook to run in the
+    /// child: one would make std fork this process instead of using
+    /// `posix_spawn`.
     pub prepare: Option<fn(&mut Command)>,
 }
 

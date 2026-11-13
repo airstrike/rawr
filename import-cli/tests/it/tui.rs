@@ -449,6 +449,29 @@ impl Terminal {
         self.screen.lock().unwrap().main.clone()
     }
 
+    /// Send `signal` to the terminal's foreground process group, as the
+    /// terminal sends SIGINT on Ctrl-C to a program that reads it with
+    /// line editing. `ps` reads the group, as the test doesn't share the
+    /// pty's session.
+    fn signal_foreground(&self, signal: nix::sys::signal::Signal) {
+        let output = Command::new("ps")
+            .args(["-o", "tpgid=", "-p"])
+            .arg(self.child.id().to_string())
+            .output()
+            .unwrap();
+        let group: i32 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_ne!(
+            u32::try_from(group).ok(),
+            Some(self.child.id()),
+            "the program has the terminal"
+        );
+        nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), signal).unwrap();
+    }
+
     fn ended(&self, times: usize) {
         self.until("the program's end", |screen| {
             screen.main.matches("a save runs it again").count() >= times
@@ -551,5 +574,22 @@ fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it(
     terminal.keys(b"q");
     let status = terminal.child.wait().unwrap();
     assert!(status.success(), "{status}\n{}", terminal.main_text());
+    assert_eq!(terminal.stty(), before);
+}
+
+/// SIGINT reaches the program, as Ctrl-C does under `cargo run`, though
+/// `rawr-import` blocks it in every thread and its runners start with that
+/// mask: each runner clears it before anything else (#1755). It ends the
+/// program, and the run with the status a shell gives it, 130, with the
+/// terminal as it was.
+#[test]
+fn sigint_at_the_terminal_ends_the_program_and_the_run_as_under_cargo_run() {
+    let root = ISLANDS.lease(&[]);
+    let mut terminal = Terminal::start(&root);
+    let before = terminal.stty();
+    terminal.shows("tui-one");
+    terminal.signal_foreground(nix::sys::signal::Signal::SIGINT);
+    let status = terminal.child.wait().unwrap();
+    assert_eq!(status.code(), Some(130), "{}", terminal.main_text());
     assert_eq!(terminal.stty(), before);
 }

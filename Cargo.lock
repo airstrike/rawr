@@ -2965,6 +2965,7 @@ dependencies = [
  "document-features",
  "futures-core",
  "getrandom 0.3.4",
+ "libc",
  "num-traits",
  "once_cell",
  "proc-macro2",

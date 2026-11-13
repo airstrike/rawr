@@ -167,6 +167,10 @@ pub mod place;
 #[cfg(unix)]
 #[doc(hidden)]
 pub mod play;
+/// A generated runner's own process: its signal mask and its leaving.
+#[cfg(unix)]
+#[doc(hidden)]
+pub mod process;
 /// Opaque data retained by resolved programs.
 pub mod program;
 /// Canonical Rawr source and project discovery.
