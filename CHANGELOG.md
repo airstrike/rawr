@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.201 (2026-11-12)
+
 - A save's restart compiles rawr's copy of the program's crate with the profile `cargo build` gives the crate. A project whose workspace dependency lies outside its workspace, or that has no path packages, had the copy built with its `[profile.dev.package."*"]` settings, which on inboard meant opt-level 3 at every restart. (#1833; part of #1789, #1801)
 
 ## 0.3.200 (2026-11-12)
