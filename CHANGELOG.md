@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr run` no longer fails to settle the runner's lockfile when the program's crate has an optional dependency the project patches (inboard's `iced_test`). The runner drops a `[patch]` only when no package of its workspace names it, optional and target-specific dependencies included. (#1840)
 
 ## 0.3.202 (2026-11-12)
 

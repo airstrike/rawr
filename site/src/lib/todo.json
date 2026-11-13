@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr run` no longer fails to settle the runner's lockfile when the program's crate has an optional dependency the project patches (inboard's `iced_test`). The runner drops a `[patch]` only when no package of its workspace names it, optional and target-specific dependencies included.","issues":[1840]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.202",
@@ -4053,7 +4058,21 @@
     {"issue":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1838,"title":"Three owner-stage unit tests fail on main","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1839,"title":"A save whose API content is kept reuses the kept graph and classification","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.202"}
+    {"issue":1839,"title":"A save whose API content is kept reuses the kept graph and classification","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.202"},
+    {"issue":1840,"title":"The runner keeps a project patch that a member of its workspace names","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1841,"title":"A path package reached only through a member's optional path dependency can lose a patch it needs in the runner","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1842,"title":"A runner without the shared runtime builds --locked from a lock lacking its members' optional dependencies","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1843,"title":"The store reads and decodes its whole installation ledger once per read-set entry and three times per lookup","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1844,"title":"Publishing a node fsyncs about 14 times, rewrites the ledger 3 times, then reads the payload back and hashes it twice","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1845,"title":"Shared binding tables are read, hashed and parsed for every crate before their inputs are checked, then replayed again","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1847,"title":"A Persisted cold resolution reruns cargo metadata and --unit-graph although the remembered output proves them unchanged","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1848,"title":"The nightly check runs with checksum freshness over every unit and its outputs are relocated message by message","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5273,7 +5292,20 @@
             {"number":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open"},
             {"number":1836,"title":"A native save replays the bundle it just built, parsing the Cargo view a third time and comparing every input again","state":"open"},
             {"number":1837,"title":"A harness for a remembered request parses Cargo's provisional metadata only to rebuild the internal recipe","state":"open"},
-            {"number":1838,"title":"Three owner-stage unit tests fail on main","state":"closed"}
+            {"number":1838,"title":"Three owner-stage unit tests fail on main","state":"closed"},
+            {"number":1841,"title":"A path package reached only through a member's optional path dependency can lose a patch it needs in the runner","state":"open"},
+            {"number":1842,"title":"A runner without the shared runtime builds --locked from a lock lacking its members' optional dependencies","state":"open"},
+            {"number":1843,"title":"The store reads and decodes its whole installation ledger once per read-set entry and three times per lookup","state":"open"},
+            {"number":1844,"title":"Publishing a node fsyncs about 14 times, rewrites the ledger 3 times, then reads the payload back and hashes it twice","state":"open"},
+            {"number":1845,"title":"Shared binding tables are read, hashed and parsed for every crate before their inputs are checked, then replayed again","state":"open"},
+            {"number":1846,"title":"Each extracted crate rescans every proof recipe and re-proves its whole closure from disk","state":"open"},
+            {"number":1847,"title":"A Persisted cold resolution reruns cargo metadata and --unit-graph although the remembered output proves them unchanged","state":"open"},
+            {"number":1848,"title":"The nightly check runs with checksum freshness over every unit and its outputs are relocated message by message","state":"open"},
+            {"number":1849,"title":"Each preparation round regenerates the shadow crate, compare-reads its 3,047 files and reloads the program graph","state":"open"},
+            {"number":1850,"title":"The interpreter's per-save compile reprints and reparses the whole script and re-resolves every unit","state":"open"},
+            {"number":1851,"title":"The API graph and classification carry Unit by value, hash each definition about seven times and re-encode on every hit","state":"open"},
+            {"number":1852,"title":"The generated runner keeps every exported handle alive and scans lists linearly on each call","state":"open"},
+            {"number":1853,"title":"The runner build hashes the runner executable twice and parses Cargo.lock eight to ten times","state":"open"}
           ]
         },
         {
