@@ -257,7 +257,7 @@ fn compile<B>(
 ) -> Result<node::Bundled<Product>, node::Error> {
     let staging = std::time::Instant::now();
     let generated = attempt.generated();
-    materialize(manifest, &attempt)?;
+    materialize(manifest, &inputs.carrier, &attempt)?;
     let target = attempt.target();
     let project_build = crate::location::build_directory(context.project(), context.environment());
     let build = crate::deps::directory(&project_build).map_err(|source| node::Error::Io {
@@ -314,10 +314,7 @@ fn compile<B>(
         path: context.rawr().join("build.lock"),
         source,
     })?;
-    let carrier = manifest
-        .generated
-        .carrier()
-        .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
+    let carrier = &inputs.carrier;
     let file_of = |path: &str| {
         manifest
             .files
@@ -355,25 +352,17 @@ fn compile<B>(
             version.as_deref(),
         )
     };
-    let sync = |runtime: Option<&crate::runner::runtime::Runtime>| {
-        let mut sources = sources(runtime);
-        // The lock cargo settled this pruned lock to, at an earlier build.
-        if runtime.is_some()
-            && let Some(settled) = settled_lock(&work, &sources)
-        {
-            for (path, bytes) in &mut sources {
-                if *path == "Cargo.lock" {
-                    *bytes = std::borrow::Cow::Owned(settled.clone().into_bytes());
-                }
-            }
-        }
-        // The sources and the carrier.
+    // The sources, with `settled` in place of their lock, and the carrier.
+    let sync = |sources: &[(&str, std::borrow::Cow<'_, [u8]>)], settled: Option<&str>| {
         let files = sources.len() + 1;
         crate::bridge::generate::sync_sources(
             &work,
             sources
                 .iter()
-                .map(|(path, bytes)| (*path, bytes.as_ref()))
+                .map(|(path, bytes)| match (*path, settled) {
+                    ("Cargo.lock", Some(settled)) => (*path, settled.as_bytes()),
+                    _ => (*path, bytes.as_ref()),
+                })
                 .chain([("rawr-generated-manifest.carrier", carrier.as_ref())]),
         )
         .map(|written| (written.len(), files))
@@ -383,11 +372,15 @@ fn compile<B>(
             source,
         })
     };
-    let (written, files) = sync(runtime.as_ref())?;
-    if let Some(runtime) = &runtime {
-        let sources = sources(Some(runtime));
+    let linked = sources(runtime.as_ref());
+    // The lock cargo settled this pruned lock to, at an earlier build.
+    let settled = runtime.as_ref().and_then(|_| settled_lock(&work, &linked));
+    let (written, files) = sync(&linked, settled.as_deref())?;
+    if let Some(runtime) = &runtime
+        && settled.is_none()
+    {
         let file = |name: &str| {
-            sources
+            linked
                 .iter()
                 .find(|(path, _)| *path == name)
                 .map_or(&[][..], |(_, bytes)| bytes.as_ref())
@@ -400,61 +393,46 @@ fn compile<B>(
             file("Cargo.lock"),
         )?;
     }
+    drop(linked);
     let before = crate::deps::project::Before::take(&build);
     #[cfg(feature = "rustc-driver")]
     let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
     crate::progress::runner_staged(staging.elapsed(), written, files);
-    let began = std::time::Instant::now();
-    let mut result = crate::process::project_cargo(&command, context.limits().process_limits())
-        .and_then(|output| {
-            // A failed adapter compilation still gives build-script evidence
-            // that can explain a nightly/project API mismatch.
-            #[cfg(feature = "rustc-driver")]
-            crate::bindings::record_runner_scripts(&work, output.stdout());
-            output.checked(crate::process::Program::Cargo)
-        })
-        .inspect(|messages| crate::progress::runner_built(messages, began.elapsed()));
-    // A runner that can't link the shared runtime, such as through a native
-    // symbol both define, builds rawr in the project as before. It says so
-    // once, and the project's next build goes there directly.
-    let local = match (&runtime, &result) {
-        (Some(_), Err(crate::Error::Process { stderr, .. })) => {
-            crate::runner::runtime::link_failure(stderr)
-        }
-        (Some(shared), Ok(messages)) => shared.native_clash(messages),
-        _ => None,
-    };
-    if let Some(reason) = local {
-        crate::runner::runtime::record_local(
-            context.rawr(),
-            generated_manifest,
-            generated_lock,
-            &reason,
-        );
-        runtime = None;
-        sync(None)?;
-        #[cfg(feature = "rustc-driver")]
-        let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
+    let run = || {
         let began = std::time::Instant::now();
-        result = crate::process::project_cargo(&command, context.limits().process_limits())
+        crate::process::project_cargo(&command, context.limits().process_limits())
             .and_then(|output| {
+                // A failed adapter compilation still gives build-script
+                // evidence that can explain a nightly/project API mismatch.
+                // A build that succeeds records it from its one decoding.
                 #[cfg(feature = "rustc-driver")]
-                crate::bindings::record_runner_scripts(&work, output.stdout());
+                if !output.success() {
+                    crate::bindings::record_runner_scripts(
+                        &work,
+                        &crate::cargo::messages::Messages::parse(output.stdout()),
+                    );
+                }
                 output.checked(crate::process::Program::Cargo)
             })
-            .inspect(|messages| crate::progress::runner_built(messages, began.elapsed()));
-    }
+            .inspect(|messages| crate::progress::runner_built(messages, began.elapsed()))
+    };
     let name = if cfg!(windows) {
         "rawr-generated-runner.exe"
     } else {
         "rawr-generated-runner"
     };
-    let copied = result.as_ref().ok().map(|messages| {
+    // What a build that succeeded leaves, read from its decoded messages.
+    let finish = |messages: &crate::cargo::messages::Messages<'_>,
+                  bytes: &[u8],
+                  linked: bool|
+     -> Result<(), node::Error> {
+        #[cfg(feature = "rustc-driver")]
+        crate::bindings::record_runner_scripts(&work, messages);
         // Cargo's JSON names the rawr crate's sources and the executable.
-        crate::deps::prune_rawr(&build, messages);
+        crate::deps::prune_rawr(&build, bytes);
         // Linked to the shared runtime, the copies of rawr that earlier
         // builds compiled in the project are stale.
-        if runtime.is_some() {
+        if linked {
             crate::deps::prune_rawr_from(&build, &crate::runner::runtime::host_sources());
         }
         crate::deps::project::prune(&build, messages, &before, &work);
@@ -464,18 +442,68 @@ fn compile<B>(
         })?;
         // Copy (a clone on APFS) under the lock, before another build of this
         // project replaces the executable.
+        let copy = destination.join(name);
         fs::create_dir_all(&destination)
-            .and_then(|()| fs::copy(&executable, destination.join(name)))
-            .map(|_| {
-                first_exec(&destination.join(name));
-                clear_uplifted(&work.join("target"), &executable);
-            })
+            .and_then(|()| fs::copy(&executable, &copy))
             .map_err(|source| node::Error::Io {
                 operation: "copy the built runner into its bundle",
-                path: destination.join(name),
+                path: copy.clone(),
                 source,
-            })
-    });
+            })?;
+        // Written frozen, the copy keeps the identity its digest is memoized
+        // under through the bundle's freeze, so it is hashed once.
+        crate::store::bundle::freeze_file(&copy)?;
+        first_exec(&copy);
+        clear_uplifted(&work.join("target"), &executable);
+        Ok(())
+    };
+    let first = run();
+    let decoded = first
+        .as_deref()
+        .ok()
+        .map(crate::cargo::messages::Messages::parse);
+    // A runner that can't link the shared runtime, such as through a native
+    // symbol both define, builds rawr in the project as before. It says so
+    // once, and the project's next build goes there directly.
+    let local = match (&runtime, &first, &decoded) {
+        (Some(_), Err(crate::Error::Process { stderr, .. }), _) => {
+            crate::runner::runtime::link_failure(stderr)
+        }
+        (Some(shared), _, Some(messages)) => shared.native_clash(messages),
+        _ => None,
+    };
+    let (result, copied) = match local {
+        None => {
+            let copied = decoded
+                .as_ref()
+                .zip(first.as_deref().ok())
+                .map(|(messages, bytes)| finish(messages, bytes, runtime.is_some()));
+            drop(decoded);
+            (first, copied)
+        }
+        Some(reason) => {
+            drop(decoded);
+            crate::runner::runtime::record_local(
+                context.rawr(),
+                generated_manifest,
+                generated_lock,
+                &reason,
+            );
+            runtime = None;
+            sync(&sources(None), None)?;
+            #[cfg(feature = "rustc-driver")]
+            let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
+            let second = run();
+            let copied = second.as_deref().ok().map(|bytes| {
+                finish(
+                    &crate::cargo::messages::Messages::parse(bytes),
+                    bytes,
+                    false,
+                )
+            });
+            (second, copied)
+        }
+    };
     drop((shared, acquired, runtime));
     result?;
     copied.transpose()?;
@@ -557,23 +585,16 @@ fn clear_uplifted(target: &Path, executable: &Path) {
 
 /// The executable of the runner's binary target, from Cargo's
 /// `compiler-artifact` message for the `rawr-generated-runner` package.
-fn runner_executable(messages: &[u8]) -> Option<PathBuf> {
+fn runner_executable(messages: &crate::cargo::messages::Messages<'_>) -> Option<PathBuf> {
     messages
-        .split(|byte| *byte == b'\n')
-        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .iter()
         .filter(|message| {
-            message.get("reason").and_then(serde_json::Value::as_str) == Some("compiler-artifact")
+            message.reason() == Some("compiler-artifact")
                 && message
-                    .get("package_id")
-                    .and_then(serde_json::Value::as_str)
+                    .package_id()
                     .is_some_and(|package| package.contains("rawr-generated-runner"))
         })
-        .find_map(|message| {
-            message
-                .get("executable")
-                .and_then(serde_json::Value::as_str)
-                .map(PathBuf::from)
-        })
+        .find_map(|message| message.executable().map(PathBuf::from))
 }
 
 /// The runner's sources as Cargo builds them: the generated files with the
@@ -591,69 +612,105 @@ fn runner_sources<'a, B>(
 ) -> Vec<(&'a str, std::borrow::Cow<'a, [u8]>)> {
     use crate::bridge::generate;
     use std::borrow::Cow;
-    // The packages each member leaves out, which no rewrite changes.
-    let without = generate::member::exclusions(
-        manifest
-            .files
-            .iter()
-            .filter(|file| generate::is_member_manifest(file.path()))
-            .filter_map(|file| std::str::from_utf8(file.bytes()).ok()),
-    );
+    // Each member's manifest, parsed once for the packages it leaves out,
+    // which no rewrite changes, and for its rewrite.
+    let members = manifest
+        .files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| generate::is_member_manifest(file.path()))
+        .filter_map(|(index, file)| {
+            let text = std::str::from_utf8(file.bytes()).ok()?;
+            Some((index, text.parse::<toml_edit::DocumentMut>().ok()?))
+        })
+        .collect::<Vec<_>>();
+    let without = generate::member::exclusions(members.iter().map(|(_, document)| document));
     let mut sources = manifest
         .files
         .iter()
         .map(|file| {
             let path = file.path();
-            let text = match (path, mirrored) {
-                ("Cargo.toml", Some(mirrored)) => Some(mirrored),
-                _ => std::str::from_utf8(file.bytes()).ok(),
-            };
-            let rewired = match (runtime, path, text) {
-                (Some(runtime), "Cargo.toml", Some(text)) => runtime.manifest(text),
-                (Some(runtime), "Cargo.lock", Some(text)) => runtime.lock(text),
-                (Some(runtime), path, Some(text)) if generate::is_build_script(path) => {
-                    runtime.build_script(text)
+            let bytes = match path {
+                "Cargo.toml" => {
+                    let base = mirrored.map_or(file.bytes(), str::as_bytes);
+                    std::str::from_utf8(base)
+                        .ok()
+                        .and_then(|text| runner_manifest(text, runtime, level, version))
+                        .map_or(Cow::Borrowed(base), |text| Cow::Owned(text.into_bytes()))
                 }
-                (Some(runtime), path, Some(text)) if generate::is_crate_root(path) => {
-                    Some(runtime.main(text))
+                "Cargo.lock" => runner_lock(file.bytes(), runtime, version, &without)
+                    .map_or(Cow::Borrowed(file.bytes()), |text| {
+                        Cow::Owned(text.into_bytes())
+                    }),
+                path => {
+                    let rewired = match (runtime, std::str::from_utf8(file.bytes()).ok()) {
+                        (Some(runtime), Some(text)) if generate::is_build_script(path) => {
+                            runtime.build_script(text)
+                        }
+                        (Some(runtime), Some(text)) if generate::is_crate_root(path) => {
+                            Some(runtime.main(text))
+                        }
+                        _ => None,
+                    };
+                    rewired.map_or(Cow::Borrowed(file.bytes()), |text| {
+                        Cow::Owned(text.into_bytes())
+                    })
                 }
-                (None, "Cargo.toml", Some(text)) => {
-                    crate::runner::runtime::with_opt_level(text, level)
-                }
-                _ => None,
-            };
-            let rewired = match (version, rewired.as_deref().or(text)) {
-                (Some(version), Some(text)) => with_version(path, text, version).or(rewired),
-                _ => rewired,
-            };
-            let rewired = match (path, rewired.as_deref().or(text)) {
-                ("Cargo.lock", Some(text)) => generate::member::lock(text, &without).or(rewired),
-                _ => rewired,
-            };
-            let bytes = match (rewired, path, mirrored) {
-                (Some(text), _, _) => Cow::Owned(text.into_bytes()),
-                (None, "Cargo.toml", Some(mirrored)) => Cow::Borrowed(mirrored.as_bytes()),
-                (None, _, _) => Cow::Borrowed(file.bytes()),
             };
             (path, bytes)
         })
         .collect::<Vec<_>>();
+    // The runner's manifest as rewritten, read once for every member.
     let runner = sources
         .iter()
         .find(|(path, _)| *path == "Cargo.toml")
         .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())
-        .map(str::to_owned);
-    for (path, bytes) in &mut sources {
-        if let Some(runner) = &runner
-            && generate::is_member_manifest(path)
-            && let Some(member) = std::str::from_utf8(bytes)
-                .ok()
-                .and_then(|member| generate::member::manifest(runner, member))
-        {
-            *bytes = Cow::Owned(member.into_bytes());
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok());
+    if let Some(runner) = &runner {
+        for (index, mut member) in members {
+            if generate::member::rebase(runner, &mut member).is_some() {
+                sources[index].1 = Cow::Owned(member.to_string().into_bytes());
+            }
         }
     }
     sources
+}
+
+/// The runner's manifest `text` as Cargo builds it ([`runner_sources`]),
+/// parsed and written once. `None` when no rewrite changes it.
+fn runner_manifest(
+    text: &str,
+    runtime: Option<&crate::runner::runtime::Runtime>,
+    level: &toml_edit::Item,
+    version: Option<&str>,
+) -> Option<String> {
+    let mut document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let linked = match runtime {
+        Some(runtime) => runtime.manifest(&mut document),
+        None => crate::runner::runtime::with_opt_level(&mut document, level),
+    };
+    let versioned = version.and_then(|version| with_version("Cargo.toml", &mut document, version));
+    (linked.is_some() || versioned.is_some()).then(|| document.to_string())
+}
+
+/// The runner's lockfile `bytes` as Cargo builds them ([`runner_sources`]):
+/// pruned for the shared `runtime`, at `version`, and with each member's
+/// entry filled in but the packages it leaves out (`without`), parsed and
+/// written once. `None` when no rewrite changes it.
+fn runner_lock(
+    bytes: &[u8],
+    runtime: Option<&crate::runner::runtime::Runtime>,
+    version: Option<&str>,
+    without: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Option<String> {
+    let mut document = std::str::from_utf8(bytes)
+        .ok()?
+        .parse::<toml_edit::DocumentMut>()
+        .ok()?;
+    let pruned = runtime.and_then(|runtime| runtime.lock(&mut document));
+    let versioned = version.and_then(|version| with_version("Cargo.lock", &mut document, version));
+    let filled = crate::bridge::generate::member::fill_lock(&mut document, without);
+    (pruned.is_some() || versioned.is_some() || filled.is_some()).then(|| document.to_string())
 }
 
 /// The runner's version for `project`: none for a project's own runner, and
@@ -672,10 +729,10 @@ fn runner_version(project: &Path) -> Option<String> {
     Some(version)
 }
 
-/// `text`, the runner's manifest or lockfile at `path`, with the runner at
-/// `version`. `None` for any other file.
-fn with_version(path: &str, text: &str, version: &str) -> Option<String> {
-    let mut document = text.parse::<toml_edit::DocumentMut>().ok()?;
+/// The runner's manifest or lockfile `document`, as `path` names it, with
+/// the runner at `version`. `None`, with `document` as it was, for any
+/// other file or one without the runner.
+fn with_version(path: &str, document: &mut toml_edit::DocumentMut, version: &str) -> Option<()> {
     let package: &mut dyn toml_edit::TableLike = match path {
         "Cargo.toml" => document.get_mut("package")?.as_table_like_mut()?,
         "Cargo.lock" => document
@@ -689,7 +746,7 @@ fn with_version(path: &str, text: &str, version: &str) -> Option<String> {
         _ => return None,
     };
     package.insert("version", toml_edit::value(version));
-    Some(document.to_string())
+    Some(())
 }
 
 /// The settled lock for the pruned manifest and lock in `sources`
@@ -705,10 +762,11 @@ fn settled_lock(work: &Path, sources: &[(&str, std::borrow::Cow<'_, [u8]>)]) -> 
 }
 
 /// Keep the generated sources in the bundle as the manifests of their parts,
-/// which repeat the last generation's and the facade's, and the carrier
+/// which repeat the last generation's and the facade's, and the `carrier`
 /// whole. Cargo builds the work directory's copy (`work_directory`).
 fn materialize<B>(
     manifest: &super::super::Manifest<super::super::Generated, B>,
+    carrier: &[u8],
     attempt: &crate::store::bundle::Attempt,
 ) -> Result<(), node::Error> {
     let generated = attempt.generated();
@@ -727,11 +785,7 @@ fn materialize<B>(
     )?;
     write_new(&generated.join(crate::store::parts::sources::FILE), &index)?;
     drop(hold);
-    let carrier = manifest
-        .generated
-        .carrier()
-        .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-    write_new(&generated.join("rawr-generated-manifest.carrier"), &carrier)
+    write_new(&generated.join("rawr-generated-manifest.carrier"), carrier)
 }
 
 /// The directory Cargo builds this project's runner from,
@@ -746,7 +800,9 @@ fn work_directory(rawr: &Path) -> PathBuf {
 struct Inputs {
     build: crate::bridge::BuildRequestKey,
     manifest: [u8; 32],
+    /// The carrier, encoded once for every file and check that needs it.
     carrier: Box<[u8]>,
+    carrier_digest: [u8; 32],
     files: Box<[InputFile]>,
 }
 
@@ -772,13 +828,15 @@ impl Inputs {
                 digest: *file.digest(),
             });
         }
+        let carrier = manifest
+            .generated
+            .carrier()
+            .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
         Ok(Self {
             build: manifest.generated.build_request_key(),
             manifest: manifest.generated.digest(),
-            carrier: manifest
-                .generated
-                .carrier()
-                .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?,
+            carrier_digest: Sha256::digest(&carrier).into(),
+            carrier,
             files: files.into_boxed_slice(),
         })
     }
@@ -804,7 +862,7 @@ impl Inputs {
         validate_file(
             &crate::store::bundle::path(&generated, Path::new("rawr-generated-manifest.carrier"))?,
             self.carrier.len(),
-            Sha256::digest(&self.carrier).into(),
+            self.carrier_digest,
         )?;
         Ok(())
     }
@@ -971,7 +1029,7 @@ impl Product {
             || array_at(&seal, 76)? != self.manifest
             || self.manifest != inputs.manifest
             || u64_at(&seal, 108)? != inputs.carrier.len() as u64
-            || array_at(&seal, 116)? != <[u8; 32]>::from(Sha256::digest(&inputs.carrier))
+            || array_at(&seal, 116)? != inputs.carrier_digest
             || u64_at(&seal, 148)? != self.executable_bytes
             || array_at(&seal, 156)? != self.executable_digest
             || u32_at(&seal, 188)? != self.mode
@@ -1307,5 +1365,60 @@ mod tests {
         assert!(Product::decode(&bytes[..224]).is_err());
         bytes[120..128].copy_from_slice(&228_u64.to_le_bytes());
         assert!(Product::decode(&bytes).is_err());
+    }
+
+    /// The runner's lock and manifest, parsed and written once, are the
+    /// bytes each rewrite gives when it reads the text the last one wrote.
+    #[test]
+    fn the_runner_lock_and_manifest_rewrite_in_one_pass_as_one_by_one() {
+        use std::collections::{BTreeMap, BTreeSet};
+        use toml_edit::DocumentMut;
+
+        let runtime = crate::runner::runtime::tests::runtime();
+        let version = "0.0.0+ab";
+        let reparsed = |document: DocumentMut| document.to_string().parse::<DocumentMut>().unwrap();
+        let lock = "version = 4\n\n\
+            [[package]]\nname = \"itoa\"\nversion = \"1.0.15\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
+            [[package]]\nname = \"rawr\"\nversion = \"0.3.3\"\ndependencies = [\n \"itoa\",\n \"smartstring\",\n]\n\n\
+            [[package]]\nname = \"rawr-generated-runner\"\nversion = \"0.0.0\"\ndependencies = [\n \"zeta\",\n \"itoa\",\n \"rawr\",\n \"rawr-generated-runner-adapters-iced\",\n \"rawr-generated-runner-base\",\n]\n\n\
+            [[package]]\nname = \"rawr-generated-runner-adapters-iced\"\nversion = \"0.0.0\"\ndependencies = [\n \"rawr-generated-runner-base\",\n]\n\n\
+            [[package]]\nname = \"rawr-generated-runner-base\"\nversion = \"0.0.0\"\n\n\
+            [[package]]\nname = \"smartstring\"\nversion = \"1.0.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
+            [[package]]\nname = \"zeta\"\nversion = \"1.0.0\"\n";
+        let without = BTreeMap::from([(
+            "rawr-generated-runner-adapters-iced".to_owned(),
+            BTreeSet::from(["zeta".to_owned()]),
+        )]);
+        let mut document = lock.parse::<DocumentMut>().unwrap();
+        runtime.lock(&mut document).unwrap();
+        let mut document = reparsed(document);
+        with_version("Cargo.lock", &mut document, version).unwrap();
+        let mut document = reparsed(document);
+        crate::bridge::generate::member::fill_lock(&mut document, &without).unwrap();
+        let once = runner_lock(lock.as_bytes(), Some(&runtime), Some(version), &without)
+            .expect("the lock is rewritten");
+        assert_eq!(once, document.to_string());
+        assert!(!once.contains("smartstring"), "{once}");
+
+        let manifest = "[workspace]\n\n[package]\nname = \"rawr-generated-runner\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
+            [dependencies]\n__rawr_internal = { package = \"rawr\", path = \"/hosts/a\" }\nitoa = \"1\"\n\n\
+            [profile.dev.package.\"path+file:///hosts/a#rawr@0.3.3\"]\nopt-level = 3\n";
+        let level = toml_edit::value("1");
+        for linked in [Some(&runtime), None] {
+            let mut document = manifest.parse::<DocumentMut>().unwrap();
+            match linked {
+                Some(runtime) => runtime.manifest(&mut document).unwrap(),
+                None => crate::runner::runtime::with_opt_level(&mut document, &level).unwrap(),
+            }
+            let mut document = reparsed(document);
+            with_version("Cargo.toml", &mut document, version).unwrap();
+            let once = runner_manifest(manifest, linked, &level, Some(version))
+                .expect("the manifest is rewritten");
+            assert_eq!(once, document.to_string());
+        }
+        assert_eq!(
+            runner_manifest("[package]\nname = \"plain\"\n", None, &level, None),
+            None
+        );
     }
 }

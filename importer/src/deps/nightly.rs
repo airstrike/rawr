@@ -57,7 +57,11 @@ const RECORDS: &str = ".rawr-records";
 /// The caller holds the directory's lock, so no other build runs there.
 pub(crate) fn prune(shared: &Path, messages: &[u8], key: &Key<'_>) {
     let profiles = super::profiles(shared);
-    let named = Named::read(messages, &profiles, None);
+    let named = Named::read(
+        &crate::cargo::messages::Messages::parse(messages),
+        &profiles,
+        None,
+    );
     if named.is_empty() {
         return;
     }
