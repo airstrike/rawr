@@ -80,8 +80,17 @@ impl Interface {
         let outlines = outlines(engine, program, outlined);
         let declarations = Declarations::new(program, &outlines, native)?;
         let own = own(program)?;
+        // A runner's compiler reads the facades registered in the process
+        // as its image holds them; a check reads its own registry's alone,
+        // which the facades below write whole, so another engine's
+        // registration keeps every source's key (#1850).
+        let registered = engine
+            .imported_native
+            .is_some()
+            .then(Engine::registered_facades);
         let every = every(
             program,
+            registered,
             models,
             &outlines,
             &declarations,
@@ -174,6 +183,7 @@ impl Native {
 /// for all its sources, and the impls of a type parameter.
 fn every(
     program: &Program,
+    registered: Option<usize>,
     models: &Models,
     outlines: &Outlines,
     declarations: &Declarations<'_>,
@@ -183,13 +193,13 @@ fn every(
     let mut written = Written(Sha256::new());
     written.0.update(b"rawr.lowering.interface/v9");
     // The compiler: the facades its host registry holds, and its options.
+    if let Some(registered) = registered {
+        write!(written, "{registered}").ok()?;
+    }
     write!(
         written,
-        "{}|{:?}|{:?}|{:?}",
-        Engine::registered_facades(),
-        models.access,
-        models.features,
-        models.std_traits,
+        "|{:?}|{:?}|{:?}",
+        models.access, models.features, models.std_traits,
     )
     .ok()?;
     // The native surface: each registry crate's facade whole, by its

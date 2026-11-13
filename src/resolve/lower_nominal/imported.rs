@@ -46,170 +46,113 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // A body that misses an item Rawr doesn't know doesn't stop the pass:
     // the next bodies' misses are asked for with it (#662).
     let mut missed = None;
-
-    for shell in program.items.iter() {
-        let item::Kind::Function(definition) = &shell.kind else {
+    let bodies = checked_bodies(program);
+    // A compiler that checks the program again on each save lowers again
+    // only the sources whose check reads something that changed: the
+    // others' uses are the earlier check's.
+    let mut checks = kept::Checks::open(engine, program, &models);
+    let mut keys = BTreeMap::new();
+    if let Some(checks) = &checks {
+        for body in &bodies {
+            keys.entry(body.source).or_insert_with(|| {
+                checks.key(
+                    body.source,
+                    program,
+                    bodies
+                        .iter()
+                        .filter(|other| other.source == body.source)
+                        .map(|other| (other.key, &*other.text)),
+                )
+            });
+        }
+    }
+    let mut reused = BTreeSet::new();
+    // What each source lowered again found so far, and whether each of its
+    // bodies lowered.
+    let mut lowered_sources = BTreeMap::<crate::program::source::Id, (Finding, bool)>::new();
+    models.take_reads();
+    for checked in &bodies {
+        let source = checked.source;
+        if reused.contains(&source) {
             continue;
-        };
-        // A template compiled per instantiation is lowered as its
-        // instances only (D629).
-        if shell
-            .key
-            .as_ref()
-            .is_some_and(|key| program.instances.templates.contains_key(key))
+        }
+        if !lowered_sources.contains_key(&source)
+            && let (Some(checks), Some(key)) = (checks.as_mut(), keys.get(&source))
+            && let Some(kept) = checks.reuse(source, *key, &models)
         {
+            kept.outside
+                .charge(allocation)
+                .map_err(crate::resolve::ImportedFailure::Surface)?;
+            uses.extend(kept.uses.iter().cloned());
+            dependencies.extend(kept.dependencies.iter().cloned());
+            reused.insert(source);
             continue;
         }
-        let body_source = body_source(
-            definition
-                .body
-                .text
-                .as_deref()
-                .unwrap_or_else(|| program.source.text_at(shell.source)),
-            &definition.body,
-        );
+        let before = uses.len();
+        let mut found = BTreeSet::new();
+        let mut charges = Vec::new();
         let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
-            let mut parser = Parser::for_function(
-                engine,
-                &body_source,
-                models.for_source(shell.source),
-                definition,
-                shell
-                    .key
-                    .clone()
-                    .expect("resolved functions retain stable item keys"),
-                offset,
-                0,
-                Some(ImportedContext {
-                    native: None,
-                    allocation: &mut *allocation,
-                    failure,
-                    source: shell.source,
-                    uses: &mut uses,
-                    dependencies: &mut dependencies,
-                }),
-            );
-            parser.symbolic_only = true;
-            parser.recover_misses = recover;
-            let lowered = parser.parse_function_body(definition);
-            (lowered, std::mem::take(&mut parser.recovered))
-        };
-        let first = lower(false, &mut allocation_failure);
-        let (lowered, more) = again(first, || lower(true, &mut None));
-        let Some(lowered) = body(
-            lowered,
-            more,
-            &mut allocation_failure,
-            shell.source,
-            &mut missed,
-        )?
-        else {
-            continue;
-        };
-        for operation in &lowered.ops {
-            dependencies.extend(operation.dependencies());
-        }
-        offset = uses.len();
-    }
-
-    // An impl for a crate's or a builtin type is checked as the crate's own
-    // are, so the native items its body uses are demanded too.
-    for definition in program.methods.iter().chain(&program.builtin_methods) {
-        // A method compiled per instantiation is lowered as its instances
-        // only (D629).
-        if program.instances.templates.contains_key(definition.key()) {
-            continue;
-        }
-        let body_source = source_span(
-            definition
-                .body_text()
-                .unwrap_or_else(|| program.source.text_at(definition.source())),
-            definition.body(),
-        );
-        let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
-            let mut parser = match Parser::for_method(
-                engine,
-                &body_source,
-                models.for_source(definition.source()),
-                definition,
-                offset,
-                0,
-                Some(ImportedContext {
-                    native: None,
-                    allocation: &mut *allocation,
-                    failure,
-                    source: definition.source(),
-                    uses: &mut uses,
-                    dependencies: &mut dependencies,
-                }),
-            ) {
-                Ok(parser) => parser,
-                Err(error) => return (Err(error), Vec::new()),
+            let mut recording = kept::Recording {
+                inner: &mut *allocation,
+                charges: Vec::new(),
             };
-            parser.symbolic_only = true;
-            parser.recover_misses = recover;
-            let lowered = parser.parse_method_body(definition);
-            (lowered, std::mem::take(&mut parser.recovered))
+            let lowered = checked.lower(
+                engine,
+                &models,
+                offset,
+                recover,
+                ImportedContext {
+                    native: None,
+                    allocation: &mut recording,
+                    failure,
+                    source,
+                    uses: &mut uses,
+                    dependencies: &mut found,
+                },
+            );
+            charges.append(&mut recording.charges);
+            lowered
         };
         let first = lower(false, &mut allocation_failure);
         let (lowered, more) = again(first, || lower(true, &mut None));
-        let Some(lowered) = body(
-            lowered,
-            more,
-            &mut allocation_failure,
-            definition.source(),
-            &mut missed,
-        )?
-        else {
+        let entry = lowered_sources
+            .entry(source)
+            .or_insert_with(|| (Finding::default(), true));
+        entry.0.charges.append(&mut charges);
+        entry.0.reads.append(&mut models.take_reads());
+        let lowered = body(lowered, more, &mut allocation_failure, source, &mut missed)?;
+        let Some(lowered) = lowered else {
+            entry.1 = false;
+            dependencies.append(&mut found);
             continue;
         };
         for operation in &lowered.ops {
-            dependencies.extend(operation.dependencies());
+            found.extend(operation.dependencies());
         }
+        entry.0.uses.extend(uses[before..].iter().cloned());
+        entry.0.dependencies.extend(found.iter().cloned());
+        dependencies.append(&mut found);
         offset = uses.len();
     }
-
-    let script = program
-        .scripts
-        .iter()
-        .find(|script| script.source == program.source.entry())
-        .expect("resolved package programs retain their entry script");
-    let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
-        let mut parser = Parser::new_with_offset(
-            engine,
-            &script.text,
-            models.for_source(script.source),
-            offset,
-            0,
-            Some(ImportedContext {
-                native: None,
-                allocation: &mut *allocation,
-                failure,
-                source: script.source,
-                uses: &mut uses,
-                dependencies: &mut dependencies,
-            }),
-        );
-        parser.symbolic_only = true;
-        parser.recover_misses = recover;
-        let lowered = parser.parse();
-        (lowered, std::mem::take(&mut parser.recovered))
-    };
-    let first = lower(false, &mut allocation_failure);
-    let (lowered, more) = again(first, || lower(true, &mut None));
-    let lowered = body(
-        lowered,
-        more,
-        &mut allocation_failure,
-        script.source,
-        &mut missed,
-    )?;
+    kept::checked(engine, lowered_sources.len());
+    if let Some(checks) = checks.as_mut() {
+        for (source, (found, lowered)) in lowered_sources {
+            if let (true, Some(key)) = (lowered, keys.get(&source)) {
+                checks.keep(
+                    source,
+                    *key,
+                    found.uses,
+                    found.dependencies,
+                    kept::Outside::new(found.charges, found.reads),
+                );
+            }
+        }
+    }
     if let Some(missed) = missed {
         return Err(crate::resolve::ImportedFailure::Lowering(missed));
     }
-    let lowered = lowered.expect("a failed script body is missed");
-    for operation in &lowered.ops {
-        dependencies.extend(operation.dependencies());
+    if let Some(checks) = checks.as_mut() {
+        checks.succeeded();
     }
     uses.sort_unstable();
     uses.dedup();
@@ -218,6 +161,160 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         uses: uses.into_boxed_slice(),
         impls,
     })
+}
+
+/// What the check of one source it lowered again found so far
+/// (`imported`): its uses, the facades it depends on, and what it charged
+/// and read outside the program.
+#[cfg(feature = "rust-import")]
+#[derive(Default)]
+struct Finding {
+    uses: Vec<ImportedUse>,
+    dependencies: BTreeSet<crate::host::facade::Dependency>,
+    charges: Vec<kept::Charge>,
+    reads: Vec<kept::Read>,
+}
+
+/// One body the check of the program lowers (`imported`).
+#[cfg(feature = "rust-import")]
+struct CheckedBody<'p> {
+    kind: Checking<'p>,
+    source: crate::program::source::Id,
+    /// Its item's key; `None` for the entry's statements outside its items.
+    key: Option<&'p crate::item::Key>,
+    /// The text its lowering reads.
+    text: std::borrow::Cow<'p, str>,
+}
+
+#[cfg(feature = "rust-import")]
+enum Checking<'p> {
+    Function(&'p item::Function),
+    Method(&'p method::Definition),
+    Script,
+}
+
+/// The bodies the check of `program` lowers, in the order it lowers them:
+/// its functions, then its methods, then its entry's statements, so the
+/// first failure reported is the first rustc reports. A template compiled
+/// per instantiation is lowered as its instances only (D629).
+#[cfg(feature = "rust-import")]
+fn checked_bodies(program: &Program) -> Vec<CheckedBody<'_>> {
+    let functions = program.items.iter().filter_map(|shell| {
+        let item::Kind::Function(definition) = &shell.kind else {
+            return None;
+        };
+        let key = shell
+            .key
+            .as_ref()
+            .expect("resolved functions retain stable item keys");
+        if program.instances.templates.contains_key(key) {
+            return None;
+        }
+        let text = body_source(
+            definition
+                .body
+                .text
+                .as_deref()
+                .unwrap_or_else(|| program.source.text_at(shell.source)),
+            &definition.body,
+        );
+        Some(CheckedBody {
+            kind: Checking::Function(definition),
+            source: shell.source,
+            key: Some(key),
+            text: text.into(),
+        })
+    });
+    // An impl for a crate's or a builtin type is checked as the crate's own
+    // are, so the native items its body uses are demanded too.
+    let methods = program
+        .methods
+        .iter()
+        .chain(&program.builtin_methods)
+        .filter(|definition| !program.instances.templates.contains_key(definition.key()))
+        .map(|definition| {
+            let text = source_span(
+                definition
+                    .body_text()
+                    .unwrap_or_else(|| program.source.text_at(definition.source())),
+                definition.body(),
+            );
+            CheckedBody {
+                kind: Checking::Method(definition),
+                source: definition.source(),
+                key: Some(definition.key()),
+                text: text.into(),
+            }
+        });
+    let script = program
+        .scripts
+        .iter()
+        .find(|script| script.source == program.source.entry())
+        .expect("resolved package programs retain their entry script");
+    functions
+        .chain(methods)
+        .chain(std::iter::once(CheckedBody {
+            kind: Checking::Script,
+            source: script.source,
+            key: None,
+            text: script.text.as_str().into(),
+        }))
+        .collect()
+}
+
+#[cfg(feature = "rust-import")]
+impl CheckedBody<'_> {
+    /// Lower the body for its uses alone, its ops numbered after
+    /// `offset`, going on past each miss when `recover`s (#662).
+    fn lower<'a>(
+        &'a self,
+        engine: &Engine,
+        models: &Models,
+        offset: usize,
+        recover: bool,
+        context: ImportedContext<'a>,
+    ) -> (Result<super::entry::Lowered, Error>, Vec<Error>) {
+        let models = models.for_source(self.source);
+        let mut parser = match self.kind {
+            Checking::Function(definition) => Parser::for_function(
+                engine,
+                &self.text,
+                models,
+                definition,
+                self.key
+                    .cloned()
+                    .expect("resolved functions retain stable item keys"),
+                offset,
+                0,
+                Some(context),
+            ),
+            Checking::Method(definition) => {
+                match Parser::for_method(
+                    engine,
+                    &self.text,
+                    models,
+                    definition,
+                    offset,
+                    0,
+                    Some(context),
+                ) {
+                    Ok(parser) => parser,
+                    Err(error) => return (Err(error), Vec::new()),
+                }
+            }
+            Checking::Script => {
+                Parser::new_with_offset(engine, &self.text, models, offset, 0, Some(context))
+            }
+        };
+        parser.symbolic_only = true;
+        parser.recover_misses = recover;
+        let lowered = match self.kind {
+            Checking::Function(definition) => parser.parse_function_body(definition),
+            Checking::Method(definition) => parser.parse_method_body(definition),
+            Checking::Script => parser.parse(),
+        };
+        (lowered, std::mem::take(&mut parser.recovered))
+    }
 }
 
 /// rustc's opaque return types of imported traits (`fn app() -> impl

@@ -156,6 +156,11 @@ pub struct Engine {
     /// changed (#1646).
     #[cfg(feature = "rust-import")]
     pub(crate) resident_lowerings: std::sync::Mutex<crate::resolve::lower_nominal::Lowerings>,
+    /// Whether this compiler keeps its lowerings from one compile to the
+    /// next though it runs no runner: an owner's check of the program,
+    /// which checks it again on each save (`Engine::keep_lowerings`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) keeps_lowerings: bool,
 
     /// Callback closure for filtering variable definition.
     pub(crate) def_var_filter: Option<Box<OnDefVarCallback>>,
@@ -307,6 +312,8 @@ impl Engine {
         resident_parses: std::sync::Mutex::new(None),
         #[cfg(feature = "rust-import")]
         resident_lowerings: std::sync::Mutex::new(crate::resolve::lower_nominal::Lowerings::new()),
+        #[cfg(feature = "rust-import")]
+        keeps_lowerings: false,
 
         def_var_filter: None,
         resolve_var: None,

@@ -1214,6 +1214,15 @@ impl Registry {
         }
     }
 
+    /// Each proof-backed application it admits and the key of the source
+    /// call it answers, by that key.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn applications(&self) -> impl Iterator<Item = (&[u8; 32], &item::Definition)> {
+        self.applied
+            .iter()
+            .map(|applied| (&applied.key, &applied.item))
+    }
+
     /// The proof-backed application answering the source call `key`.
     #[cfg(feature = "rust-import")]
     pub(crate) fn applied(

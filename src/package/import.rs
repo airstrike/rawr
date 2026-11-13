@@ -160,6 +160,12 @@ impl crate::Engine {
         facade: Option<&[u8]>,
         cells: Option<&super::Cells>,
     ) -> Result<CompiledImported, super::Error> {
+        let mut step = std::time::Instant::now();
+        let mut steps = Vec::new();
+        let mut took = |name| {
+            steps.push((name, step.elapsed()));
+            step = std::time::Instant::now();
+        };
         snapshot
             .revalidate()
             .map_err(Error::from)
@@ -181,6 +187,7 @@ impl crate::Engine {
         if !snapshot.exactly_matches(&current_snapshot) {
             return Err(super::Error::import(Error::SnapshotMismatch));
         }
+        took("loading");
 
         let sources = graph.diagnostic_sources();
         let mut allocation = contract
@@ -214,6 +221,7 @@ impl crate::Engine {
         admit_applications(&mut registry, applications).map_err(super::Error::import)?;
         // Every lowering below shares this one copy.
         let registry = crate::Shared::new(registry);
+        took("installing");
         let mut program = match crate::resolve::package::resolve(graph, &registry) {
             Ok(program) => program,
             Err(failure) => {
@@ -260,6 +268,7 @@ impl crate::Engine {
                 .with_rust_misses(hidden));
             }
         };
+        took("resolving");
         let symbolic =
             match crate::resolve::lower_imported(self, &mut program, &registry, &mut allocation) {
                 Ok(uses) => uses,
@@ -350,6 +359,7 @@ impl crate::Engine {
                     }));
                 }
             };
+        took("lowering");
         let mut compiler = contract
             .compiler_with_allocation(Brand::mint(facade), imported_snapshot, limits, allocation)
             .map_err(Error::from)
@@ -598,6 +608,8 @@ impl crate::Engine {
             .seal()
             .map_err(Error::from)
             .map_err(super::Error::import)?;
+        took("requiring");
+        rawr_import::progress::checked_steps(&steps);
         Ok(CompiledImported { demand })
     }
 }

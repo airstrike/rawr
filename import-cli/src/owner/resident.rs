@@ -328,8 +328,12 @@ impl Start {
             rounds.len(),
             rawr_import::progress::read_set_walks() - self.walks,
         );
-        for round in rounds {
+        for (index, round) in rounds.iter().enumerate() {
             eprintln!("rawr-import: a start's round: {round}");
+            eprintln!(
+                "rawr-import: the start's round's phases took: {}",
+                rawr_import::progress::phases(self.rounds + index)
+            );
         }
     }
 }

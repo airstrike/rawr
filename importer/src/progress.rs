@@ -302,6 +302,23 @@ pub(crate) fn timed(step: &str, took: Duration) {
     }
 }
 
+/// With `RAWR_VERBOSE`, say how long each step of the program's check
+/// took, in order: loading it, installing the crates' facades, resolving
+/// it, lowering it for its uses, and requiring them of the facade.
+pub fn checked_steps(steps: &[(&str, Duration)]) {
+    if !verbose() || UNCOUNTED.get() {
+        return;
+    }
+    let steps = steps
+        .iter()
+        .map(|(step, took)| format!("{step} {:.1} s", took.as_secs_f64()))
+        .collect::<Vec<_>>();
+    say(&format!(
+        "rawr-import: the program's check took: {}",
+        steps.join(", ")
+    ));
+}
+
 /// With `RAWR_VERBOSE`, say how long one run of the probe took, `took`.
 #[cfg(feature = "rustc-driver")]
 pub(crate) fn probe_ran(took: Duration) {
@@ -546,7 +563,8 @@ pub fn work() -> Work {
 /// sealed, whether the probe ran, how many definitions the round read from
 /// the API, how many compiler sidecars it canonicalized into an API, how
 /// many definitions it classified, how many classified paths it generated
-/// bindings for, and how many of the program's sources it parsed. A stage a cache
+/// bindings for, how many of the program's sources it parsed, and how many
+/// its check lowered rather than taking an earlier check's. A stage a cache
 /// answered counts nothing. Last, what its replays of a stored Cargo view
 /// did: how many parsed the view's metadata, how many read and hashed its
 /// recorded inputs again, and how many took what this process kept (#1759).
@@ -565,6 +583,7 @@ pub struct Round {
     classified: usize,
     generated: usize,
     parsed: usize,
+    lowered: usize,
     views: Views,
     rebuilt: usize,
     framed: usize,
@@ -584,7 +603,7 @@ impl std::fmt::Display for Round {
         write!(
             formatter,
             "harnesses {}, compiled {}, copied {}, sealed {}, probes {}, read {}, \
-             canonicalized {}, classified {}, generated {}, parsed {}, \
+             canonicalized {}, classified {}, generated {}, parsed {}, lowered {}, \
              Cargo views parsed {}, compared {}, kept {}, \
              API graphs rebuilt {}, framed {}, classifications replayed {}",
             self.harnessed,
@@ -597,6 +616,7 @@ impl std::fmt::Display for Round {
             self.classified,
             self.generated,
             self.parsed,
+            self.lowered,
             self.views.parsed,
             self.views.compared,
             self.views.kept,
@@ -762,6 +782,12 @@ pub(crate) fn sealed() {
 /// Count `sources` of the program parsed in this round.
 pub fn parsed(sources: usize) {
     count_round(|round| &mut round.parsed, sources);
+}
+
+/// Count `sources` of the program its check lowered in this round, rather
+/// than taking what an earlier check of them found.
+pub fn lowered(sources: usize) {
+    count_round(|round| &mut round.lowered, sources);
 }
 
 /// What one replay of a stored Cargo view did ([`Round`]).

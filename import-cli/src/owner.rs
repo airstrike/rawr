@@ -230,7 +230,7 @@ pub fn run(
         None,
         None,
         &cells(target),
-        &mut rawr_import::api::Kept::default(),
+        &mut crate::Kept::default(),
     )
     .map_err(Unchecked::into_report);
     events(ran.as_ref().map_err(Some), None);
@@ -301,7 +301,7 @@ pub fn run_program(
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
     let cells = cells(target);
     // The API graph each session's saves share, kept across restarts.
-    let mut kept = rawr_import::api::Kept::default();
+    let mut kept = crate::Kept::default();
     let mut ran = session(
         target,
         Origin::graph(graph),
@@ -431,7 +431,7 @@ pub fn run_tests(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
     let cells = cells(target);
-    let mut kept = rawr_import::api::Kept::default();
+    let mut kept = crate::Kept::default();
     let ran = loop {
         match session(
             target,
@@ -551,7 +551,7 @@ fn session(
     program: Option<&rawr_import::process::Arguments>,
     reload: Option<&rawr_cli::events::reload::Stream>,
     cells: &rawr::package::Cells,
-    kept: &mut rawr_import::api::Kept,
+    kept: &mut crate::Kept,
 ) -> Result<Ended, Unchecked> {
     same_build(target)?;
     // Each save that changes Rawr source reads the same API fragments.
@@ -1313,7 +1313,7 @@ fn initial_watched_program(
     lifecycle: rawr_import::process::Lifecycle,
     profile: &dyn crate::Profile,
     program: Option<&rawr_import::process::Arguments>,
-    mut kept: Option<&mut rawr_import::api::Kept>,
+    mut kept: Option<&mut crate::Kept>,
 ) -> Result<
     (
         Lane,
@@ -1447,7 +1447,7 @@ fn prepare_on_lane(
     origin: Origin,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
-    mut kept: Option<&mut rawr_import::api::Kept>,
+    mut kept: Option<&mut crate::Kept>,
 ) -> Result<Initial, Unchecked> {
     // A save while the runner builds (D531.9): the build is kept, and the
     // program is prepared again from the saved files.
@@ -1558,7 +1558,7 @@ fn refresh_initial(
     target_path: &Path,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
-    kept: Option<&mut rawr_import::api::Kept>,
+    kept: Option<&mut crate::Kept>,
 ) -> Result<Initial, Unchecked> {
     let target = rawr::project::Target::discover(target_path)
         .map_err(|error| rawr::diagnostic::Report::from_project(&error))?;
