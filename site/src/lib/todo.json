@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A restart that needs no native build starts the program sooner: the new runner skips its walk of the program's dependencies when the file watcher saw none change, unchanged source files aren't read again, and the runner looks up its adapters instead of scanning for them.","issues":[1879],"refs":[1755]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.209",
@@ -4149,7 +4154,8 @@
     {"issue":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1877,"title":"Splice kept lowerings in as parsed pieces instead of reprinting and reparsing the whole script","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1879,"title":"A vouched respawn walks no read set, unchanged sources aren't re-read, and the runner looks adapters up","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {

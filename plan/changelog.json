@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A restart that needs no native build starts the program sooner: the new runner skips its walk of the program's dependencies when the file watcher saw none change, unchanged source files aren't read again, and the runner looks up its adapters instead of scanning for them.","issues":[1879],"refs":[1755]}
+    ]
   },
   "releases": [
     {

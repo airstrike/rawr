@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A restart that needs no native build starts the program sooner: the new runner skips its walk of the program's dependencies when the file watcher saw none change, unchanged source files aren't read again, and the runner looks up its adapters instead of scanning for them. (#1879; part of #1755)
 
 ## 0.3.209 (2026-11-13)
 
