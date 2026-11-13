@@ -6,10 +6,12 @@
 //! command cohort and toolchain) and of what Cargo reads from the packages:
 //! their manifests, the manifests above them, Cargo config files, and which
 //! target files exist for auto-discovery. None of them reads a Rust source's
-//! bytes, so a `.rs` edit leaves all four outputs unchanged. They name the
-//! bundle they were produced in, so a reuse rewrites that bundle's root to the
-//! new one. Anything else (a new request, a changed manifest, an added target,
-//! an unusual root path) runs Cargo as before.
+//! bytes, so a `.rs` edit leaves them all unchanged. The provisional metadata
+//! is read only for the internal recipe it seals, so the recipe is kept in its
+//! place (#1837). The others name the bundle they were produced in, so a reuse
+//! rewrites that bundle's root to the new one. Anything else (a new request, a
+//! changed manifest, an added target, an unusual root path) runs Cargo as
+//! before.
 //!
 //! The demand is not part of the request here: it changes what the probe
 //! extracts, never what Cargo sees. The outputs are also kept in the
@@ -20,10 +22,12 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest as _, Sha256};
 
-/// The four Cargo outputs of one request.
+/// The Cargo outputs of one request.
 #[derive(Clone)]
 pub(in crate::cargo) struct Outputs {
-    pub(in crate::cargo) provisional: Box<[u8]>,
+    /// The internal recipe the provisional metadata sealed, as
+    /// `internal::Recipe::encode` wrote it.
+    pub(in crate::cargo) internal: Box<[u8]>,
     pub(in crate::cargo) candidate: Box<[u8]>,
     pub(in crate::cargo) lock: Box<[u8]>,
     pub(in crate::cargo) units: Box<[u8]>,
@@ -50,7 +54,7 @@ fn file(rawr: &Path, base: &[u8; 32]) -> PathBuf {
 }
 
 /// A kept entry's format: each field framed by its length.
-const FORMAT: &[u8] = b"rawr.cargo.remembered/v1";
+const FORMAT: &[u8] = b"rawr.cargo.remembered/v2";
 
 fn encode(entry: &Entry) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -68,7 +72,7 @@ fn encode(entry: &Entry) -> Option<Vec<u8>> {
     frame(&entry.determinants);
     let outputs = &entry.outputs;
     for field in [
-        &outputs.provisional,
+        &outputs.internal,
         &outputs.candidate,
         &outputs.lock,
         &outputs.units,
@@ -102,7 +106,7 @@ fn decode(mut bytes: &[u8]) -> Option<Entry> {
         roots,
         determinants,
         outputs: Outputs {
-            provisional: output()?,
+            internal: output()?,
             candidate: output()?,
             lock: output()?,
             units: output()?,
@@ -183,7 +187,7 @@ pub(in crate::cargo) fn lookup(base: &[u8; 32], root: &Path, rawr: &Path) -> Opt
     }
     let rewrite = |bytes: &[u8]| replace(bytes, entry.root.as_bytes(), new.as_bytes());
     Some(Outputs {
-        provisional: rewrite(&entry.outputs.provisional),
+        internal: entry.outputs.internal.clone(),
         candidate: rewrite(&entry.outputs.candidate),
         lock: entry.outputs.lock.clone(),
         units: rewrite(&entry.outputs.units),
@@ -338,7 +342,7 @@ mod tests {
             &old,
             &roots,
             Outputs {
-                provisional: named(&old).into(),
+                internal: Box::from(&b"recipe"[..]),
                 candidate: named(&old).into(),
                 lock: Box::from(&b"lock"[..]),
                 units: named(&old).into(),
@@ -350,6 +354,7 @@ mod tests {
         assert_eq!(&*reused.candidate, named(&new).as_slice());
         assert_eq!(&*reused.units, named(&new).as_slice());
         assert_eq!(&*reused.lock, b"lock");
+        assert_eq!(&*reused.internal, b"recipe");
         assert!(lookup(&super::base(&[b"other"]), &new, &rawr).is_none());
         // The next process starts from what this one kept.
         super::REMEMBERED.lock().unwrap().clear();

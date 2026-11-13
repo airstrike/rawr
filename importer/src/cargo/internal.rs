@@ -162,6 +162,32 @@ impl Seed {
         }
         Recipe::transform(package, cargo_id)
     }
+
+    /// The recipe [`Recipe::encode`] wrote for an earlier sealing of the
+    /// same provisional metadata, while it names this seed's root and
+    /// version (#1837). The final metadata still revalidates it.
+    pub(crate) fn recall(&self, bytes: &[u8]) -> Option<Recipe> {
+        let mut rest = bytes;
+        let mut field = || -> Option<&str> {
+            let (length, after) = rest.split_first_chunk::<8>()?;
+            let (field, after) =
+                after.split_at_checked(usize::try_from(u64::from_le_bytes(*length)).ok()?)?;
+            rest = after;
+            std::str::from_utf8(field).ok()
+        };
+        let [package_id, source, root, version] = [field()?, field()?, field()?, field()?];
+        (rest.is_empty()
+            && !package_id.is_empty()
+            && !source.is_empty()
+            && Path::new(root) == self.root
+            && version == self.version.as_ref())
+        .then(|| Recipe {
+            package_id: package_id.into(),
+            source: source.into(),
+            root: self.root.clone(),
+            version: self.version.clone(),
+        })
+    }
 }
 
 impl Recipe {
@@ -178,6 +204,22 @@ impl Recipe {
 
     pub(crate) const fn schema(&self) -> u32 {
         SCHEMA
+    }
+
+    /// This recipe as bytes [`Seed::recall`] reads back, each field framed
+    /// by its length. `None` for a root that is not UTF-8.
+    pub(crate) fn encode(&self) -> Option<Box<[u8]>> {
+        let mut bytes = Vec::new();
+        for field in [
+            self.package_id.as_ref(),
+            self.source.as_ref(),
+            self.root.to_str()?,
+            self.version.as_ref(),
+        ] {
+            bytes.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(field.as_bytes());
+        }
+        Some(bytes.into_boxed_slice())
     }
 
     pub(crate) fn package_id(&self) -> &str {
@@ -349,6 +391,15 @@ mod tests {
         let recipe = Recipe::transform(&package, &source).expect("the Recipe transforms");
         assert_eq!(recipe.version(), "1.23.6");
         assert_eq!(OWNED_RECIPES.with(std::cell::Cell::get), 1);
+        // A remembered request's recipe comes back with no metadata sealed
+        // again, and only under the seed it names (#1837).
+        let seed = Seed::transform(&root).expect("the Seed transforms");
+        let encoded = recipe.encode().expect("a UTF-8 root encodes");
+        assert_eq!(seed.recall(&encoded), Some(recipe));
+        assert_eq!(OWNED_RECIPES.with(std::cell::Cell::get), 1);
+        assert_eq!(seed.recall(&encoded[..encoded.len() - 1]), None);
+        let other = Recipe::fixture().encode().expect("a UTF-8 root encodes");
+        assert_eq!(seed.recall(&other), None, "another root or version");
         fs::remove_dir_all(root).expect("internal fixture is removed");
     }
 

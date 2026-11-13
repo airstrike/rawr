@@ -488,6 +488,7 @@ fn provisional_decode_failure_releases_the_shared_checkpoint() {
                     &mut epoch,
                     &definition,
                     (paths.manifest(), paths.source(), paths.lock()),
+                    None,
                     |phase| match phase {
                         cargo::MetadataPhase::Provisional => super::super::provisional_metadata(
                             &production,

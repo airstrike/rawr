@@ -288,12 +288,23 @@ impl Request {
             self.target.as_bytes(),
             self.profile.as_bytes(),
         ]);
+        // With the internal recipe the provisional metadata sealed, so that
+        // is not observed again (#1837).
         let reuse = matches!(placement.state, cargo::PlacementState::Fresh)
             .then(|| {
-                super::remembered::lookup(&remembered_base, layout.root(), cached.context.rawr())
+                let outputs = super::remembered::lookup(
+                    &remembered_base,
+                    layout.root(),
+                    cached.context.rawr(),
+                )?;
+                Some((self.internal.recall(&outputs.internal)?, outputs))
             })
             .flatten();
-        let mut produced = (None, None);
+        let (recalled, reuse) = match reuse {
+            Some((recalled, outputs)) => (Some(recalled), Some(outputs)),
+            None => (None, None),
+        };
+        let mut produced = None;
         let (metadata_transport, candidate_lock, internal) = match placement.state {
             cargo::PlacementState::Fresh => {
                 cargo::write_atomic(provisional.manifest(), provisional_manifest.as_bytes())?;
@@ -309,23 +320,19 @@ impl Request {
                     &mut cargo_allocation,
                     definition,
                     (paths.manifest(), paths.source(), paths.lock()),
+                    recalled,
                     |phase| match (phase, &reuse) {
-                        (cargo::MetadataPhase::Provisional, Some(reuse)) => {
-                            Ok(reuse.provisional.clone())
+                        (cargo::MetadataPhase::Provisional, _) => {
+                            crate::progress::resolved();
+                            provisional_metadata(&native, self, layout, limits)
                         }
                         (cargo::MetadataPhase::Candidate, Some(reuse)) => {
                             cargo::write_atomic(paths.lock(), &reuse.lock)?;
                             Ok(reuse.candidate.clone())
                         }
-                        (cargo::MetadataPhase::Provisional, None) => {
-                            crate::progress::resolved();
-                            let bytes = provisional_metadata(&native, self, layout, limits)?;
-                            produced.0 = Some(bytes.clone());
-                            Ok(bytes)
-                        }
                         (cargo::MetadataPhase::Candidate, None) => {
                             let bytes = metadata(&native, self, layout, false, limits)?;
-                            produced.1 = Some(bytes.clone());
+                            produced = Some(bytes.clone());
                             Ok(bytes)
                         }
                     },
@@ -430,13 +437,13 @@ impl Request {
             candidate_lock.bytes(),
             crate::process::CAPTURE_BYTES,
         )?;
-        if let (None, (Some(provisional), Some(candidate))) = (&reuse, produced) {
+        if let (None, Some(candidate), Some(recipe)) = (&reuse, produced, internal.encode()) {
             super::remembered::remember(
                 remembered_base,
                 layout.root(),
                 &workspace.roots,
                 super::remembered::Outputs {
-                    provisional,
+                    internal: recipe,
                     candidate,
                     lock: candidate_lock.bytes().into(),
                     units: bytes.clone(),
