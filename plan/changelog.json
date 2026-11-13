@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A native save back to an earlier save's sources, or the launch's, reuses that bundle's parsed Cargo view instead of parsing it again, and the metadata probe resolves each loaded crate's paths once per run, not once for every crate rawr names. RAWR_VERBOSE also times a native save's harness preparation, output copy, input capture, seal, bundle replay and the program's check.","issues":[1835],"refs":[1794]},
-      {"text":"A native edit that changes no crate's API, such as a private field, no longer rebuilds the API graph or decodes the classification on a save: the owner reuses the graph it kept, with the new build's details, and the classification the last save read.","issues":[1839],"refs":[1786,1799]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.202",
+      "date": "2026-11-12",
+      "entries": [
+        {"text":"A native save back to an earlier save's sources, or the launch's, reuses that bundle's parsed Cargo view instead of parsing it again, and the metadata probe resolves each loaded crate's paths once per run, not once for every crate rawr names. RAWR_VERBOSE also times a native save's harness preparation, output copy, input capture, seal, bundle replay and the program's check.","issues":[1835],"refs":[1794]},
+        {"text":"A native edit that changes no crate's API, such as a private field, no longer rebuilds the API graph or decodes the classification on a save: the owner reuses the graph it kept, with the new build's details, and the classification the last save read.","issues":[1839],"refs":[1786,1799]}
+      ]
+    },
     {
       "version": "0.3.201",
       "date": "2026-11-12",
