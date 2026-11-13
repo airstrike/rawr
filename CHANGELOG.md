@@ -9,6 +9,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A rawr run save that needs the API graph shares the one its owner built or is still building for the same API, with no lock and no copy; a save for a different API builds its own at once instead of waiting. (#1822)
 - Shared values no longer sleep up to 50 ms when a borrow conflicts: a conflict fails at once, a Mutex's own state waits for the other thread, and a borrowed value is never mistaken for one of another type. (#1823)
 - A function taking a struct parameter checks it without copying it, so a native program's state lent to marked `update` is no longer copied on every call. (#1823)
+- A native edit that changes nothing the runner's sources are rendered from, such as a private field added to a struct native code holds, restarts the program without rendering or storing those sources again. `RAWR_VERBOSE` says how many of the runner's files each generation rendered. (#1821)
 
 ## 0.3.199 (2026-11-12)
 
