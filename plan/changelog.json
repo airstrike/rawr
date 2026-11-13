@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A save's restart compiles rawr's copy of the program's crate with the profile `cargo build` gives the crate. A project whose workspace dependency lies outside its workspace, or that has no path packages, had the copy built with its `[profile.dev.package.\"*\"]` settings, which on inboard meant opt-level 3 at every restart.","issues":[1833],"refs":[1789,1801]}
+    ]
   },
   "releases": [
     {

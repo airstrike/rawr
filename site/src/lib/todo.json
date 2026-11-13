@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A save's restart compiles rawr's copy of the program's crate with the profile `cargo build` gives the crate. A project whose workspace dependency lies outside its workspace, or that has no path packages, had the copy built with its `[profile.dev.package.\"*\"]` settings, which on inboard meant opt-level 3 at every restart.","issues":[1833],"refs":[1789,1801]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.200",
@@ -4031,7 +4036,9 @@
     {"issue":1829,"title":"rawr-import-driver doesn't build on nightly-2026-11-02, the window's newest","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.200"},
     {"issue":1830,"title":"An API-changing native edit renders only the adapters whose plans changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1831,"title":"An overlay hit's assembly re-hashes and copies every generated file","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1833,"title":"rawr's copy of the crate builds with the profile cargo build gives the crate","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5247,7 +5254,8 @@
             {"number":1829,"title":"rawr-import-driver doesn't build on nightly-2026-11-02, the window's newest","state":"closed"},
             {"number":1830,"title":"An API-changing native edit renders only the adapters whose plans changed","state":"open"},
             {"number":1831,"title":"An overlay hit's assembly re-hashes and copies every generated file","state":"open"},
-            {"number":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open"}
+            {"number":1832,"title":"The runner's source map is O(plans x entries) and kept across use-site moves","state":"open"},
+            {"number":1834,"title":"The runner binary rebuilds after the copy on every native edit and waits for the copy to finish","state":"open"}
           ]
         },
         {
