@@ -288,6 +288,13 @@ pub(super) fn imported_surface_type(
                 )?),
             }
         }
+        // A script future a crate's `T` holds, as iced's `window::run(id,
+        // f)` gives back what `f` returns: rawr's holder for it, which a
+        // later `Future` bound polls as the script future (#551).
+        Ty::Host { proof, .. } if is_core_future(proof) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::value(),
+            arguments: Box::default(),
+        },
         Ty::Host { proof, arguments } => {
             let definition = host_surface_definition(&proof.definition)
                 .ok_or_else(|| unsupported_type_argument(ty.name(models), operation))?;
@@ -509,6 +516,13 @@ pub(super) fn imported_surface_type(
         }
         other => return Err(unsupported_type_argument(other.name(models), operation)),
     })
+}
+
+/// Whether `proof` is the core's future, the type of a program's `async`
+/// block and `async fn` call (D511.3).
+#[cfg(feature = "rust-import")]
+fn is_core_future(proof: &super::ty::HostTyProof) -> bool {
+    proof.definition.path() == crate::future::facade::FUTURE
 }
 
 /// Whether `target`, what a shared reference borrows, is a crate trait's
@@ -972,6 +986,11 @@ pub(super) fn instance_surface_type(
         Ty::ProfileMessage { payload, seal, .. } => Type::ProfileMessage {
             mapper: *seal,
             payload: Box::new(instance_surface_type(inference, models, payload)?),
+        },
+        // A script future, as `imported_surface_type` has it (#551).
+        Ty::Host { proof, .. } if is_core_future(proof) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::value(),
+            arguments: Box::default(),
         },
         Ty::Host { proof, arguments } => Type::Nominal {
             definition: host_surface_definition(&proof.definition)?,

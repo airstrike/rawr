@@ -1010,15 +1010,25 @@ fn validate_function_items(
         // type parameter, as `window::close::<Message>` is. Its bounds, as
         // `Task::done`'s `T: MaybeSend + 'static`, hold or fail where rustc
         // checks the adapter's call.
+        // So is one that takes a future, as `Task::future` is where a
+        // script future fills the callable's input: the adapter polls the
+        // input's script future for it (#551).
+        let selectable = |signature: &crate::classify::representability::signature::Signature| {
+            signature.parameters().iter().all(|parameter| {
+                matches!(
+                    parameter.kind(),
+                    crate::classify::representability::signature::Kind::Type
+                        | crate::classify::representability::signature::Kind::Future
+                )
+            })
+        };
         let selected_signature = match selected_outcome.representability() {
             Representability::Function(plan) => plan.signature(),
             Representability::FunctionItem(plan)
                 if plan.receiver().is_none()
                     && plan.call().is_none()
                     && plan.crossings().is_empty()
-                    && plan.signature().parameters().iter().all(|parameter| {
-                        parameter.kind() == crate::classify::representability::signature::Kind::Type
-                    }) =>
+                    && selectable(plan.signature()) =>
             {
                 plan.signature()
             }
@@ -1028,15 +1038,21 @@ fn validate_function_items(
                 if plan.receiver().is_none()
                     && plan.call().is_none()
                     && plan.crossings().is_empty()
-                    && plan.signature().parameters().iter().all(|parameter| {
-                        parameter.kind() == crate::classify::representability::signature::Kind::Type
-                    }) =>
+                    && selectable(plan.signature()) =>
             {
                 plan.signature()
             }
             _ => return Err(Error::InstanceMismatch),
         };
-        if selected_signature.parameters().len() != selected.identity().types().len()
+        // A future parameter takes no type: the instance writes it `_`.
+        let typed = selected_signature
+            .parameters()
+            .iter()
+            .filter(|parameter| {
+                parameter.kind() != crate::classify::representability::signature::Kind::Future
+            })
+            .count();
+        if typed != selected.identity().types().len()
             || selected_signature.inputs().len() != call.inputs().len()
         {
             return Err(Error::InstanceMismatch);

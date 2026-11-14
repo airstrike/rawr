@@ -77,6 +77,22 @@ impl std::fmt::Debug for Future {
 }
 
 impl Future {
+    /// The future a crate's `T` carried as `value`, where a later bound
+    /// needs `Future`: as iced's `Task::future` takes what `window::run(id,
+    /// f)` gave back of a script `f` that returns an `async` block (#551).
+    ///
+    /// # Panics
+    ///
+    /// When `value` holds no future: Rawr gives a crate's `T` a future's
+    /// holder only where the program's checker typed it as one.
+    #[must_use]
+    pub fn held(value: crate::Value) -> Self {
+        value
+            .into_inner()
+            .try_cast::<Self>()
+            .expect("a crate's `T` the program typed as a future holds one")
+    }
+
     /// The future of an async body whose step function is `step`: called
     /// with `()` it starts, and called with a [`Frame`] it goes on.
     #[must_use]
