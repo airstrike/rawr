@@ -1477,6 +1477,128 @@ impl Drop for CallArena {
     }
 }
 
+/// The native values a script future polled off the owner thread holds
+/// between two polls, as tokio's workers take turns at one task: its call
+/// arena's slots, each value of a `Send` type out of its slot, so the
+/// arena is made again with the same epoch and slots on the thread that
+/// polls the future next, where the future's handles reach them (#1949).
+/// Dropped, it frees them, as the end of a call frees its arena's.
+pub struct Departed {
+    epoch: [u8; 32],
+    generations: Vec<u64>,
+    free: Vec<u32>,
+    moved: Vec<Moved>,
+    /// Whether the arena went on to another poll, which keeps its epoch.
+    arrived: bool,
+}
+
+impl Drop for Departed {
+    fn drop(&mut self) {
+        if self.arrived {
+            return;
+        }
+        let epoch = self.epoch;
+        CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|live| *live != epoch);
+        take_releases(&epoch, false);
+    }
+}
+
+/// Make this thread's arena the one `departed` holds, or a call arena of
+/// its own when it holds none, where the thread has no arena: `false`,
+/// with `departed` left, when it has one, as a call running here lends.
+pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
+    if arena_access(|_| ()).is_some() {
+        return false;
+    }
+    let Some(mut away) = departed.take().and_then(|away| away.downcast::<Departed>().ok()) else {
+        let guard = CallArena::enter();
+        let Some(epoch) = guard.0 else {
+            return false;
+        };
+        // The arena outlives the guard: `depart` takes it, and `Departed`
+        // frees its epoch.
+        std::mem::forget(guard);
+        return NATIVE_ARENA.with(|cell| {
+            cell.borrow().as_ref().is_some_and(|arena| arena.epoch == epoch)
+        });
+    };
+    away.arrived = true;
+    let mut arena = Arena { call: true, ..Arena::new(away.epoch) };
+    arena.free = std::mem::take(&mut away.free);
+    arena.slots = away
+        .generations
+        .iter()
+        .map(|generation| NativeSlot { generation: *generation, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, send: None, name: "" })
+        .collect();
+    for moved in std::mem::take(&mut away.moved) {
+        if let Some(entry) = arena.slots.get_mut(moved.slot as usize) {
+            entry.value = Some(moved.value);
+            entry.send = Some(moved.send);
+            entry.debug = moved.debug;
+            entry.display = moved.display;
+            entry.clone = moved.clone;
+            entry.relations = moved.relations;
+            entry.witness = moved.witness;
+            entry.project = moved.project;
+            entry.mapper = moved.mapper;
+            entry.default_of = moved.default_of;
+            entry.opaque = moved.opaque;
+            entry.name = moved.name;
+        }
+    }
+    NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(arena));
+    true
+}
+
+/// This thread's call arena out of its cell, as [`arrive`] made it, to go
+/// with the future it serves. A value of a type that isn't `Send` can't go
+/// to another thread, as rustc refuses a future that holds one across an
+/// `.await` where it must be `Send` (E0277).
+pub fn depart() -> Option<Box<dyn Any + Send>> {
+    let mut arena = NATIVE_ARENA.with(|cell| cell.borrow_mut().take())?;
+    arena.release_dropped();
+    let generations = arena.slots.iter().map(|slot| slot.generation).collect();
+    let mut moved = Vec::new();
+    for (slot, entry) in arena.slots.iter_mut().enumerate() {
+        let Some(value) = entry.value.take() else {
+            continue;
+        };
+        let send = entry.send.filter(|_| entry.homed.is_none() && !entry.leased);
+        let Some((send, Ok(value))) = send.map(|send| (send, send(value))) else {
+            panic!(
+                "rawr: a future polled on another thread holds `{0}` across an `.await`, and `{0}` cannot be sent between threads safely (E0277)",
+                entry.name
+            );
+        };
+        moved.push(Moved {
+            slot: slot as u32,
+            generation: entry.generation,
+            value,
+            send,
+            debug: entry.debug,
+            display: entry.display,
+            clone: entry.clone,
+            relations: entry.relations,
+            witness: entry.witness.take(),
+            project: entry.project.take(),
+            mapper: entry.mapper,
+            default_of: entry.default_of,
+            opaque: entry.opaque.take(),
+            name: entry.name,
+        });
+    }
+    Some(Box::new(Departed {
+        epoch: arena.epoch,
+        generations,
+        free: std::mem::take(&mut arena.free),
+        moved,
+        arrived: false,
+    }))
+}
+
 /// `call` with this thread's arena: the one in its cell, or else the one a
 /// native call running on this thread lends. `None` when neither is free.
 /// A thread that ends has no arena: a handle its last values drop finds none.
@@ -2727,6 +2849,7 @@ pub fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::lends(lent_in_place);
     __rawr_internal::island::lodges(lodge);
     __rawr_internal::island::arenas(|| Box::new(CallArena::enter()));
+    __rawr_internal::island::travels(arrive, depart);
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();

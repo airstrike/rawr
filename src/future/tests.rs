@@ -17,6 +17,14 @@ impl super::Host for Program {
             .invoke_bound(function, arguments, self.runtime.clone())
             .map_err(|error| super::error(error.to_string()))
     }
+
+    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    fn share(&self) -> Option<super::Program> {
+        Some(crate::island::shared(
+            self.authority.clone(),
+            self.runtime.clone(),
+        ))
+    }
 }
 
 /// Compile `source` with the core future, and call its `main`.
@@ -227,7 +235,11 @@ fn futures_with_testing(source: &str, functions: &[&str]) -> Vec<super::Future> 
     let authority = engine
         .compile_authority(source)
         .unwrap_or_else(|error| panic!("{error}"));
-    let futures = functions
+    super::serve(Rc::new(Program {
+        authority: authority.clone(),
+        runtime: registry.clone(),
+    }));
+    functions
         .iter()
         .map(|name| {
             let function = authority
@@ -240,20 +252,17 @@ fn futures_with_testing(source: &str, functions: &[&str]) -> Vec<super::Future> 
                 .unwrap_or_else(|error| panic!("{error}"))
                 .cast::<super::Future>()
         })
-        .collect();
-    super::serve(Rc::new(Program {
-        authority,
-        runtime: registry,
-    }));
-    futures
+        .collect()
 }
 
-/// Steps polled on other threads queue for the owner, which drains them
-/// (D527). A future dropped before the owner reaches its step runs no more,
-/// a step's panic reaches the thread that polls it, and a body dropped on
-/// another thread drops what it holds on the owner. One test, since the
-/// owner's queue is the process's.
-#[cfg(feature = "sync")]
+/// Steps polled on other threads run there while no owner drains them, as
+/// a script future iced's executor polls does (#1949). Once one does, they
+/// queue for the owner, which drains them (D527). A future dropped before
+/// the owner reaches its step runs no more, a step's panic reaches the
+/// thread that polls it, and a body dropped on another thread drops what
+/// it holds on the owner. One test, since the owner's queue is the
+/// process's.
+#[cfg(all(feature = "sync", feature = "rust-import"))]
 #[test]
 fn steps_polled_elsewhere_queue_for_the_owner_which_drains_them() {
     use std::sync::atomic::Ordering::SeqCst;
@@ -269,15 +278,20 @@ fn steps_polled_elsewhere_queue_for_the_owner_which_drains_them() {
              let (x, y) = tokio::join!(add(1, 2), add(3, 4));
              add(x, y).await
          }",
-        &["cancelled", "panicking", "held", "joined"],
+        &["cancelled", "panicking", "held", "joined", "joined"],
     )
     .into_iter();
-    let (cancelled, panicking, held, joined) = (
+    let (cancelled, panicking, held, joined, alone) = (
+        futures.next().unwrap(),
         futures.next().unwrap(),
         futures.next().unwrap(),
         futures.next().unwrap(),
         futures.next().unwrap(),
     );
+    // No owner drains steps yet: each runs on the thread that polls it.
+    let script = alone.into_script();
+    let alone = std::thread::spawn(move || block_on_here(script)).join();
+    assert_eq!(alone.unwrap().into_inner().as_int().unwrap(), 10);
     super::drive(Waker::noop());
     let off_owner = |future: super::Future, polls: usize| {
         std::thread::spawn(move || {

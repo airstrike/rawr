@@ -185,6 +185,37 @@ pub fn arenas(arena: Arena) {
     let _ = ARENA.set(arena);
 }
 
+/// Make this thread's arena the one a future took with it when it was last
+/// polled, or a call arena of the future's own: `false`, with the taken
+/// arena left, when the thread has an arena already.
+pub type Arrive = fn(&mut Option<Box<dyn Any + Send>>) -> bool;
+
+/// The arena [`Arrive`] made, out of this thread, to go with its future
+/// to the thread that polls it next.
+pub type Depart = fn() -> Option<Box<dyn Any + Send>>;
+
+/// How the runner moves a future's arena between the threads that poll it,
+/// which [`travels`] names.
+static TRAVEL: OnceLock<(Arrive, Depart)> = OnceLock::new();
+
+/// Name how the runner gives a script future polled on threads that don't
+/// own the program an arena that goes with it from poll to poll, as a
+/// tokio worker polls iced's `Task::perform` future (#1949). Set once.
+pub fn travels(arrive: Arrive, depart: Depart) {
+    let _ = TRAVEL.set((arrive, depart));
+}
+
+/// The arena `away` holds, or a new one, on this thread for one poll of
+/// its future: whether it is the future's, to [`depart`] after the poll.
+pub(crate) fn arrive(away: &mut Option<Box<dyn Any + Send>>) -> bool {
+    TRAVEL.get().is_some_and(|(arrive, _)| arrive(away))
+}
+
+/// The arena [`arrive`] made, out of this thread, after its future's poll.
+pub(crate) fn depart() -> Option<Box<dyn Any + Send>> {
+    TRAVEL.get().and_then(|(_, depart)| depart())
+}
+
 /// Where the native value a script value holds is, lent to native code in
 /// place for as long as `pins` are kept; `None` when it holds none, and
 /// `Err` when it can't be lent so long. Without pins, only a value that
