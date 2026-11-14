@@ -64,6 +64,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - An associated function's arguments take its parameter types as their expected types, so `State::with_life(cells.collect())` collects into the type it takes and game_of_life starts. (#2006)
 - iced's integration example draws frames and takes input: a field borrow in a let whose value borrows nothing ends with the statement, and a value bound out of a crate enum's variant moves rather than cloning, so a SurfaceTexture is presented once. (#2000)
 - iced's editor example takes key presses: a match arm that binds nothing of a borrowing subject runs after the borrow ends, so key_binding's `_ => Binding::from_key_press(press)` moves the press. (#2005)
+- A program's impl of a crate trait can return a reference to a crate value it holds, as iced markdown's `fn theme(&self) -> &Theme` does, and native code borrows the value where it is for as long as `&self` lives. (#2001; part of #83)
 
 ## 0.3.213 (2026-11-13)
 
