@@ -10,12 +10,37 @@ pub(crate) mod type_id;
 
 use crate::Shared;
 use std::any::TypeId;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 thread_local! {
     /// What a write or a read under way knows (`Known::within`).
     static KNOWN: RefCell<Option<Known>> = const { RefCell::new(None) };
+    /// Whether the write under way is a digest's (`digesting`).
+    static DIGESTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// What `write` gives, each value it writes meanwhile written whole, for a
+/// digest of it that no read decodes: a type by its text, whether a read
+/// knows it or not, and a carrier by its identity.
+pub(crate) fn digesting<R>(write: impl FnOnce() -> R) -> R {
+    /// Puts back how values were written before, as `write` ends or
+    /// unwinds.
+    struct Restore(bool);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DIGESTING.set(self.0);
+        }
+    }
+
+    let _restore = Restore(DIGESTING.replace(true));
+    write()
+}
+
+/// Whether the write under way is a digest's.
+fn is_digesting() -> bool {
+    DIGESTING.get()
 }
 
 /// What a stored value may name: the runtime's own value types and the

@@ -12,6 +12,7 @@ pub type TraitArgument = (crate::ImmutableString, Box<[type_ref::Type]>);
 pub type Equality = (crate::ImmutableString, crate::item::Name, type_ref::Type);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Shell {
     pub id: item::Id,
     pub source: crate::program::source::Id,
@@ -38,6 +39,7 @@ impl Shell {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum Kind {
     Use(Use),
     Struct(Struct),
@@ -48,6 +50,7 @@ pub(crate) enum Kind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Use {
     pub header: crate::item::Header,
     pub bindings: Box<[Binding]>,
@@ -55,6 +58,7 @@ pub(crate) struct Use {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Binding {
     pub name: crate::item::Name,
     pub qualified: crate::ImmutableString,
@@ -62,6 +66,7 @@ pub(crate) struct Binding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum Import {
     Module,
     ModuleItem {
@@ -113,6 +118,7 @@ pub(crate) enum Import {
 /// name, or a declaration whose kind the import table doesn't keep, is in
 /// both.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum Namespace {
     Type,
     Value,
@@ -205,6 +211,7 @@ pub(crate) struct Generic {
 /// `Self`; provided functions keep their default bodies, which each impl
 /// that does not override them receives as its own method.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Trait {
     pub header: crate::item::Header,
     pub name: crate::item::Name,
@@ -257,6 +264,7 @@ pub(crate) struct Trait {
 /// forwards to `T`'s impl: `&T` implements the trait when `T` does and has
 /// these bounds besides.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct ReferenceForward {
     /// The impl is for `&mut T`.
     pub mutable: bool,
@@ -361,6 +369,7 @@ pub(crate) struct Variant {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Impl {
     pub header: crate::item::Header,
     pub generics: Box<[Generic]>,
@@ -376,6 +385,7 @@ pub(crate) struct Impl {
 
 /// The trait of `impl Trait for Type`.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum TraitImpl {
     /// `impl Trait for Owner` of a trait declared in the crate or the
     /// prelude (`From<T>`), with the trait's type arguments: `i64`
@@ -402,6 +412,7 @@ pub(crate) enum TraitImpl {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Function {
     pub header: crate::item::Header,
     pub name: crate::item::Name,
@@ -425,6 +436,7 @@ pub(crate) struct Function {
 /// has, which native code fills (`resolve::opaque_generics`): its name, as
 /// the runner's impl writes it, and its bounds.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct OpaqueGeneric {
     pub name: crate::ImmutableString,
     /// The host path of its opaque type.
@@ -435,6 +447,7 @@ pub(crate) struct OpaqueGeneric {
 /// One bound of an [`OpaqueGeneric`]: the trait's path from the crate's
 /// root, the lifetimes it takes by name, and its type arguments.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct OpaqueBound {
     pub path: crate::ImmutableString,
     pub lifetimes: Box<[crate::ImmutableString]>,
@@ -546,6 +559,7 @@ impl Lifetimes {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Parameter {
     pub name: crate::item::Name,
     pub ty: type_ref::Type,
@@ -554,6 +568,7 @@ pub(crate) struct Parameter {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Body {
     pub span: Span,
     pub lowering: Lowering,
@@ -570,6 +585,7 @@ pub(crate) struct Body {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum Lowering {
     Unavailable,
     NominalFunction,

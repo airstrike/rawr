@@ -1018,15 +1018,18 @@ pub struct Function {
 /// an item, as resolution and each lowering's interface make, copies none
 /// of them (#1850).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct BodySyntax(crate::Shared<[BodyToken]>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct BodyToken {
     kind: BodyTokenKind,
     span: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum BodyTokenKind {
     Identifier(ImmutableString),
     DoubleColon,
@@ -1104,6 +1107,7 @@ impl BodyToken {
 
 /// An associated function receiver.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub enum Receiver {
     /// An `&self` receiver.
     Shared(Span),
@@ -1144,6 +1148,7 @@ pub struct Parameter {
 
 /// An irrefutable parameter pattern.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub enum ParameterPattern {
     /// `name` or `mut name`.
     Binding {

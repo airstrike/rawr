@@ -54,13 +54,16 @@
 //! does.
 //!
 //! What an interface makes is kept for the next (`Remembered`): each
-//! text's outline, by the text and its bodies, each item's digest, and the
+//! text's outline, by the text and its bodies, each item's and each
+//! instance's digest, by what it is written from (`Item::key`), and the
 //! walks over the declarations, by everything a walk reads
-//! (`Declarations::key`). A runner keeps the outlines and the walks on
-//! disk as well, so a respawned runner whose program the exiting runner
-//! compiled lexes no source and walks no declaration again (#1898, #1899).
+//! (`Declarations::key`). A runner keeps them on disk as well, so a
+//! respawned runner whose program the exiting runner compiled lexes no
+//! source, digests no item or instance and walks no declaration again
+//! (#1898, #1899, #1755).
 
 use super::disk::{self, Disk};
+use super::memo::Memo;
 use super::models::Models;
 use crate::host::image;
 use crate::program::source;
@@ -107,8 +110,25 @@ impl Interface {
 
     /// What each source's lowering reads of `program`; `None` when it
     /// can't be written. `remembered` keeps what it makes for the next
-    /// interface, and `disk`, a runner's, for the next runner's.
+    /// interface, and `disk`, a runner's, for the next runner's. A
+    /// facade's proof is what every source reads of another crate's
+    /// facade, and of the program's own, its entries a name reaches: each
+    /// is written as its root.
     pub(super) fn new(
+        engine: &Engine,
+        program: &Program,
+        models: &Models,
+        remembered: &mut Remembered,
+        disk: Option<&mut Disk>,
+        native: &Native,
+    ) -> Option<Self> {
+        crate::host::facade::Fingerprint::rooted(|| {
+            Self::rooted(engine, program, models, remembered, disk, native)
+        })
+    }
+
+    /// [`Self::new`], each facade's proof written as its root.
+    fn rooted(
         engine: &Engine,
         program: &Program,
         models: &Models,
@@ -123,8 +143,17 @@ impl Interface {
             disk.as_deref_mut(),
         );
         let scopes = Scopes::new(program, &outlines, native);
-        let declarations =
-            Declarations::new(program, &outlines, &scopes, native, &mut remembered.digests)?;
+        let declarations = Declarations::new(
+            program,
+            &outlines,
+            &scopes,
+            native,
+            Digesting {
+                engine,
+                digests: &mut remembered.digests,
+                disk: disk.as_deref_mut(),
+            },
+        )?;
         let own = own(program)?;
         let calls = Calls::by_source(program)?;
         // A runner's compiler reads the facades registered in the process
@@ -155,14 +184,9 @@ impl Interface {
             .map(|script| (script.source, &script.namespace))
             .collect::<BTreeMap<_, _>>();
         let key = declarations.key(program, &outlines, native, drops);
-        let walked = match remembered.walks.find(engine, disk, &key) {
-            Some(walked) => walked,
-            None => {
-                let walked = declarations.walked(&outlines, &scopes, &namespaces, drops);
-                remembered.walks.keep(key, crate::Shared::clone(&walked));
-                walked
-            }
-        };
+        let walked = remembered.walks.get_or_make(engine, disk, &key, || {
+            Some(declarations.walked(&outlines, &scopes, &namespaces, drops))
+        })?;
         let mut sources = BTreeMap::new();
         let mut revealed = BTreeMap::new();
         for (index, outline) in outlines.sources.iter().enumerate() {
@@ -216,47 +240,16 @@ impl Interface {
 /// bind is as it was then (#1755).
 pub(super) struct Instances(BTreeMap<crate::item::Key, [u8; 32]>);
 
-/// The digests of the instances the last [`Instances`] read, each with
-/// what it was digested from, so the next, a reveal round's or a later
-/// save's, digests again only the instances a round added or revealed the
-/// output of.
-pub(super) struct Instanced(BTreeMap<crate::item::Key, Instance>);
-
-/// One instance's digest, and what it was digested from: the types its
-/// template's parameters take and its signature.
-struct Instance {
-    names: Box<[ImmutableString]>,
-    function: Option<item::Function>,
-    method: Option<crate::method::Definition>,
-    digest: [u8; 32],
-}
-
-impl Instanced {
-    /// None digested yet.
-    pub(super) const fn new() -> Self {
-        Self(BTreeMap::new())
-    }
-}
-
-impl Instance {
-    /// Whether it is the digest of the instance whose types are `names`
-    /// and whose signature is `function` or `method`.
-    fn of(
-        &self,
-        names: &[ImmutableString],
-        function: Option<&item::Function>,
-        method: Option<&crate::method::Definition>,
-    ) -> bool {
-        *self.names == *names
-            && self.function.as_ref() == function
-            && self.method.as_ref() == method
-    }
-}
-
 impl Instances {
-    /// Each template's instances in `program`. An instance `instanced`
-    /// digested as it is now isn't digested again.
-    pub(super) fn new(program: &Program, instanced: &mut Instanced) -> Option<Self> {
+    /// Each template's instances in `program`. An instance `remembered`
+    /// digested as it is now, or that an earlier runner kept so in `disk`,
+    /// isn't digested again.
+    pub(super) fn new(
+        engine: &Engine,
+        program: &Program,
+        remembered: &mut Remembered,
+        mut disk: Option<&mut Disk>,
+    ) -> Option<Self> {
         let functions = program
             .items
             .iter()
@@ -273,38 +266,42 @@ impl Instances {
             .filter(|definition| program.instances.types.contains_key(definition.key()))
             .map(|definition| (definition.key(), definition))
             .collect::<BTreeMap<_, _>>();
-        let mut earlier = std::mem::take(&mut instanced.0);
         let mut templates = BTreeMap::new();
         for (template, instances) in &program.instances.templates {
             let mut written = Sha256::new();
             for (names, key) in instances {
                 let function = functions.get(key).copied();
                 let method = methods.get(key).copied();
-                let instance = match earlier.remove(key) {
-                    Some(instance) if instance.of(names, function, method) => instance,
-                    _ => Instance {
-                        names: names.clone(),
-                        function: function.cloned(),
-                        method: method.cloned(),
-                        // A facade a signature names is written as its
-                        // root, as the interface writes it: what a reading
-                        // reads of a facade is the entries a name reaches.
-                        digest: crate::host::facade::Fingerprint::rooted(|| {
-                            digest(None, |written| {
-                                write!(written, "{names:?}|{key:?}|")?;
-                                if let Some(definition) = function {
-                                    write!(written, "{definition:?}|")?;
-                                }
-                                if let Some(definition) = method {
-                                    write!(written, "{definition:?}|")?;
-                                }
-                                Ok(())
+                // What its digest is written from: its types and its
+                // signature.
+                let mut from = Written(Sha256::new());
+                from.0.update(b"rawr.lowering.instance/v1");
+                crate::stored::digesting(|| {
+                    rmp_serde::encode::write(&mut from, &(names, key, function, method))
+                })
+                .ok()?;
+                let from: [u8; 32] = from.0.finalize().into();
+                let digest =
+                    remembered
+                        .instanced
+                        .get_or_make(engine, disk.as_deref_mut(), &from, || {
+                            // A facade a signature names is written as its
+                            // root, as the interface writes it: what a reading
+                            // reads of a facade is the entries a name reaches.
+                            crate::host::facade::Fingerprint::rooted(|| {
+                                digest(None, |written| {
+                                    write!(written, "{names:?}|{key:?}|")?;
+                                    if let Some(definition) = function {
+                                        write!(written, "{definition:?}|")?;
+                                    }
+                                    if let Some(definition) = method {
+                                        write!(written, "{definition:?}|")?;
+                                    }
+                                    Ok(())
+                                })
                             })
-                        })?,
-                    },
-                };
-                written.update(instance.digest);
-                instanced.0.insert(key.clone(), instance);
+                        })?;
+                written.update(digest);
             }
             templates.insert(template.clone(), written.finalize().into());
         }
@@ -561,7 +558,8 @@ struct Declarations<'p> {
 
 /// A declaration's digests: as a source's lowering reads it, and as
 /// reveal's reading of a body reads it (#1755).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct Digest {
     lowering: [u8; 32],
     /// As reveal reads it, when that differs: the instances a template
@@ -705,15 +703,20 @@ impl Declared {
 
 impl<'p> Declarations<'p> {
     /// The program's declarations, whose sources' outlines are `outlines`,
-    /// and the entries of its own facades, `native`'s. An item `digests`
-    /// digested as it is now isn't digested again.
+    /// and the entries of its own facades, `native`'s. An item whose digest
+    /// `digesting` holds as it is now isn't digested again.
     fn new(
         program: &'p Program,
         outlines: &'p Outlines,
         scopes: &Scopes<'p>,
         native: &'p Native,
-        digests: &mut Digests,
+        digesting: Digesting<'_, '_>,
     ) -> Option<Self> {
+        let Digesting {
+            engine,
+            digests,
+            mut disk,
+        } = digesting;
         let items = program.items.iter().collect::<Vec<_>>();
         // What the program holds of each item beside its shell: its type,
         // the methods its impl or trait declares, its instances.
@@ -835,7 +838,6 @@ impl<'p> Declarations<'p> {
         }
         let declares = scopes.declares(&names);
         let mut declarations = Vec::with_capacity(macros + program.macros.definitions().count());
-        digests.begin();
         for ((index, shell), held) in items.iter().enumerate().zip(&held) {
             let outline = outlines.sources.get(shell.source.index());
             let identity = program.source.identity_at(shell.source);
@@ -845,7 +847,7 @@ impl<'p> Declarations<'p> {
                 shell,
                 held,
             };
-            let found = digests.digest(item, || {
+            let make = || {
                 let places = outline
                     .map(|outline| outline.places.between(shell.span.start(), shell.span.end()));
                 let item_digest = |reader: Reader| {
@@ -877,7 +879,11 @@ impl<'p> Declarations<'p> {
                     outside,
                     lowered,
                 })
-            })?;
+            };
+            let found = match item.key(&program.instances) {
+                Some(key) => digests.get_or_make(engine, disk.as_deref_mut(), &key, make),
+                None => make(),
+            }?;
             let writes = scopes.writes(
                 shell.source,
                 outline
@@ -1147,91 +1153,16 @@ impl Reached {
 /// as its bodies' reveal read the declarations.
 type Walked = crate::Shared<[(Reached, Reached)]>;
 
-/// The walks interfaces made, by what they read (`Declarations::key`), so
-/// an interface of a program whose declarations an earlier one walked
-/// walks none again (#1899). What one compile kept is the next compile's
-/// earlier; what a runner kept on disk is its next runner's first.
-struct Walks {
-    /// The walks this compile's interfaces made or reused.
-    kept: BTreeMap<[u8; 32], Walked>,
-    /// The walks of the compile before it.
-    earlier: BTreeMap<[u8; 32], Walked>,
-    /// Whether `earlier` holds what the disk held.
-    loaded: bool,
-    /// Whether this compile made a walk the disk doesn't hold.
-    made: bool,
-}
-
-/// The file of walks holds each walk's own key (`Walks`).
-const WALKS: [u8; 32] = [0; 32];
-
-impl Walks {
-    const fn new() -> Self {
-        Self {
-            kept: BTreeMap::new(),
-            earlier: BTreeMap::new(),
-            loaded: false,
-            made: false,
-        }
-    }
-
-    /// The walks made at `key`: this compile's, the compile before's, or,
-    /// on the compiler's first, what an earlier runner kept in `disk`.
-    fn find(&mut self, engine: &Engine, disk: Option<&mut Disk>, key: &[u8; 32]) -> Option<Walked> {
-        if let Some(walked) = self.kept.get(key) {
-            return Some(crate::Shared::clone(walked));
-        }
-        if !self.loaded
-            && let Some(disk) = disk
-        {
-            self.loaded = true;
-            let stored = disk.read::<BTreeMap<[u8; 32], Walked>>(engine, Self::entry());
-            for (key, walked) in stored.into_iter().flatten() {
-                self.earlier.entry(key).or_insert(walked);
-            }
-        }
-        let walked = self.earlier.remove(key)?;
-        self.kept.insert(*key, crate::Shared::clone(&walked));
-        Some(walked)
-    }
-
-    /// Keep `walked`, made at `key`.
-    fn keep(&mut self, key: [u8; 32], walked: Walked) {
-        self.kept.insert(key, walked);
-        self.made = true;
-    }
-
-    /// A compile begins: the last one's walks are its earlier.
-    fn begin(&mut self) {
-        if !self.kept.is_empty() {
-            self.earlier = std::mem::take(&mut self.kept);
-        }
-    }
-
-    /// The compile succeeded: `disk` holds its walks, when it made one.
-    fn succeeded(&mut self, engine: &Engine, disk: Option<&mut Disk>) {
-        if let Some(disk) = disk
-            && std::mem::take(&mut self.made)
-        {
-            disk.write(engine, Self::entry(), &self.kept);
-        }
-    }
-
-    const fn entry() -> disk::Entry<'static> {
-        disk::Entry {
-            identity: "",
-            kind: disk::Kind::Walks,
-            key: &WALKS,
-        }
-    }
-}
-
 /// What a compiler's interfaces keep for the next interface: each text's
-/// outline, each item's digest and each set of walks.
+/// outline, each item's and each instance's digest, and the walks an
+/// interface made over the declarations, by what they read
+/// (`Declarations::key`), so an interface of a program whose declarations
+/// an earlier one walked walks none again (#1899).
 pub(super) struct Remembered {
     outlined: Outlined,
-    digests: Digests,
-    walks: Walks,
+    digests: Memo<Digest>,
+    instanced: Memo<[u8; 32]>,
+    walks: Memo<Walked>,
 }
 
 impl Remembered {
@@ -1239,19 +1170,24 @@ impl Remembered {
     pub(super) const fn new() -> Self {
         Self {
             outlined: BTreeMap::new(),
-            digests: Digests::new(),
-            walks: Walks::new(),
+            digests: Memo::new(disk::Kind::Digests),
+            instanced: Memo::new(disk::Kind::Instances),
+            walks: Memo::new(disk::Kind::Walks),
         }
     }
 
     /// A compile begins: what the one before kept is what it reuses.
     pub(super) fn begin(&mut self) {
+        self.digests.begin();
+        self.instanced.begin();
         self.walks.begin();
     }
 
     /// The compile succeeded: `disk`, a runner's, holds what it made for
     /// the next runner.
-    pub(super) fn succeeded(&mut self, engine: &Engine, disk: Option<&mut Disk>) {
+    pub(super) fn succeeded(&mut self, engine: &Engine, mut disk: Option<&mut Disk>) {
+        self.digests.succeeded(engine, disk.as_deref_mut());
+        self.instanced.succeeded(engine, disk.as_deref_mut());
         self.walks.succeeded(engine, disk);
     }
 }
@@ -1297,7 +1233,7 @@ impl Walk {
 }
 
 /// What the program holds of an item beside its shell.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 enum Held<'p> {
     Type(&'p crate::type_def::Definition),
     Method(&'p crate::method::Definition),
@@ -1319,37 +1255,6 @@ impl Held<'_> {
         match self {
             Self::Template(..) | Self::Instance(..) => true,
             Self::Method(definition) => instances.types.contains_key(definition.key()),
-            _ => false,
-        }
-    }
-
-    /// What it holds, as its own.
-    fn owned(self) -> Owned {
-        match self {
-            Self::Type(definition) => Owned::Type(Box::new(definition.clone())),
-            Self::Method(definition) => Owned::Method(Box::new(definition.clone())),
-            Self::Impl(instances) => Owned::Impl(instances.into()),
-            Self::Template(key, instances) => Owned::Template(key.clone(), instances.into()),
-            Self::Instance(key, types) => Owned::Instance(key.clone(), types.into()),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Native(native) => Owned::Native(native.clone()),
-        }
-    }
-
-    /// Whether it holds what `owned` holds.
-    fn is(self, owned: &Owned) -> bool {
-        match (self, owned) {
-            (Self::Type(held), Owned::Type(owned)) => *held == **owned,
-            (Self::Method(held), Owned::Method(owned)) => *held == **owned,
-            (Self::Impl(held), Owned::Impl(owned)) => *held == **owned,
-            (Self::Template(key, held), Owned::Template(owned_key, owned)) => {
-                key == owned_key && *held == **owned
-            }
-            (Self::Instance(key, held), Owned::Instance(owned_key, owned)) => {
-                key == owned_key && *held == **owned
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            (Self::Native(held), Owned::Native(owned)) => held == owned,
             _ => false,
         }
     }
@@ -1515,20 +1420,6 @@ fn plain(ty: &super::ty::Ty) -> bool {
     }
 }
 
-/// What a [`Held`] holds, kept with a digest of it (`Digests`).
-enum Owned {
-    Type(Box<crate::type_def::Definition>),
-    Method(Box<crate::method::Definition>),
-    Impl(Box<[crate::resolve::ImplInstance]>),
-    Template(crate::item::Key, Box<[crate::resolve::Instance]>),
-    Instance(
-        crate::item::Key,
-        Box<[(crate::ImmutableString, type_ref::Type)]>,
-    ),
-    #[cfg(not(target_arch = "wasm32"))]
-    Native(crate::resolve::record::Native),
-}
-
 /// One item an interface digests, with what its digest is written from
 /// besides: its source's identity and outline, and what the program holds
 /// of it.
@@ -1542,84 +1433,43 @@ struct Item<'a> {
     held: &'a [Held<'a>],
 }
 
-/// The digests of the items an interface digested, each with what it was
-/// digested from, so the next interface, a reveal round's or a later
-/// save's, digests again only the items that changed (#1878). An item's
-/// digest is written from its source's identity, its places in its
-/// source's outline, its shell and what the program holds of it: an item
-/// equal in each has the same digest.
-pub(super) struct Digests {
-    /// What the last interface digested, by its source's outline and its
-    /// span.
-    kept: BTreeMap<([u8; 32], Span), Vec<Digested>>,
-    /// What the interface before it digested, which this one reuses.
-    earlier: BTreeMap<([u8; 32], Span), Vec<Digested>>,
-}
-
-/// One item's digest, and what it was digested from.
-struct Digested {
-    identity: Box<str>,
-    shell: item::Shell,
-    held: Box<[Owned]>,
-    digest: Digest,
-}
-
-impl Digested {
-    /// Whether it is the digest of `item`.
-    fn of(&self, item: Item<'_>) -> bool {
-        *self.identity == *item.identity
-            && self.shell == *item.shell
-            && self.held.len() == item.held.len()
-            && item
-                .held
-                .iter()
-                .zip(&self.held)
-                .all(|(held, owned)| held.is(owned))
+impl Item<'_> {
+    /// The digest of what its digests are written from (`Digest`): its
+    /// source's identity and outline, its shell as another source reads
+    /// it (`outlined`), and what the program holds of it, each with
+    /// whether reveal reads it otherwise. An item equal in each has the
+    /// same digests. `None` when it has no outline or can't be written.
+    fn key(self, instances: &crate::resolve::Instances) -> Option<[u8; 32]> {
+        let outline = self.outline?;
+        let mut written = Written(Sha256::new());
+        written.0.update(b"rawr.lowering.item/v1");
+        framed(&mut written.0, self.identity);
+        written.0.update(outline);
+        let shell = self.shell;
+        let held = self
+            .held
+            .iter()
+            .map(|held| (held, held.instanced(instances)))
+            .collect::<Vec<_>>();
+        let kind = outlined(&shell.kind);
+        crate::stored::digesting(|| {
+            rmp_serde::encode::write(
+                &mut written,
+                &(&shell.key, shell.span, &shell.facades, &kind, &held),
+            )
+        })
+        .ok()?;
+        Some(written.0.finalize().into())
     }
 }
 
-impl Digests {
-    /// None digested yet.
-    pub(super) const fn new() -> Self {
-        Self {
-            kept: BTreeMap::new(),
-            earlier: BTreeMap::new(),
-        }
-    }
-
-    /// Begin an interface: it reuses what the last one digested.
-    fn begin(&mut self) {
-        self.earlier = std::mem::take(&mut self.kept);
-    }
-
-    /// The digest of `item`: the last interface's when it digested the
-    /// item as it is, else `digest`'s.
-    fn digest(
-        &mut self,
-        item: Item<'_>,
-        digest: impl FnOnce() -> Option<Digest>,
-    ) -> Option<Digest> {
-        let Some(outline) = item.outline else {
-            return digest();
-        };
-        let place = (outline, item.shell.span);
-        let earlier = self.earlier.get_mut(&place).and_then(|earlier| {
-            let at = earlier.iter().position(|digested| digested.of(item))?;
-            Some(earlier.swap_remove(at))
-        });
-        let digested = match earlier {
-            Some(digested) => digested,
-            None => Digested {
-                identity: item.identity.into(),
-                shell: item.shell.clone(),
-                held: item.held.iter().map(|held| held.owned()).collect(),
-                digest: digest()?,
-            },
-        };
-        let found = digested.digest;
-        self.kept.entry(place).or_default().push(digested);
-        Some(found)
-    }
+/// What an interface's declarations digest their items with: the
+/// compiler's digests, and a runner's disk, where an earlier runner kept
+/// them.
+struct Digesting<'d, 'e> {
+    engine: &'e Engine,
+    digests: &'d mut Memo<Digest>,
+    disk: Option<&'d mut Disk>,
 }
 
 /// The items of each source by where they start, to find the one a place
@@ -2175,6 +2025,17 @@ impl std::fmt::Write for Written {
     }
 }
 
+impl std::io::Write for Written {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// What another source's lowering reads of one source's text (#1646): its
 /// tokens outside its function and method bodies and its inert attributes
 /// (`item::inert`), where each of them starts, which its positions are
@@ -2587,12 +2448,11 @@ struct Outlines {
 
 #[cfg(test)]
 mod tests {
-    use super::{disk, outlines, Disk, Interface, Models, Native, Outline, Outlined, Remembered};
-    use super::{Text, Walked, Walks};
+    use super::{disk, outlines, Disk, Interface, Models, Native, Outline, Outlined};
+    use super::{Remembered, Text};
     use crate::program::source;
     use crate::resolve::Program;
     use crate::Engine;
-    use std::collections::BTreeMap;
 
     const SOURCE: &str = "struct State { title: String }\n\
         impl State { fn title(&self) -> &str { &self.title } }\n\
@@ -2705,10 +2565,9 @@ mod tests {
             walked
         );
         exiting.succeeded(&engine, Some(&mut disk));
-        let stored = disk.read::<BTreeMap<[u8; 32], Walked>>(&engine, Walks::entry());
         assert_eq!(
-            stored.as_ref(),
-            Some(&exiting.walks.kept),
+            exiting.walks.stored(&engine, &mut disk).as_ref(),
+            Some(exiting.walks.kept()),
             "the exiting runner kept the walks its compile made"
         );
         let mut respawned = Remembered::new();
@@ -2722,6 +2581,49 @@ mod tests {
         assert_eq!(
             interface(&engine, &changed, &mut Remembered::new(), Some(&mut disk)),
             interface(&engine, &changed, &mut Remembered::new(), None)
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The digest of each item a runner's compile read is on disk once it
+    /// succeeds, at what it was written from, and each digest a respawned
+    /// runner reads there is the one it would write: of the same program,
+    /// and of a changed one, whose changed items it digests again (#1755).
+    #[test]
+    fn a_respawned_runner_reads_each_items_digest_an_earlier_runner_kept_as_it_writes_it() {
+        let engine = Engine::new();
+        let (directory, mut disk) = disk("digests");
+        let mut fresh = Remembered::new();
+        let written = interface(&engine, SOURCE, &mut fresh, None);
+        let mut exiting = Remembered::new();
+        exiting.begin();
+        interface(&engine, SOURCE, &mut exiting, Some(&mut disk));
+        exiting.succeeded(&engine, Some(&mut disk));
+        assert_eq!(
+            exiting.digests.stored(&engine, &mut disk).as_ref(),
+            Some(fresh.digests.kept()),
+            "the exiting runner kept the digests its compile wrote"
+        );
+        let changed = SOURCE.replace("title: String }", "title: String, visits: u32 }");
+        let changed = changed.replace("String::new() }", "String::new(), visits: 0 }");
+        for text in [SOURCE, &changed] {
+            let mut fresh = Remembered::new();
+            let written = interface(&engine, text, &mut fresh, None);
+            let mut respawned = Remembered::new();
+            respawned.begin();
+            assert_eq!(
+                interface(&engine, text, &mut respawned, Some(&mut disk)),
+                written
+            );
+            assert_eq!(
+                respawned.digests.kept(),
+                fresh.digests.kept(),
+                "each digest the respawned runner read is the one it would write"
+            );
+        }
+        assert_eq!(
+            interface(&engine, SOURCE, &mut Remembered::new(), Some(&mut disk)),
+            written
         );
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -1,7 +1,8 @@
 //! A `TypeId` a stored value holds, written as its text and read back as
 //! the type of this process's that has that text (`super::Known`). The same
 //! build gives a type the same text. A type the process doesn't know fails
-//! the write or the read, and what holds it is made again.
+//! the write or the read, and what holds it is made again; a digest's write
+//! writes any type (`super::digesting`).
 
 use std::any::TypeId;
 
@@ -19,7 +20,7 @@ pub(crate) fn serialize<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     let text = text(*type_id);
-    if known(&text).is_none() {
+    if !super::is_digesting() && known(&text).is_none() {
         return Err(serde::ser::Error::custom(format_args!(
             "{text} is no type a read knows"
         )));

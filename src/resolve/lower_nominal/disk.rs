@@ -14,8 +14,10 @@
 //! So do each source's outlines, its text's and its script's, at the key
 //! of the text and its bodies (#1898), and the walks over the
 //! declarations the last compile's interfaces made, each at what it read
-//! (#1899): a respawned runner whose program the exiting runner compiled
-//! lexes no source and walks no declaration again.
+//! (#1899), and the digests of the items and of the instances they made,
+//! each at what it was written from (#1755): a respawned runner whose
+//! program the exiting runner compiled lexes no source, digests no item
+//! or instance and walks no declaration again.
 
 use crate::stored::Known;
 use crate::Engine;
@@ -52,6 +54,12 @@ pub(super) enum Kind {
     Text(super::interface::Text),
     /// The walks the last compile's interfaces made, one for the runner.
     Walks,
+    /// The digests of the items the last compile's interfaces read, one
+    /// for the runner.
+    Digests,
+    /// The digests of the instances the last compile's reveal read, one
+    /// for the runner.
+    Instances,
 }
 
 /// One source's file of one kind, at the key it is made at.
@@ -161,6 +169,8 @@ impl Disk {
             Kind::Text(super::interface::Text::Source) => ".text",
             Kind::Text(super::interface::Text::Script) => ".script-text",
             Kind::Walks => ".walks",
+            Kind::Digests => ".digests",
+            Kind::Instances => ".instances",
         });
         self.directory.join(name)
     }
