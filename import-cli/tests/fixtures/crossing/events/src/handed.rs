@@ -64,3 +64,32 @@ where
 {
     std::thread::spawn(work).join().unwrap()
 }
+
+/// What `f` makes of the output of `future`, polled to its end on a thread
+/// of its own, as iced's `Task::perform(future, f)` maps the output of a
+/// future a tokio worker polls.
+pub fn perform<T, A>(
+    future: impl Future<Output = T> + Send + 'static,
+    f: impl FnOnce(T) -> A + Send + 'static,
+) -> A
+where
+    T: Send + 'static,
+    A: Send + 'static,
+{
+    std::thread::spawn(move || f(block_on(future)))
+        .join()
+        .unwrap()
+}
+
+/// The output of `future`, polled on this thread till it is ready.
+fn block_on<T>(future: impl Future<Output = T>) -> T {
+    use std::task::{Context, Poll, Waker};
+    let mut future = std::pin::pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+            return output;
+        }
+        std::thread::yield_now();
+    }
+}

@@ -304,7 +304,17 @@ impl std::future::Future for Script {
     type Output = crate::Value;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<Self::Output> {
-        match self.poll_output(cx) {
+        // The output leaves the arena its bodies ran in, which ends with
+        // the future, with the native values it holds (#1957).
+        #[cfg(feature = "rust-import")]
+        let polled = self.polled(|poller| {
+            poller
+                .poll(cx)
+                .map(|output| output.map(crate::island::output))
+        });
+        #[cfg(not(feature = "rust-import"))]
+        let polled = self.poll_output(cx);
+        match polled {
             std::task::Poll::Pending => std::task::Poll::Pending,
             std::task::Poll::Ready(Ok(value)) => std::task::Poll::Ready(crate::Value::from(value)),
             std::task::Poll::Ready(Err(error)) => panic!("{}", message(&error)),

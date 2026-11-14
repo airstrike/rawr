@@ -2540,8 +2540,8 @@ impl Dynamic {
         }
     }
 
-    /// Recursively scan for [`Dynamic`] values within this [`Dynamic`] (e.g. items in an array or map),
-    /// calling a filter function on each.
+    /// Recursively scan for [`Dynamic`] values within this [`Dynamic`] (e.g. items in an array or map,
+    /// fields, payloads, and what an `Option` or a `Result` holds), calling a filter function on each.
     ///
     /// # Shared Value
     ///
@@ -2564,6 +2564,19 @@ impl Dynamic {
                     .payload_mut()
                     .iter_mut()
                     .for_each(|v| scan_inner(v, filter)),
+                // Rawr's `Option<T>` and `Result<T, E>`, Rust's own of
+                // values (`option::Value`, `result::Value`): what a `Some`,
+                // an `Ok` or an `Err` holds.
+                Union::Variant(variant, ..) => {
+                    let any = (***variant).as_any_mut();
+                    if let Some(option) = any.downcast_mut::<Option<Dynamic>>() {
+                        option.iter_mut().for_each(|v| scan_inner(v, filter));
+                    } else if let Some(result) = any.downcast_mut::<Result<Dynamic, Dynamic>>() {
+                        match result {
+                            Ok(v) | Err(v) => scan_inner(v, filter),
+                        }
+                    }
+                }
                 _ => (),
             }
         }

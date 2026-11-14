@@ -38,8 +38,13 @@ impl Clone for Value {
 }
 
 impl Value {
-    /// The script value.
+    /// The script value, made here when it was deferred to where it is
+    /// first used, as a future's output polled on another thread is
+    /// (`crossing::settled`).
     pub fn into_inner(self) -> Dynamic {
+        #[cfg(feature = "sync")]
+        return crate::crossing::settled(self.0);
+        #[cfg(not(feature = "sync"))]
         self.0
     }
 
@@ -57,7 +62,7 @@ impl From<Dynamic> for Value {
 
 impl From<Value> for Dynamic {
     fn from(value: Value) -> Self {
-        value.0
+        value.into_inner()
     }
 }
 

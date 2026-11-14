@@ -157,6 +157,43 @@ fn qualified_enum_constructors_support_bare_empty_and_payload_forms() {
     assert_eq!(engine.eval_ast::<String>(&debug).unwrap(), "Move(7, true)");
 }
 
+/// A closure compares its parameters before its calls give them their
+/// type, as todos' `filter_button` compares `filter == current_filter`:
+/// each by its type's own `eq`, the derived one or one the program wrote.
+#[test]
+fn a_closure_compares_parameters_its_calls_infer() {
+    let engine = Engine::new();
+    let ast = engine
+        .compile(
+            r#"
+                #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                enum Filter { All, Active }
+
+                #[derive(Debug, Clone, Copy)]
+                struct Loose(i64);
+
+                impl PartialEq for Loose {
+                    fn eq(&self, other: &Self) -> bool {
+                        self.0 % 10 == other.0 % 10
+                    }
+                }
+
+                let same = |filter, current| filter == current;
+                let differ = |left, right| left != right;
+                let loose = |left, right| left == right;
+                format!(
+                    "{} {} {} {}",
+                    same(Filter::All, Filter::Active),
+                    same(Filter::Active, Filter::Active),
+                    differ(Filter::All, Filter::Active),
+                    loose(Loose(3), Loose(13)),
+                )
+            "#,
+        )
+        .unwrap();
+    assert_eq!(engine.eval_ast::<String>(&ast).unwrap(), "false true true true");
+}
+
 #[test]
 fn valid_clone_copy_debug_and_equality_capabilities_execute() {
     let engine = Engine::new();

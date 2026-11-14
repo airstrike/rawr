@@ -216,6 +216,28 @@ pub(crate) fn depart() -> Option<Box<dyn Any + Send>> {
     TRAVEL.get().and_then(|(_, depart)| depart())
 }
 
+/// A script future's output, with the native values it holds in the arena
+/// of the poll that made it moved out with it, to the arena where it is
+/// first used ([`crate::crossing::settled`]).
+pub type Output = fn(Dynamic) -> Dynamic;
+
+static OUTPUT: OnceLock<Output> = OnceLock::new();
+
+/// Name how the runner moves a script future's output out of the arena it
+/// was made in, which ends with the future, with the crate values made on
+/// the thread that polled it (#1957). Set once.
+pub fn outputs(output: Output) {
+    let _ = OUTPUT.set(output);
+}
+
+/// `value`, a script future's output, as [`outputs`] moves it.
+pub(crate) fn output(value: Dynamic) -> Dynamic {
+    match OUTPUT.get() {
+        Some(output) => output(value),
+        None => value,
+    }
+}
+
 /// Where the native value a script value holds is, lent to native code in
 /// place for as long as `pins` are kept; `None` when it holds none, and
 /// `Err` when it can't be lent so long. Without pins, only a value that

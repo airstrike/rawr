@@ -829,6 +829,24 @@ impl<'a> Parser<'a> {
             }
             Ty::Unknown => Err(self.unsupported("equality of dynamic values")),
             Ty::Dyn(..) => Err(self.not_equatable(negate, operator_at, &lhs, &rhs)),
+            // An operand whose type a later use infers, as a closure's
+            // parameter the closure compares before its calls give it a
+            // type: rustc leaves the
+            // `PartialEq` obligation to then, and the values compare by
+            // their types' own `eq` when they run.
+            Ty::Infer(_) => {
+                let expression = span(lhs.span.start(), rhs.span.end());
+                let equal = self.prelude_op(
+                    PreludeOp::GenericEqual,
+                    [lhs.rendered_source(), rhs.rendered_source()],
+                );
+                let source = if negate {
+                    equal.surrounded("!(", ")")
+                } else {
+                    equal
+                };
+                Ok(self.operator_expr(source, Ty::Bool, expression))
+            }
             // Tuples and arrays of crate types: element by element, each by
             // its type's own `eq` where it has one.
             ty if !self.plain_equality(&ty) => {
