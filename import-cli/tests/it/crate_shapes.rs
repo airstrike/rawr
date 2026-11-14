@@ -450,6 +450,33 @@ fn an_opaque_output_keeps_its_receiver_borrowed_while_it_lives() {
     runs_as_cargo_does("panels", "[sky]\n|[sea]|\n[land]\n");
 }
 
+/// A match on a value that borrows a crate value, `press.key.as_ref()`,
+/// runs an arm that binds nothing of it after the borrow ends, so the arm
+/// moves the press, as iced's editor's `key_binding` closure does (#2005);
+/// and a `let` whose value borrows nothing ends its field borrow with the
+/// statement. Both used to stop at E0499.
+#[test]
+fn an_arm_that_binds_nothing_runs_after_its_subjects_borrow_ends() {
+    runs_as_cargo_does(
+        "presses",
+        "Some(Insert('x'))\nSome(Custom(Save))\n2\nSome(Insert('a'))\n\
+         Some(Move)\nSome(Custom(Save))\nSome(Insert('q'))\n",
+    );
+}
+
+/// A `Clone` value with a `Drop` bound by value out of a crate enum's
+/// variant moves into the call that takes it, as integration's
+/// `queue.present(frame)` moves its `SurfaceTexture` (#2000): the binding
+/// used to share it with the pattern's hidden part, so the move cloned it
+/// and the original was discarded.
+#[test]
+fn a_value_bound_out_of_a_crate_variant_moves() {
+    runs_as_cargo_does(
+        "surfaces",
+        "Format(7)\npresent 7\nFormat(8)\npresent 8\nend\n",
+    );
+}
+
 /// The receiver `panel.view()` captures stays borrowed while the value
 /// lives: rawr's own check refuses a `&mut` of it meanwhile with rustc's
 /// E0502 before anything runs (#1991).

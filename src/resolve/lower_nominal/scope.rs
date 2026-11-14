@@ -82,12 +82,15 @@ pub(super) type ArrayElements = (Vec<ParsedExpr>, Option<usize>, Option<ParsedEx
 
 /// A scope frame a statement's call opens (D558 tier 1): `outer` declares
 /// what keeps the frame, `inner` binds and opens it ahead of the statement,
-/// and `after` stores the copies it gives back once it has ended.
+/// and `after` stores the copies it gives back once it has ended. `drops`
+/// is whether the value it holds may use what it borrows when it drops,
+/// so the frame must last as long as Rust keeps that value.
 #[derive(Default)]
 pub(super) struct Frame {
     pub(super) outer: origin::Fragment,
     pub(super) inner: origin::Fragment,
     pub(super) after: origin::Fragment,
+    pub(super) drops: bool,
 }
 
 pub(super) struct Branch {

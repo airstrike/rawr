@@ -2327,3 +2327,141 @@ pub mod panels {
         format!("|{}|", shown.show())
     }
 }
+
+/// A key press a crate gives a script closure, as iced's `text_editor`
+/// gives its `key_binding` closure a `KeyPress`: its key is matched through
+/// `Key::as_ref`, whose value borrows the press, and the press moves once
+/// that borrow is over.
+pub mod presses {
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Key<C = String> {
+        Named(u8),
+        Character(C),
+    }
+
+    impl Key {
+        pub fn as_ref(&self) -> Key<&str> {
+            match self {
+                Self::Named(named) => Key::Named(*named),
+                Self::Character(text) => Key::Character(text.as_str()),
+            }
+        }
+
+        pub fn width(&self) -> usize {
+            match self {
+                Self::Named(_) => 1,
+                Self::Character(text) => text.len(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Modifiers(pub u8);
+
+    impl Modifiers {
+        pub fn command(self) -> bool {
+            self.0 & 1 == 1
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct KeyPress {
+        pub key: Key,
+        pub modifiers: Modifiers,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Binding<M> {
+        Custom(M),
+        Insert(char),
+        Move,
+    }
+
+    impl<M> Binding<M> {
+        pub fn from_key_press(press: KeyPress) -> Option<Self> {
+            match press.key {
+                Key::Named(_) => Some(Self::Move),
+                Key::Character(text) => text.chars().next().map(Self::Insert),
+            }
+        }
+    }
+
+    pub struct Editor<'a, M> {
+        binding: Option<Box<dyn Fn(KeyPress) -> Option<Binding<M>> + 'a>>,
+    }
+
+    impl<'a, M> Editor<'a, M> {
+        pub fn new() -> Self {
+            Self { binding: None }
+        }
+
+        pub fn key_binding(
+            mut self,
+            binding: impl Fn(KeyPress) -> Option<Binding<M>> + 'a,
+        ) -> Self {
+            self.binding = Some(Box::new(binding));
+            self
+        }
+
+        pub fn press(&mut self, key: Key, modifiers: Modifiers) -> Option<Binding<M>> {
+            let press = KeyPress { key, modifiers };
+            match &self.binding {
+                Some(binding) => binding(press),
+                None => Binding::from_key_press(press),
+            }
+        }
+    }
+}
+
+/// A frame a crate gives inside an enum's variant, as wgpu's
+/// `CurrentSurfaceTexture::Success(SurfaceTexture)` does: it is `Clone`
+/// and its `Drop` discards it, so a move of it that cloned would discard
+/// the frame it presented.
+pub mod surfaces {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Format(pub u8);
+
+    #[derive(Debug, Clone)]
+    pub struct Texture(pub u8);
+
+    impl Texture {
+        pub fn format(&self) -> Format {
+            Format(self.0)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Frame {
+        pub texture: Texture,
+    }
+
+    impl Drop for Frame {
+        fn drop(&mut self) {
+            println!("discard {}", self.texture.0);
+        }
+    }
+
+    pub enum Current {
+        Success(Frame),
+        Lost,
+    }
+
+    pub struct Surface(pub u8);
+
+    impl Surface {
+        pub fn current(&self) -> Current {
+            Current::Success(Frame {
+                texture: Texture(self.0),
+            })
+        }
+    }
+
+    pub struct Queue;
+
+    impl Queue {
+        pub fn present(&self, frame: Frame) {
+            println!("present {}", frame.texture.0);
+            std::mem::forget(frame);
+        }
+    }
+}
