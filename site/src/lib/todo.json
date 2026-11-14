@@ -4223,7 +4223,10 @@
     {"issue":1907,"title":"A start reuses a runner whose input proof a save's check then finds changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1908,"title":"A plain-value field read through a native field path moves the path","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1909,"title":"A nested store through a field of a generic native struct is unsupported","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5491,7 +5494,10 @@
             {"number":1907,"title":"A start reuses a runner whose input proof a save's check then finds changed","state":"open"},
             {"number":1908,"title":"A plain-value field read through a native field path moves the path","state":"open"},
             {"number":1909,"title":"A nested store through a field of a generic native struct is unsupported","state":"open"},
-            {"number":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open"}
+            {"number":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open"},
+            {"number":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"open"},
+            {"number":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"open"},
+            {"number":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"open"}
           ]
         },
         {
