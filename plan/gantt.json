@@ -3,9 +3,9 @@
   "updated": "2026-11-14",
   "version": "0.3.213",
   "examples": {
-    "running": 45,
+    "running": 48,
     "total": 56,
-    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14 on b8f6af78b: 45 of 56 behave as cargo does. Left: table and toast (#2003), editor (#2005), game_of_life (#2006), delineate (#2007, unconfirmed), gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), integration (#2000), markdown (#2001). system_information runs as cargo; its hot-reload save fails (#2004)."
+    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 48 of 56 behave as cargo does (table, toast and game_of_life since 657b990d3). Left: editor (#2005), delineate (#2007, unconfirmed), gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), integration (#2000), markdown (#2001). system_information runs as cargo; its hot-reload save fails (#2004)."
   },
   "groups": [
     {
@@ -161,7 +161,7 @@
       "subtitle": "D557: a debugger any editor or MCP hooks into",
       "open": true,
       "rows": [
-        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"next","note":"rawr mcp inspect works with or without dependencies, its screenshot is drawn by the program itself with no OS capture (#1989), and input waits for the first window (#1947). Next: rawr's menu bar items (#1990), locked and 2x capture checks (#1993); frames, types and the editor remain.","issues":[488,510,511,512,513,514,1989,1990,1993,1995,1996],"milestone":"0.5"},
+        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"next","note":"rawr mcp inspect works with or without dependencies, its screenshot is drawn by the program itself with no OS capture (#1989), and input waits for the first window (#1947). Next: rawr's menu bar items (#1990), locked and 2x capture checks (#1993); frames, types and the editor remain.","issues":[488,510,511,512,513,514,1989,1990,1993,1995,1996,2009],"milestone":"0.5"},
         {"id":"breakpoints","name":"Breakpoints and stepping","start":56,"size":4,"state":"done","note":"break, step, continue, clear, and a paused state","issues":[489,534,535],"milestone":"0.3"},
         {"id":"repl","name":"Evaluate in a paused frame","start":60,"size":3,"state":"next","note":"The same interpreter, the same errors","issues":[490],"milestone":"0.5"},
         {"id":"record-replay","name":"Record, replay and comet","start":63,"size":4,"state":"next","note":"Messages and state over time","issues":[491],"milestone":"0.5"}
