@@ -29,7 +29,8 @@
         {"text":"A crate method that returns `&Path`, as directories' `ProjectDirs::data_dir()`, and a tokio future that takes `&[u8]`, as `fs::write(path, json.as_bytes())`, no longer fail to build.","issues":[1942,1943]},
         {"text":"A path that starts with `::` after a keyword, as gallery's `match ::image::load_from_memory(..)`, names its crate.","issues":[1935]},
         {"text":"A crate trait that a `use` inside a function brings into scope, as game_of_life's `use itertools::Itertools;`, gives its methods to calls in that function.","issues":[1936]},
-        {"text":"`std::convert::identity` runs, a std function passed as a value (`.on_link_click(std::convert::identity)`, `.map(std::mem::take)`) is the closure that calls it, and a one-argument call accepts a trailing comma.","issues":[1944]}
+        {"text":"`std::convert::identity` runs, a std function passed as a value (`.on_link_click(std::convert::identity)`, `.map(std::mem::take)`) is the closure that calls it, and a one-argument call accepts a trailing comma.","issues":[1944]},
+        {"text":"`log::error!`, `warn!` and `info!` in marked code run as under Cargo: `std::panic::Location` crosses as std's own value, and a crate's `#[track_caller]` function sees the program's call site, so a logger prints the user's file and line.","issues":[1560]}
       ]
     },
     "releases": [
@@ -3900,7 +3901,7 @@
     {"issue":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"closed","category":"No glue (D593)"},
-    {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)"},
+    {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"closed","category":"No glue (D593)"},
     {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
     {"issue":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open","category":"Divergences from rustc"},
@@ -4289,7 +4290,9 @@
     {"issue":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open","category":"No glue (D593)"},
     {"issue":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"open","category":"No glue (D593)"},
-    {"issue":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open","category":"No glue (D593)"}
+    {"issue":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open","category":"No glue (D593)"},
+    {"issue":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open","category":"No glue (D593)"},
+    {"issue":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4930,7 +4933,9 @@
             {"number":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open"},
             {"number":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open"},
             {"number":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"open"},
-            {"number":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open"}
+            {"number":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open"},
+            {"number":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open"},
+            {"number":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -5350,7 +5355,7 @@
             {"number":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"closed"},
             {"number":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"closed"},
             {"number":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"closed"},
-            {"number":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open"},
+            {"number":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"closed"},
             {"number":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"closed"},
             {"number":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"closed"},
             {"number":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open"},
