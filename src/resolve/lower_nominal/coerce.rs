@@ -507,7 +507,13 @@ impl<'a> Parser<'a> {
                 self.coerce_expr(&call, value)?;
                 // The witness of each input is its value's: native code
                 // passes a borrow of a crate value as a copy of it, as a
-                // closure's call does (`host_callable`).
+                // closure's call does (`host_callable`). Its item is the
+                // symbolic function the callable became, which the witness
+                // names.
+                let given = match self.inference.resolve(&value.ty) {
+                    Ty::Callable { item, .. } => item,
+                    _ => None,
+                };
                 let call = match self.inference.resolve(&call) {
                     Ty::Callable {
                         inputs,
@@ -527,7 +533,7 @@ impl<'a> Parser<'a> {
                             })
                             .collect(),
                         output,
-                        item,
+                        item: given.or(item),
                     },
                     call => call,
                 };

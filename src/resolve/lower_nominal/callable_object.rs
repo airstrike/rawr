@@ -50,10 +50,9 @@ impl Coercion {
 
     /// The private function's name, one per callable type.
     pub(super) fn name(&self) -> String {
-        let key = serde_json::to_vec(&self.call).expect("a callable's type encodes as JSON");
         format!(
             "\0rawr.object.callable.{:016x}",
-            crate::program::schema::symbol_id(&key)
+            crate::program::schema::symbol_id(&self.call)
         )
     }
 
