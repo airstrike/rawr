@@ -13,6 +13,15 @@
 //! kept with it, and the lowering is reused only while each reads the
 //! same.
 //!
+//! Another module's struct is read without its private fields of a plain
+//! type (#1885), so a save that adds one to a screen's state keeps the
+//! lowering of each module that only names the state. What such a
+//! lowering holds of the struct, its schema in an op, a pattern or a
+//! native call's proof, is renewed from the program when it is reused
+//! (`Lowered::renewed`), and what reads its fields whole, a struct
+//! pattern or a derived `Default`, is kept as a read (`Read::Fields`), so
+//! a reused lowering is the one a fresh compile makes.
+//!
 //! A kept lowering also holds each adapter its ops call, a witnessed op's
 //! among them, and is reused only while the runner admitted each one: a
 //! runner whose files another runner wrote may lack one, and the part is
@@ -43,11 +52,12 @@ use super::imported::ImplUse;
 use super::interface::{
     framed, Calls, Digests, Instanced, Instances, Interface, Native, Outlined, Written,
 };
-use super::models::Models;
+use super::models::{Models, Nominal};
 use super::op::ExecutableOp;
 use super::splice::Parsed;
 use super::surface::ImportedUse;
 use super::ty::Ty;
+use crate::ast::{NominalEnumPattern, NominalPattern, NominalPayloadType};
 use crate::program::source;
 use crate::resolve::package::Resolutions;
 use crate::resolve::Program;
@@ -68,9 +78,12 @@ pub(super) enum Part {
 /// The allocation one `retain_checked` charged.
 pub(super) type Charge = (Option<usize>, Option<usize>);
 
-/// What a lowering read outside the program while it compiled: a file
-/// `include_str!` or `include_bytes!` read, a variable `env!` read. A kept
-/// lowering is reused only while each of its reads reads the same.
+/// What a lowering read outside the program while it compiled, a file
+/// `include_str!` or `include_bytes!` read, a variable `env!` read, or
+/// what it read of the program beside its key: a struct's fields whole,
+/// which another module's lowering keys without its private fields of a
+/// plain type (`interface::lowered`, #1885). A kept lowering is reused
+/// only while each of its reads reads the same.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(super) enum Read {
     File {
@@ -82,6 +95,20 @@ pub(super) enum Read {
         place: Place,
         name: Box<str>,
         value: Option<Box<str>>,
+    },
+    /// The fields of the program's struct `identity`, as its schema
+    /// writes them: a struct pattern's discards, a derived `Default`'s
+    /// fields.
+    Fields {
+        identity: crate::type_def::Identity,
+        schema: crate::program::schema::Fingerprint,
+    },
+    /// Whether the program's struct `identity` has a field `name`, which
+    /// the method probe asks (`own_member`).
+    Field {
+        identity: crate::type_def::Identity,
+        name: Box<str>,
+        found: bool,
     },
 }
 
@@ -103,14 +130,45 @@ impl Read {
         }
     }
 
-    /// Whether reading again reads the same.
-    fn holds(&self, access: &crate::Access) -> bool {
+    /// The read of the fields of the program's type `definition`.
+    pub(super) fn fields(definition: &crate::type_def::Definition) -> Self {
+        Self::Fields {
+            identity: crate::type_def::Identity::Script(definition.key().clone()),
+            schema: definition.schema().clone(),
+        }
+    }
+
+    /// The read of whether the program's struct `definition` has a field
+    /// `name`, which it `found`.
+    pub(super) fn field(definition: &crate::type_def::Definition, name: &str, found: bool) -> Self {
+        Self::Field {
+            identity: crate::type_def::Identity::Script(definition.key().clone()),
+            name: name.into(),
+            found,
+        }
+    }
+
+    /// Whether reading again, from `models`, reads the same.
+    fn holds(&self, models: &Models) -> bool {
         match self {
-            Self::File { path, bytes } => included(access, path)
+            Self::File { path, bytes } => included(&models.access, path)
                 .is_ok_and(|read| <[u8; 32]>::from(Sha256::digest(read)) == *bytes),
             Self::Variable { place, name, value } => {
-                place.variable(access, name).as_deref() == value.as_deref()
+                place.variable(&models.access, name).as_deref() == value.as_deref()
             }
+            Self::Fields { identity, schema } => {
+                models.schema(identity).is_some_and(|now| now == *schema)
+            }
+            Self::Field {
+                identity,
+                name,
+                found,
+            } => match models.by_identity.get(identity) {
+                Some(Nominal::Struct { item, .. }) => {
+                    item.fields.iter().any(|field| *field.name.text == **name) == *found
+                }
+                _ => false,
+            },
         }
     }
 }
@@ -123,6 +181,12 @@ impl Models {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(read);
+    }
+
+    /// Note that the lowering read the fields of the program's type
+    /// `definition` whole (`Read::Fields`).
+    pub(super) fn read_fields(&self, definition: &crate::type_def::Definition) {
+        self.read(Read::fields(definition));
     }
 
     /// What the lowering read outside the program since the last take.
@@ -178,9 +242,9 @@ impl Outside {
         }
     }
 
-    /// Whether each of its reads reads the same again.
-    fn holds(&self, access: &crate::Access) -> bool {
-        self.reads.iter().all(|read| read.holds(access))
+    /// Whether each of its reads reads the same again, from `models`.
+    fn holds(&self, models: &Models) -> bool {
+        self.reads.iter().all(|read| read.holds(models))
     }
 
     /// Charge `allocation` again what the lowering charged.
@@ -456,7 +520,7 @@ impl<'e> Readings<'e> {
                     .iter()
                     .all(|(template, instances)| pass.instances.of(template) == *instances)
             });
-        if let Some(scanned) = found.filter(|scanned| scanned.outside.holds(&models.access)) {
+        if let Some(scanned) = found.filter(|scanned| scanned.outside.holds(models)) {
             scanned.outside.charge(allocation)?;
             scanned.used = true;
             return Ok(scanned.found.clone());
@@ -689,9 +753,7 @@ impl<'e> Session<'e> {
             None => None,
         };
         let kept = earlier.filter(|kept| {
-            kept.key == key.digest
-                && kept.outside.holds(&models.access)
-                && kept.admitted(&models.host)
+            kept.key == key.digest && kept.outside.holds(models) && kept.admitted(&models.host)
         })?;
         Some(self.kept.entry(place).or_insert(kept))
     }
@@ -841,7 +903,7 @@ impl<'e> Checks<'e> {
         let earlier = self
             .earlier
             .remove(&source)
-            .filter(|earlier| earlier.key == key && earlier.outside.holds(&models.access))?;
+            .filter(|earlier| earlier.key == key && earlier.outside.holds(models))?;
         Some(self.kept.entry(source).or_insert(earlier))
     }
 
@@ -897,14 +959,19 @@ fn adapters(lowered: &[Lowered]) -> Box<[host::structural::Definition]> {
 
 impl Lowered {
     /// This kept lowering for a new generation of the program: what an op
-    /// holds of the generation it was made in made again. `None` when one
-    /// can't be, and the body is lowered again.
+    /// or a pattern holds of the generation it was made in made again.
+    /// `None` when one can't be, and the body is lowered again.
     pub(super) fn renewed(&self, models: &Models) -> Option<Self> {
         let mut lowered = self.clone();
         lowered.ops = self
             .ops
             .iter()
             .map(|op| op.renewed(models))
+            .collect::<Option<_>>()?;
+        lowered.patterns = self
+            .patterns
+            .iter()
+            .map(|pattern| pattern.renewed(models))
             .collect::<Option<_>>()?;
         Some(lowered)
     }
@@ -1019,27 +1086,189 @@ impl ExecutableOp {
         }
     }
 
-    /// This op for a new generation of the program: a default value made
-    /// again in its model, a witnessed op with no instance yet. `None` when
-    /// the default can't be made.
+    /// This op for a new generation of the program: each program type it
+    /// holds as the program has it now, a struct that gained a private
+    /// field among them (#1885), a default value made again in its model,
+    /// a witnessed op with no instance yet. `None` when a type it holds is
+    /// gone or the default can't be made.
     fn renewed(&self, models: &Models) -> Option<Self> {
+        let schema = |identity: &crate::type_def::Identity| models.schema(identity);
         Some(match self {
-            Self::Default { definition, .. } => Self::Default {
-                value: models
-                    .runtime
-                    .materialize_default(
-                        &crate::type_def::Identity::Script(definition.key().clone()),
-                        definition.schema(),
-                    )
-                    .ok()?,
-                definition: definition.clone(),
+            Self::Struct { definition, .. } => match models.nominal(definition)? {
+                Nominal::Struct { definition, item } => Self::Struct {
+                    definition: definition.clone(),
+                    item: item.clone(),
+                },
+                Nominal::Enum { .. } => return None,
             },
+            Self::Enum {
+                definition,
+                variant,
+                ..
+            } => match models.nominal(definition)? {
+                Nominal::Enum { definition, item } => Self::Enum {
+                    definition: definition.clone(),
+                    item: item.clone(),
+                    variant: *variant,
+                },
+                Nominal::Struct { .. } => return None,
+            },
+            Self::MatchSubject { definition, .. } => match models.nominal(definition)? {
+                Nominal::Enum { definition, item } => Self::MatchSubject {
+                    definition: definition.clone(),
+                    item: item.clone(),
+                },
+                Nominal::Struct { .. } => return None,
+            },
+            Self::Clone { definition } => Self::Clone {
+                definition: models.nominal(definition)?.definition().clone(),
+            },
+            Self::Debug { definition } => Self::Debug {
+                definition: models.nominal(definition)?.definition().clone(),
+            },
+            Self::Equal { definition } => Self::Equal {
+                definition: models.nominal(definition)?.definition().clone(),
+            },
+            Self::Validate { definition } => Self::Validate {
+                definition: models.nominal(definition)?.definition().clone(),
+            },
+            Self::Default { definition, .. } => {
+                let definition = models.nominal(definition)?.definition().clone();
+                Self::Default {
+                    value: models
+                        .runtime
+                        .materialize_default(
+                            &crate::type_def::Identity::Script(definition.key().clone()),
+                            definition.schema(),
+                        )
+                        .ok()?,
+                    definition,
+                }
+            }
+            Self::Intrinsic { proof } => Self::Intrinsic {
+                proof: proof.renewed(&schema)?,
+            },
+            Self::Imported { proof } => Self::Imported {
+                proof: proof.renewed(&schema)?,
+            },
+            Self::Projection { proof } => Self::Projection {
+                proof: Box::new(proof.renewed(&schema)?),
+            },
+            Self::Sequence(constructor) => Self::Sequence(constructor.renewed(&schema)?),
             Self::Witnessed(op) => Self::Witnessed(Box::new(super::op::WitnessedOp::new(
                 op.template.renewed(models)?,
                 op.witnesses,
             ))),
-            op => op.clone(),
+            Self::Symbolic { .. }
+            | Self::Prelude(_)
+            | Self::Kinded { .. }
+            | Self::Shaped { .. } => self.clone(),
         })
+    }
+}
+
+impl NominalPattern {
+    /// This pattern with each program type it checks a part against as
+    /// the program has it now (`ExecutableOp::renewed`).
+    fn renewed(&self, models: &Models) -> Option<Self> {
+        let each = |patterns: &[Self]| -> Option<Box<[Self]>> {
+            patterns
+                .iter()
+                .map(|pattern| pattern.renewed(models))
+                .collect()
+        };
+        let boxed = |pattern: &Self| Some(Box::new(pattern.renewed(models)?));
+        Some(match self {
+            Self::Binding { name, expected } => Self::Binding {
+                name: name.clone(),
+                expected: expected.renewed(models)?,
+            },
+            Self::Part { name, expected } => Self::Part {
+                name: name.clone(),
+                expected: expected.renewed(models)?,
+            },
+            Self::Discard { expected } => Self::Discard {
+                expected: expected.renewed(models)?,
+            },
+            Self::Enum(pattern) => Self::Enum(NominalEnumPattern {
+                schema: models.schema(&pattern.identity)?,
+                payload: each(&pattern.payload)?,
+                ..pattern.clone()
+            }),
+            Self::Option(pattern) => Self::Option(match pattern {
+                Some(pattern) => Some(boxed(pattern)?),
+                None => None,
+            }),
+            Self::Result(pattern) => Self::Result(match pattern {
+                Ok(pattern) => Ok(boxed(pattern)?),
+                Err(pattern) => Err(boxed(pattern)?),
+            }),
+            Self::Cow { owned, payload } => Self::Cow {
+                owned: *owned,
+                payload: boxed(payload)?,
+            },
+            Self::Tuple(members) => Self::Tuple(each(members)?),
+            Self::Struct(members) => Self::Struct(each(members)?),
+            Self::Slice {
+                before,
+                rest,
+                after,
+            } => Self::Slice {
+                before: each(before)?,
+                rest: match rest {
+                    Some(rest) => Some(boxed(rest)?),
+                    None => None,
+                },
+                after: each(after)?,
+            },
+            Self::Or(alternatives) => Self::Or(each(alternatives)?),
+            Self::At {
+                name,
+                pattern,
+                part,
+            } => Self::At {
+                name: name.clone(),
+                pattern: boxed(pattern)?,
+                part: *part,
+            },
+            Self::Literal(_) | Self::Range { .. } => self.clone(),
+        })
+    }
+}
+
+impl NominalPayloadType {
+    /// This type as the program has it now (`ExecutableOp::renewed`).
+    fn renewed(&self, models: &Models) -> Option<Self> {
+        Some(match self {
+            Self::Script { identity, .. } => Self::Script {
+                identity: identity.clone(),
+                schema: models.schema(identity)?,
+            },
+            Self::Unit | Self::Host(_) | Self::Any => self.clone(),
+        })
+    }
+}
+
+impl Models {
+    /// The program's type `definition` names, by its key, as the program
+    /// has it now.
+    fn nominal(&self, definition: &crate::type_def::Definition) -> Option<&Nominal> {
+        self.by_identity
+            .get(&crate::type_def::Identity::Script(definition.key().clone()))
+    }
+
+    /// The schema the program's type `identity` has now.
+    fn schema(
+        &self,
+        identity: &crate::type_def::Identity,
+    ) -> Option<crate::program::schema::Fingerprint> {
+        Some(
+            self.by_identity
+                .get(identity)?
+                .definition()
+                .schema()
+                .clone(),
+        )
     }
 }
 

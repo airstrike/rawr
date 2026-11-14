@@ -225,6 +225,29 @@ impl Proof {
         crate::program::schema::symbol_id(self)
     }
 
+    /// This proof with each program type's schema as `schema` gives it
+    /// (`type_ref::Type::renewed`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn renewed(
+        &self,
+        schema: &dyn Fn(&crate::type_def::Identity) -> Option<crate::program::schema::Fingerprint>,
+    ) -> Option<Self> {
+        Some(Self {
+            operands: self
+                .operands
+                .iter()
+                .map(|operand| {
+                    Some(Operand {
+                        ty: operand.ty.renewed(schema)?,
+                        ..operand.clone()
+                    })
+                })
+                .collect::<Option<_>>()?,
+            output: self.output.renewed(schema)?,
+            ..self.clone()
+        })
+    }
+
     pub(crate) fn invoke_prepared(
         &self,
         runtime: &host::runtime::Registry,

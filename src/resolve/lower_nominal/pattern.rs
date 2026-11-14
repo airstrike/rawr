@@ -2720,6 +2720,10 @@ impl<'a> Parser<'a> {
         let Nominal::Struct { definition, item } = model else {
             unreachable!("struct patterns are parsed for structs");
         };
+        // A lowering that reads its fields whole is reused only while
+        // they are as they were (#1885).
+        #[cfg(feature = "rust-import")]
+        self.models.read_fields(&definition);
         let (written, rest, end) = self.parse_field_patterns()?;
         let span = span(start.start(), end);
         let names = written

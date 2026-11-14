@@ -729,9 +729,14 @@ pub fn called_from_native() -> bool {
 /// Offer a committed generation to the thread that owns the program
 /// (D553.3): `admit` runs there at its next outermost entry from native
 /// code, so the whole call tree of each entry runs in one generation. The
-/// latest offer wins. The program's windows are asked to redraw, so an
-/// idle event loop runs its next frame, and that frame's first call into
-/// marked code admits it (#1479).
+/// latest offer wins.
+///
+/// A program that shows windows runs its event loop on the main thread,
+/// which is idle between events: the main thread admits the offer there,
+/// outside every call into script code, and then its windows redraw, so
+/// the frame that follows draws with the new generation without any input
+/// (#1479, #1889). The frame need not call marked code for the generation
+/// to be admitted first.
 pub fn offer(admit: impl FnOnce() + Send + 'static) {
     let older = {
         let mut offered = lock(&OFFERED);
@@ -739,7 +744,17 @@ pub fn offer(admit: impl FnOnce() + Send + 'static) {
         offered.replace(Box::new(admit))
     };
     drop(older);
-    crate::redraw::windows();
+    crate::redraw::windows_after(admit_idle);
+}
+
+/// Admit the generation offered last when this thread owns the program
+/// and is outside every call from native code into script code, as an
+/// event loop is between events. Inside one, the next outermost entry
+/// admits it.
+fn admit_idle() {
+    if outermost() {
+        admit_waiting();
+    }
 }
 
 /// Inside a call from native code into script code until it drops
@@ -778,6 +793,12 @@ fn admit_offered() {
     if !ENTERED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
         ENTERED_ONCE.store(true, std::sync::atomic::Ordering::Release);
     }
+    admit_waiting();
+}
+
+/// On the thread that owns the program, admit the generation offered last,
+/// if one waits.
+fn admit_waiting() {
     if !(WAITING.load(std::sync::atomic::Ordering::Acquire) && owns()) {
         return;
     }

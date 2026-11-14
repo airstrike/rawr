@@ -9,7 +9,8 @@ use crate::{host, package, resolve, Engine};
 /// module that names a `State` of its own, as an iced app's modules do,
 /// and a reader module whose function takes the screen's `State`, which
 /// its lowering checks against the struct's schema where the call enters
-/// (`validate_parameters`).
+/// (`validate_parameters`), and which it clones, formats, passes to native
+/// code and binds in a pattern, each of which holds the schema too.
 fn snapshot(screen: &str) -> package::snapshot::Snapshot {
     let root = std::path::Path::new("/reveal-fixture");
     let entry = root.join("src/main.rs");
@@ -17,7 +18,11 @@ fn snapshot(screen: &str) -> package::snapshot::Snapshot {
         pub fn shown<T: Clone>(value: T) -> T { native::echo(value) }\n\
         pub fn count(state: &State) -> i64 { shown(state.count) }\n";
     let reader = "// rawr\nuse crate::screen;\n\
-        pub fn read(state: &screen::State) -> i64 { state.ticks() }\n";
+        pub fn read(state: &screen::State) -> i64 {\n\
+        let seen = native::echo(state.clone());\n\
+        let text = format!(\"{seen:?}\");\n\
+        match Some(seen) { Some(held) => held.ticks() + state.count + text.len() as i64, None => 0 }\n\
+        }\n";
     let main = "// rawr\nmod reader;\nmod screen;\nmod widget;\n\
         pub fn main() { let mut state = screen::State::new(); state.tick(); \
         reader::read(&state); widget::count(&widget::State { count: 1 }); }\n";
@@ -38,9 +43,10 @@ fn snapshot(screen: &str) -> package::snapshot::Snapshot {
     .unwrap()
 }
 
-const SCREEN: &str = "// rawr\npub struct State { ticks: i64 }\n\
+const SCREEN: &str =
+    "// rawr\n#[derive(Clone, Debug)]\npub struct State { pub count: i64, ticks: i64 }\n\
     impl State {\n\
-    pub fn new() -> Self { Self { ticks: 0 } }\n\
+    pub fn new() -> Self { Self { count: 0, ticks: 0 } }\n\
     pub fn tick(&mut self) { self.ticks = crate::widget::shown(self.ticks + 1); }\n\
     pub fn ticks(&self) -> i64 { self.ticks }\n\
     }\n";
@@ -74,8 +80,8 @@ fn a_reveal_that_reuses_unchanged_bodies_finds_what_a_fresh_one_does() {
         revealed(&compiler(), &snapshot(SCREEN))
     );
     let saved = SCREEN
-        .replace("{ ticks: i64 }", "{ ticks: i64, held: u32 }")
-        .replace("{ ticks: 0 }", "{ ticks: 0, held: 0 }")
+        .replace("ticks: i64 }", "ticks: i64, held: u32 }")
+        .replace("ticks: 0 }", "ticks: 0, held: 0 }")
         .replace("self.ticks + 1", "self.ticks + 2");
     assert_eq!(
         revealed(&keeping, &snapshot(&saved)),
@@ -121,24 +127,41 @@ fn reads(snapshot: &package::snapshot::Snapshot, file: &str) -> ([u8; 32], [u8; 
 /// screen's (#1886): a field the screen's `State` gains, private or
 /// public, keeps what the widget's lowering and its bodies' reveal read.
 /// The root names the screen's through `screen::`, and the reader through
-/// its import, so each reads it again: the reader's lowering holds the
-/// struct's schema, which a private field changes (#1885).
+/// its import, and neither sees its private fields: a private field of a
+/// plain type keeps what each lowering reads, which renews the struct's
+/// schema where it holds it (#1885), and a public one changes it.
 #[test]
 fn a_field_of_another_module_s_state_keeps_what_a_module_with_its_own_reads() {
     let private = SCREEN
-        .replace("{ ticks: i64 }", "{ ticks: i64, held: u32 }")
-        .replace("{ ticks: 0 }", "{ ticks: 0, held: 0 }");
+        .replace("ticks: i64 }", "ticks: i64, held: u32 }")
+        .replace("ticks: 0 }", "ticks: 0, held: 0 }");
     let public = SCREEN
-        .replace("{ ticks: i64 }", "{ ticks: i64, pub held: u32 }")
-        .replace("{ ticks: 0 }", "{ ticks: 0, held: 0 }");
+        .replace("ticks: i64 }", "ticks: i64, pub held: u32 }")
+        .replace("ticks: 0 }", "ticks: 0, held: 0 }");
     let widget = reads(&snapshot(SCREEN), "widget.rs");
     assert_eq!(reads(&snapshot(&private), "widget.rs"), widget);
     assert_eq!(reads(&snapshot(&public), "widget.rs"), widget);
-    let main = reads(&snapshot(SCREEN), "main.rs");
-    assert_ne!(reads(&snapshot(&private), "main.rs").0, main.0);
-    assert_ne!(reads(&snapshot(&public), "main.rs"), main);
-    let reader = reads(&snapshot(SCREEN), "reader.rs");
-    assert_ne!(reads(&snapshot(&private), "reader.rs").0, reader.0);
+    for file in ["main.rs", "reader.rs"] {
+        let read = reads(&snapshot(SCREEN), file);
+        assert_eq!(reads(&snapshot(&private), file), read, "{file}");
+        assert_ne!(reads(&snapshot(&public), file).0, read.0, "{file}");
+    }
+}
+
+/// A private field whose type a lowering asks about, a cell's, which makes
+/// the struct hold one, or a reference's, which a borrow's check reads,
+/// changes what another module's lowering reads (#1885).
+#[test]
+fn a_private_field_a_lowering_asks_about_changes_what_another_module_reads() {
+    let reader = reads(&snapshot(SCREEN), "reader.rs").0;
+    let cell = SCREEN
+        .replace("ticks: i64 }", "ticks: i64, held: std::cell::Cell<u32> }")
+        .replace("ticks: 0 }", "ticks: 0, held: std::cell::Cell::new(0) }");
+    assert_ne!(reads(&snapshot(&cell), "reader.rs").0, reader);
+    let referent = SCREEN
+        .replace("ticks: i64 }", "ticks: i64, held: &'static str }")
+        .replace("ticks: 0 }", "ticks: 0, held: \"\" }");
+    assert_ne!(reads(&snapshot(&referent), "reader.rs").0, reader);
 }
 
 /// What `engine` lowers `snapshot`'s program to.
@@ -149,15 +172,23 @@ fn lowered(engine: &Engine, snapshot: &package::snapshot::Snapshot) -> String {
         &mut host::TestImportAllocation::default(),
     )
     .unwrap_or_else(|_| panic!("the fixture compiles"));
-    let (_, ast) = output.candidate.with_top_level();
-    format!("{ast:?}")
+    let (_, mut ast) = output.candidate.with_top_level();
+    let lowered = format!("{ast:?}");
+    // The schemas a body's patterns check, which their `Debug` leaves out.
+    let mut schemas = Vec::new();
+    ast.for_each_fn_def_mut(|function| {
+        schemas.push(crate::program::schema::symbol_id(&function.body));
+    });
+    format!("{lowered}\n{schemas:?}")
 }
 
 /// A save that adds a private field to the screen's `State`, which the
 /// widget's own `State` shares a name with: the keeping compiler, which
-/// reuses the widget's lowering and lowers the reader's again, lowers the
+/// reuses the widget's lowering and the reader's, each op and pattern of
+/// the reader's renewed with the struct's new schema (#1885), lowers the
 /// program to what a fresh compiler does, and so after a save back. A
-/// reader lowering reused with the old schema would name its check by it.
+/// reader lowering reused with the old schema would name its check, its
+/// clone, its native call and its pattern by it.
 #[test]
 fn a_compile_that_reuses_another_state_s_module_lowers_what_a_fresh_one_does() {
     let mut keeping = compiler();
@@ -167,8 +198,8 @@ fn a_compile_that_reuses_another_state_s_module_lowers_what_a_fresh_one_does() {
         lowered(&compiler(), &snapshot(SCREEN))
     );
     let saved = SCREEN
-        .replace("{ ticks: i64 }", "{ ticks: i64, held: u32 }")
-        .replace("{ ticks: 0 }", "{ ticks: 0, held: 0 }");
+        .replace("ticks: i64 }", "ticks: i64, held: u32 }")
+        .replace("ticks: 0 }", "ticks: 0, held: 0 }");
     assert_eq!(
         lowered(&keeping, &snapshot(&saved)),
         lowered(&compiler(), &snapshot(&saved))

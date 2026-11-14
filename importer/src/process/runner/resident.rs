@@ -54,13 +54,16 @@ impl<B> Candidate<super::Admitted, B> {
             .fingerprint())
     }
 
-    /// Why `request` needs another runner than this one, in one line;
+    /// Why `request` needs another runner than this one, in one line,
+    /// naming no path under `outputs`, the directories builds write;
     /// `None` when this runner serves it.
     pub fn native_change(
         &self,
         request: &crate::bridge::GenerationRequestKey<B>,
+        outputs: &[std::path::PathBuf],
     ) -> Result<Option<String>, Error> {
-        Ok(request.change_from(self.inner.as_ref().ok_or(Error::Consumed)?.manifest()))
+        let manifest = self.inner.as_ref().ok_or(Error::Consumed)?.manifest();
+        Ok(request.change_from(manifest, outputs))
     }
 
     /// Compile once inside the admitted live process. A terminal nonprepared

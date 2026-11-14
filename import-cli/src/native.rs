@@ -48,12 +48,14 @@ impl<B> Lane<B> {
         self.slot.native_fingerprint().map_err(Error::Process)
     }
 
-    /// Why `miss` needs another runner than the running one, in one line.
+    /// Why `miss` needs another runner than the running one, in one line,
+    /// naming no path under `outputs`, the directories builds write.
     pub(crate) fn native_change(
         &self,
         miss: &rawr_import::process::hot::Miss<B>,
+        outputs: &[std::path::PathBuf],
     ) -> Option<String> {
-        self.slot.native_change(miss.request())
+        self.slot.native_change(miss.request(), outputs)
     }
 
     pub(crate) fn prepare_resident(

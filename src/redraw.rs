@@ -1,29 +1,37 @@
 //! A redraw of the program's windows, asked for once a new generation is
 //! offered (#1479): an idle event-driven program, as an iced app waiting
-//! for its next event, makes no call into marked code until something wakes
+//! for its next event, makes no call into marked code till something wakes
 //! its event loop, so the generation would wait for the person's next input.
-//! Asking the platform to redraw every window the process shows wakes that
-//! loop and runs the program's next frame, whose first call into marked
-//! code admits the generation (D553.3), so the frame draws with it.
+//! The work a redraw needs first, admitting the generation, runs on the
+//! main thread, where the event loop runs and the program's state lives,
+//! between two of its events (#1889). Asking the platform to redraw every
+//! window the process shows then wakes that loop and runs the program's
+//! next frame, which draws with the new generation whether or not it calls
+//! marked code.
 //!
-//! Nothing here knows the program's framework. On macOS each window's
-//! content view is marked as needing display, on the main thread, as AppKit
-//! itself does when a window's contents change: winit hands that to the
-//! program as `RedrawRequested`. A process that shows no window asks for
-//! nothing, as a terminal program: its next call into marked code, at its
-//! own next tick or input, admits the generation. Other platforms ask for
-//! nothing yet, so there a generation waits for the program's next event.
+//! Nothing here knows the program's framework. On macOS the work goes on
+//! the main dispatch queue, which the main thread's run loop drains when it
+//! is idle, and then each window's content view is marked as needing
+//! display, as AppKit itself does when a window's contents change: winit
+//! hands that to the program as `RedrawRequested`. A process that shows no
+//! window asks for nothing, as a terminal program: its next call into
+//! marked code, at its own next tick or input, admits the generation.
+//! Other platforms ask for nothing yet, so there a generation waits for the
+//! program's next event.
 //!
 //! What a frame calls is the program's: iced draws its widgets again but
 //! builds its view only after a message, so a redraw shows an edit of code
 //! a draw calls (a style, a theme's colors, a canvas), and an edit of code
 //! only `view` calls shows at the next message.
 
-/// Ask the platform to redraw every window the process shows. Any thread
-/// may call this; it returns before the redraw runs.
-pub(crate) fn windows() {
+/// Run `first` on the main thread, then ask the platform to redraw every
+/// window the process shows. Any thread may call this; it returns before
+/// either runs. A process that shows no window runs neither.
+pub(crate) fn windows_after(first: fn()) {
     #[cfg(target_os = "macos")]
-    appkit::windows();
+    appkit::windows_after(first);
+    #[cfg(not(target_os = "macos"))]
+    let _ = first;
 }
 
 #[cfg(target_os = "macos")]
@@ -157,21 +165,23 @@ mod appkit {
         }
     }
 
-    /// Ask the main thread to redraw the application's windows, when
-    /// AppKit is loaded.
-    pub(super) fn windows() {
+    /// Ask the main thread to run `first` and then redraw the
+    /// application's windows, when AppKit is loaded.
+    pub(super) fn windows_after(first: fn()) {
         unsafe extern "C" fn run(context: *mut c_void) {
-            // SAFETY: `context` is the runtime `windows` passed, which
-            // lives as long as the process.
-            let runtime = unsafe { &*context.cast::<Runtime>() };
-            runtime.redraw();
+            // SAFETY: `context` is the function `windows_after` passed.
+            let first = unsafe { std::mem::transmute::<*mut c_void, fn()>(context) };
+            first();
+            if let Some(runtime) = Runtime::get() {
+                runtime.redraw();
+            }
         }
-        let Some(runtime) = Runtime::get() else {
+        if Runtime::get().is_none() {
             return;
-        };
-        let context = std::ptr::from_ref(runtime).cast_mut().cast::<c_void>();
-        // SAFETY: the main queue runs `run` once with `context`, a static
-        // runtime that it only reads.
+        }
+        let context = first as *mut c_void;
+        // SAFETY: the main queue runs `run` once with `context`, a function
+        // that lives as long as the process.
         unsafe { dispatch_async_f((&raw const _dispatch_main_q).cast(), context, run) };
     }
 

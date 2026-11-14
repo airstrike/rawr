@@ -730,6 +730,10 @@ impl<'a> Parser<'a> {
                 construction: name_span,
             });
         };
+        // A lowering that reads its fields whole is reused only while
+        // they are as they were (#1885).
+        #[cfg(feature = "rust-import")]
+        self.models.read_fields(&definition);
         self.next();
         let model = Nominal::Struct {
             definition: definition.clone(),

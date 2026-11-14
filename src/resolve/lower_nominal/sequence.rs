@@ -84,6 +84,21 @@ impl Constructor {
         dependencies
     }
 
+    /// This constructor with each program type's schema as `schema`
+    /// gives it (`Type::renewed`).
+    pub(super) fn renewed(
+        &self,
+        schema: &dyn Fn(&crate::type_def::Identity) -> Option<crate::program::schema::Fingerprint>,
+    ) -> Option<Self> {
+        Some(Self {
+            key: self.key.clone(),
+            target: match &self.target {
+                Some(target) => Some(target.renewed(schema)?),
+                None => None,
+            },
+        })
+    }
+
     pub(super) fn name(&self) -> String {
         format!(
             "\0rawr.sequence.construct.{:016x}",

@@ -1639,6 +1639,9 @@ impl<'a> Parser<'a> {
                     && item.generics.is_empty()
                     && !self.models.default_folds(&ty, &mut Vec::new())
                 {
+                    // Reused only while its fields are as they were (#1885).
+                    #[cfg(feature = "rust-import")]
+                    self.models.read_fields(definition);
                     let fields = item
                         .fields
                         .iter()

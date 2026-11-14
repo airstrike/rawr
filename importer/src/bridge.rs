@@ -311,8 +311,13 @@ impl<B> GenerationRequestKey<B> {
     /// Why the runner this request needs is not `built`, in one line, as
     /// `rawr run` says why it restarts; `None` when it is. Each part of
     /// [`build_request_key`] is named in its order: a native input, the
-    /// crates' API, then the native items the program uses.
-    pub(crate) fn change_from<P>(&self, built: &crate::runner::Manifest<P, B>) -> Option<String> {
+    /// crates' API, then the native items the program uses. A native input
+    /// is never one under `outputs`, the directories builds write.
+    pub(crate) fn change_from<P>(
+        &self,
+        built: &crate::runner::Manifest<P, B>,
+        outputs: &[std::path::PathBuf],
+    ) -> Option<String> {
         if self.build == built.generated.build_request_key() {
             return None;
         }
@@ -322,7 +327,7 @@ impl<B> GenerationRequestKey<B> {
         if native(&self.native) != native(&built.native) {
             return Some(
                 self.native
-                    .change_from(&built.native)
+                    .change_from(&built.native, outputs)
                     .unwrap_or_else(|| "a native input changed".to_owned()),
             );
         }
