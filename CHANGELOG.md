@@ -17,6 +17,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain. (#1928)
 - A crate function that takes a shared borrow of a tuple holding borrows, as log's `&(&str, &'static str, &Location)`, or a `fn(&T) -> U` pointer is no longer refused as having a higher-ranked lifetime; marked code passes the tuple and a script function as rustc does. (#1559, #966)
 - A project's Cargo.lock never has to change for rawr: rawr's own dependency floors no longer raise a package the project pins, such as toml_datetime. (#1914)
+- A string literal or `&'static str` const passed where a crate takes `impl Into<T>` lives for the program when T converts only from `&'static str`, as iced's `.id(..)`, `operation::focus(..)` and `scrollable::snap_to(..)` take one. (#726)
+- A float pair passed as `impl Into<Size>`, as iced's `window_size((500.0, 800.0))`, takes f32s, as rustc infers them. (#1941)
+- A crate method that returns `&Path`, as directories' `ProjectDirs::data_dir()`, and a tokio future that takes `&[u8]`, as `fs::write(path, json.as_bytes())`, no longer fail to build. (#1942, #1943)
 
 ## 0.3.213 (2026-11-13)
 
