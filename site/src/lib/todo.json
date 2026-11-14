@@ -3,9 +3,9 @@
   "updated": "2026-11-14",
   "version": "0.3.213",
   "examples": {
-    "running": 51,
+    "running": 54,
     "total": 56,
-    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 51 of 56 behave as cargo does (tour since 956bdc199). Left: gallery opens an image (#2015; its grid loads), markdown (#2013), pokedex (#1986), todos (#249), delineate (#2007, unconfirmed). system_information runs as cargo; its hot-reload save fails (#2004)."
+    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 54 of 56 behave as cargo does (pokedex, todos and gallery since b77ee04ef). Left: markdown (#2013, in progress), delineate (#2007, unconfirmed against cargo). system_information runs as cargo; its hot-reload save fails (#2004)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -74,7 +74,10 @@
         {"text":"A program's impl of a crate trait can return a reference to a crate value it holds, as iced markdown's `fn theme(&self) -> &Theme` does, and native code borrows the value where it is for as long as `&self` lives.","issues":[2001],"refs":[83]},
         {"text":"A future or a Send closure that captured a crate value can use it on the thread that polls or calls it, so iced's gallery loads its images.","issues":[2014]},
         {"text":"A program's From impl into a std type, such as `From<Language> for String`, reaches a crate's `impl Into<String>`, so iced's tour shows its language radio.","issues":[1987]},
-        {"text":"`rich_text![..]` and other `FromIterator::from_iter` calls on a crate type take the program's array of spans.","issues":[1988]}
+        {"text":"`rich_text![..]` and other `FromIterator::from_iter` calls on a crate type take the program's array of spans.","issues":[1988]},
+        {"text":"A future polled on another thread brings back the crate values it made, inside an Option or a Result too, so pokedex's images and todos' saved task ids survive.","issues":[1986,1957]},
+        {"text":"A widget made inside a view and passed in an Option, as gallery's `stack![content, viewer]` does, reaches the call that boxes it, so gallery's image viewer opens.","issues":[2015]},
+        {"text":"A closure can compare parameters whose types its later calls fix, and keyed_column takes (key, element) pairs made inside a view, so iced's todos adds, checks, filters, deletes and saves its tasks.","issues":[2019],"refs":[249]}
       ]
     },
     "releases": [
@@ -4341,7 +4344,7 @@
     {"issue":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open","category":"No glue (D593)"},
     {"issue":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open","category":"No glue (D593)"},
     {"issue":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open","category":"No glue (D593)"},
-    {"issue":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open","category":"No glue (D593)"},
+    {"issue":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"closed","category":"No glue (D593)"},
     {"issue":1958,"title":"A crate function that borrows a value whose type holds a borrow inside a type argument, as…","state":"closed","category":"No glue (D593)"},
     {"issue":1959,"title":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does…","state":"closed","category":"No glue (D593)"},
     {"issue":1960,"title":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the…","state":"closed","category":"No glue (D593)"},
@@ -4370,7 +4373,7 @@
     {"issue":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"closed","category":"Health"},
     {"issue":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1985,"title":"A program family's blanket RawrOpaque impl in the runner bin crate breaks the orphan rule (E0210, gallery)","state":"closed","category":"No glue (D593)"},
-    {"issue":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"open","category":"No glue (D593)"},
+    {"issue":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"closed","category":"No glue (D593)"},
     {"issue":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"closed","category":"No glue (D593)"},
     {"issue":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"closed","category":"No glue (D593)"},
     {"issue":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"closed","category":"Health"},
@@ -4399,8 +4402,11 @@
     {"issue":2012,"title":"rawr's checker reports a false E0382 for a match arm binding moved inside a for loop","state":"open","category":"Divergences from rustc"},
     {"issue":2013,"title":"A script impl function whose revealed output holds a crate's opaque type (markdown's code_block) can't be named","state":"open","category":"No glue (D593)"},
     {"issue":2014,"title":"A future or a Send closure that captured a crate value can use it on the thread that polls or…","state":"closed","category":"No glue (D593)"},
-    {"issue":2015,"title":"Animation::go_mut through a field of a script method's &mut self panics with TypeMismatch (gallery's open)","state":"open","category":"No glue (D593)"},
-    {"issue":2016,"title":"A carried future or Send closure can't reach its values while the main store is lent, or under a Send-implying bound","state":"open","category":"No glue (D593)"}
+    {"issue":2015,"title":"Animation::go_mut through a field of a script method's &mut self panics with TypeMismatch (gallery's open)","state":"closed","category":"No glue (D593)"},
+    {"issue":2016,"title":"A carried future or Send closure can't reach its values while the main store is lent, or under a Send-implying bound","state":"open","category":"No glue (D593)"},
+    {"issue":2017,"title":"Typing into a freshly focused text_input under rawr doubled the first character (todos' 'buy milk' became 'bbuy milk')","state":"open","category":"Health"},
+    {"issue":2018,"title":"A region's (key, element) tuple inside an Option is not taken in its region","state":"open","category":"No glue (D593)"},
+    {"issue":2019,"title":"A closure can compare parameters whose types its later calls fix, and keyed_column takes (key…","state":"closed","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5048,7 +5054,7 @@
             {"number":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open"},
             {"number":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open"},
             {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
-            {"number":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open"},
+            {"number":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"closed"},
             {"number":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"closed"},
             {"number":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open"},
             {"number":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"closed"},
@@ -5059,7 +5065,7 @@
             {"number":1981,"title":"A fn item coerced to a native trait object through a crate's blanket impl over Fn (markdown's `&Code::highlight`)","state":"closed"},
             {"number":1982,"title":"A method whose `&'a self` borrow is kept by a `&mut T<'a>` input a scope frame holds is refused (integration)","state":"closed"},
             {"number":1985,"title":"A program family's blanket RawrOpaque impl in the runner bin crate breaks the orphan rule (E0210, gallery)","state":"closed"},
-            {"number":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"open"},
+            {"number":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"closed"},
             {"number":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"closed"},
             {"number":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"closed"},
             {"number":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"closed"},
@@ -5069,8 +5075,9 @@
             {"number":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"closed"},
             {"number":2006,"title":"A struct-update literal over a derived-Default struct with FxHashSet fields has no constructor (game_of_life)","state":"closed"},
             {"number":2007,"title":"A widget operation run from on_scroll sees the layout from before that scroll (delineate)","state":"open"},
-            {"number":2015,"title":"Animation::go_mut through a field of a script method's &mut self panics with TypeMismatch (gallery's open)","state":"open"},
-            {"number":2016,"title":"A carried future or Send closure can't reach its values while the main store is lent, or under a Send-implying bound","state":"open"}
+            {"number":2015,"title":"Animation::go_mut through a field of a script method's &mut self panics with TypeMismatch (gallery's open)","state":"closed"},
+            {"number":2016,"title":"A carried future or Send closure can't reach its values while the main store is lent, or under a Send-implying bound","state":"open"},
+            {"number":2018,"title":"A region's (key, element) tuple inside an Option is not taken in its region","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -6116,7 +6123,8 @@
             {"number":1993,"title":"rawr mcp screenshot: check a locked session, an off-screen window and a 2x display","state":"open"},
             {"number":1995,"title":"A program rawr runs on Linux gets rawr's menu items (restart, screenshot, about, exit) and keeps its own name","state":"open"},
             {"number":1996,"title":"A program rawr runs on Windows gets rawr's menu items (restart, screenshot, about, exit)","state":"open"},
-            {"number":2009,"title":"rawr mcp screenshot takes a region in points and renders at a chosen scale, 2x by default whatever the display","state":"open"}
+            {"number":2009,"title":"rawr mcp screenshot takes a region in points and renders at a chosen scale, 2x by default whatever the display","state":"open"},
+            {"number":2017,"title":"Typing into a freshly focused text_input under rawr doubled the first character (todos' 'buy milk' became 'bbuy milk')","state":"open"}
           ],
           "milestone": "0.5"
         },

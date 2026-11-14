@@ -68,6 +68,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A future or a Send closure that captured a crate value can use it on the thread that polls or calls it, so iced's gallery loads its images. (#2014)
 - A program's From impl into a std type, such as `From<Language> for String`, reaches a crate's `impl Into<String>`, so iced's tour shows its language radio. (#1987)
 - `rich_text![..]` and other `FromIterator::from_iter` calls on a crate type take the program's array of spans. (#1988)
+- A future polled on another thread brings back the crate values it made, inside an Option or a Result too, so pokedex's images and todos' saved task ids survive. (#1986, #1957)
+- A widget made inside a view and passed in an Option, as gallery's `stack![content, viewer]` does, reaches the call that boxes it, so gallery's image viewer opens. (#2015)
+- A closure can compare parameters whose types its later calls fix, and keyed_column takes (key, element) pairs made inside a view, so iced's todos adds, checks, filters, deletes and saves its tasks. (#2019; part of #249)
 
 ## 0.3.213 (2026-11-13)
 
