@@ -378,28 +378,38 @@ fn compile<B>(
             source,
         })
     };
-    let linked = sources(runtime.as_ref());
-    // The lock cargo settled this pruned lock to, at an earlier build.
-    let settled = runtime.as_ref().and_then(|_| settled_lock(&work, &linked));
-    let (written, files) = sync(&linked, settled.as_deref())?;
-    if let Some(runtime) = &runtime
-        && settled.is_none()
-    {
-        let file = |name: &str| {
-            linked
-                .iter()
-                .find(|(path, _)| *path == name)
-                .map_or(&[][..], |(_, bytes)| bytes.as_ref())
-        };
-        runtime.settle_lock(
-            &work,
-            context.project(),
-            context.environment(),
-            file("Cargo.toml"),
-            file("Cargo.lock"),
-        )?;
-    }
-    drop(linked);
+    // The sources for `runtime`, written with the lock cargo settles them
+    // to. The harness locked rawr's crate without its dependencies (#1914):
+    // linked to the shared runtime, the runner keeps the project's
+    // versions; compiling rawr in the project, it adds rawr's graph.
+    let stage = |runtime: Option<&crate::runner::runtime::Runtime>| {
+        let staged = sources(runtime);
+        // The lock cargo settled this one to, at an earlier build.
+        let settled = settled_lock(&work, &staged);
+        let written = sync(&staged, settled.as_deref())?;
+        if settled.is_none() {
+            let file = |name: &str| {
+                staged
+                    .iter()
+                    .find(|(path, _)| *path == name)
+                    .map_or(&[][..], |(_, bytes)| bytes.as_ref())
+            };
+            let cargo = match runtime {
+                Some(runtime) => runtime.cargo().to_path_buf(),
+                None => crate::runner::runtime::project_cargo(context)?,
+            };
+            crate::runner::runtime::settle_lock(
+                &cargo,
+                &work,
+                context.project(),
+                context.environment(),
+                file("Cargo.toml"),
+                file("Cargo.lock"),
+            )?;
+        }
+        Ok::<_, node::Error>(written)
+    };
+    let (written, files) = stage(runtime.as_ref())?;
     // Settled from the project's lock, the runner must build each package
     // at the version the bindings were generated against (#1912).
     if runtime.is_some() {
@@ -509,7 +519,7 @@ fn compile<B>(
                 &reason,
             );
             runtime = None;
-            sync(&sources(None), None)?;
+            stage(None)?;
             #[cfg(feature = "rustc-driver")]
             let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
             let second = run();

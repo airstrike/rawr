@@ -371,57 +371,9 @@ impl Runtime {
         (digest == runner_digest(manifest, pruned)).then(|| settled.to_owned())
     }
 
-    /// Settle the runner's lockfile in `work`, written from the `pruned`
-    /// lock and `manifest`, to what cargo resolves without rawr, for a
-    /// build that found no lock an earlier build settled
-    /// ([`Self::settled_lock`]). The `pruned` lock is the project's own when
-    /// it has one (#1912): cargo adds what the runner adds and keeps every
-    /// version the project pins, so the runner's units are the ones the
-    /// project's `cargo build` made. Otherwise it is the harness's, pruned
-    /// of rawr, whose edges name a shared package's dependencies at the
-    /// features rawr turned on too: ahash keeps `const-random` from rawr's
-    /// `compile-time-rng`. Cargo drops what no remaining feature needs and
-    /// keeps every version, so the build's `--locked` holds.
-    pub(crate) fn settle_lock(
-        &self,
-        work: &Path,
-        project: &Path,
-        environment: &crate::cargo::config::Environment,
-        manifest: &[u8],
-        pruned: &[u8],
-    ) -> Result<(), node::Error> {
-        let output = Command::new(&self.cargo)
-            .args(["update", "--workspace", "--offline", "--quiet"])
-            .arg("--manifest-path")
-            .arg(work.join("Cargo.toml"))
-            .current_dir(project)
-            .env_clear()
-            .envs(environment.entries())
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|source| node::Error::Io {
-                operation: "settle the runner's lockfile",
-                path: self.cargo.clone(),
-                source,
-            })?;
-        if !output.status.success() {
-            return Err(node::Error::Transform(
-                format!(
-                    "cargo could not settle the runner's lockfile in {}: {}",
-                    work.display(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )
-                .into_boxed_str(),
-            ));
-        }
-        let lock = work.join("Cargo.lock");
-        let settled = fs::read_to_string(&lock).map_err(|source| node::Error::Io {
-            operation: "read the runner's settled lockfile",
-            path: lock,
-            source,
-        })?;
-        let record = format!("{}\n{settled}", runner_digest(manifest, pruned));
-        write_changed(&work.join(SETTLED), record.as_bytes())
+    /// The project's cargo, which settles the runner's lockfile.
+    pub(crate) fn cargo(&self) -> &Path {
+        &self.cargo
     }
 
     /// The runner's build script, which also points rustc at the runtime.
@@ -471,6 +423,64 @@ impl Runtime {
                 .find_map(|runtime| project.conflict(runtime))
         })
     }
+}
+
+/// Settle the runner's lockfile in `work`, written from the `pruned` lock
+/// and `manifest`, with the project's `cargo`, for a build that found no
+/// lock an earlier build settled ([`Runtime::settled_lock`]). The harness
+/// locked rawr's crate without its dependencies (#1914). A runner linked
+/// to the shared runtime starts from the project's own lock when it has
+/// one (#1912), pruned of rawr: cargo adds what the runner adds and keeps
+/// every version the project pins, so the runner's units are the ones the
+/// project's `cargo build` made. A runner that compiles rawr in the project
+/// starts from the harness's lock, and cargo adds rawr's graph to it.
+pub(crate) fn settle_lock(
+    cargo: &Path,
+    work: &Path,
+    project: &Path,
+    environment: &crate::cargo::config::Environment,
+    manifest: &[u8],
+    pruned: &[u8],
+) -> Result<(), node::Error> {
+    let output = Command::new(cargo)
+        .args(["update", "--workspace", "--offline", "--quiet"])
+        .arg("--manifest-path")
+        .arg(work.join("Cargo.toml"))
+        .current_dir(project)
+        .env_clear()
+        .envs(environment.entries())
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| node::Error::Io {
+            operation: "settle the runner's lockfile",
+            path: cargo.to_path_buf(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(node::Error::Transform(
+            format!(
+                "cargo could not settle the runner's lockfile in {}: {}",
+                work.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+            .into_boxed_str(),
+        ));
+    }
+    let lock = work.join("Cargo.lock");
+    let settled = fs::read_to_string(&lock).map_err(|source| node::Error::Io {
+        operation: "read the runner's settled lockfile",
+        path: lock,
+        source,
+    })?;
+    let record = format!("{}\n{settled}", runner_digest(manifest, pruned));
+    write_changed(&work.join(SETTLED), record.as_bytes())
+}
+
+/// The cargo the project's `cargo build` runs, which settles a runner's
+/// lockfile that compiles rawr in the project.
+pub(crate) fn project_cargo(context: &crate::context::Context) -> Result<PathBuf, node::Error> {
+    Ok(Toolchain::for_context(context)?
+        .map_or_else(|| PathBuf::from("cargo"), |toolchain| toolchain.cargo))
 }
 
 /// Where a runner that compiled rawr in the project took rawr's sources
@@ -649,11 +659,12 @@ fn prune_lock(document: &mut DocumentMut) -> Option<()> {
 
 /// Why the runner's settled `runner` lock can't build the bindings the
 /// harness generated from its `harness` lock: a package both resolve, from
-/// one source and in one semver series, at two versions. The harness
-/// resolves rawr's crates with the project's, so their version floors can
-/// raise a package the project pins; the runner, linked to the shared
-/// runtime, keeps the project's version, and a binding naming an item only
-/// the raised one has would not compile (#1912). `None` when they agree.
+/// one source and in one semver series, at two versions. The harness locks
+/// rawr's crate without its dependencies (#1914) and starts from the
+/// project's lock, so it keeps every version the project pins, as the
+/// runner linked to the shared runtime does (#1912). A binding naming an
+/// item only a raised version has would not compile. `None` when they
+/// agree.
 pub(crate) fn disagreement(harness: &[u8], runner: &str) -> Option<String> {
     let versions = |lock: &str| -> BTreeMap<(String, String, Series), String> {
         let Ok(document) = lock.parse::<DocumentMut>() else {
@@ -681,10 +692,8 @@ pub(crate) fn disagreement(harness: &[u8], runner: &str) -> Option<String> {
         let raised = harness.get(&key).filter(|raised| **raised != pinned)?;
         let name = key.0;
         Some(format!(
-            "rawr's own crates need `{name}` {raised}, and this project's Cargo.lock pins \
-                 `{name}` {pinned}. The bindings rawr generated name `{name}` {raised}, so \
-                 they would not build against the pinned one. Run \
-                 `cargo update -p {name}@{pinned} --precise {raised}` in the project"
+            "the bindings rawr generated name `{name}` {raised}, and this project's \
+                 Cargo.lock pins `{name}` {pinned}, so the runner would not build them"
         ))
     })
 }

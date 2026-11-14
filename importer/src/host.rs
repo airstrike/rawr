@@ -14,14 +14,15 @@
 //!
 //! A resolution harness reads less than its host holds. Rawr's crate is a
 //! build dependency of the harness, which builds no unit of it (D609.2), so
-//! Cargo reads only the manifests, the lockfile and which target files
-//! exist. The harness therefore names Rawr's crate at the host's Cargo view
-//! ([`cargo_root`]): those manifests and that lockfile, with each target
-//! file present and empty, in `manifests/<digest>` under Rawr's home, named
-//! for what it holds. Builds whose sources differ but whose manifests agree
-//! share it, and with it the harness, Cargo's resolution and the bundle,
-//! while the runner that compiles Rawr names the host itself
-//! ([`relocated`]).
+//! it names the crate only for its identity. The harness therefore names
+//! Rawr's crate at the host's Cargo view ([`cargo_root`]): the crate's
+//! name, version, edition and features, with no dependencies and an empty
+//! library, in `manifests/<digest>` under Rawr's home, named for what it
+//! holds. Rawr's own dependencies never resolve with the project's, so no
+//! floor of theirs raises a package the project pins (#1914). Builds whose
+//! sources differ but whose views agree share it, and with it the harness,
+//! Cargo's resolution and the bundle, while the runner names the host
+//! itself ([`relocated`]).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -57,18 +58,10 @@ pub fn root() -> crate::Result<PathBuf> {
     Ok(ROOT.get_or_init(|| lease).root.clone())
 }
 
-/// The root a resolution harness names Rawr's crate at: the checkout,
-/// which Cargo reads as it stands.
-#[cfg(not(feature = "embedded-host"))]
-pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
-    root()
-}
-
 /// The root a resolution harness names Rawr's crate at: the host's Cargo
 /// view in Rawr's home, written once per process when it is not there. A
 /// view or host whose path [`relocated`] can't rewrite as text has no view
 /// apart from the host, so its harness names the host itself.
-#[cfg(feature = "embedded-host")]
 pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
     static ROOT: std::sync::OnceLock<Option<Lease>> = std::sync::OnceLock::new();
     if let Some(leased) = ROOT.get() {
@@ -80,21 +73,48 @@ pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
             None => root(),
         };
     }
+    let host = root()?;
+    let view = View::of(&host_manifest(&host)?).ok_or_else(|| crate::Error::Request {
+        reason: "rawr's own Cargo.toml names no package version or edition".into(),
+    })?;
     let views = crate::store::home(&cargo_home()?).join(VIEWS);
-    let view = View::of(FILES);
     let lease =
-        Lease::take(&views, &view.digest, &view.files).map_err(|source| crate::Error::Io {
+        Lease::take(&views, &view.digest, &view.files()).map_err(|source| crate::Error::Io {
             operation: "write",
             path: views.clone(),
             source,
         })?;
     prune(&views, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
-    let host = root()?;
     let leased = ROOT.get_or_init(|| (plain(&lease.root) && plain(&host)).then_some(lease));
     match leased {
         Some(lease) => Ok(lease.root.clone()),
         None => Ok(host),
     }
+}
+
+/// The manifest of Rawr's own crate, as this build carries it.
+#[cfg(feature = "embedded-host")]
+fn host_manifest(_host: &Path) -> crate::Result<std::borrow::Cow<'static, [u8]>> {
+    FILES
+        .iter()
+        .find(|(path, _)| *path == "Cargo.toml")
+        .map(|(_, bytes)| std::borrow::Cow::Borrowed(*bytes))
+        .ok_or_else(|| crate::Error::Request {
+            reason: "this rawr carries no manifest of its own crate".into(),
+        })
+}
+
+/// The manifest of Rawr's own crate: the checkout's, as it stands.
+#[cfg(not(feature = "embedded-host"))]
+fn host_manifest(host: &Path) -> crate::Result<std::borrow::Cow<'static, [u8]>> {
+    let path = host.join("Cargo.toml");
+    std::fs::read(&path)
+        .map(std::borrow::Cow::Owned)
+        .map_err(|source| crate::Error::Io {
+            operation: "read",
+            path,
+            source,
+        })
 }
 
 /// The identity of what a resolution harness reads of Rawr: the digest of
@@ -104,7 +124,12 @@ pub(crate) fn cargo_digest() -> [u8; 32] {
     #[cfg(feature = "embedded-host")]
     {
         static VIEW: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
-        *VIEW.get_or_init(|| View::of(FILES).digest)
+        *VIEW.get_or_init(|| {
+            host_manifest(Path::new(""))
+                .ok()
+                .and_then(|manifest| View::of(&manifest))
+                .map_or(DIGEST, |view| view.digest)
+        })
     }
     #[cfg(not(feature = "embedded-host"))]
     {
@@ -149,78 +174,72 @@ fn rewritten(text: &str, old: &str, new: &str) -> Option<String> {
 /// Where the Cargo views of hosts live, under Rawr's home. Rawr's home,
 /// not the runtime home hosts may share: the resolutions that name a view
 /// live in the home and the projects that use it.
-#[cfg(feature = "embedded-host")]
 const VIEWS: &str = "manifests";
 
-/// A host's files as a resolution harness's Cargo reads them: every
-/// manifest and the lockfile as they are, and each file Cargo looks for to
-/// find a package's targets present and empty. Nothing else of the host is
-/// read before a unit of Rawr is built, and the harness builds none.
-#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
-struct View<'files> {
-    files: Vec<(&'files str, &'files [u8])>,
+/// Rawr's crate as a resolution harness's Cargo reads it: its name,
+/// version and edition, each feature it declares with nothing behind it,
+/// its `[patch]` table, and an empty library, with no dependencies.
+///
+/// The harness names Rawr's crate only to lock its identity, and builds no
+/// unit of it (D609.2). Named with its dependencies, Cargo would unify
+/// their version floors with the project's packages and raise a package
+/// the project pins, such as rawr's `toml_datetime` 1.1 over a project's
+/// 1.0.1, and the bindings would name the raised one (#1914). A runner
+/// linked to the shared runtime never compiles that graph, and one that
+/// compiles rawr in the project settles its own lock.
+struct View {
+    manifest: String,
     digest: [u8; 32],
 }
 
-#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
-impl<'files> View<'files> {
-    /// The view of the host written from `files`, whose paths are sorted.
-    fn of(files: &[(&'files str, &'files [u8])]) -> Self {
+impl View {
+    /// The view of the crate whose manifest is `manifest`. `None` when it
+    /// names no package name, version or edition of its own.
+    fn of(manifest: &[u8]) -> Option<Self> {
         use sha2::Digest as _;
+        use toml_edit::{DocumentMut, Item, Table};
 
-        let packages: Vec<&str> = files
-            .iter()
-            .filter_map(|(path, _)| manifest_package(path))
-            .collect();
-        let target = |path: &str| {
-            packages.iter().any(|package| {
-                let inside = match *package {
-                    "" => Some(path),
-                    package => path
-                        .strip_prefix(package)
-                        .and_then(|rest| rest.strip_prefix('/')),
-                };
-                inside.is_some_and(|file| TARGETS.contains(&file))
-            })
-        };
-        let mut view = Vec::new();
+        let document = std::str::from_utf8(manifest)
+            .ok()?
+            .parse::<DocumentMut>()
+            .ok()?;
+        let declared = document.get("package")?.as_table_like()?;
+        let mut package = Table::new();
+        for key in ["name", "version", "edition"] {
+            package.insert(key, toml_edit::value(declared.get(key)?.as_str()?));
+        }
+        let mut features = Table::new();
+        let declared = document.get("features").and_then(Item::as_table_like);
+        for (name, _) in declared.into_iter().flat_map(|features| features.iter()) {
+            features.insert(name, toml_edit::value(toml_edit::Array::new()));
+        }
+        let mut view = DocumentMut::new();
+        view.insert("workspace", Item::Table(Table::new()));
+        view.insert("package", Item::Table(package));
+        view.insert("features", Item::Table(features));
+        if let Some(patch) = document.get("patch") {
+            view.insert("patch", patch.clone());
+        }
+        let manifest = view.to_string();
         let mut digest = sha2::Sha256::new();
-        digest.update(b"rawr.host.cargo-view/v1");
-        for (path, bytes) in files {
-            let kept: &[u8] = if *path == "Cargo.lock" || manifest_package(path).is_some() {
-                bytes
-            } else if target(path) {
-                b""
-            } else {
-                continue;
-            };
-            digest.update((path.len() as u64).to_le_bytes());
-            digest.update(path.as_bytes());
-            digest.update((kept.len() as u64).to_le_bytes());
-            digest.update(kept);
-            view.push((*path, kept));
-        }
-        Self {
-            files: view,
+        digest.update(b"rawr.host.cargo-view/v2");
+        digest.update(manifest.as_bytes());
+        Some(Self {
+            manifest,
             digest: digest.finalize().into(),
-        }
+        })
+    }
+
+    /// The files the view is written as.
+    fn files(&self) -> [(&str, &[u8]); 2] {
+        [
+            ("Cargo.toml", self.manifest.as_bytes()),
+            ("src/lib.rs", b""),
+        ]
     }
 }
-
-/// The package directory of a manifest's path, `""` for the root's, or
-/// `None` for another file.
-fn manifest_package(path: &str) -> Option<&str> {
-    match path {
-        "Cargo.toml" => Some(""),
-        path => path.strip_suffix("/Cargo.toml"),
-    }
-}
-
-/// The files Cargo looks for, under a package's root, to find its targets.
-const TARGETS: [&str; 3] = ["build.rs", "src/lib.rs", "src/main.rs"];
 
 /// Cargo's home, as Cargo finds it.
-#[cfg(feature = "embedded-host")]
 fn cargo_home() -> crate::Result<PathBuf> {
     match std::env::var_os("CARGO_HOME") {
         Some(home) => Ok(PathBuf::from(home)),
@@ -242,7 +261,6 @@ fn canonical(path: &Path) -> PathBuf {
 
 /// Whether `path`, resolved, is spelled alike in a manifest, in Cargo's
 /// JSON and in a package id's URL.
-#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
 fn plain(path: &Path) -> bool {
     canonical(path).to_str().is_some_and(|text| {
         text.bytes()
@@ -252,13 +270,11 @@ fn plain(path: &Path) -> bool {
 
 /// A host this process uses, held locked through its own `.lock-<pid>` file
 /// so that no prune removes it while the lease lives.
-#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
 struct Lease {
     root: PathBuf,
     _lock: std::fs::File,
 }
 
-#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
 impl Lease {
     /// Lease the host for `digest` under `hosts`, writing it from `files`
     /// first when it is not there. A prune that retires the host while the
@@ -321,7 +337,6 @@ fn hex(digest: &[u8; 32]) -> String {
 /// it is not there yet. A host is built in a staging directory beside it and
 /// renamed into place with its `.digest` stamp, so a host directory is always
 /// complete; one that is present is only marked used.
-#[cfg_attr(not(feature = "embedded-host"), allow(dead_code))]
 fn materialize(
     hosts: &Path,
     digest: &[u8; 32],
@@ -390,7 +405,6 @@ pub fn clean(cargo_home: &Path) {
         HOST_IDLE,
         HOSTS_KEPT,
     );
-    #[cfg(feature = "embedded-host")]
     prune(
         &crate::store::home(cargo_home).join(VIEWS),
         &[],
@@ -519,54 +533,39 @@ mod tests {
     }
 
     #[test]
-    fn a_hosts_cargo_view_moves_with_its_manifests_and_not_its_sources() {
-        let host = |library: &'static [u8], manifest: &'static [u8]| {
-            [
-                ("Cargo.lock", &b"lock"[..]),
-                ("Cargo.toml", manifest),
-                ("README.md", b"readme"),
-                ("codegen/Cargo.toml", b"[package]\nname = \"codegen\"\n"),
-                ("codegen/src/lib.rs", b"pub fn codegen() {}\n"),
-                ("codegen/src/parse.rs", b"fn parse() {}\n"),
-                ("src/lib.rs", library),
-                ("src/runtime.rs", b"pub fn run() {}\n"),
-            ]
+    fn a_hosts_cargo_view_names_rawr_s_features_and_none_of_its_dependencies() {
+        let manifest = |version: &str, floor: &str| {
+            format!(
+                "[workspace]\nmembers = [\".\", \"importer\"]\n\n\
+                 [package]\nname = \"rawr\"\nversion = \"{version}\"\nedition = \"2024\"\n\
+                 description = \"rawr\"\n\n\
+                 [dependencies]\ntoml_datetime = \"{floor}\"\n\
+                 rawr_import = {{ path = \"importer\", optional = true }}\n\n\
+                 [features]\ndefault = [\"std\", \"ahash/runtime-rng\"]\nstd = []\n\
+                 rust-import = [\"dep:rawr_import\"]\n"
+            )
         };
-        let manifest: &[u8] = b"[package]\nname = \"rawr\"\nversion = \"1.0.0\"\n";
-        let files = host(b"pub mod runtime;\n", manifest);
-        let view = super::View::of(&files);
-        // The manifests and the lockfile as they are; each target root
-        // there, empty; no other source.
+        let view = super::View::of(manifest("1.0.0", "1.1.1").as_bytes()).unwrap();
+        // Each feature, with nothing behind it, and no dependency for Cargo
+        // to unify with a project's packages (#1914).
         assert_eq!(
-            view.files,
-            [
-                ("Cargo.lock", &b"lock"[..]),
-                ("Cargo.toml", manifest),
-                ("codegen/Cargo.toml", b"[package]\nname = \"codegen\"\n"),
-                ("codegen/src/lib.rs", b""),
-                ("src/lib.rs", b""),
-            ]
+            view.manifest,
+            "[workspace]\n\n\
+             [package]\nname = \"rawr\"\nversion = \"1.0.0\"\nedition = \"2024\"\n\n\
+             [features]\ndefault = []\nstd = []\nrust-import = []\n"
         );
-        // A build of other sources reads the same view, so it resolves the
-        // same harness; its runner compiles the sources from its own host.
-        let edited = host(b"/// The runtime.\npub mod runtime;\n", manifest);
-        assert_eq!(super::View::of(&edited).digest, view.digest);
-        let bumped = host(
-            b"pub mod runtime;\n",
-            b"[package]\nname = \"rawr\"\nversion = \"1.0.1\"\n",
-        );
+        assert_eq!(view.files()[1], ("src/lib.rs", &b""[..]));
+        // A floor rawr raises reaches no harness: the view stays, and with
+        // it the harness's resolution.
+        let raised = super::View::of(manifest("1.0.0", "1.1.3").as_bytes()).unwrap();
+        assert_eq!(raised.digest, view.digest);
+        let bumped = super::View::of(manifest("1.0.1", "1.1.1").as_bytes()).unwrap();
         assert_ne!(
-            super::View::of(&bumped).digest,
-            view.digest,
-            "a manifest Cargo reads names another view"
+            bumped.digest, view.digest,
+            "another version names another view"
         );
-        let mut grown = files.to_vec();
-        grown.insert(5, ("codegen/src/main.rs", b"fn main() {}\n"));
-        assert_ne!(
-            super::View::of(&grown).digest,
-            view.digest,
-            "a new target root names another view"
-        );
+        let inherited = b"[package]\nname = \"rawr\"\nversion.workspace = true\n";
+        assert!(super::View::of(inherited).is_none());
     }
 
     #[test]
