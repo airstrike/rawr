@@ -54,7 +54,8 @@
       {"text":"A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502.","issues":[1982]},
       {"text":"`&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work.","issues":[1982]},
       {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]},
-      {"text":"A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing.","issues":[1983]}
+      {"text":"A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing.","issues":[1983]},
+      {"text":"A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit.","issues":[1990]}
     ]
   },
   "releases": [

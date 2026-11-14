@@ -55,6 +55,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work. (#1982)
 - rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it. (#1989)
 - A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing. (#1983)
+- A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit. (#1990)
 
 ## 0.3.213 (2026-11-13)
 
