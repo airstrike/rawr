@@ -48,7 +48,8 @@
       {"text":"A script function that returns an async block can fill a crate's generic type, a crate function that takes a future, as `.then(Task::future)`, runs it, and an `Rc` or `Arc` of a string or number crosses as Rust's own pointer to it, so iced's editor builds and starts unchanged.","issues":[551]},
       {"text":"std's `io::Cursor` runs: a program makes one over its bytes and reads, seeks and rewinds it, and passes one to a crate, as image's `ImageReader::new(io::Cursor::new(bytes))` takes it; `io::SeekFrom` is std's own.","issues":[1976],"refs":[87]},
       {"text":"A full-path std call with a turbofish, as `std::sync::mpsc::channel::<u8>()`, is a call again beside a std function named as a value.","issues":[1980]},
-      {"text":"A closure's `?` converts its error through From into the error the closure's tail gives, as rustc infers it, instead of fixing the error type at the first `?`.","issues":[1977]}
+      {"text":"A closure's `?` converts its error through From into the error the closure's tail gives, as rustc infers it, instead of fixing the error type at the first `?`.","issues":[1977]},
+      {"text":"A value that keeps a `&'a mut` and a `&'a` of the crate values it was made from, as integration's `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`, lives in its block and holds both places for its life, as rustc's borrow does.","issues":[1973]}
     ]
   },
   "releases": [

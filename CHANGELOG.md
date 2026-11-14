@@ -49,6 +49,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - std's `io::Cursor` runs: a program makes one over its bytes and reads, seeks and rewinds it, and passes one to a crate, as image's `ImageReader::new(io::Cursor::new(bytes))` takes it; `io::SeekFrom` is std's own. (#1976; part of #87)
 - A full-path std call with a turbofish, as `std::sync::mpsc::channel::<u8>()`, is a call again beside a std function named as a value. (#1980)
 - A closure's `?` converts its error through From into the error the closure's tail gives, as rustc infers it, instead of fixing the error type at the first `?`. (#1977)
+- A value that keeps a `&'a mut` and a `&'a` of the crate values it was made from, as integration's `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`, lives in its block and holds both places for its life, as rustc's borrow does. (#1973)
 
 ## 0.3.213 (2026-11-13)
 
