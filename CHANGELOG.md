@@ -27,6 +27,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Crate structs with a PhantomData field, as palette's Rgb and Hsl, build in the runner when the program has moved another of their fields out, so iced's color_palette runs. (#1931)
 - `image(&handle)` boxed at iced's renderer takes iced's Handle, as rustc infers it, so iced's screenshot runs. (#1939)
 - A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called. (#1937)
+- A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged. (#1940)
 
 ## 0.3.213 (2026-11-13)
 

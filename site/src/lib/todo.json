@@ -33,7 +33,8 @@
         {"text":"`log::error!`, `warn!` and `info!` in marked code run as under Cargo: `std::panic::Location` crosses as std's own value, and a crate's `#[track_caller]` function sees the program's call site, so a logger prints the user's file and line.","issues":[1560]},
         {"text":"Crate structs with a PhantomData field, as palette's Rgb and Hsl, build in the runner when the program has moved another of their fields out, so iced's color_palette runs.","issues":[1931]},
         {"text":"`image(&handle)` boxed at iced's renderer takes iced's Handle, as rustc infers it, so iced's screenshot runs.","issues":[1939]},
-        {"text":"A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called.","issues":[1937]}
+        {"text":"A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called.","issues":[1937]},
+        {"text":"A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged.","issues":[1940]}
       ]
     },
     "releases": [
@@ -4283,7 +4284,7 @@
     {"issue":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed","category":"No glue (D593)"},
     {"issue":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open","category":"No glue (D593)"},
     {"issue":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"closed","category":"No glue (D593)"},
-    {"issue":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"open","category":"No glue (D593)"},
+    {"issue":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"closed","category":"No glue (D593)"},
     {"issue":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"closed","category":"No glue (D593)"},
     {"issue":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"closed","category":"No glue (D593)"},
     {"issue":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"closed","category":"No glue (D593)"},
@@ -4297,7 +4298,9 @@
     {"issue":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open","category":"No glue (D593)"},
     {"issue":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open","category":"No glue (D593)"},
     {"issue":1953,"title":"A crate fn taking &DeviceDescriptor<'_> (a &str borrow inside a type argument) is refused as a borrow rawr can't lend","state":"open","category":"No glue (D593)"},
-    {"issue":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open","category":"No glue (D593)"}
+    {"issue":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open","category":"No glue (D593)"},
+    {"issue":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open","category":"No glue (D593)"},
+    {"issue":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4929,7 +4932,7 @@
             {"number":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed"},
             {"number":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open"},
             {"number":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"closed"},
-            {"number":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"open"},
+            {"number":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"closed"},
             {"number":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"closed"},
             {"number":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"closed"},
             {"number":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"closed"},
@@ -4942,7 +4945,9 @@
             {"number":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open"},
             {"number":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open"},
             {"number":1953,"title":"A crate fn taking &DeviceDescriptor<'_> (a &str borrow inside a type argument) is refused as a borrow rawr can't lend","state":"open"},
-            {"number":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open"}
+            {"number":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open"},
+            {"number":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open"},
+            {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"}
           ],
           "milestone": "0.3"
         },
