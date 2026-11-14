@@ -658,6 +658,14 @@ pub trait Remote: crate::func::SendSync {
         None
     }
 
+    /// The unit variant `variant` of the script enum at `path`, which a
+    /// runner holds a fieldless `Copy` enum's values as (#1940). `None`
+    /// when the program has no such type.
+    fn variant_of(&self, path: &str, variant: &str) -> Option<RawrResultOf<Dynamic>> {
+        let _ = (path, variant);
+        None
+    }
+
     /// The function the program holds at `path`, its owner's path and the
     /// member (`Arc::Program<Message>::draw`): a function of a script impl
     /// native code calls through the owner's proxy (D594).

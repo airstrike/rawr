@@ -1905,6 +1905,17 @@ impl crate::future::Remote for Shared {
         })
     }
 
+    fn variant_of(&self, path: &str, variant: &str) -> Option<crate::RawrResultOf<Dynamic>> {
+        self.authority
+            .model()
+            .variant_by_path(path, variant)
+            .map(|made| {
+                made.map_err(|error| {
+                    crate::future::error(format!("rawr: `{path}::{variant}`: {error}"))
+                })
+            })
+    }
+
     fn member(&self, path: &str) -> Option<item::Value> {
         self.members.get(path).cloned()
     }

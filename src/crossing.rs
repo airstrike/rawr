@@ -239,6 +239,141 @@ impl std::fmt::Debug for Proxy {
     }
 }
 
+/// The variants of a script enum whose variants carry nothing and which is
+/// `Copy`, in the order of their discriminants, with the path the runner
+/// names it by (#1940).
+pub struct Variants {
+    path: &'static str,
+    names: &'static [&'static str],
+}
+
+impl Variants {
+    /// The variants `names` of the script enum at `path`.
+    #[must_use]
+    pub const fn new(path: &'static str, names: &'static [&'static str]) -> Self {
+        Self { path, names }
+    }
+}
+
+/// A value of a script enum whose variants carry nothing and which is
+/// `Copy`, where native generic code takes a Rust type: which of its
+/// [`Variants`] it is. It holds no script value, so it is `Copy` as the
+/// script type is, and `radio`'s `V: Copy + Eq` holds of it (#1940).
+///
+/// It is made from a script value and makes one wherever script code takes
+/// it, with the method names a [`Proxy`] has, so the runner lends it as it
+/// lends a proxy.
+#[derive(Clone, Copy)]
+pub struct Variant {
+    of: &'static Variants,
+    index: usize,
+}
+
+impl Variant {
+    /// Which of `of` the script value `value` is. A panic when it is none
+    /// of them: the runner gives it only values of its type.
+    #[must_use]
+    pub fn new(of: &'static Variants, value: &Dynamic) -> Self {
+        let value = value.flatten_clone();
+        let index = value
+            .read_lock::<crate::types::nominal::Enum>()
+            .and_then(|made| {
+                let name = made.variant().name();
+                of.names.iter().position(|known| *known == name)
+            });
+        match index {
+            Some(index) => Self { of, index },
+            None => panic!("rawr: {value:?} is no variant of `{}`", of.path),
+        }
+    }
+
+    /// Which of `of` the value `proxy` holds is.
+    #[must_use]
+    pub fn from_proxy(of: &'static Variants, proxy: Proxy) -> Self {
+        Self::new(of, &proxy.into_dynamic())
+    }
+
+    /// Its position among its type's variants, in the order of their
+    /// discriminants, which a derived `PartialEq`, `Ord` or `Hash` reads.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.index
+    }
+
+    /// The script value, in the generation current on this thread.
+    pub fn into_dynamic(self) -> Dynamic {
+        let (path, name) = (self.of.path, self.of.names[self.index]);
+        let _entry = crate::future::entry();
+        let made = crate::future::current_program()
+            .ok_or_else(|| crate::future::error("rawr: no program runs script code on this thread"))
+            .and_then(|program| {
+                program.variant_of(path, name).unwrap_or_else(|| {
+                    Err(crate::future::error(format!(
+                        "rawr: the program has no script type `{path}`"
+                    )))
+                })
+            });
+        match made {
+            Ok(value) => value,
+            Err(error) => panic!("{}", crate::future::message(&error)),
+        }
+    }
+
+    /// The script value, lent shared to a script function for one call: a
+    /// copy, as Rust lends a `Copy` value's.
+    pub fn lend(&self) -> Dynamic {
+        self.into_dynamic()
+    }
+
+    /// The script value, lent `&mut` to a script function for one call;
+    /// [`Variant::restore`] reads back what the function left.
+    pub fn lend_mut(&mut self) -> Dynamic {
+        self.into_dynamic()
+    }
+
+    /// Hold what a script function that took the value `&mut` left in its
+    /// place.
+    pub fn restore(&mut self, value: Dynamic) {
+        *self = Self::new(self.of, &value);
+    }
+
+    /// The strings native values borrow from the value while it is lent
+    /// shared: none, as its variants carry nothing.
+    #[must_use]
+    pub fn pins(&self) -> &'static crate::scope::Pins {
+        static NONE: crate::scope::Pins = crate::scope::Pins::new();
+        &NONE
+    }
+
+    /// A proxy of the script value, as a generic holder hands it on.
+    #[must_use]
+    pub fn into_proxy(self) -> Proxy {
+        Proxy::new(self.into_dynamic())
+    }
+
+    /// The value's text as its script type's own `Display` writes it.
+    ///
+    /// # Errors
+    ///
+    /// When the formatter fails.
+    pub fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.into_proxy().display(f)
+    }
+
+    /// `self == other` by the `PartialEq` the program writes for the type.
+    #[must_use]
+    pub fn equal(&self, other: &Self) -> bool {
+        self.into_proxy() == other.into_proxy()
+    }
+}
+
+impl std::fmt::Debug for Variant {
+    /// The script type's `Debug` text.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.into_proxy(), f)
+    }
+}
+
 /// One of std's types that Rawr's own std holds as its Rust value
 /// (`rawr_import::classify::std_binding`): a crate's `PathBuf` or
 /// `io::Error` is the program's, so native code takes, gives and borrows

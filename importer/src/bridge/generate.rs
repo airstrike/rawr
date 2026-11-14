@@ -21834,7 +21834,7 @@ fn instantiated(
         } => convert::Type::Script {
             path: path.clone(),
             arguments: all(arguments)?,
-            holder: *holder,
+            holder: holder.clone(),
         },
         convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
             input: one(input)?,
@@ -23742,8 +23742,12 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
             open.push(module.clone());
         }
         for (path, name, arity, holder) in proxies {
-            if let (convert::Holder::Mirror, Some(krate)) = (holder, &krate) {
+            if let (convert::Holder::Mirror, Some(krate)) = (&holder, &krate) {
                 render_mirror(&path, &name, krate, output)?;
+                continue;
+            }
+            if let convert::Holder::Variant { variants, traits } = &holder {
+                render_variant(&path, &name, variants, *traits, output)?;
                 continue;
             }
             let parameters = (0..arity)
@@ -23846,6 +23850,138 @@ pub trait __RawrHeld: Sized {
 }
 ";
 
+/// The script type `path`, an enum whose `variants` carry nothing and which
+/// is `Copy`, held as which variant a value is, so the holder is `Copy` and
+/// has the std `traits` the script type has (#1940). A derived comparison
+/// or hash reads the variant's position, which follows the discriminants;
+/// a `PartialEq` the program writes is the program's.
+fn render_variant(
+    path: &str,
+    name: &str,
+    variants: &[Box<str>],
+    traits: convert::Traits,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use convert::Trait;
+    let names = variants
+        .iter()
+        .map(|variant| format!("{variant:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut impls = String::new();
+    if traits.derives(Trait::PartialEq) {
+        impls.push_str(&format!(
+            "impl ::core::cmp::PartialEq for {name} {{
+    fn eq(&self, other: &Self) -> ::core::primitive::bool {{
+        self.0.index() == other.0.index()
+    }}
+}}
+"
+        ));
+    } else if traits.has(Trait::PartialEq) {
+        impls.push_str(&format!(
+            "impl ::core::cmp::PartialEq for {name} {{
+    fn eq(&self, other: &Self) -> ::core::primitive::bool {{
+        self.0.equal(&other.0)
+    }}
+}}
+"
+        ));
+    }
+    if traits.has(Trait::Eq) {
+        impls.push_str(&format!("impl ::core::cmp::Eq for {name} {{}}\n"));
+    }
+    if traits.derives(Trait::PartialOrd) {
+        impls.push_str(&format!(
+            "impl ::core::cmp::PartialOrd for {name} {{
+    fn partial_cmp(&self, other: &Self) -> ::core::option::Option<::core::cmp::Ordering> {{
+        ::core::option::Option::Some(self.0.index().cmp(&other.0.index()))
+    }}
+}}
+"
+        ));
+    }
+    if traits.derives(Trait::Ord) {
+        impls.push_str(&format!(
+            "impl ::core::cmp::Ord for {name} {{
+    fn cmp(&self, other: &Self) -> ::core::cmp::Ordering {{
+        self.0.index().cmp(&other.0.index())
+    }}
+}}
+"
+        ));
+    }
+    if traits.derives(Trait::Hash) {
+        impls.push_str(&format!(
+            "impl ::core::hash::Hash for {name} {{
+    fn hash<H: ::core::hash::Hasher>(&self, state: &mut H) {{
+        ::core::hash::Hash::hash(&self.0.index(), state)
+    }}
+}}
+"
+        ));
+    }
+    if traits.has(Trait::Debug) {
+        impls.push_str(&format!(
+            "impl ::core::fmt::Debug for {name} {{
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {{
+        ::core::fmt::Debug::fmt(&self.0, f)
+    }}
+}}
+"
+        ));
+    }
+    if traits.has(Trait::Default) {
+        impls.push_str(&format!(
+            "impl ::core::default::Default for {name} {{
+    fn default() -> Self {{
+        Self::from_proxy(__rawr_internal::crossing::Proxy::default_of({path:?}))
+    }}
+}}
+"
+        ));
+    }
+    writeln!(
+        output,
+        "/// The script type `{path}` where native generic code takes a Rust type:
+/// which of its variants a value is (#1940).
+#[derive(Clone, Copy)]
+pub struct {name}(pub __rawr_internal::crossing::Variant);
+
+#[allow(dead_code)]
+impl {name} {{
+    const VARIANTS: &'static __rawr_internal::crossing::Variants =
+        &__rawr_internal::crossing::Variants::new({path:?}, &[{names}]);
+
+    pub fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
+        Self(__rawr_internal::crossing::Variant::from_proxy(Self::VARIANTS, proxy))
+    }}
+}}
+
+impl ::core::fmt::Display for {name} {{
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {{
+        self.0.display(f)
+    }}
+}}
+
+impl crate::__RawrHeld for {name} {{
+    fn from_proxy(proxy: __rawr_internal::crossing::Proxy) -> Self {{
+        {name}::from_proxy(proxy)
+    }}
+
+    fn into_proxy(self) -> __rawr_internal::crossing::Proxy {{
+        self.0.into_proxy()
+    }}
+
+    fn lent<R>(&self, body: impl FnOnce(__rawr_internal::Dynamic) -> R) -> R {{
+        body(self.0.lend())
+    }}
+}}
+{impls}"
+    )
+    .map_err(request::unwritable)
+}
+
 /// The script type `path` held as its mirror in rawr's copy of `krate`,
 /// a native root's crate, as native code names the marked module's type
 /// (#1249): `name` is the mirror, and a value crosses by the island's wire
@@ -23940,7 +24076,7 @@ fn impl_type(ty: &convert::Type, generics: &[Box<str>]) -> Option<String> {
             concrete_type(&convert::Type::Script {
                 path: path.clone(),
                 arguments: arguments.iter().map(|_| convert::Type::Unit).collect(),
-                holder: *holder,
+                holder: holder.clone(),
             })?;
             let (_, path) = path.split_once("::")?;
             format!("crate::{path}<{}>", all(arguments)?.join(", "))
@@ -25363,7 +25499,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             PROXIES.with_borrow_mut(|proxies| {
                 proxies
                     .entry(path.to_owned())
-                    .or_insert((arguments.len(), *holder));
+                    .or_insert_with(|| (arguments.len(), holder.clone()));
             });
             PROXY_CRATE.with_borrow_mut(|named| {
                 named.get_or_insert_with(|| krate.to_owned());
@@ -26177,6 +26313,66 @@ mod tests {
             &[],
             &super::Patches::new(),
         );
+    }
+
+    /// A fieldless `Copy` script enum is held as its variant, so native
+    /// code's `V: Copy + Eq`, as iced's `radio` asks, holds of its holder.
+    /// A derived comparison reads the variant; a written `PartialEq` is
+    /// the program's; a trait the type lacks, the holder lacks (#1940).
+    #[test]
+    fn a_fieldless_copy_enum_is_held_as_its_variant_with_its_traits() {
+        use crate::classify::representability::convert::{Trait, Traits};
+        let render = |traits: Traits| {
+            let mut output = Vec::new();
+            super::render_variant(
+                "app::Direction",
+                "Direction",
+                &["Vertical".into(), "Horizontal".into()],
+                traits,
+                &mut output,
+            )
+            .expect("rendered");
+            String::from_utf8(output).expect("utf-8")
+        };
+        let derived = render(
+            [
+                Trait::Clone,
+                Trait::Copy,
+                Trait::Debug,
+                Trait::PartialEq,
+                Trait::Eq,
+            ]
+            .into_iter()
+            .fold(Traits::default(), Traits::with_derived),
+        );
+        assert!(derived.contains("#[derive(Clone, Copy)]\npub struct Direction(pub __rawr_internal::crossing::Variant);"), "{derived}");
+        assert!(
+            derived.contains("Variants::new(\"app::Direction\", &[\"Vertical\", \"Horizontal\"])"),
+            "{derived}"
+        );
+        assert!(
+            derived.contains("self.0.index() == other.0.index()"),
+            "{derived}"
+        );
+        assert!(
+            derived.contains("impl ::core::cmp::Eq for Direction {}"),
+            "{derived}"
+        );
+        assert!(
+            derived.contains("impl ::core::fmt::Debug for Direction"),
+            "{derived}"
+        );
+        assert!(!derived.contains("Ord for Direction"), "{derived}");
+        assert!(!derived.contains("Hash for Direction"), "{derived}");
+        assert!(!derived.contains("Default for Direction"), "{derived}");
+        let written = render(
+            Traits::default()
+                .with_derived(Trait::Copy)
+                .with_written(Trait::PartialEq),
+        );
+        assert!(written.contains("self.0.equal(&other.0)"), "{written}");
+        assert!(!written.contains("Eq for Direction {}"), "{written}");
+        assert!(!written.contains("Debug for Direction"), "{written}");
     }
 
     /// Writing the runner's source in memory can't fail; if it did, that
