@@ -387,12 +387,15 @@ impl Parser<'_> {
         }
     }
 
-    /// `mutex.lock().unwrap()` or `.lock().expect(msg)`: the lock, held as
-    /// a `RefCell`'s mutable borrow is, which no thread poisons, since a
-    /// panic in rawr ends the thread it is on before the guard drops.
-    /// `get_mut()` and `into_inner()`, unwrapped too, are a `RefCell`'s.
-    /// A `LockResult` kept as it is, and `Mutex`'s other methods, are the
-    /// not-yet error (D712.1).
+    /// `mutex.lock().unwrap()`, `.lock().expect(msg)` or
+    /// `.lock().unwrap_or_else(f)`: the lock, held as a `RefCell`'s mutable
+    /// borrow is, which no thread poisons, since a panic in rawr ends the
+    /// thread it is on before the guard drops; so `f`, which takes the
+    /// `PoisonError`, is never called, and `is_poisoned()` is `false`.
+    /// `get_mut()` and `into_inner()`, unwrapped too, are a `RefCell`'s, and
+    /// `into_inner()` kept as its `LockResult` is `Ok` of the value. A
+    /// guard's `LockResult` kept as it is, and `Mutex`'s other methods, are
+    /// the not-yet error (D712.1).
     pub(super) fn parse_mutex_member(
         &mut self,
         value: ParsedExpr,
@@ -405,8 +408,36 @@ impl Parser<'_> {
         let unwrapped = matches!(member.as_str(), "lock" | "get_mut" | "into_inner")
             && next() == Token::Unit
             && next() == Token::Period
-            && matches!(next(), Token::Identifier(name) if matches!(name.as_str(), "unwrap" | "expect"))
+            && matches!(next(), Token::Identifier(name) if matches!(name.as_str(), "unwrap" | "expect" | "unwrap_or_else"))
             && matches!(next(), Token::Unit | Token::LeftParen);
+        let poison = |inner: Ty| Ty::Thread(thread::Kind::PoisonError, Box::new(inner));
+        match member.as_str() {
+            // No lock rawr runs is poisoned.
+            "is_poisoned" | "clear_poison" => {
+                let (_, end) = self.parse_call_arguments("`Mutex` method arguments")?;
+                let call = span(value.span.start(), end);
+                let (text, ty) = if member.as_str() == "is_poisoned" {
+                    ("false", Ty::Bool)
+                } else {
+                    ("()", Ty::Unit)
+                };
+                let mut source = origin::Fragment::plain("{ ");
+                source.push(value.rendered_source());
+                source.push_text(format!("; {text} }}"));
+                let source = source.surrounded("(", ")");
+                return Ok(self.operator_expr(source, ty, call));
+            }
+            // `LockResult<T>`: the value, taken out of the mutex.
+            "into_inner" if !unwrapped => {
+                let mut taken =
+                    self.parse_cell_member(value, inner.clone(), member, member_span)?;
+                let ok = self.prelude_op(PreludeOp::Ok, [taken.rendered_source()]);
+                let ty = Ty::Result(Box::new(inner.clone()), Box::new(poison(inner)));
+                taken = self.operator_expr(ok, ty, taken.span);
+                return Ok(taken);
+            }
+            _ => {}
+        }
         if !unwrapped {
             let owner = Ty::Cell(CellKind::Mutex, Box::new(inner.clone()));
             let path = std_method::inherent(&owner, &member).map_or_else(
@@ -431,7 +462,29 @@ impl Parser<'_> {
         let mut locked = self.parse_cell_member(value, inner, cell_member, member_span)?;
         self.expect(Token::Period, "'.' after the call")?;
         let (unwrap, _) = self.expect_member_name()?;
+        // `unwrap_or_else(f)`: `f` takes the `PoisonError` of what the lock
+        // gives, which no lock rawr runs makes, and gives that again.
+        let given = self.inference.resolve(&locked.ty);
+        if unwrap.as_str() == "unwrap_or_else" {
+            self.closure_hints = vec![Some(Box::new([poison(given.clone())]))];
+        }
         let (mut arguments, end) = self.parse_call_arguments("`unwrap` arguments")?;
+        if unwrap.as_str() == "unwrap_or_else" {
+            let [handler] = arguments.as_mut_slice() else {
+                return Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified("Result", "unwrap_or_else").to_string(),
+                    1,
+                    arguments.len(),
+                    span(locked.span.start(), end),
+                ));
+            };
+            let expected = Ty::Fn {
+                inputs: Box::new([poison(given.clone())]),
+                output: Box::new(given),
+            };
+            self.coerce_expr(&expected, handler)?;
+        }
         if unwrap.as_str() == "expect" {
             let [message] = arguments.as_mut_slice() else {
                 return Err(Error::argument_count(

@@ -33,6 +33,9 @@ pub(super) enum Kind {
     Scope,
     /// A scoped thread's `ScopedJoinHandle<T>`.
     ScopedJoinHandle,
+    /// `PoisonError<T>`, of a lock a panicking thread held. No lock rawr
+    /// runs is poisoned, so no value of it is made.
+    PoisonError,
 }
 
 impl Kind {
@@ -41,6 +44,7 @@ impl Kind {
         Some(match name {
             "JoinHandle" => Self::JoinHandle,
             "ScopedJoinHandle" => Self::ScopedJoinHandle,
+            "PoisonError" => Self::PoisonError,
             crate::resolve::MPSC_SENDER => Self::Sender,
             crate::resolve::MPSC_SYNC_SENDER => Self::SyncSender,
             crate::resolve::MPSC_RECEIVER => Self::Receiver,
@@ -59,6 +63,7 @@ impl Kind {
             Self::Panic => "Box<dyn Any + Send>".into(),
             Self::Scope => "Scope<'_, '_>".into(),
             Self::ScopedJoinHandle => format!("ScopedJoinHandle<'_, {inner}>"),
+            Self::PoisonError => format!("PoisonError<{inner}>"),
         }
     }
 
@@ -75,6 +80,7 @@ impl Kind {
             Self::Panic => return None,
             Self::Scope => ("std::thread::scoped::Scope", false),
             Self::ScopedJoinHandle => ("std::thread::scoped::ScopedJoinHandle", true),
+            Self::PoisonError => ("std::sync::poison::PoisonError", true),
         })
     }
 
@@ -97,7 +103,7 @@ impl Kind {
 }
 
 /// The functions and methods rawr runs, by the code `invoke` takes.
-const METHODS: [&str; 16] = [
+const METHODS: [&str; 19] = [
     "spawn",
     "join",
     "is_finished",
@@ -114,6 +120,9 @@ const METHODS: [&str; 16] = [
     "scope",
     "scoped_spawn",
     "builder_spawn",
+    "into_inner",
+    "get_ref",
+    "get_mut",
 ];
 
 fn code(name: &str) -> origin::Fragment {
@@ -229,6 +238,8 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
             })
         }
         "scope" => scope(context, args[0].take()),
+        // A `PoisonError`'s, of which no lock rawr runs makes one.
+        "into_inner" | "get_ref" | "get_mut" => Err(invariant("no lock rawr runs is poisoned")),
         "builder_spawn" => {
             let closure = args[2].take();
             builder_spawn(context, args[0], closure)
@@ -737,6 +748,17 @@ impl Parser<'_> {
                 Ty::Result(Box::new(inner), Box::new(error(Kind::Panic, Ty::Unit)))
             }
             (Kind::JoinHandle | Kind::ScopedJoinHandle, "is_finished", 0) => Ty::Bool,
+            // A poisoned lock's value, which no lock rawr runs gives.
+            (Kind::PoisonError, "into_inner", 0) => {
+                if owned {
+                    self.move_local(&mut value)?;
+                }
+                inner
+            }
+            (Kind::PoisonError, "get_ref" | "get_mut", 0) => Ty::Reference {
+                mutable: member.as_str() == "get_mut",
+                target: Box::new(inner),
+            },
             (Kind::Sender | Kind::SyncSender, "send", 1) => {
                 self.coerce_expr(&inner, &mut arguments[0])?;
                 self.move_local(&mut arguments[0])?;

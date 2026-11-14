@@ -516,6 +516,42 @@ fn a_scoped_or_built_thread_s_closure_meets_std_s_bounds() {
     assert!(report.contains("E0373"), "{report}");
 }
 
+/// A lock no thread poisoned: `unwrap_or_else` of a `PoisonError` handler
+/// holds it as `unwrap()` does, `is_poisoned()` is `false`, and
+/// `into_inner()` kept as its `LockResult` is `Ok` of the value (#949).
+#[test]
+fn a_mutex_s_lock_results_are_std_s() {
+    let source = r#"
+use std::sync::{Mutex, PoisonError};
+
+fn main() {
+    let m = Mutex::new(vec![1]);
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(2);
+    {
+        let mut guard = m.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.push(3);
+    }
+    println!("{} {:?}", m.is_poisoned(), m.lock().unwrap());
+    m.clear_poison();
+    let mut n = Mutex::new(5);
+    *n.get_mut().unwrap_or_else(|e| e.into_inner()) += 1;
+    match n.into_inner() {
+        Ok(value) => println!("{value}"),
+        Err(poisoned) => println!("poisoned {}", poisoned.into_inner()),
+    }
+    let r: Result<Vec<i32>, PoisonError<Vec<i32>>> = m.into_inner();
+    println!("{:?}", r.unwrap());
+}
+main();
+"#;
+    assert_eq!(printed(source), "false [1, 2, 3]\n6\n[1, 2, 3]\n");
+    let report = refused(
+        "use std::sync::Mutex;\nfn main() { let m = Mutex::new(1); \
+         let _ = m.lock().unwrap_or_else(|e| 5); }\nmain();\n",
+    );
+    assert!(report.contains("E0308"), "{report}");
+}
+
 /// A `Mutex`'s `get_mut()` and `into_inner()`, unwrapped as `lock()` is,
 /// reach its value (#949).
 #[test]

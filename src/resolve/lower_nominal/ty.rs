@@ -1192,6 +1192,8 @@ impl Ty {
                 thread::Kind::Receiver => Some(TypeId::of::<thread::Receiver>()),
                 thread::Kind::SendError => Some(TypeId::of::<thread::SendError>()),
                 thread::Kind::Panic => Some(TypeId::of::<thread::Panic>()),
+                // No value is made: no lock rawr runs is poisoned.
+                thread::Kind::PoisonError => Some(TypeId::of::<Dynamic>()),
             },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),

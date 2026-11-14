@@ -2072,8 +2072,8 @@ pub(crate) const MPSC_RECEIVER: &str = "MpscReceiver";
 pub(crate) const MPSC_SYNC_SENDER: &str = "MpscSyncSender";
 
 /// Rawr's builtin name for the std thread type `path` names: `Mutex`,
-/// `JoinHandle`, `ScopedJoinHandle`, or a `Sender`, `SyncSender` or
-/// `Receiver` of `std::sync::mpsc`.
+/// `JoinHandle`, `ScopedJoinHandle`, `PoisonError`, or a `Sender`,
+/// `SyncSender` or `Receiver` of `std::sync::mpsc`.
 pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
     match path {
         "Mutex" | "sync::Mutex" | "std::sync::Mutex" => Some("Mutex"),
@@ -2091,6 +2091,7 @@ pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
         "ScopedJoinHandle" | "thread::ScopedJoinHandle" | "std::thread::ScopedJoinHandle" => {
             Some("ScopedJoinHandle")
         }
+        "PoisonError" | "sync::PoisonError" | "std::sync::PoisonError" => Some("PoisonError"),
         _ => None,
     }
 }
