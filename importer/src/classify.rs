@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 227;
+const CLASSIFIER_VERSION: u32 = 229;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -75,6 +75,9 @@ pub(crate) struct OutcomeRecord {
     /// `into` of `Degrees` that core's blanket `Into` gives through a
     /// crate's `From<Degrees>` is `Into::into`, whatever its selector.
     member: Option<crate::surface::identity::Definition>,
+    /// A trait's methods' opaque outputs, with how a value behind a box of
+    /// the runner's implements their traits (#2013).
+    outputs: Option<Box<representability::signature::Outputs>>,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -239,6 +242,8 @@ struct StoredOutcome {
     variant: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     member: Option<crate::surface::identity::Definition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outputs: Option<Box<representability::signature::Outputs>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -3676,6 +3681,13 @@ impl<'contract> Outcome<'contract> {
         self.record.member
     }
 
+    /// A trait's methods' opaque outputs (`signature::Outputs`), when it
+    /// is a trait some of whose methods give one.
+    #[must_use]
+    pub fn outputs(&self) -> Option<&'contract representability::signature::Outputs> {
+        self.record.outputs.as_deref()
+    }
+
     /// Return the export/declaration positions for a definition-backed outcome.
     #[must_use]
     pub const fn origin(&self) -> Option<&'contract representability::origin::Set> {
@@ -4232,7 +4244,7 @@ impl Serialize for OutcomeRecord {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Outcome", 9)?;
+        let mut state = serializer.serialize_struct("Outcome", 10)?;
         state.serialize_field("export", &self.export)?;
         state.serialize_field("identity", &self.identity)?;
         state.serialize_field("name", &self.name)?;
@@ -4255,6 +4267,10 @@ impl Serialize for OutcomeRecord {
         match &self.member {
             Some(member) => state.serialize_field("member", member)?,
             None => state.skip_field("member")?,
+        }
+        match &self.outputs {
+            Some(outputs) => state.serialize_field("outputs", outputs)?,
+            None => state.skip_field("outputs")?,
         }
         state.end()
     }
@@ -4571,6 +4587,7 @@ impl StoredOutcome {
             implementations: implementations.into_boxed_slice(),
             variant: self.variant,
             member: self.member,
+            outputs: self.outputs,
         })
     }
 }
@@ -5476,6 +5493,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     implementations: Box::default(),
                     variant: None,
                     member: None,
+                    outputs: None,
                 })
             }
             ledger::Path::Rejected { reason, span, .. } => {
@@ -5497,6 +5515,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     implementations: Box::default(),
                     variant: None,
                     member: None,
+                    outputs: None,
                 })
             }
             ledger::Path::Imported(export) => {
@@ -5591,6 +5610,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     implementations,
                     variant,
                     member: None,
+                    outputs: self.trait_outputs(definition)?.map(Box::new),
                 })
             }
         }
@@ -5891,6 +5911,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     variant: None,
                     member: trait_member(implementation, definition)
                         .then(|| self.graph.surface_definition(definition.id())),
+                    outputs: None,
                 });
             }
             self.retain_span(implementation.span())?;
@@ -6225,6 +6246,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         implementations: Box::default(),
                         variant: None,
                         member: None,
+                        outputs: None,
                     });
                 }
                 // Charged as `implementations` charges a crate's own.
@@ -6399,6 +6421,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 implementations,
                 variant: None,
                 member: None,
+                outputs: None,
             });
         }
         outcomes.extend(self.parameter_members(export, definition)?);
@@ -6539,6 +6562,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 implementations: Box::default(),
                 variant: None,
                 member: None,
+                outputs: None,
             });
         }
         if outcomes.is_empty() {
@@ -6788,6 +6812,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             implementations,
             variant: None,
             member: None,
+            outputs: None,
         }))
     }
 
@@ -8646,6 +8671,128 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             });
         }
         Some(traits.into_boxed_slice())
+    }
+
+    /// The opaque outputs of the methods of `definition`, when it is a
+    /// trait some of whose methods give one, as `fn shape(&self) -> impl
+    /// Shape<T> + 'a` does (`signature::Outputs`, #2013). Each output's
+    /// traits are at the trait's type parameters, by position after
+    /// `Self`, and each parameter has its default where Rawr can write it.
+    fn trait_outputs(
+        &self,
+        definition: &model::Definition,
+    ) -> Result<Option<representability::signature::Outputs>, Error> {
+        let model::Kind::Trait {
+            associated,
+            generics,
+            ..
+        } = definition.kind()
+        else {
+            return Ok(None);
+        };
+        let trait_id = definition.id();
+        // Each type parameter other than `Self`, by its position, which a
+        // program's impl writes its argument at.
+        let positions = generics
+            .parameters()
+            .filter(|parameter| {
+                parameter.owner() == trait_id
+                    && matches!(parameter.kind(), model::ParameterKind::Type { .. })
+                    && parameter.name() != "Self"
+            })
+            .collect::<Vec<_>>();
+        let by_position = positions
+            .iter()
+            .enumerate()
+            .filter_map(|(position, parameter)| {
+                Some((
+                    parameter.index(),
+                    model::Type::Parameter {
+                        owner: trait_id.clone(),
+                        index: u32::try_from(position).ok()?,
+                    },
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut methods = Vec::new();
+        for item in associated.iter() {
+            let Some(method) = self
+                .graph
+                .definition_index(item)
+                .and_then(|index| self.graph.definitions().nth(index))
+            else {
+                continue;
+            };
+            let model::Kind::Function { signature, .. } = method.kind() else {
+                continue;
+            };
+            // The method's opaque output is an anonymous associated type of
+            // the trait, whose bounds name the trait's parameters.
+            let model::Type::Projection {
+                associated: output, ..
+            } = signature.output()
+            else {
+                continue;
+            };
+            let Some(model::Kind::AssociatedType { bounds, .. }) = self
+                .graph
+                .definition_index(output)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .map(model::Definition::kind)
+            else {
+                continue;
+            };
+            let anonymous = self
+                .definition_name(output)
+                .is_some_and(|name| name.starts_with("{anonymous-associated-type:"));
+            if !anonymous {
+                continue;
+            }
+            let bounds = bounds
+                .iter()
+                .map(|predicate| {
+                    mapped_predicate(predicate, &|ty| substitute_bindings(ty, &by_position))
+                })
+                .collect::<Vec<_>>();
+            let Some(traits) = self.opaque_traits(&bounds) else {
+                continue;
+            };
+            let forwards = (traits.len() == 1)
+                .then(|| self.opaque_forwards(&bounds))
+                .flatten();
+            let Some(name) = self.definition_name(item) else {
+                continue;
+            };
+            self.retain_str(name)?;
+            methods.push((
+                Box::<str>::from(name),
+                representability::signature::Opaque::new(
+                    *self.graph.surface_definition(output).as_bytes(),
+                    Box::default(),
+                    traits,
+                    forwards,
+                ),
+            ));
+        }
+        if methods.is_empty() {
+            return Ok(None);
+        }
+        let defaults = positions
+            .iter()
+            .map(|parameter| match parameter.kind() {
+                model::ParameterKind::Type {
+                    default: model::Default::Present(default),
+                    ..
+                } => self
+                    .convert(&substitute_bindings(default, &by_position))
+                    .ok(),
+                _ => None,
+            })
+            .collect();
+        Ok(Some(representability::signature::Outputs::new(
+            defaults,
+            methods.into_boxed_slice(),
+        )))
     }
 
     /// How a value held through the proxy of an opaque type's one trait

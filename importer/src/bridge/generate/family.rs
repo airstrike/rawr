@@ -78,6 +78,9 @@ pub(super) struct Ops {
     /// The types it is implemented for.
     shape: Shape,
     methods: Vec<Method>,
+    /// How its box implements the trait a script impl's function gives a
+    /// value of it as, through methods of its own (#2013).
+    forwards: Option<super::Forwards>,
 }
 
 /// One method of an [`Ops`] trait: the call `consumer` of the program on
@@ -310,6 +313,7 @@ impl Ops {
                         index: next,
                         shape,
                         methods: Vec::new(),
+                        forwards: None,
                     }
                 })
                 .index;
@@ -362,6 +366,17 @@ impl Ops {
                 )
             })
         })
+    }
+
+    /// Implement the traits `forwards` renders for the box of the opaque
+    /// type spelled `key`, unless its box implements some already: the
+    /// trait of the script impl's function that gives it (#2013).
+    pub(super) fn forward(key: &str, forwards: super::Forwards) {
+        OPS.with_borrow_mut(|ops| {
+            if let Some(ops) = ops.get_mut(key) {
+                ops.forwards.get_or_insert(forwards);
+            }
+        });
     }
 
     /// Add `method`, the `consumer`-th call on the opaque type spelled
@@ -473,6 +488,7 @@ pub fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + use<'x> {
             index,
             shape,
             methods,
+            forwards,
         } in ops.values()
         {
             let parameters = shape
@@ -504,6 +520,14 @@ pub fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + use<'x> {
                     "\n    #[allow(unused_mut)]\n    {head} {{\n        let mut receiver = {reached};\n        {call}\n    }}"
                 );
             }
+            // Each trait its box implements, through a method of the trait
+            // for each of theirs (`super::render_forwards`).
+            let mut implementation = "";
+            if let Some(forwards) = forwards {
+                let _ = write!(declared, "\n{}", forwards.methods.trim_end());
+                let _ = write!(implemented, "\n{}", forwards.bodies.trim_end());
+                implementation = &forwards.implementation;
+            }
             let _ = writeln!(
                 output,
                 "pub trait RawrOpaque{index}<'x> {{{declared}
@@ -511,7 +535,7 @@ pub fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + use<'x> {
 
 impl<'x{parameters}> RawrOpaque{index}<'x> for {spelled} {{{implemented}
 }}
-",
+{implementation}",
                 spelled = shape.spelled
             );
         }

@@ -2754,6 +2754,22 @@ fn a_script_impl_gives_native_code_a_reference_to_a_crate_value_it_holds() {
     assert_eq!(rawr, "lent dusk true\nagain noon true\nowned dawn true");
 }
 
+/// #2013: a program's impl of a crate trait whose method gives `impl
+/// Shape<T> + 'a` gives a crate type holding another crate function's
+/// opaque output, as markdown's `Viewer::code_block` gives `Hover<impl
+/// Widget, ..>`. The runner's impl gives the box the value is held in,
+/// which implements `Shape<u32>` and its supertrait through the boxed
+/// value, the trait's argument by its default. The output is `cargo run`'s.
+#[test]
+fn a_script_impl_gives_a_crate_type_holding_an_opaque_type_as_its_trait_s_opaque_output() {
+    let (rawr, cargo) = both_printed("framing.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "square framed 10 [\"side\", \"oak\"]\nsquare framed 26 [\"side\", \"oak\"]"
+    );
+}
+
 /// #1987, #1988, #1985: what iced's tour and gallery hand iced and tokio. A
 /// crate's `impl Into<String>` takes a unit enum by the program's own
 /// `impl From<Language> for String`; `FromIterator::from_iter<T:

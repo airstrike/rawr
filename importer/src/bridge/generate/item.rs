@@ -229,7 +229,16 @@ fn balanced(text: &str, open: u8, close: u8) -> Option<usize> {
 fn implemented(text: &str) -> Option<String> {
     let head = impl_head(text)?;
     let ty = head.split_once(" for ").map_or(head.as_str(), |(_, ty)| ty);
-    last_segment(ty)
+    let segment = last_segment(ty)?;
+    // A box of a trait object is the trait's, as rustc's orphan rule has
+    // it where the trait is declared (`Box` is fundamental): the runner's
+    // impl of a crate's trait for `Box<dyn RawrOpaque0<'x> + 'x>` (#2013).
+    if segment == "Box"
+        && let Some((_, object)) = text.split_once(" for Box<dyn ")
+    {
+        return last_segment(object.split(['<', ' ', '+']).next()?);
+    }
+    Some(segment)
 }
 
 /// The last path segment of the trait `text`'s `impl` implements, before
@@ -343,6 +352,21 @@ mod tests {
                 (Some("Hover".to_owned()), Some("RawrOpaque0".to_owned())),
                 (Some("Wrapper".to_owned()), None),
             ]
+        );
+    }
+
+    /// An `impl` for a box of a trait object is for the trait, which
+    /// rustc's orphan rule finds local where the trait is (#2013).
+    #[test]
+    fn an_impl_for_a_boxed_object_is_for_its_trait() {
+        let source = "    #[allow(clippy::all)]\n    impl<'x> ::iced_core::Widget<crate::Message> for Box<dyn RawrOpaque0<'x> + 'x> {\n    }\n";
+        let implements = split(source)
+            .into_iter()
+            .map(|item| (item.name, item.implements))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            implements,
+            [(Some("RawrOpaque0".to_owned()), Some("Widget".to_owned()))]
         );
     }
 }
