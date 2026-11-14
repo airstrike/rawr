@@ -886,6 +886,44 @@ impl<'a> Parser<'a> {
         index: usize,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        self.dispatch_choice(arguments, index, call, |this, candidate| {
+            this.finish_host_method(
+                receiver.clone(),
+                definition,
+                items,
+                owner.clone(),
+                scoped,
+                member_span,
+                candidate,
+                call,
+            )
+        })
+    }
+
+    /// A host function whose callable argument is a `fn` pointer choice, as
+    /// a host method's is.
+    pub(super) fn dispatch_host_function(
+        &mut self,
+        items: &[crate::host::item::Definition],
+        owner: Option<crate::host::facade::Dependency>,
+        arguments: Vec<ParsedExpr>,
+        index: usize,
+        call: Span,
+    ) -> Result<ParsedExpr, Error> {
+        self.dispatch_choice(arguments, index, call, |this, candidate| {
+            this.call_host_function(items, owner.clone(), candidate, call)
+        })
+    }
+
+    /// `finish` of each candidate of the choice `arguments[index]` holds,
+    /// run as the one the pointer names.
+    fn dispatch_choice(
+        &mut self,
+        arguments: Vec<ParsedExpr>,
+        index: usize,
+        call: Span,
+        mut finish: impl FnMut(&mut Self, Vec<ParsedExpr>) -> Result<ParsedExpr, Error>,
+    ) -> Result<ParsedExpr, Error> {
         let Ty::FnChoice {
             keys,
             inputs,
@@ -903,23 +941,10 @@ impl<'a> Parser<'a> {
             let mut candidate = arguments.clone();
             candidate[index] = self.operator_expr(
                 origin::Fragment::plain("()"),
-                Ty::FnItem {
-                    key: Box::new(key.clone()),
-                    inputs: inputs.clone(),
-                    output: output.clone(),
-                },
+                self.inference.resolve(&key.ty(&inputs, &output)),
                 arguments[index].span,
             );
-            let call = self.finish_host_method(
-                receiver.clone(),
-                definition,
-                items,
-                owner.clone(),
-                scoped,
-                member_span,
-                candidate,
-                call,
-            )?;
+            let call = finish(self, candidate)?;
             if position + 1 < keys.len() {
                 source.push_text(format!("if {chosen} == {position} {{ "));
                 source.push(call.rendered_source());

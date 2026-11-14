@@ -532,6 +532,79 @@ pub(super) enum PartialEqImpl {
     Between,
 }
 
+/// A function a `fn` pointer choice may hold: a script function or
+/// closure, or a crate's function, each its own item as in Rust.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) enum FnCandidate {
+    Script(crate::item::Key),
+    /// A crate's function, whose value is `()`: its type names it, as
+    /// `text::warning` beside `text::default` is.
+    #[cfg(feature = "rust-import")]
+    Imported {
+        input: Box<Ty>,
+        output: Box<Ty>,
+        proof: Box<ImportedFunctionProof>,
+    },
+}
+
+impl FnCandidate {
+    /// The candidate a function's type names, when it names one.
+    pub(super) fn of(ty: &Ty) -> Option<Self> {
+        match ty {
+            Ty::FnItem { key, .. } => Some(Self::Script((**key).clone())),
+            #[cfg(feature = "rust-import")]
+            Ty::ImportedFunctionItem {
+                input,
+                output,
+                item: Some(proof),
+            } => Some(Self::Imported {
+                input: input.clone(),
+                output: output.clone(),
+                proof: proof.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Both name the same function, wherever each was written.
+    pub(super) fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Script(left), Self::Script(right)) => left == right,
+            #[cfg(feature = "rust-import")]
+            (Self::Imported { proof: left, .. }, Self::Imported { proof: right, .. }) => {
+                left.item == right.item
+                    && left.owner == right.owner
+                    && left.parameters == right.parameters
+            }
+            #[cfg(feature = "rust-import")]
+            _ => false,
+        }
+    }
+
+    /// The type of the candidate's own value, which a host call takes as
+    /// that exact function.
+    pub(super) fn ty(&self, inputs: &[Ty], output: &Ty) -> Ty {
+        match self {
+            Self::Script(key) => Ty::FnItem {
+                key: Box::new(key.clone()),
+                inputs: inputs.into(),
+                output: Box::new(output.clone()),
+            },
+            #[cfg(feature = "rust-import")]
+            Self::Imported {
+                input,
+                output,
+                proof,
+            } => Ty::ImportedFunctionItem {
+                input: input.clone(),
+                output: output.clone(),
+                item: Some(proof.clone()),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Ty {
@@ -593,7 +666,7 @@ pub(super) enum Ty {
     /// its candidates so a host callable can take each exact item. At
     /// runtime, `[index, fn pointer]`.
     FnChoice {
-        keys: crate::Shared<Vec<crate::item::Key>>,
+        keys: crate::Shared<Vec<FnCandidate>>,
         inputs: Box<[Ty]>,
         output: Box<Ty>,
     },
@@ -788,6 +861,14 @@ impl Ty {
                     input.collect_dependencies(dependencies);
                 }
                 output.collect_dependencies(dependencies);
+                #[cfg(feature = "rust-import")]
+                if let Self::FnChoice { keys, .. } = self {
+                    for candidate in keys.iter() {
+                        if let FnCandidate::Imported { proof, .. } = candidate {
+                            dependencies.insert(proof.owner.clone());
+                        }
+                    }
+                }
             }
             Self::Array { element, .. } | Self::Option(element) => {
                 element.collect_dependencies(dependencies);

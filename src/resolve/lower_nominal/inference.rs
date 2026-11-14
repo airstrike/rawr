@@ -3,7 +3,7 @@
 
 #[cfg(feature = "rust-import")]
 use super::ImplProjection;
-use super::{builtin_operator, instantiate, is_iterator_trait, Float, Int, Ty};
+use super::{builtin_operator, instantiate, is_iterator_trait, Float, FnCandidate, Int, Ty};
 use crate::resolve::type_ref;
 use crate::{type_def, ImmutableString, Shared};
 use std::collections::{BTreeMap, BTreeSet};
@@ -177,6 +177,31 @@ impl Inference {
         }
     }
 
+    /// A choice's candidates with their own types resolved: a crate
+    /// function's types are what the choice's pointer met.
+    fn resolve_candidates(&self, keys: &Shared<Vec<FnCandidate>>) -> Shared<Vec<FnCandidate>> {
+        #[cfg(feature = "rust-import")]
+        if keys
+            .iter()
+            .any(|candidate| matches!(candidate, FnCandidate::Imported { .. }))
+        {
+            let resolved = keys.iter().map(|candidate| match candidate {
+                FnCandidate::Imported {
+                    input,
+                    output,
+                    proof,
+                } => FnCandidate::Imported {
+                    input: Box::new(self.resolve(input)),
+                    output: Box::new(self.resolve(output)),
+                    proof: proof.clone(),
+                },
+                FnCandidate::Script(_) => candidate.clone(),
+            });
+            return Shared::new(resolved.collect());
+        }
+        keys.clone()
+    }
+
     pub(super) fn resolve(&self, ty: &Ty) -> Ty {
         match ty {
             Ty::Infer(id) | Ty::Int(Int::Var(id)) | Ty::Float(Float::Var(id)) => self
@@ -285,7 +310,7 @@ impl Inference {
                 inputs,
                 output,
             } => Ty::FnChoice {
-                keys: keys.clone(),
+                keys: self.resolve_candidates(keys),
                 inputs: inputs.iter().map(|input| self.resolve(input)).collect(),
                 output: Box::new(self.resolve(output)),
             },

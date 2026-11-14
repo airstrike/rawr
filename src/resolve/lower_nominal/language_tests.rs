@@ -10555,16 +10555,24 @@ fn language_collect_into_a_type_that_implements_from_iterator() {
             }
         }
         fn size(life: Life) -> i64 { life.cells.len() as i64 }
+        impl Life {
+            fn size(life: Life) -> i64 { life.cells.len() as i64 }
+        }
         pub fn run() -> i64 {
             let life: Life = vec![(1, 2), (3, 4), (1, 2)].into_iter().map(|(i, j)| Cell { i, j }).collect();
             let passed = size(vec![Cell { i: 0, j: 0 }].into_iter().collect());
+            let associated = Life::size(vec![Cell { i: 0, j: 0 }].into_iter().collect());
             let direct = Life::from_iter(vec![Cell { i: 5, j: 5 }]);
             let total = (1..=4).collect::<Total>();
-            life.cells.len() as i64 * 1000 + passed * 100 + direct.cells.len() as i64 * 10 + total.0
+            life.cells.len() as i64 * 10000
+                + associated * 1000
+                + passed * 100
+                + direct.cells.len() as i64 * 10
+                + total.0
         }
         run()
     "#);
-    assert_eq!(value, 2120);
+    assert_eq!(value, 21120);
 }
 
 #[test]

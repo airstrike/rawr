@@ -293,8 +293,8 @@ use ty::{first_inference, mentions_script, reaches_param};
 use ty::{host_ty_proof_allocations, reset_host_ty_proof_allocations};
 use ty::{
     host_type_name, literal_fallback, numeric_type, same_head, same_host_definition, same_inferred,
-    CellKind, Counter, Float, HostTyProof, Int, Keyed, PartialEqImpl, Pointer, Time, Ty, Unplaced,
-    UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
+    CellKind, Counter, Float, FnCandidate, HostTyProof, Int, Keyed, PartialEqImpl, Pointer, Time,
+    Ty, Unplaced, UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
 };
 use wide::{
     kind_value, wide_i128, wide_method, wide_order, wide_u128, wide_value, PendingFloat,

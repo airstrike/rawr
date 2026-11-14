@@ -246,12 +246,50 @@ impl<'a> Parser<'a> {
             source = target.clone();
         }
         // A function item taking its place in a `fn` pointer choice.
-        if let (Ty::FnChoice { keys, .. }, Ty::FnItem { key, .. }) = (&target, &source)
-            && let Some(index) = keys.iter().position(|candidate| candidate == &**key)
+        if let Ty::FnChoice { keys, .. } = &target
+            && let Some(candidate) = FnCandidate::of(&source)
+            && let Some(index) = keys.iter().position(|known| known.same(&candidate))
         {
+            // A crate function's value is `()`: the pointer slot holds the
+            // closure that calls it.
+            #[cfg(feature = "rust-import")]
+            if let FnCandidate::Imported { proof, .. } = &candidate {
+                let at = value.span;
+                *value = self.host_function_value(proof.item.clone(), at)?;
+                value.span = at;
+            }
             let mut rendered = origin::Fragment::plain(format!("[{index}, "));
             rendered.push(value.rendered_source());
             rendered.push_text("]");
+            value.prelude = origin::Fragment::default();
+            value.source = rendered;
+            value.ty = target.clone();
+            value.lvalue = None;
+            value.source.cover(value.span);
+            return Ok(None);
+        }
+        // A choice widening to one that holds its functions and more, as
+        // the inner `if` of `if a { x } else if b { y } else { z }` meets
+        // `x`: its index becomes the wider choice's.
+        if let (Ty::FnChoice { keys, .. }, Ty::FnChoice { keys: inner, .. }) = (&target, &source)
+            && keys != inner
+            && let Some(indices) = inner
+                .iter()
+                .map(|candidate| keys.iter().position(|known| known.same(candidate)))
+                .collect::<Option<Vec<_>>>()
+        {
+            let chosen = self.temporary("choice");
+            let widened = self.temporary("widened");
+            let indices = indices
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut rendered = origin::Fragment::plain(format!("{{ const {chosen} = "));
+            rendered.push(value.rendered_source());
+            rendered.push_text(format!(
+                "; const {widened} = [{indices}]; [{widened}[{chosen}[0]], {chosen}[1]] }}"
+            ));
             value.prelude = origin::Fragment::default();
             value.source = rendered;
             value.ty = target.clone();
@@ -750,38 +788,39 @@ impl<'a> Parser<'a> {
     /// Arms naming different functions of one signature meet at a `fn`
     /// pointer, as in Rust; the pointer keeps which function it is.
     pub(super) fn fn_choice(&mut self, sources: &[Ty]) -> Option<Ty> {
-        let Some(Ty::FnItem { inputs, output, .. }) = sources.first() else {
-            return None;
-        };
-        let mut keys = Vec::new();
+        let pointer = fn_pointer(sources.first()?)?;
+        let mut keys = Vec::<FnCandidate>::new();
         for source in sources {
-            let Ty::FnItem { key, .. } = source else {
-                return None;
+            // An arm that is itself a choice, as an `else if`, gives each of
+            // its functions.
+            let candidates = match source {
+                Ty::FnChoice { keys, .. } => keys.to_vec(),
+                source => vec![FnCandidate::of(source)?],
             };
-            // A closure that captures is chosen as its value, not its item.
-            if self
-                .lifted
-                .iter()
-                .any(|closure| closure.key == **key && !closure.captures.is_empty())
-            {
-                return None;
-            }
-            if !keys.contains(&**key) {
-                keys.push((**key).clone());
+            for candidate in candidates {
+                // A closure that captures is chosen as its value, not its
+                // item.
+                if let FnCandidate::Script(key) = &candidate
+                    && self
+                        .lifted
+                        .iter()
+                        .any(|closure| closure.key == *key && !closure.captures.is_empty())
+                {
+                    return None;
+                }
+                if !keys.iter().any(|known| known.same(&candidate)) {
+                    keys.push(candidate);
+                }
             }
         }
         if keys.len() < 2 {
             return None;
         }
-        let pointer = Ty::Fn {
-            inputs: inputs.clone(),
-            output: output.clone(),
-        };
+        // Each function's own pointer meets the first's: its signature.
         let checkpoint = self.inference.checkpoint();
-        if !sources
-            .iter()
-            .all(|source| self.unify_type(&pointer, source))
-        {
+        if !sources.iter().all(|source| {
+            fn_pointer(source).is_some_and(|source| self.unify_type(&pointer, &source))
+        }) {
             self.inference.rollback(checkpoint);
             return None;
         }
@@ -1327,5 +1366,33 @@ impl<'a> Parser<'a> {
             outcome: crate::host::usage::Outcome::Conservative,
             evaluation: crate::host::usage::Evaluation::Required,
         }
+    }
+}
+
+/// The `fn` pointer a named function, or a choice of them, coerces to, of
+/// its own signature.
+fn fn_pointer(function: &Ty) -> Option<Ty> {
+    match function {
+        Ty::FnItem { inputs, output, .. } | Ty::FnChoice { inputs, output, .. } => Some(Ty::Fn {
+            inputs: inputs.clone(),
+            output: output.clone(),
+        }),
+        #[cfg(feature = "rust-import")]
+        Ty::ImportedFunctionItem {
+            input,
+            output,
+            item: Some(proof),
+        } => {
+            let inputs: Box<[Ty]> = match (proof.item.signature().parameters().len(), &**input) {
+                (1, input) => Box::new([input.clone()]),
+                (_, Ty::Tuple(members)) => members.clone(),
+                (_, _) => Box::default(),
+            };
+            Some(Ty::Fn {
+                inputs,
+                output: output.clone(),
+            })
+        }
+        _ => None,
     }
 }

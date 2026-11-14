@@ -9312,7 +9312,9 @@ pub(crate) fn facade_item_path(plan: &Plan) -> String {
 }
 
 /// The key a call of this adapter's instance carries, or zeros for an
-/// item that is not generic.
+/// item that is not generic. A crate function an argument passes is part
+/// of the instance, as `.style(text::warning)` and `.style(text::default)`
+/// are two, even where the parameter's `impl Fn` leaves no substitution.
 fn instance_key(plan: &Plan) -> [u8; 32] {
     match plan.operation() {
         Operation::Function {
@@ -9328,7 +9330,11 @@ fn instance_key(plan: &Plan) -> [u8; 32] {
             slots,
             functions,
             ..
-        } if !substitutions.is_empty() || !constants.is_empty() || !slots.is_empty() => {
+        } if !substitutions.is_empty()
+            || !constants.is_empty()
+            || !slots.is_empty()
+            || !functions.is_empty() =>
+        {
             let items = functions
                 .iter()
                 .map(|function| {

@@ -313,7 +313,13 @@ impl<'a> Parser<'a> {
             self.move_local(argument)?;
         }
         let call = span(name_span.start(), end);
-        self.call_host_function(&items, owner, arguments, call)
+        let choice = arguments.iter().position(|argument| {
+            matches!(self.inference.resolve(&argument.ty), Ty::FnChoice { .. })
+        });
+        match choice {
+            Some(index) => self.dispatch_host_function(&items, owner, arguments, index, call),
+            None => self.call_host_function(&items, owner, arguments, call),
+        }
     }
 
     /// A facade function's call with its parsed `arguments`.
