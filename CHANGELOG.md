@@ -42,6 +42,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate builder method that keeps a borrow in Self, as loading_spinners' `Linear::easing(&'a Easing)` does, takes a static or the program's value for as long as the value it is kept in. (#610)
 - A script closure can take a crate trait's object that native code lends for the call, as iced's `window::run` lends `&dyn Window`, and pass it on to another crate call. (#1967; part of #28)
 - A crate function's opaque value that borrows a string it is given, such as iced's `markdown::parse(&text)`, lives beside the string, so iced's changelog builds and runs. (#1966)
+- A struct literal or pattern written through a crate's type alias, as wgpu's `DeviceDescriptor { label: None, .. }` and `SurfaceConfiguration { .. }`, builds the aliased struct with the alias's arguments, and a `&self` method's `impl Future` that borrows nothing, as `request_device`, can be awaited. (#1961; part of #1953)
 
 ## 0.3.213 (2026-11-13)
 
