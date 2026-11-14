@@ -6,6 +6,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees. (#1897; part of #1755)
+- A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema. (#1885)
 
 ## 0.3.212 (2026-11-13)
 

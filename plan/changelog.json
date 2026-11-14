@@ -5,7 +5,8 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees.","issues":[1897],"refs":[1755]}
+      {"text":"A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees.","issues":[1897],"refs":[1755]},
+      {"text":"A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema.","issues":[1885]}
     ]
   },
   "releases": [
