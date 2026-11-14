@@ -58,6 +58,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit. (#1990)
 - Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one. (#1984)
 - A `&self` method whose `impl Trait` result captures the receiver, as edition 2024 does by default or as `+ '_` writes it, keeps the receiver borrowed for as long as the result lives. (#1991)
+- A crate call takes by value a result that borrows its call's values even when its trait has type arguments and supertraits and its methods borrow, as iced's `UserInterface::build(controls.view(), ..)` does, and the values it borrowed come back when native code drops it. (#1998; part of #1997)
+- A program's impl of a crate trait whose function returns `impl Trait` returns the type its body gives, as markdown's `Viewer::image` and `code_block` do. (#1999; part of #83)
 
 ## 0.3.213 (2026-11-13)
 
