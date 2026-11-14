@@ -50,6 +50,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A full-path std call with a turbofish, as `std::sync::mpsc::channel::<u8>()`, is a call again beside a std function named as a value. (#1980)
 - A closure's `?` converts its error through From into the error the closure's tail gives, as rustc infers it, instead of fixing the error type at the first `?`. (#1977)
 - A value that keeps a `&'a mut` and a `&'a` of the crate values it was made from, as integration's `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`, lives in its block and holds both places for its life, as rustc's borrow does. (#1973)
+- A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function. (#1981)
 
 ## 0.3.213 (2026-11-13)
 
