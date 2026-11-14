@@ -162,7 +162,8 @@ thread_local! {
 /// before it, so a save that moves them without changing them (a line
 /// added between them, a signature written over more lines, a token left
 /// out of them) writes them the same (#1646).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct Places(std::sync::Arc<[Position]>);
 
 impl Places {

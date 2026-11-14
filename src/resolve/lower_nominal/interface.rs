@@ -52,7 +52,15 @@
 //! the sources that name it (#1740). So a new runner's start lowers again
 //! only the sources that name what changed, as a save in the running one
 //! does.
+//!
+//! What an interface makes is kept for the next (`Remembered`): each
+//! text's outline, by the text and its bodies, each item's digest, and the
+//! walks over the declarations, by everything a walk reads
+//! (`Declarations::key`). A runner keeps the outlines and the walks on
+//! disk as well, so a respawned runner whose program the exiting runner
+//! compiled lexes no source and walks no declaration again (#1898, #1899).
 
+use super::disk::{self, Disk};
 use super::models::Models;
 use crate::host::image;
 use crate::program::source;
@@ -66,6 +74,7 @@ use std::fmt::Write as _;
 
 /// What each source's lowering reads of the program, the other sources'
 /// bodies aside.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(super) struct Interface {
     /// What every source's lowering reads.
     every: [u8; 32],
@@ -97,20 +106,25 @@ impl Interface {
     }
 
     /// What each source's lowering reads of `program`; `None` when it
-    /// can't be written. `outlined` keeps the outlines of the sources'
-    /// texts, and `digests` the declarations' digests, from one interface
-    /// to the next.
+    /// can't be written. `remembered` keeps what it makes for the next
+    /// interface, and `disk`, a runner's, for the next runner's.
     pub(super) fn new(
         engine: &Engine,
         program: &Program,
         models: &Models,
-        outlined: &mut Outlined,
-        digests: &mut Digests,
+        remembered: &mut Remembered,
+        mut disk: Option<&mut Disk>,
         native: &Native,
     ) -> Option<Self> {
-        let outlines = outlines(engine, program, outlined);
+        let outlines = outlines(
+            engine,
+            program,
+            &mut remembered.outlined,
+            disk.as_deref_mut(),
+        );
         let scopes = Scopes::new(program, &outlines, native);
-        let declarations = Declarations::new(program, &outlines, &scopes, native, digests)?;
+        let declarations =
+            Declarations::new(program, &outlines, &scopes, native, &mut remembered.digests)?;
         let own = own(program)?;
         let calls = Calls::by_source(program)?;
         // A runner's compiler reads the facades registered in the process
@@ -140,11 +154,20 @@ impl Interface {
             .iter()
             .map(|script| (script.source, &script.namespace))
             .collect::<BTreeMap<_, _>>();
+        let key = declarations.key(program, &outlines, native, drops);
+        let walked = match remembered.walks.find(engine, disk, &key) {
+            Some(walked) => walked,
+            None => {
+                let walked = declarations.walked(&outlines, &scopes, &namespaces, drops);
+                remembered.walks.keep(key, crate::Shared::clone(&walked));
+                walked
+            }
+        };
         let mut sources = BTreeMap::new();
         let mut revealed = BTreeMap::new();
-        let mut walk = Walk::new(&declarations);
         for (index, outline) in outlines.sources.iter().enumerate() {
             let source = source::Id::from_index(index);
+            let (lowering_walk, reveal_walk) = walked.get(index)?;
             // What the program resolved of the source's own names.
             let mut written = Written(Sha256::new());
             let aliases = program
@@ -166,42 +189,15 @@ impl Interface {
             }
             written.0.update(own.get(&Some(source)).unwrap_or(&[0; 32]));
             let resolved: [u8; 32] = written.0.finalize().into();
-            // Another module's struct, unless the source is that module or
-            // below it: as the source's lowering reads it, without its
-            // private fields of a plain type, and as its bodies' reveal
-            // reads it, without its private fields.
-            let here = namespaces.get(&source);
-            let outside = |declared: source::Id| {
-                declared != source
-                    && !here
-                        .zip(namespaces.get(&declared))
-                        .is_some_and(|(here, declared)| here.sees_private(declared))
-            };
             let mut lowering = Sha256::new();
             lowering.update(every);
-            declarations.reached(
-                source,
-                &scopes,
-                &outline.mentioned,
-                &mut walk,
-                &mut lowering,
-                Reader::Lowering,
-                (!drops).then_some(&outside),
-            );
+            lowering_walk.write(&mut lowering);
             lowering.update(resolved);
             lowering.update(calls.get(&Some(source)).unwrap_or(&[0; 32]));
             sources.insert(source, lowering.finalize().into());
             let mut reading = Sha256::new();
             reading.update(every_revealed);
-            declarations.reached(
-                source,
-                &scopes,
-                &outline.mentioned,
-                &mut walk,
-                &mut reading,
-                Reader::Reveal,
-                Some(&outside),
-            );
+            reveal_walk.write(&mut reading);
             reading.update(resolved);
             revealed.insert(source, reading.finalize().into());
         }
@@ -634,7 +630,67 @@ enum By {
     Foreign,
 }
 
+impl By {
+    /// Write it into `digest` (`Declarations::key`).
+    fn write(self, digest: &mut Sha256) {
+        match self {
+            Self::Open => digest.update([0]),
+            Self::Local(source) => {
+                digest.update([1]);
+                digest.update(source.index().to_le_bytes());
+            }
+            Self::Foreign => digest.update([2]),
+        }
+    }
+}
+
+impl Declaration {
+    /// Write what a walk reads of it into `digest` (`Declarations::key`).
+    fn write(&self, digest: &mut Sha256) {
+        let Digest {
+            lowering,
+            revealed,
+            outside,
+            lowered,
+        } = &self.digest;
+        digest.update(lowering);
+        for read in [revealed, outside, lowered] {
+            match read {
+                Some(read) => {
+                    digest.update([1]);
+                    digest.update(read);
+                }
+                None => digest.update([0]),
+            }
+        }
+        match self.source {
+            Some(source) => {
+                digest.update([1]);
+                digest.update(source.index().to_le_bytes());
+            }
+            None => digest.update([0]),
+        }
+        digest.update(self.writes.len().to_le_bytes());
+        for (name, by) in &self.writes {
+            digest.update(name.to_le_bytes());
+            by.write(digest);
+        }
+    }
+}
+
 impl Declared {
+    /// Write it into `digest` (`Declarations::key`).
+    fn write(self, digest: &mut Sha256) {
+        match self {
+            Self::In(source) => {
+                digest.update([0]);
+                digest.update(source.index().to_le_bytes());
+            }
+            Self::Native => digest.update([1]),
+            Self::Any => digest.update([2]),
+        }
+    }
+
     /// Whether a name written as `by` reaches a declaration of it declared
     /// so; `declares` says whether a source's own items declare it.
     fn reached(self, by: By, declares: impl FnOnce(source::Id) -> bool) -> bool {
@@ -903,27 +959,121 @@ impl<'p> Declarations<'p> {
         })
     }
 
-    /// Write into `digest` the declarations a text that writes the names
-    /// `mentioned` reaches: how many, and their digests summed lane by
-    /// lane, which no order of the walk changes. The walk touches only
-    /// what it reaches, and no digest is digested again (#1850). Reveal's
-    /// reading of a body reads each as `Digest::revealed`. A struct a
-    /// source `outside` says the text's module doesn't see the private
-    /// items of `reader` reads as `Digest::outside` or `Digest::lowered`.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "one walk's reader and its places; each is the walk's own"
-    )]
+    /// Each source's walks, by its index: what its lowering reaches, and
+    /// what its bodies' reveal reaches, of the declarations its outline's
+    /// names reach. `namespaces` holds each source's module, which sees
+    /// the private fields of its own structs and those of the modules
+    /// above it; with `drops`, a lowering reads every struct whole.
+    fn walked(
+        &self,
+        outlines: &Outlines,
+        scopes: &Scopes<'_>,
+        namespaces: &BTreeMap<source::Id, &crate::resolve::Namespace>,
+        drops: bool,
+    ) -> Walked {
+        let mut walk = Walk::new(self);
+        outlines
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(index, outline)| {
+                let source = source::Id::from_index(index);
+                // Another module's struct, unless the source is that module
+                // or below it: as the source's lowering reads it, without
+                // its private fields of a plain type, and as its bodies'
+                // reveal reads it, without its private fields.
+                let here = namespaces.get(&source);
+                let outside = |declared: source::Id| {
+                    declared != source
+                        && !here
+                            .zip(namespaces.get(&declared))
+                            .is_some_and(|(here, declared)| here.sees_private(declared))
+                };
+                let start = Start {
+                    source,
+                    scopes,
+                    mentioned: &outline.mentioned,
+                };
+                let lowering = self.reached(
+                    start,
+                    &mut walk,
+                    Reader::Lowering,
+                    (!drops).then_some(&outside),
+                );
+                let reveal = self.reached(start, &mut walk, Reader::Reveal, Some(&outside));
+                (lowering, reveal)
+            })
+            .collect()
+    }
+
+    /// What `walked` reads, and so what its walks are made from: each
+    /// source's outline, which holds the names it writes and its imports,
+    /// each source's module, the crates a path may start with, each
+    /// declared name with the declarations that declare it and which
+    /// texts reach them, and each declaration's digests, source and the
+    /// names it writes. Programs whose keys are equal walk the same.
+    fn key(
+        &self,
+        program: &Program,
+        outlines: &Outlines,
+        native: &Native,
+        drops: bool,
+    ) -> [u8; 32] {
+        let mut written = Written(Sha256::new());
+        written.0.update(b"rawr.lowering.walks/v1");
+        written.0.update([u8::from(drops)]);
+        written.0.update(outlines.sources.len().to_le_bytes());
+        for outline in &outlines.sources {
+            written.0.update(outline.key);
+        }
+        // A namespace's, a prelude's and a name's `Debug` can't fail to
+        // write.
+        for script in &program.scripts {
+            let _ = write!(written, "{:?}|{:?}|", script.source, script.namespace);
+        }
+        let _ = write!(
+            written,
+            "{:?}|{:?}|{:?}|",
+            program.crates, program.own, native.roots
+        );
+        let mut names = vec![""; self.declaring.len()];
+        for (name, number) in &self.names {
+            names[*number] = name;
+        }
+        for (name, declaring) in names.iter().zip(&self.declaring) {
+            framed(&mut written.0, name);
+            written.0.update(declaring.len().to_le_bytes());
+            for (index, declared) in declaring {
+                written.0.update(index.to_le_bytes());
+                declared.write(&mut written.0);
+            }
+        }
+        written.0.update(self.declarations.len().to_le_bytes());
+        for declaration in &self.declarations {
+            declaration.write(&mut written.0);
+        }
+        written.0.finalize().into()
+    }
+
+    /// The declarations `start` reaches: how many, and their digests summed
+    /// lane by lane, which no order of the walk changes. The walk touches
+    /// only what it reaches, and no digest is digested again (#1850).
+    /// Reveal's reading of a body reads each as `Digest::revealed`. A
+    /// struct a source `outside` says the text's module doesn't see the
+    /// private items of `reader` reads as `Digest::outside` or
+    /// `Digest::lowered`.
     fn reached(
         &self,
-        source: source::Id,
-        scopes: &Scopes<'_>,
-        mentioned: &[(Box<str>, Head)],
+        start: Start<'_, '_>,
         walk: &mut Walk,
-        digest: &mut Sha256,
         reader: Reader,
         outside: Option<&dyn Fn(source::Id) -> bool>,
-    ) {
+    ) -> Reached {
+        let Start {
+            source,
+            scopes,
+            mentioned,
+        } = start;
         let mut sum = [0_u64; 4];
         let mut count = 0_u64;
         for (name, head) in mentioned {
@@ -962,10 +1112,147 @@ impl<'p> Declarations<'p> {
             }
         }
         walk.clear();
-        digest.update(count.to_le_bytes());
-        for lane in sum {
+        Reached { count, sum }
+    }
+}
+
+/// A text a walk starts from (`Declarations::reached`): the source that
+/// writes it, what each name it writes can name, and those names.
+#[derive(Clone, Copy)]
+struct Start<'s, 'p> {
+    source: source::Id,
+    scopes: &'s Scopes<'p>,
+    mentioned: &'s [(Box<str>, Head)],
+}
+
+/// What one walk reached: how many declarations, and their digests summed
+/// lane by lane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+struct Reached {
+    count: u64,
+    sum: [u64; 4],
+}
+
+impl Reached {
+    /// Write it into `digest`.
+    fn write(self, digest: &mut Sha256) {
+        digest.update(self.count.to_le_bytes());
+        for lane in self.sum {
             digest.update(lane.to_le_bytes());
         }
+    }
+}
+
+/// One interface's walks, each source's by its index: as its lowering and
+/// as its bodies' reveal read the declarations.
+type Walked = crate::Shared<[(Reached, Reached)]>;
+
+/// The walks interfaces made, by what they read (`Declarations::key`), so
+/// an interface of a program whose declarations an earlier one walked
+/// walks none again (#1899). What one compile kept is the next compile's
+/// earlier; what a runner kept on disk is its next runner's first.
+struct Walks {
+    /// The walks this compile's interfaces made or reused.
+    kept: BTreeMap<[u8; 32], Walked>,
+    /// The walks of the compile before it.
+    earlier: BTreeMap<[u8; 32], Walked>,
+    /// Whether `earlier` holds what the disk held.
+    loaded: bool,
+    /// Whether this compile made a walk the disk doesn't hold.
+    made: bool,
+}
+
+/// The file of walks holds each walk's own key (`Walks`).
+const WALKS: [u8; 32] = [0; 32];
+
+impl Walks {
+    const fn new() -> Self {
+        Self {
+            kept: BTreeMap::new(),
+            earlier: BTreeMap::new(),
+            loaded: false,
+            made: false,
+        }
+    }
+
+    /// The walks made at `key`: this compile's, the compile before's, or,
+    /// on the compiler's first, what an earlier runner kept in `disk`.
+    fn find(&mut self, engine: &Engine, disk: Option<&mut Disk>, key: &[u8; 32]) -> Option<Walked> {
+        if let Some(walked) = self.kept.get(key) {
+            return Some(crate::Shared::clone(walked));
+        }
+        if !self.loaded
+            && let Some(disk) = disk
+        {
+            self.loaded = true;
+            let stored = disk.read::<BTreeMap<[u8; 32], Walked>>(engine, Self::entry());
+            for (key, walked) in stored.into_iter().flatten() {
+                self.earlier.entry(key).or_insert(walked);
+            }
+        }
+        let walked = self.earlier.remove(key)?;
+        self.kept.insert(*key, crate::Shared::clone(&walked));
+        Some(walked)
+    }
+
+    /// Keep `walked`, made at `key`.
+    fn keep(&mut self, key: [u8; 32], walked: Walked) {
+        self.kept.insert(key, walked);
+        self.made = true;
+    }
+
+    /// A compile begins: the last one's walks are its earlier.
+    fn begin(&mut self) {
+        if !self.kept.is_empty() {
+            self.earlier = std::mem::take(&mut self.kept);
+        }
+    }
+
+    /// The compile succeeded: `disk` holds its walks, when it made one.
+    fn succeeded(&mut self, engine: &Engine, disk: Option<&mut Disk>) {
+        if let Some(disk) = disk
+            && std::mem::take(&mut self.made)
+        {
+            disk.write(engine, Self::entry(), &self.kept);
+        }
+    }
+
+    const fn entry() -> disk::Entry<'static> {
+        disk::Entry {
+            identity: "",
+            kind: disk::Kind::Walks,
+            key: &WALKS,
+        }
+    }
+}
+
+/// What a compiler's interfaces keep for the next interface: each text's
+/// outline, each item's digest and each set of walks.
+pub(super) struct Remembered {
+    outlined: Outlined,
+    digests: Digests,
+    walks: Walks,
+}
+
+impl Remembered {
+    /// Nothing made yet.
+    pub(super) const fn new() -> Self {
+        Self {
+            outlined: BTreeMap::new(),
+            digests: Digests::new(),
+            walks: Walks::new(),
+        }
+    }
+
+    /// A compile begins: what the one before kept is what it reuses.
+    pub(super) fn begin(&mut self) {
+        self.walks.begin();
+    }
+
+    /// The compile succeeded: `disk`, a runner's, holds what it made for
+    /// the next runner.
+    pub(super) fn succeeded(&mut self, engine: &Engine, disk: Option<&mut Disk>) {
+        self.walks.succeeded(engine, disk);
     }
 }
 
@@ -1893,7 +2180,8 @@ impl std::fmt::Write for Written {
 /// (`item::inert`), where each of them starts, which its positions are
 /// written by, and the names its whole text writes, which reach the
 /// declarations its lowering reads (#1718).
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(super) struct Outline {
     /// What it is the outline of: its text and bodies (`outlines`).
     key: [u8; 32],
@@ -1919,7 +2207,7 @@ pub(super) struct Outline {
 
 /// The path a name is below, as a text writes it (#1886): what the name
 /// can name follows from it (`Names::reach`).
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 enum Head {
     /// Written alone: `State`.
     Bare,
@@ -2191,11 +2479,28 @@ fn inert_attribute(tokens: &[(Token, Position)]) -> Option<usize> {
 
 /// The outlines a compiler wrote, by their texts and bodies: a text or
 /// bodies that didn't change aren't outlined again.
-pub(super) type Outlined = BTreeMap<[u8; 32], Outline>;
+type Outlined = BTreeMap<[u8; 32], Outline>;
+
+/// Which text of a source an outline is of, which names its file on disk.
+#[derive(Clone, Copy)]
+pub(super) enum Text {
+    /// The source's text.
+    Source,
+    /// Its script: its statements outside its items.
+    Script,
+}
 
 /// The outlines of the program's sources and scripts, those `outlined`
-/// keeps reused, and `outlined` then the outlines this program has.
-fn outlines(engine: &Engine, program: &Program, outlined: &mut Outlined) -> Outlines {
+/// keeps reused, and `outlined` then the outlines this program has. An
+/// outline `outlined` doesn't keep is read from `disk`, a runner's, where
+/// an earlier runner kept it at the same key (#1898), or made and kept
+/// there.
+fn outlines(
+    engine: &Engine,
+    program: &Program,
+    outlined: &mut Outlined,
+    mut disk: Option<&mut Disk>,
+) -> Outlines {
     let mut bodies = BTreeMap::<source::Id, Vec<Span>>::new();
     for shell in program.items.iter() {
         if let item::Kind::Function(function) = &shell.kind
@@ -2222,16 +2527,28 @@ fn outlines(engine: &Engine, program: &Program, outlined: &mut Outlined) -> Outl
         spans.dedup();
     }
     let mut earlier = std::mem::take(outlined);
-    let mut outline = |text: &str, spans: &[Span]| {
+    let mut outline = |identity: &str, of: Text, text: &str, spans: &[Span]| {
         let mut written = Written(Sha256::new());
         framed(&mut written.0, text);
         // A span's `Debug` can't fail to write.
         let _ = write!(written, "{spans:?}");
         let key: [u8; 32] = written.0.finalize().into();
+        let entry = disk::Entry {
+            identity,
+            kind: disk::Kind::Text(of),
+            key: &key,
+        };
         let outline = earlier
             .remove(&key)
             .or_else(|| outlined.get(&key).cloned())
-            .unwrap_or_else(|| Outline::new(engine, text, spans, key));
+            .or_else(|| disk.as_deref_mut()?.read::<Outline>(engine, entry))
+            .unwrap_or_else(|| {
+                let outline = Outline::new(engine, text, spans, key);
+                if let Some(disk) = disk.as_deref_mut() {
+                    disk.write(engine, entry, &outline);
+                }
+                outline
+            });
         outlined.insert(key, outline.clone());
         outline
     };
@@ -2240,16 +2557,23 @@ fn outlines(engine: &Engine, program: &Program, outlined: &mut Outlined) -> Outl
         .texts()
         .enumerate()
         .map(|(index, text)| {
-            let spans = bodies
-                .get(&source::Id::from_index(index))
-                .map_or(&[][..], Vec::as_slice);
-            outline(text, spans)
+            let source = source::Id::from_index(index);
+            let spans = bodies.get(&source).map_or(&[][..], Vec::as_slice);
+            outline(
+                program.source.identity_at(source),
+                Text::Source,
+                text,
+                spans,
+            )
         })
         .collect();
     let scripts = program
         .scripts
         .iter()
-        .map(|script| outline(&script.text, &[]))
+        .map(|script| {
+            let identity = program.source.identity_at(script.source);
+            outline(identity, Text::Script, &script.text, &[])
+        })
         .collect();
     Outlines { sources, scripts }
 }
@@ -2263,34 +2587,50 @@ struct Outlines {
 
 #[cfg(test)]
 mod tests {
-    use super::{Digests, Interface, Models, Native, Outlined};
+    use super::{disk, outlines, Disk, Interface, Models, Native, Outline, Outlined, Remembered};
+    use super::{Text, Walked, Walks};
     use crate::program::source;
+    use crate::resolve::Program;
     use crate::Engine;
+    use std::collections::BTreeMap;
 
     const SOURCE: &str = "struct State { title: String }\n\
         impl State { fn title(&self) -> &str { &self.title } }\n\
         fn main() { let state = State { title: String::new() }; state.title(); }\n";
 
-    /// What the root's lowering reads of `text`'s program, its items'
-    /// digests reused from `digests` where they are as they were.
-    fn read(engine: &Engine, text: &str, digests: &mut Digests) -> [u8; 32] {
-        let program =
-            crate::resolve::resolve(engine.parse_unit(text).unwrap(), &engine.host_registry)
-                .unwrap();
+    fn program(engine: &Engine, text: &str) -> Program {
+        crate::resolve::resolve(engine.parse_unit(text).unwrap(), &engine.host_registry).unwrap()
+    }
+
+    /// What each source's lowering reads of `text`'s program, what an
+    /// earlier interface made reused from `remembered`, and from `disk`,
+    /// a runner's, where an earlier runner kept it.
+    fn interface(
+        engine: &Engine,
+        text: &str,
+        remembered: &mut Remembered,
+        disk: Option<&mut Disk>,
+    ) -> Interface {
+        let program = program(engine, text);
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
         let models = Models::new(&program, runtime, engine.host_registry.share(), engine);
         let native = Native::new(&program, &models.host);
-        Interface::new(
-            engine,
-            &program,
-            &models,
-            &mut Outlined::new(),
-            digests,
-            &native,
-        )
-        .unwrap()
-        .of(source::Id::from_index(0))
+        Interface::new(engine, &program, &models, remembered, disk, &native).unwrap()
+    }
+
+    /// What the root's lowering reads of `text`'s program, what an earlier
+    /// interface made reused from `remembered` where it is as it was.
+    fn read(engine: &Engine, text: &str, remembered: &mut Remembered) -> [u8; 32] {
+        interface(engine, text, remembered, None).of(source::Id::from_index(0))
+    }
+
+    /// A runner's files in a directory of their own, for the test `name`.
+    fn disk(name: &str) -> (std::path::PathBuf, Disk) {
+        let directory =
+            std::env::temp_dir().join(format!("rawr-interface-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        (directory.clone(), Disk::new(directory))
     }
 
     /// An item's digest an interface reuses is the one it would write
@@ -2298,14 +2638,91 @@ mod tests {
     #[test]
     fn an_interface_reuses_only_the_digests_of_items_as_they_were() {
         let engine = Engine::new();
-        let mut digests = Digests::new();
-        let first = read(&engine, SOURCE, &mut digests);
-        assert_eq!(read(&engine, SOURCE, &mut digests), first);
+        let mut remembered = Remembered::new();
+        let first = read(&engine, SOURCE, &mut remembered);
+        assert_eq!(read(&engine, SOURCE, &mut remembered), first);
         let changed = SOURCE.replace("title: String }", "title: String, visits: u32 }");
         let changed = changed.replace("String::new() }", "String::new(), visits: 0 }");
-        let after = read(&engine, &changed, &mut digests);
+        let after = read(&engine, &changed, &mut remembered);
         assert_ne!(after, first);
-        assert_eq!(after, read(&engine, &changed, &mut Digests::new()));
-        assert_eq!(read(&engine, SOURCE, &mut digests), first);
+        assert_eq!(after, read(&engine, &changed, &mut Remembered::new()));
+        assert_eq!(read(&engine, SOURCE, &mut remembered), first);
+    }
+
+    /// Each outline a runner's interface lexed is on disk at its key, and
+    /// the outline a respawned runner reads there is the one it would lex
+    /// (#1898).
+    #[test]
+    fn a_runner_reads_each_outline_an_earlier_runner_kept_as_it_lexes_it() {
+        let engine = Engine::new();
+        let (directory, mut disk) = disk("outlines");
+        interface(&engine, SOURCE, &mut Remembered::new(), Some(&mut disk));
+        let program = program(&engine, SOURCE);
+        let lexed = outlines(&engine, &program, &mut Outlined::new(), None);
+        let kept = |identity: &str, of: Text, outline: &Outline, disk: &mut Disk| {
+            let entry = disk::Entry {
+                identity,
+                kind: disk::Kind::Text(of),
+                key: &outline.key,
+            };
+            disk.read::<Outline>(&engine, entry)
+        };
+        for (index, outline) in lexed.sources.iter().enumerate() {
+            let identity = program.source.identity_at(source::Id::from_index(index));
+            assert_eq!(
+                kept(identity, Text::Source, outline, &mut disk).as_ref(),
+                Some(outline),
+                "the runner kept the outline it lexed of the source"
+            );
+        }
+        for (script, outline) in program.scripts.iter().zip(&lexed.scripts) {
+            let identity = program.source.identity_at(script.source);
+            assert_eq!(
+                kept(identity, Text::Script, outline, &mut disk).as_ref(),
+                Some(outline),
+                "the runner kept the outline it lexed of the script"
+            );
+        }
+        let reread = outlines(&engine, &program, &mut Outlined::new(), Some(&mut disk));
+        assert_eq!(reread.sources, lexed.sources);
+        assert_eq!(reread.scripts, lexed.scripts);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The walks a runner's compile made are on disk once it succeeds, and
+    /// the interface a respawned runner writes from them is the one it
+    /// would walk: of the same program, and of a changed one, whose walks
+    /// it makes again (#1899).
+    #[test]
+    fn a_respawned_runner_writes_from_kept_walks_the_interface_it_walks() {
+        let engine = Engine::new();
+        let (directory, mut disk) = disk("walks");
+        let walked = interface(&engine, SOURCE, &mut Remembered::new(), None);
+        let mut exiting = Remembered::new();
+        exiting.begin();
+        assert_eq!(
+            interface(&engine, SOURCE, &mut exiting, Some(&mut disk)),
+            walked
+        );
+        exiting.succeeded(&engine, Some(&mut disk));
+        let stored = disk.read::<BTreeMap<[u8; 32], Walked>>(&engine, Walks::entry());
+        assert_eq!(
+            stored.as_ref(),
+            Some(&exiting.walks.kept),
+            "the exiting runner kept the walks its compile made"
+        );
+        let mut respawned = Remembered::new();
+        respawned.begin();
+        assert_eq!(
+            interface(&engine, SOURCE, &mut respawned, Some(&mut disk)),
+            walked
+        );
+        let changed = SOURCE.replace("title: String }", "title: String, visits: u32 }");
+        let changed = changed.replace("String::new() }", "String::new(), visits: 0 }");
+        assert_eq!(
+            interface(&engine, &changed, &mut Remembered::new(), Some(&mut disk)),
+            interface(&engine, &changed, &mut Remembered::new(), None)
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

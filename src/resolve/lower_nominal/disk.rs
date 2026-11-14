@@ -10,6 +10,12 @@
 //! The outline of the image's own facades (`host::image::Outline`) has one
 //! file too, at the key of its facades' digests, so a respawned runner of
 //! the same image reads it rather than decoding every body again (#1755).
+//!
+//! So do each source's outlines, its text's and its script's, at the key
+//! of the text and its bodies (#1898), and the walks over the
+//! declarations the last compile's interfaces made, each at what it read
+//! (#1899): a respawned runner whose program the exiting runner compiled
+//! lexes no source and walks no declaration again.
 
 use crate::stored::Known;
 use crate::Engine;
@@ -42,6 +48,10 @@ pub(super) enum Kind {
     Readings,
     /// The outline of the image's own facades, one for the runner.
     Outline,
+    /// The outline of a source's text or of its script.
+    Text(super::interface::Text),
+    /// The walks the last compile's interfaces made, one for the runner.
+    Walks,
 }
 
 /// One source's file of one kind, at the key it is made at.
@@ -148,6 +158,9 @@ impl Disk {
             Kind::Part(super::kept::Part::Script) => ".script",
             Kind::Readings => ".readings",
             Kind::Outline => ".outline",
+            Kind::Text(super::interface::Text::Source) => ".text",
+            Kind::Text(super::interface::Text::Script) => ".script-text",
+            Kind::Walks => ".walks",
         });
         self.directory.join(name)
     }

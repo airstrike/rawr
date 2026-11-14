@@ -50,7 +50,7 @@ use super::disk::{self, Disk};
 use super::entry::{Body, Lowered};
 use super::imported::ImplUse;
 use super::interface::{
-    framed, Calls, Digests, Instanced, Instances, Interface, Native, Outlined, Written,
+    framed, Calls, Instanced, Instances, Interface, Native, Remembered, Written,
 };
 use super::models::{Models, Nominal};
 use super::op::ExecutableOp;
@@ -295,11 +295,9 @@ pub(crate) struct Lowerings {
     kept: BTreeMap<(source::Id, Part), Kept>,
     /// Reveal's readings, by their keys.
     scanned: BTreeMap<[u8; 32], Vec<Scanned>>,
-    /// The outlines of the sources the last interface read, by their texts
-    /// and bodies (`outlines`).
-    outlines: Outlined,
-    /// The digests of the items the last interface read (#1878).
-    digests: Digests,
+    /// What the last interfaces made: the outlines of the sources' texts,
+    /// the digests of the items (#1878) and the walks over them.
+    remembered: Remembered,
     /// The digests of the instances the last reveal round read.
     instanced: Instanced,
     /// What the last interface read of the native surface, by how many
@@ -329,8 +327,7 @@ impl Lowerings {
         Self {
             kept: BTreeMap::new(),
             scanned: BTreeMap::new(),
-            outlines: BTreeMap::new(),
-            digests: Digests::new(),
+            remembered: Remembered::new(),
             instanced: Instanced::new(),
             native: None,
             lowered: 0,
@@ -446,7 +443,11 @@ impl<'e> Readings<'e> {
         if !keeps(engine) {
             return None;
         }
-        let earlier = std::mem::take(&mut lock(engine).scanned);
+        let earlier = {
+            let mut lowerings = lock(engine);
+            lowerings.remembered.begin();
+            std::mem::take(&mut lowerings.scanned)
+        };
         Some(Self {
             engine,
             pass: None,
@@ -803,9 +804,10 @@ impl<'e> Session<'e> {
     }
 
     /// The compile succeeded: what the earlier one kept and this one
-    /// didn't reuse is gone.
+    /// didn't reuse is gone, and what its interfaces made is on disk.
     pub(super) fn succeeded(&mut self) {
         self.earlier.clear();
+        store_interfaces(self.engine);
     }
 }
 
@@ -928,10 +930,21 @@ impl<'e> Checks<'e> {
     }
 
     /// The check succeeded: what the earlier one kept and this one didn't
-    /// reuse is gone.
+    /// reuse is gone, and what its interfaces made is on disk.
     pub(super) fn succeeded(&mut self) {
         self.earlier.clear();
+        store_interfaces(self.engine);
     }
+}
+
+/// A compile or a check of `engine` succeeded: its disk, a runner's, holds
+/// what its interfaces made for the next runner (#1899).
+fn store_interfaces(engine: &Engine) {
+    let mut lowerings = lock(engine);
+    let lowerings = &mut *lowerings;
+    lowerings
+        .remembered
+        .succeeded(engine, lowerings.disk.as_mut());
 }
 
 impl Drop for Checks<'_> {
@@ -1008,22 +1021,14 @@ fn lock(engine: &Engine) -> std::sync::MutexGuard<'_, Lowerings> {
 }
 
 /// What each source's lowering reads of `program`; `None` when it can't
-/// be written. The compiler keeps the outlines of its sources' texts, and
-/// what they read of its native surface.
+/// be written. The compiler keeps what its interfaces made, and what they
+/// read of its native surface.
 fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Interface> {
     let registered = Engine::registered_facades();
-    let (mut outlined, mut digests, kept) = {
-        let mut lowerings = lock(engine);
-        let kept = lowerings
-            .native
-            .take()
-            .filter(|(at, native)| *at == registered && native.is_of(&program.own));
-        (
-            std::mem::take(&mut lowerings.outlines),
-            std::mem::replace(&mut lowerings.digests, Digests::new()),
-            kept,
-        )
-    };
+    let kept = lock(engine)
+        .native
+        .take()
+        .filter(|(at, native)| *at == registered && native.is_of(&program.own));
     let native = kept.map_or_else(
         || {
             crate::Shared::new(Native::outlined(program, &models.host, |held| {
@@ -1032,6 +1037,13 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         },
         |(_, native)| native,
     );
+    let (mut remembered, mut disk) = {
+        let mut lowerings = lock(engine);
+        (
+            std::mem::replace(&mut lowerings.remembered, Remembered::new()),
+            lowerings.disk.take(),
+        )
+    };
     // A facade's proof is what every source reads of another crate's
     // facade, and of the program's own, its entries a name reaches.
     let interface = crate::host::facade::Fingerprint::rooted(|| {
@@ -1039,14 +1051,14 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
             engine,
             program,
             models,
-            &mut outlined,
-            &mut digests,
+            &mut remembered,
+            disk.as_mut(),
             &native,
         )
     });
     let mut lowerings = lock(engine);
-    lowerings.outlines = outlined;
-    lowerings.digests = digests;
+    lowerings.remembered = remembered;
+    lowerings.disk = disk;
     lowerings.native = Some((registered, native));
     interface
 }

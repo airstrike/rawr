@@ -111,8 +111,8 @@ fn reads(snapshot: &package::snapshot::Snapshot, file: &str) -> ([u8; 32], [u8; 
         &engine,
         &program,
         &models,
-        &mut super::interface::Outlined::new(),
-        &mut super::interface::Digests::new(),
+        &mut super::interface::Remembered::new(),
+        None,
         &native,
     )
     .unwrap();
