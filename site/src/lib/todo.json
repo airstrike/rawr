@@ -21,7 +21,8 @@
         {"text":"`Option::insert`, `get_or_insert`, `get_or_insert_with` and `get_or_insert_default` give the payload's place, so `*o.get_or_insert_with(f) += 1` works.","issues":[1001]},
         {"text":"`Receiver::try_recv`, `recv_timeout`, `sync_channel`, `thread::scope` and `thread::Builder` run as std's, and a receive's errors are std's own.","issues":[950]},
         {"text":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work.","issues":[1927],"refs":[949]},
-        {"text":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain.","issues":[1928]}
+        {"text":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain.","issues":[1928]},
+        {"text":"A crate function that takes a shared borrow of a tuple holding borrows, as log's `&(&str, &'static str, &Location)`, or a `fn(&T) -> U` pointer is no longer refused as having a higher-ranked lifetime; marked code passes the tuple and a script function as rustc does.","issues":[1559,966]}
       ]
     },
     "releases": [
@@ -3298,7 +3299,7 @@
     {"issue":963,"title":"rawr keeps every runtime it ever built in ~/.cargo/rawr/runtime","state":"closed","category":"Health","release":"0.3.149"},
     {"issue":964,"title":"rawr-cli's extension tests fail under load when stand-in binaries miss the manifest deadline","state":"open","category":"Health"},
     {"issue":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open","category":"Divergences from rustc"},
-    {"issue":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open","category":"Divergences from rustc"},
+    {"issue":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"closed","category":"Divergences from rustc"},
     {"issue":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"closed","category":"Divergences from rustc"},
     {"issue":968,"title":"`async fn` in a program without a Cargo project is unsupported: no core future","state":"closed","category":"Divergences from rustc","release":"0.3.146"},
     {"issue":969,"title":"A panic in a runtime's async main prints \"invocation of symbolic item ... failed: Runtime error:\" instead of Rust's","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
@@ -3891,7 +3892,7 @@
     {"issue":1556,"title":"rawr check doesn't know the types native code instantiates a marked generic fn or type at","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"closed","category":"No glue (D593)","release":"0.3.175"},
     {"issue":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"closed","category":"No glue (D593)","release":"0.3.175"},
-    {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open","category":"No glue (D593)"},
+    {"issue":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"closed","category":"No glue (D593)"},
     {"issue":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open","category":"No glue (D593)"},
     {"issue":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"closed","category":"Divergences from rustc","release":"0.3.176"},
     {"issue":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"closed","category":"No glue (D593)","release":"0.3.175"},
@@ -4940,7 +4941,7 @@
             {"number":936,"title":"A region can't hold a crate's opaque output, whose type Rust code can't name (E0782)","state":"closed"},
             {"number":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"closed"},
             {"number":965,"title":"A slot or member output, or an anchored region's output, of a borrowing opaque type isn't held","state":"open"},
-            {"number":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"open"},
+            {"number":966,"title":"A crate function whose parameter is a `fn(&T) -> U` pointer can't be imported (higher-ranked lifetime), so no script","state":"closed"},
             {"number":967,"title":"A crate type's associated const (`Theme::ALL`, `Look::ALL`) is rejected by the classifier","state":"closed"},
             {"number":1187,"title":"Run opaque iterators and inherent methods' opaque members","state":"closed"},
             {"number":1188,"title":"An iterator whose items are references, as Vec::iter_mut's are","state":"open"},
@@ -5336,7 +5337,7 @@
             {"number":1556,"title":"rawr check doesn't know the types native code instantiates a marked generic fn or type at","state":"closed"},
             {"number":1557,"title":"A marked struct or enum with a lifetime parameter can't cross to native code","state":"closed"},
             {"number":1558,"title":"A marked value lent to native code as &dyn Debug or Display panics","state":"closed"},
-            {"number":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"open"},
+            {"number":1559,"title":"log's __private_api::log is refused: a &(&str, &'static str, &Location) input is read as higher-ranked","state":"closed"},
             {"number":1560,"title":"std::panic::Location in a crate signature, and #[track_caller] through adapters","state":"open"},
             {"number":1561,"title":"format_args! is held as its text, so {:?} of it quotes it","state":"closed"},
             {"number":1562,"title":"A crate fn taking a &'static T of a native type fails the runner build with E0597","state":"closed"},
