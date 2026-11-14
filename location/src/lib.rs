@@ -243,6 +243,27 @@ pub fn rawr_directory_in(target: &Path, project: &Path) -> PathBuf {
     }
 }
 
+/// What tells `project`'s Rawr directory `rawr` ([`rawr_directory_in`])
+/// apart from every other project's in its target directory: its path
+/// under `<target>/rawr`. `None` for a workspace's root package in the
+/// workspace's own target directory, which no other project's shares.
+///
+/// Cargo hashes a path package by its path under its workspace root, and
+/// each project's runner roots a workspace of its own laid out alike, so
+/// this is what keeps their units apart (#1984).
+#[must_use]
+pub fn shared_path(rawr: &Path, project: &Path) -> Option<PathBuf> {
+    let member = member_path(project);
+    let keyed = Path::new(PROJECTS)
+        .join(project_key(&physical(&workspace_root(project))))
+        .join(member.as_deref().unwrap_or(Path::new("")));
+    if rawr.ends_with(&keyed) {
+        Some(keyed)
+    } else {
+        member
+    }
+}
+
 /// The directory under `<target>/rawr` that holds each workspace's products
 /// when the target directory is not the workspace's own.
 pub const PROJECTS: &str = "projects";
@@ -375,7 +396,8 @@ pub fn workspace_root(project: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_directory, member_path, package, rawr_directory, resolved, target_directory,
+        build_directory, member_path, package, rawr_directory, resolved, shared_path,
+        target_directory,
     };
     use std::fs;
     use std::path::Path;
@@ -468,12 +490,18 @@ mod tests {
         }
         // The same project spelled through `..` keeps the same directory.
         assert_eq!(rawr_directory(&root.join("two/../one"), none, None), one);
+        // #1984: each names its directory apart from the other's.
+        let shared = |directory: &Path, name: &str| {
+            shared_path(directory, &root.join(name))
+                .map(|path| root.join("_target/rawr").join(path))
+        };
+        assert_eq!(shared(&one, "one").as_ref(), Some(&one));
+        assert_eq!(shared(&two, "two").as_ref(), Some(&two));
         // A project's own `target` stays as it was.
         let environment = |key: &str| (key == "CARGO_TARGET_DIR").then_some("target");
-        assert_eq!(
-            rawr_directory(&root.join("one"), environment, None),
-            root.join("one/target/rawr")
-        );
+        let own = rawr_directory(&root.join("one"), environment, None);
+        assert_eq!(own, root.join("one/target/rawr"));
+        assert_eq!(shared_path(&own, &root.join("one")), None);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -497,6 +525,13 @@ mod tests {
         assert_eq!(
             rawr_directory(&root.join("examples/game"), none, None),
             root.join("target/rawr/members/examples/game")
+        );
+        assert_eq!(
+            shared_path(
+                &root.join("target/rawr/members/examples/game"),
+                &root.join("examples/game")
+            ),
+            Some(Path::new("examples/game").to_path_buf())
         );
         assert_eq!(member_path(&root), None);
         assert_eq!(
