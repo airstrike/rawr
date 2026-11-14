@@ -9,6 +9,14 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema. (#1885)
 - A save to a marked file of an idle windowed program on macOS is applied at once on its main thread, with no input, and code its frames call shows on the next redraw. (#1889)
 - A restart no longer names rawr's own generated files, such as the store's Cargo.lock, as the change that caused it, and rawr never watches them. (#1890)
+- A marked call whose argument a crate's `impl Into<T>` can't take, such as `.spacing("zero")`, fails at once with rustc's E0277 at the argument instead of minutes later in rawr's generated code; generated crates no longer warn about build metadata in their pinned versions. (#1891)
+- After a save whose native build failed, a save back to what the running program was built from swaps in place, with no new native build and no restart. (#1892)
+- Assigning a field of a native field that isn't Copy, as `theme.colors.accent = theme.colors.error`, changes it in place, as rustc does. (#1893)
+- Calling a method on a Copy field through a native field path, as `theme.colors.error.clone()`, no longer moves the path; a later `theme.colors.clone()` checks as rustc checks it. (#1894)
+- A native struct literal with `..base` runs its fields in source order before the base's borrow, as `Colors { accent: theme.colors.error.clone(), ..theme.colors.clone() }`. (#1895)
+- A save whose first `.into()` needs a crate's From impl, as `text(..).into()` into an Element, prepares again with it instead of failing with an unknown member. (#1896)
+- An app that keeps its view, as iced does, can show a save of view-only code at once: the new `rawr-hot` crate tells the app each save it takes, and `Subscription::run(rawr_hot::generations).map(|_| Message::Reloaded)` turns that into a message. Under cargo it never fires. (#1903)
+- A path dependency whose manifest names a file above its own folder, as a workspace member's `readme = "../README.md"`, no longer stops `rawr run` with an internal error. (#1904)
 
 ## 0.3.212 (2026-11-13)
 

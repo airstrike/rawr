@@ -8,7 +8,15 @@
       {"text":"A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees.","issues":[1897],"refs":[1755]},
       {"text":"A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema.","issues":[1885]},
       {"text":"A save to a marked file of an idle windowed program on macOS is applied at once on its main thread, with no input, and code its frames call shows on the next redraw.","issues":[1889]},
-      {"text":"A restart no longer names rawr's own generated files, such as the store's Cargo.lock, as the change that caused it, and rawr never watches them.","issues":[1890]}
+      {"text":"A restart no longer names rawr's own generated files, such as the store's Cargo.lock, as the change that caused it, and rawr never watches them.","issues":[1890]},
+      {"text":"A marked call whose argument a crate's `impl Into<T>` can't take, such as `.spacing(\"zero\")`, fails at once with rustc's E0277 at the argument instead of minutes later in rawr's generated code; generated crates no longer warn about build metadata in their pinned versions.","issues":[1891]},
+      {"text":"After a save whose native build failed, a save back to what the running program was built from swaps in place, with no new native build and no restart.","issues":[1892]},
+      {"text":"Assigning a field of a native field that isn't Copy, as `theme.colors.accent = theme.colors.error`, changes it in place, as rustc does.","issues":[1893]},
+      {"text":"Calling a method on a Copy field through a native field path, as `theme.colors.error.clone()`, no longer moves the path; a later `theme.colors.clone()` checks as rustc checks it.","issues":[1894]},
+      {"text":"A native struct literal with `..base` runs its fields in source order before the base's borrow, as `Colors { accent: theme.colors.error.clone(), ..theme.colors.clone() }`.","issues":[1895]},
+      {"text":"A save whose first `.into()` needs a crate's From impl, as `text(..).into()` into an Element, prepares again with it instead of failing with an unknown member.","issues":[1896]},
+      {"text":"An app that keeps its view, as iced does, can show a save of view-only code at once: the new `rawr-hot` crate tells the app each save it takes, and `Subscription::run(rawr_hot::generations).map(|_| Message::Reloaded)` turns that into a message. Under cargo it never fires.","issues":[1903]},
+      {"text":"A path dependency whose manifest names a file above its own folder, as a workspace member's `readme = \"../README.md\"`, no longer stops `rawr run` with an internal error.","issues":[1904]}
     ]
   },
   "releases": [
