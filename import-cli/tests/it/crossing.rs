@@ -47,7 +47,7 @@ fn printed(variant: Option<&str>) -> String {
 /// `rawr-import run` on the project at `root`, as `printed` gives it.
 fn printed_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -372,7 +372,7 @@ fn both_printed_in(root: &std::path::Path, presses: &str, flags: &[&str]) -> (St
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let mut rawr = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+    let mut rawr = crate::support::rawr_import();
     rawr.arg("run")
         .arg(root)
         .args(flags)
@@ -2744,7 +2744,7 @@ fn checked(variant: &str) -> String {
 fn passes_check(variant: &str) {
     let root = lane(Some(variant));
     let directory = crate::support::scratch();
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -2783,7 +2783,7 @@ fn rejected_as_cargo(variant: &str, code: &str) -> String {
 /// `rawr-import check` of the project at `root`, as `checked` gives it.
 fn checked_in(root: &std::path::Path) -> String {
     let directory = crate::support::scratch();
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))

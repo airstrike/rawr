@@ -8,7 +8,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 /// A program with one path dependency: the least a runner links rawr's
@@ -54,7 +53,7 @@ fn warm(root: &Path, home: &Path) {
             fs::write(&path, text).unwrap();
         }
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let output = crate::support::rawr_import()
         .arg("run")
         .arg(root)
         .env("RAWR_HOME", home)

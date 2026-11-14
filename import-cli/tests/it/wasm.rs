@@ -5,7 +5,7 @@
 //! Build the driver first, as for `plain`.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use crate::support::Fixture;
 
@@ -18,7 +18,7 @@ fn text(bytes: &[u8]) -> String {
 
 /// `rawr-import check` in the package at `root`.
 fn check(root: &Path, home: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    crate::support::rawr_import()
         .arg("check")
         .current_dir(root)
         .env("RAWR_HOME", home)

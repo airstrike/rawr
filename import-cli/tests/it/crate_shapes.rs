@@ -35,7 +35,7 @@ fn lane_runs_as_cargo_does(root: &std::path::Path, expected: &str) {
     assert_eq!(text(&native.stdout), expected);
 
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -407,7 +407,7 @@ fn a_formats_borrow_lasts_as_long_as_its_output() {
     let program = "// rawr\nuse natives::lifetimes::Clock;\n\nfn main() {\n    let clock = Clock::new(9, 5);\n    let mut format = String::from(\"%H\");\n    println!(\"start\");\n    let shown = clock.strftime(&format);\n    format.push_str(\"x\");\n    println!(\"{shown}\");\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -475,7 +475,7 @@ fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
     let program = "// rawr\n\nfn main() {\n    let _ = opener::number_of(opener::read_in_background(1));\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
     let directory = crate::support::scratch();
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -556,7 +556,7 @@ fn a_forwarding_impls_parameters_are_its_own() {
     let program = SHAPES.read("mains/forwarding.rs");
     let root = SHAPES.lease(&[("src/main.rs", &program)]);
     let directory = crate::support::scratch();
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -651,7 +651,7 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
                    println!(\"{}\", row.draw());\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
     let directory = crate::support::scratch();
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -678,7 +678,7 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
                    let composed = natives::badge::composed(Slot::from(\"x\"));\n    \
                    let slot = Slot::from(composed);\n    println!(\"{}\", slot.label());\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -769,7 +769,7 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
 
     let directory = crate::support::scratch();
     let out = directory.join("universe");
-    let built = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let built = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))

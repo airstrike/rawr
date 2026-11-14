@@ -17,7 +17,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 /// The most slots of one fixture: a test that waits for one holds a test
@@ -135,7 +135,7 @@ impl Started {
             .join("tests/fixtures")
             .join(self.name);
         crate::support::copy(&source, root);
-        let mut run = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+        let mut run = crate::support::rawr_import();
         run.arg("run")
             .arg(root)
             .stdin(Stdio::null())
