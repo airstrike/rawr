@@ -181,6 +181,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_match(&mut self, match_span: Span) -> Result<ParsedExpr, Error> {
         let dereferenced = matches!(self.peek(), Token::Multiply);
+        let framed = self.frames.last().map_or(0, Vec::len);
         let (subject, matched) = self.parse_subject()?;
         // Matching through `&T` matches the referenced value.
         let subject_ty = self.referenced(&subject.ty);
@@ -194,7 +195,8 @@ impl<'a> Parser<'a> {
             .host_variants(&subject_ty)
             .or_else(|| self.host_value_variants(&subject_ty))
         {
-            return self.parse_host_match(subject, matched, subject_ty, variants, match_span);
+            return self
+                .parse_host_match(subject, matched, subject_ty, variants, match_span, framed);
         }
         let subject_span = subject.span;
         let scrutinee_span = self.scrutinee_span(&subject);
@@ -1172,6 +1174,7 @@ impl<'a> Parser<'a> {
         subject_ty: Ty,
         variants: Vec<ImmutableString>,
         match_span: Span,
+        framed: usize,
     ) -> Result<ParsedExpr, Error> {
         let Ty::Host { proof, .. } = &subject_ty else {
             unreachable!("host matches are selected for host types");
@@ -1304,9 +1307,12 @@ impl<'a> Parser<'a> {
                 .map(|(_, _, action)| &mut action.value)
                 .collect::<Vec<_>>(),
         )?;
+        let frames = self.subject_frames(framed, &subject, &arms);
         let mut source = origin::Fragment::plain(format!("{{\nlet {temporary} = "));
         source.push(subject.rendered_source());
         source.push_text(";\n");
+        let arm = self.temporary("arm");
+        let mut deferred = Vec::new();
         let count = arms.len();
         for (index, (condition, binds, action)) in arms.into_iter().enumerate() {
             if index + 1 == count {
@@ -1316,12 +1322,76 @@ impl<'a> Parser<'a> {
                 source.push(condition);
                 source.push_text(" { ");
             }
-            source.push(binds);
-            source.push(action.value.rendered_block());
+            if frames.is_empty() || !binds.is_empty() {
+                source.push(binds);
+                source.push(action.value.rendered_block());
+            } else {
+                source.push_text(format!("{arm} = {}; ()", deferred.len() + 1));
+                deferred.push(action.value.rendered_block());
+            }
             source.push_text(if index + 1 == count { " }" } else { " } else " });
         }
         source.push_text("\n}");
+        if !frames.is_empty() {
+            source = self.deferred_arms(frames, source, &arm, deferred);
+        }
         Ok(self.operator_expr(source, output, span(match_span.start(), end)))
+    }
+
+    /// The scope frames the subject of a match opened, from the `framed`th
+    /// of its statement's on, taken to end with the match's tests, when an
+    /// arm binds nothing of the subject: rustc ends the subject's borrow
+    /// where no arm left to run uses it, so such an arm runs after the
+    /// frames end, and may move or change what they lent, as text_editor's
+    /// `key_binding` closure's `_ => Binding::from_key_press(key_press)`
+    /// moves the press it matched `key_press.key.as_ref()` of (#2005).
+    /// None when every arm binds, or when the subject or a frame's value
+    /// uses what it borrows when it drops, which Rust drops after the arm.
+    fn subject_frames(
+        &mut self,
+        framed: usize,
+        subject: &ParsedExpr,
+        arms: &[(origin::Fragment, origin::Fragment, Branch)],
+    ) -> Vec<Frame> {
+        if arms.iter().all(|(_, binds, _)| !binds.is_empty())
+            || self.drop_use(&subject.ty) != drops::DropUse::None
+        {
+            return Vec::new();
+        }
+        let Some(frames) = self
+            .frames
+            .last_mut()
+            .filter(|frames| frames.len() > framed)
+        else {
+            return Vec::new();
+        };
+        if frames[framed..].iter().any(|frame| frame.drops) {
+            return Vec::new();
+        }
+        frames.split_off(framed)
+    }
+
+    /// `tests`, a match whose arms that bind nothing set `arm` to their
+    /// number instead of running, inside `frames`, and then the deferred
+    /// arm it chose, or else the value of the arm that ran.
+    fn deferred_arms(
+        &mut self,
+        frames: Vec<Frame>,
+        tests: origin::Fragment,
+        arm: &str,
+        deferred: Vec<origin::Fragment>,
+    ) -> origin::Fragment {
+        let value = self.temporary("tested");
+        let mut source = origin::Fragment::plain(format!("{{\nlet {arm} = 0;\nlet {value} = "));
+        source.push(self.framed(frames, tests));
+        source.push_text(";\n");
+        for (index, body) in deferred.into_iter().enumerate() {
+            source.push_text(format!("if {arm} == {} ", index + 1));
+            source.push(body);
+            source.push_text(" else ");
+        }
+        source.push_text(format!("{{ {value} }}\n}}"));
+        source
     }
 
     /// The test a pattern on a scalar subject held in `temporary` makes:

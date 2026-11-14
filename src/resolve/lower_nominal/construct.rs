@@ -525,7 +525,11 @@ impl<'a> Parser<'a> {
                 // The element moves into its binding, as into the array.
                 self.move_local(element)?;
                 let name = self.temporary("element");
-                let mut frame = Frame::default();
+                // An element is a value of its own, which may drop.
+                let mut frame = Frame {
+                    drops: true,
+                    ..Frame::default()
+                };
                 frame.inner.push_text(format!("let {name} = "));
                 frame.inner.push(element.rendered_source());
                 frame.inner.push_text("; ");

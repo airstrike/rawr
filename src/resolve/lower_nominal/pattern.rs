@@ -427,10 +427,6 @@ pub(super) struct HostPart {
     /// bindings read copies instead.
     pub(super) escaping: Option<origin::Fragment>,
     /// Whether reading the part moves the fields out of the value.
-    #[cfg_attr(
-        not(feature = "rust-import"),
-        expect(dead_code, reason = "only imported variants have parts")
-    )]
     pub(super) moves: bool,
     /// Whether reading the part lends the fields mutably.
     #[cfg_attr(
@@ -578,7 +574,7 @@ impl Host {
     /// the part has none.
     pub(super) fn rendered(&self, reading: HostReading) -> origin::Fragment {
         let mut source = origin::Fragment::default();
-        let mut bind = |name: &str, value: &origin::Fragment| {
+        let bind = |source: &mut origin::Fragment, name: &str, value: &origin::Fragment| {
             source.push_text(format!("let {name} = "));
             source.push(value.clone());
             source.push_text("; ");
@@ -588,17 +584,34 @@ impl Host {
                 HostStep::Part(index) => {
                     let part = &self.parts[index];
                     if let Some(reader) = part.reader(reading) {
-                        bind(&part.name, reader);
+                        bind(&mut source, &part.name, reader);
                     }
                 }
                 HostStep::Bind(index) => {
-                    let value = self
-                        .readers
-                        .iter()
-                        .find(|(reader, ..)| *reader == index)
-                        .filter(|(_, part, _)| self.parts[*part].reader(reading).is_none())
-                        .map_or(&self.values[index], |(.., copy)| copy);
-                    bind(&self.binds[index].name, value);
+                    let reader = self.readers.iter().find(|(reader, ..)| *reader == index);
+                    let part = reader
+                        .map(|(_, part, _)| &self.parts[*part])
+                        .filter(|part| part.reader(reading).is_some());
+                    let value = match reader {
+                        Some((.., copy)) if part.is_none() => copy,
+                        _ => &self.values[index],
+                    };
+                    bind(&mut source, &self.binds[index].name, value);
+                    // A field moved out of a part is its binding's alone:
+                    // the part keeps no copy, so a move of the binding
+                    // moves the value, as `queue.present(frame)` moves the
+                    // `SurfaceTexture` a `Success(frame)` arm bound (#2000).
+                    // A second copy made that move a clone, and the
+                    // original dropped.
+                    if let Some(part) = part
+                        && part.moves
+                        && part
+                            .reader(reading)
+                            .is_some_and(|read| read.as_str() == part.reader.as_str())
+                    {
+                        source.push(value.clone());
+                        source.push_text(" = (); ");
+                    }
                 }
             }
         }

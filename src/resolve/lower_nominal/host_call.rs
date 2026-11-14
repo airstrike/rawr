@@ -2555,7 +2555,10 @@ impl<'a> Parser<'a> {
             }
         }
         let made = self.temporary("frame");
-        let mut frame = Frame::default();
+        let mut frame = Frame {
+            drops: self.drop_use(&value.ty) != drops::DropUse::None,
+            ..Frame::default()
+        };
         let bound = if places.is_empty() {
             frame.inner.push_text(format!("let {made} = "));
             frame.inner.push(value.rendered_source());

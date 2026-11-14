@@ -128,6 +128,29 @@ impl<'a> Parser<'a> {
         self.settle_parses()
     }
 
+    /// `value`, a `let`'s, run inside the scope frames its calls opened
+    /// when it borrows nothing they lend, as `frame.texture.create_view(..)`
+    /// gives a `TextureView` that keeps no borrow of `frame`: rustc ends the
+    /// temporary borrows at the end of the `let`, so the frames end with
+    /// the value, and the rest of the block may move or change what they
+    /// lent (#2000). A value that borrows them keeps the frames open for
+    /// the rest of the block, as `statement_frames` binds them.
+    fn frame_value(&mut self, value: &mut ParsedExpr) {
+        let borrows_nothing = !self.may_hold_borrow(&value.ty)
+            || self.flow().origins(value.span).is_some_and(<[_]>::is_empty);
+        if !borrows_nothing || matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) {
+            return;
+        }
+        let Some(frames) = self.frames.last_mut().filter(|frames| !frames.is_empty()) else {
+            return;
+        };
+        let frames = std::mem::take(frames);
+        let rendered = value.rendered_source();
+        value.source = self.framed(frames, rendered);
+        value.prelude = origin::Fragment::default();
+        value.lvalue = None;
+    }
+
     /// The statement `rendered` with the field maps its `entry` calls
     /// changed (`field_entries` after `pending`) copied out before it and
     /// stored back after it.
@@ -273,6 +296,7 @@ impl<'a> Parser<'a> {
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        self.frame_value(&mut value);
         // `let mut it = v.iter_mut();`: each `it.next()` lends the next
         // element of `v`.
         match self.pending_iter_mut.take() {
