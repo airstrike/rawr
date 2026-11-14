@@ -30,7 +30,7 @@ fn text(bytes: &[u8]) -> String {
 }
 
 fn rawr_import(command: &str, root: &Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    crate::support::rawr_import()
         .arg(command)
         .arg(root)
         .env("RAWR_HOME", crate::support::runtime_home())

@@ -943,7 +943,7 @@ fn a_marked_module_names_the_items_of_a_native_module() {
         String::from_utf8_lossy(&native.stdout),
         format!("{}\n", PRINTED.join("\n"))
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1037,7 +1037,7 @@ fn a_marked_module_names_crate_aliases_through_a_used_module() {
         String::from_utf8_lossy(&native.stdout),
         format!("{}\n", PRINTED.join("\n"))
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1099,7 +1099,7 @@ fn a_marked_module_below_native_modules_runs_and_swaps_a_body_edit() {
         String::from_utf8_lossy(&native.stdout),
         format!("{}\n", PRINTED.join("\n"))
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1179,7 +1179,7 @@ fn a_native_root_s_modules_load_as_cargo_configures_them_for_the_target() {
         String::from_utf8_lossy(&native.stdout),
         format!("{}\n", printed.join("\n"))
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1267,7 +1267,7 @@ fn a_marked_type_becomes_a_native_trait_object() {
         printed.contains("held true\nheld true\nheld true\nheld true\nname 99 true home\n"),
         "{printed}"
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1301,7 +1301,7 @@ fn a_marked_type_becomes_a_native_trait_object() {
     );
     let mut cargo = std::process::Command::new("cargo");
     cargo.arg("check").current_dir(&root);
-    let mut rawr = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+    let mut rawr = crate::support::rawr_import();
     rawr.arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home());
@@ -1536,7 +1536,7 @@ fn a_held_struct_s_handle_is_send_as_its_fields_are() {
                 cargo
             }
             _ => {
-                let mut rawr = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+                let mut rawr = crate::support::rawr_import();
                 rawr.arg("check")
                     .arg(&root)
                     .env("RAWR_HOME", crate::support::runtime_home());
@@ -1587,7 +1587,7 @@ fn a_native_child_that_starts_reading_a_held_struct_s_field_checks_with_its_real
     const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
     let root = crate::support::fresh("islands-held-child");
     copy(Path::new(HELD), &root);
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1924,7 +1924,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
     // A check from no kept state passes, and the run after it prints the
     // same (#446, #1618).
     let _ = fs::remove_dir_all(root.join("target/rawr"));
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -1951,7 +1951,7 @@ fn a_marked_theme_over_a_native_theme_converts_and_implements_crate_traits() {
 fn another_rawr_build_checks_and_keeps_the_instance_record_as_its_own() {
     let root = THEME.project();
     let check = |host: &str| {
-        let checked = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        let checked = crate::support::rawr_import()
             .arg("check")
             .arg(&root)
             .env("RAWR_HOME", crate::support::runtime_home())
@@ -2018,7 +2018,7 @@ fn a_second_run_of_an_unchanged_project_rebuilds_nothing() {
         .filter(|line| !line.starts_with("stderr: "))
         .fold(String::new(), |text, line| text + line.as_str() + "\n");
     let built = modified(&root.join("target"));
-    let second = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let second = crate::support::rawr_import()
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -2077,7 +2077,7 @@ fn a_save_that_dropped_a_native_use_swaps_and_the_next_start_runs() {
     run.wait();
 
     // The next start, which ends at once.
-    let second = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let second = crate::support::rawr_import()
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3005,7 +3005,7 @@ fn a_marked_module_reads_a_native_crate_s_static_text_and_slice_constants() {
         ),
         "{printed}"
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3037,7 +3037,7 @@ fn a_marked_module_reads_a_native_crate_s_static_text_and_slice_constants() {
     let mut text = fs::read_to_string(&theme).unwrap();
     text.push_str("\npub fn pair() -> u8 {\n    fonts::PAIR.0\n}\n");
     fs::write(&theme, text).unwrap();
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3101,7 +3101,7 @@ fn a_marked_static_of_native_blocks_is_read_by_native_code() {
         ),
         "{printed}"
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3166,7 +3166,7 @@ fn a_local_borrowed_where_native_code_takes_static_does_not_live_long_enough() {
             .expect("the added function holds the borrow")
             + 1;
         let at = format!("badge.rs:{line}:{column}");
-        let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        let check = crate::support::rawr_import()
             .arg("check")
             .arg(&root)
             .env("RAWR_HOME", crate::support::runtime_home())
@@ -3223,7 +3223,7 @@ fn an_unused_import_of_a_native_module_is_no_error() {
         "{}",
         String::from_utf8_lossy(&native.stderr)
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3258,7 +3258,7 @@ fn a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_alone() {
     );
     let root = crate::support::fresh("islands-supertrait");
     copy(Path::new(SUPERTRAIT), &root);
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3291,7 +3291,7 @@ fn a_run_of_a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_a
     );
     let root = crate::support::fresh("islands-supertrait-run");
     copy(Path::new(SUPERTRAIT), &root);
-    let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3369,7 +3369,7 @@ fn a_marked_argument_that_misses_a_crate_bound_fails_its_check_at_the_marked_lin
     });
     run.child.kill().unwrap();
     run.wait();
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3575,7 +3575,7 @@ fn a_workspace_whose_member_build_script_watches_its_whole_package_runs_and_repl
         String::from_utf8_lossy(&native.stdout).into_owned()
     };
     let rawr = || {
-        let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        let run = crate::support::rawr_import()
             .arg("run")
             .arg(&root)
             .env("RAWR_HOME", crate::support::runtime_home())
@@ -3705,7 +3705,7 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
             ),
         "{printed}"
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3728,7 +3728,7 @@ fn a_native_workspace_keeps_a_marked_state_and_polls_its_tasks() {
         "        Message::Wizard(wizard::Message::Step(step)) => {\n            state.count += step;\n            common::Action::none()\n        }\n",
         "",
     );
-    let refused = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let refused = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3869,7 +3869,7 @@ fn a_native_main_gives_marked_functions_any_value_of_an_impl_trait() {
         ),
         "{printed}"
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -3998,7 +3998,7 @@ fn a_marked_home_screen_with_inboard_s_shapes_runs_as_cargo_runs_it() {
             && printed.contains("Some(Commit { target: Replace(2), infolet: Infolet"),
         "{printed}"
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -4041,7 +4041,7 @@ fn cargo_prints(root: &Path) -> String {
 /// `rawr check` of the project at `root`, which must pass, and its `rawr
 /// run`, which must print `printed`, line by line.
 fn checks_and_prints(root: &Path, printed: &str) {
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -4170,7 +4170,7 @@ fn cargo_builds(root: &Path) {
 
 /// `rawr-import run root`, which succeeds.
 fn runs(root: &Path) {
-    let run = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(root)
         .env("RAWR_HOME", crate::support::runtime_home())
@@ -4320,7 +4320,7 @@ fn a_native_field_path_read_after_its_field_moved_is_cargo_s_e0382() {
         "        let base = theme.colors.clone();\n",
         "        let base = theme.colors;\n        let _error = theme.colors.error;\n",
     );
-    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&root)
         .env("RAWR_HOME", crate::support::runtime_home())

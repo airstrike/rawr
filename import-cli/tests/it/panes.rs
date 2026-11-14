@@ -43,7 +43,7 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
     );
 
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -78,7 +78,7 @@ fn a_lent_str_keeps_its_value_borrowed() {
     )
     .unwrap();
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))

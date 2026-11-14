@@ -24,6 +24,20 @@ pub use started::Started;
 
 use events::{Events, News};
 
+/// The opt-level the suite compiles rawr's runtime at. The suite checks
+/// what runs, never how fast, and timing is the benchmarks' job, so its
+/// runtime builds at the cheapest level. Installed and user builds keep
+/// theirs.
+const RUNTIME_OPT_LEVEL: &str = "0";
+
+/// `rawr-import`, as the suite runs it: with rawr's runtime at the suite's
+/// opt-level, which every run must agree on to share the suite's runtime.
+pub fn rawr_import() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+    command.env("RAWR_RUNTIME_OPT_LEVEL", RUNTIME_OPT_LEVEL);
+    command
+}
+
 /// How often a wait looks at the run's events and whether it exited. A
 /// look that finds neither looks again: no wait has a deadline.
 const LOOK: Duration = Duration::from_millis(50);
@@ -270,7 +284,7 @@ pub fn start_with(
     arguments: &[&str],
     stdin: Stdio,
 ) -> Run {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
+    let mut child = crate::support::rawr_import();
     child
         .arg("run")
         .arg(root)

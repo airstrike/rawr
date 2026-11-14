@@ -16,7 +16,7 @@ fn text(bytes: &[u8]) -> String {
 
 /// `rawr-import` with `arguments` in the package at `root`.
 fn rawr(root: &Path, home: &Path, arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    crate::support::rawr_import()
         .args(arguments)
         .current_dir(root)
         .env("RAWR_HOME", home)

@@ -13,7 +13,11 @@
 //! commit and host target, the runtime's manifest with its features and
 //! profile, the opt-level setting, and the hashing seed rawr's build script
 //! reads. A key that misses compiles a new entry, so a runner never links a
-//! copy compiled for another key. Entries go by last use (D608.7).
+//! copy compiled for another key. Entries go by last use (D608.7). An entry
+//! holds only copies of the libraries a runner links: every entry whose key
+//! agrees but for rawr's sources compiles in one shared cargo build
+//! directory (`build`), so a new build of rawr recompiles only the crates
+//! whose sources changed (#1983).
 //!
 //! A project that can't link the shared copy compiles rawr in its own build
 //! directory, as before, and says why:
@@ -27,7 +31,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
-use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
@@ -38,10 +41,13 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::cargo::config::INTERNAL_ALIAS;
 use crate::node;
 
+mod build;
 mod native;
+mod source;
 pub(crate) mod users;
 
-const DOMAIN: &[u8] = b"rawr.runtime/v1";
+/// What an entry's key covers: its build's base key and the host's digest.
+const DOMAIN: &[u8] = b"rawr.runtime/v2";
 /// The runtime's own package, which only depends on `rawr`.
 const PACKAGE: &str = "rawr-runtime";
 /// The generated runner's package in its lockfile.
@@ -217,61 +223,28 @@ fn shared(
     toolchain: &Toolchain,
     environment: &crate::cargo::config::Environment,
 ) -> Result<(Runtime, bool), node::Error> {
-    let transform = |reason: String| node::Error::Transform(reason.into_boxed_str());
-    let level = opt_level(environment).map_err(transform)?;
-    let wrapper = wrapper_manifest(root, dependency, &level);
-    let source_lock = fs::read(root.join("Cargo.lock")).map_err(|source| node::Error::Io {
-        operation: "read the lockfile of rawr's runtime",
-        path: root.join("Cargo.lock"),
-        source,
-    })?;
-    let development = crate::host::DIGEST == [0; 32];
-    let mut key = Sha256::new();
-    for part in [
-        DOMAIN,
-        &crate::host::DIGEST,
-        // A development build has no source digest: its checkout names it,
-        // and cargo decides what is fresh there.
-        if development {
-            root.as_os_str().as_encoded_bytes()
-        } else {
-            b""
-        },
-        &Sha256::digest(&source_lock),
-        toolchain.version.as_bytes(),
-        wrapper.as_bytes(),
-    ] {
-        key.update((part.len() as u64).to_le_bytes());
-        key.update(part);
-    }
-    // rawr's build script bakes this seed into the crate.
-    for name in ["RAWR_HASHING_SEED", "RAWR_AHASH_SEED"] {
-        let value = environment
-            .entries()
-            .find_map(|(key, value)| (key == name).then_some(value))
-            .unwrap_or_default();
-        key.update((value.len() as u64).to_le_bytes());
-        key.update(value.as_bytes());
-    }
-    let key = hex(&key.finalize());
-    let runtimes = runtimes()?;
-    let entry = runtimes.join(&key[..16]);
-    let (runtime, compiled) = ensure(
-        &entry,
-        &key,
-        &wrapper,
-        &source_lock,
+    let build = build::Build::plan(
+        root,
+        dependency,
         toolchain,
         environment,
-        development,
+        &crate::host::DIGEST,
     )?;
+    let key = build.entry_key(&crate::host::DIGEST);
+    let runtimes = runtimes()?;
+    let entry = runtimes.join(&key[..16]);
+    let (runtime, compiled) = ensure(&entry, &key, &build, toolchain, environment)?;
     // A new entry is what replaces older ones, so cleanup runs when one is
     // compiled, never on a build that reuses one.
     if compiled {
         let keep = entry.clone();
+        let directory = build.directory().to_path_buf();
         let _ = std::thread::Builder::new()
             .name("rawr-runtime-cleanup".into())
-            .spawn(move || prune(&runtimes, &[keep.as_path()], RECENT));
+            .spawn(move || {
+                prune(&runtimes, &[keep.as_path()], RECENT);
+                build::prune(&runtimes, &[directory.as_path()]);
+            });
     }
     Ok((runtime, compiled))
 }
@@ -897,16 +870,14 @@ fn runtimes() -> Result<PathBuf, node::Error> {
     Ok(crate::store::runtime_home(&cargo_home).join("runtime"))
 }
 
-/// The entry for `key`, compiled first when it has none, and leased, with
-/// whether this call compiled it new.
+/// The entry for `key`, compiled by `build` first when it has none, and
+/// leased, with whether this call compiled it new.
 fn ensure(
     entry: &Path,
     key: &str,
-    wrapper: &str,
-    source_lock: &[u8],
+    build: &build::Build,
     toolchain: &Toolchain,
     environment: &crate::cargo::config::Environment,
-    development: bool,
 ) -> Result<(Runtime, bool), node::Error> {
     let io = |operation: &'static str, path: &Path| {
         let path = path.to_path_buf();
@@ -939,8 +910,8 @@ fn ensure(
     let lib = entry.join("lib");
     let built = fs::read_to_string(&stamp).is_ok_and(|text| text.trim() == key)
         && fs::read_to_string(entry.join("native")).is_ok();
-    if development || !built {
-        compile(entry, key, wrapper, source_lock, toolchain, environment)?;
+    if build.reads_checkout() || !built {
+        build.compile(entry, key, toolchain, environment)?;
     }
     if let Ok(executable) = std::env::current_exe() {
         users::Users::of(entry).enroll(&executable);
@@ -968,225 +939,6 @@ fn ensure(
     ))
 }
 
-/// Compile the runtime in `entry` with the project's toolchain and publish
-/// its libraries in `entry/lib`.
-fn compile(
-    entry: &Path,
-    key: &str,
-    wrapper: &str,
-    source_lock: &[u8],
-    toolchain: &Toolchain,
-    environment: &crate::cargo::config::Environment,
-) -> Result<(), node::Error> {
-    let io = |operation: &'static str, path: PathBuf| {
-        move |source| node::Error::Io {
-            operation,
-            path,
-            source,
-        }
-    };
-    crate::progress::note(
-        "runtime-compile",
-        "rawr: compiling rawr's runtime for this toolchain; later projects reuse it",
-    );
-    write_changed(&entry.join("Cargo.toml"), wrapper.as_bytes())?;
-    write_changed(&entry.join("lib.rs"), b"")?;
-    // The runtime resolves from the lockfile rawr was released with. Cargo
-    // drops what the runtime doesn't need and changes no version.
-    let source = entry.join("source.lock");
-    if fs::read(&source).ok().as_deref() != Some(source_lock) {
-        fs::write(entry.join("Cargo.lock"), source_lock).map_err(io(
-            "write the lockfile of rawr's runtime",
-            entry.join("Cargo.lock"),
-        ))?;
-        fs::write(&source, source_lock).map_err(io("record rawr's lockfile", source.clone()))?;
-    }
-    let target = entry.join("target");
-    let build = toml_edit::Value::from(target.to_string_lossy().as_ref()).to_string();
-    let mut command = Command::new(&toolchain.cargo);
-    command
-        .args(["build", "--message-format=json-render-diagnostics"])
-        .arg("--config")
-        .arg(format!("build.build-dir={build}"))
-        .arg("--manifest-path")
-        .arg(entry.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(&target)
-        .current_dir(entry)
-        .env_clear()
-        .envs(environment.entries().filter(|(key, _)| !overrides(key)))
-        // An empty value overrides every other source of rustflags.
-        .env("CARGO_ENCODED_RUSTFLAGS", "")
-        .env("RUSTC", &toolchain.rustc)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // The toolchain's Cargo runs without its rustup proxy, so the runtime's
-    // build scripts need the library path the proxy would have set, as the
-    // project's own build does.
-    if let Some(loader) = environment.loader_path(&toolchain.rustc) {
-        command.env(crate::cargo::config::LOADER_PATH, loader);
-    }
-    let mut child = command.spawn().map_err(io(
-        "launch the build of rawr's runtime",
-        toolchain.cargo.clone(),
-    ))?;
-    let stderr = child.stderr.take();
-    let log = entry.join("build.log");
-    let errors = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        if let Some(mut stderr) = stderr {
-            let _ = stderr.read_to_end(&mut text);
-        }
-        text
-    });
-    let mut messages = Vec::new();
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).split(b'\n').map_while(Result::ok) {
-            crate::progress::observe(true, b"\n");
-            messages.extend_from_slice(&line);
-            messages.push(b'\n');
-        }
-    }
-    let status = child.wait().map_err(io(
-        "wait for the build of rawr's runtime",
-        toolchain.cargo.clone(),
-    ))?;
-    let errors = errors.join().unwrap_or_default();
-    let _ = fs::write(&log, &errors);
-    if !status.success() {
-        let text = String::from_utf8_lossy(&errors);
-        let tail = text
-            .lines()
-            .rev()
-            .take(40)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(node::Error::Transform(
-            format!(
-                "rawr's runtime failed to compile ({status}); cargo's output is in {}:\n{tail}",
-                log.display()
-            )
-            .into_boxed_str(),
-        ));
-    }
-    publish(entry, key, &messages)
-}
-
-/// Whether an environment variable would change how the runtime compiles in
-/// a way its key does not cover: the project's target, build directory,
-/// rustflags and profile. The runtime takes its own.
-fn overrides(key: &str) -> bool {
-    matches!(
-        key,
-        "RUSTFLAGS"
-            | "CARGO_ENCODED_RUSTFLAGS"
-            | "CARGO_BUILD_RUSTFLAGS"
-            | "CARGO_TARGET_DIR"
-            | "CARGO_BUILD_TARGET_DIR"
-            | "CARGO_BUILD_BUILD_DIR"
-            | "CARGO_BUILD_TARGET"
-            | "CARGO_INCREMENTAL"
-            | "RUSTC"
-    ) || key.starts_with("CARGO_PROFILE_")
-        || (key.starts_with("CARGO_TARGET_") && key.ends_with("_RUSTFLAGS"))
-}
-
-/// Link the libraries cargo's `messages` name into a fresh `entry/lib`, so
-/// rustc finds exactly one `rawr`, and record the static libraries the
-/// runtime's build scripts link. The stamp goes last.
-fn publish(entry: &Path, key: &str, messages: &[u8]) -> Result<(), node::Error> {
-    let io = |operation: &'static str, path: PathBuf| {
-        move |source| node::Error::Io {
-            operation,
-            path,
-            source,
-        }
-    };
-    let mut files = BTreeMap::new();
-    for line in messages.split(|byte| *byte == b'\n') {
-        let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
-            continue;
-        };
-        if message.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-artifact") {
-            continue;
-        }
-        let library = message
-            .pointer("/target/kind")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|kinds| {
-                kinds
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .any(|kind| {
-                        matches!(
-                            kind,
-                            "lib" | "rlib" | "dylib" | "proc-macro" | "staticlib" | "cdylib"
-                        )
-                    })
-            });
-        if !library {
-            continue;
-        }
-        for file in message
-            .get("filenames")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-        {
-            let path = PathBuf::from(file);
-            if let Some(name) = path.file_name() {
-                files.insert(name.to_owned(), path);
-            }
-        }
-    }
-    let rawr = files
-        .keys()
-        .filter(|name| {
-            let name = name.to_string_lossy();
-            name.starts_with("librawr-") && name.ends_with(".rlib")
-        })
-        .count();
-    if rawr != 1 {
-        return Err(node::Error::Transform(
-            format!("rawr's runtime build named {rawr} `rawr` libraries, not one").into_boxed_str(),
-        ));
-    }
-    let id = std::process::id();
-    let staging = entry.join(format!(".lib-{id}"));
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(io("stage rawr's runtime", staging.clone()))?;
-    for (name, path) in &files {
-        let to = staging.join(name);
-        if fs::hard_link(path, &to).is_err() {
-            fs::copy(path, &to).map_err(io("stage a library of rawr's runtime", path.clone()))?;
-        }
-    }
-    let lib = entry.join("lib");
-    let retired = entry.join(format!(".lib-old-{id}"));
-    if lib.exists() {
-        fs::rename(&lib, &retired).map_err(io("retire rawr's runtime", lib.clone()))?;
-    }
-    fs::rename(&staging, &lib).map_err(io("publish rawr's runtime", lib.clone()))?;
-    let _ = fs::remove_dir_all(&retired);
-    let native = native::Link::all_in(&crate::cargo::messages::Messages::parse(messages))
-        .iter()
-        .map(native::Link::record)
-        .collect::<String>();
-    fs::write(entry.join("native"), native).map_err(io(
-        "record the native libraries of rawr's runtime",
-        entry.join("native"),
-    ))?;
-    let partial = entry.join(format!(".built-{id}"));
-    fs::write(&partial, format!("{key}\n")).map_err(io("stamp rawr's runtime", partial.clone()))?;
-    fs::rename(&partial, entry.join("built"))
-        .map_err(io("stamp rawr's runtime", entry.join("built")))
-}
-
 fn write_changed(path: &Path, bytes: &[u8]) -> Result<(), node::Error> {
     if fs::read(path).ok().as_deref() == Some(bytes) {
         return Ok(());
@@ -1208,11 +960,9 @@ fn hex(bytes: &[u8]) -> String {
 
 /// `rawr cache clean`: remove the runtimes no installed rawr links.
 pub fn clean(cargo_home: &Path) {
-    prune(
-        &crate::store::runtime_home(cargo_home).join("runtime"),
-        &[],
-        Duration::ZERO,
-    );
+    let runtimes = crate::store::runtime_home(cargo_home).join("runtime");
+    prune(&runtimes, &[], Duration::ZERO);
+    build::prune(&runtimes, &[]);
 }
 
 /// Best effort: remove entries other than `keep` that nothing used within
