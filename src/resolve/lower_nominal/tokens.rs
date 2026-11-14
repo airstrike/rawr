@@ -15,6 +15,48 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `at`, an expression's span from its first token to where its last
+    /// token starts, over that last token too, as rustc marks an
+    /// expression: `"x"` whole, not its first character.
+    pub(super) fn expression_span(&self, at: Span) -> Span {
+        if at.start().is_none() || at.end().is_none() {
+            return at;
+        }
+        let rest = Span::new(at.end(), Position::new(u16::MAX, u16::MAX)).text(self.text);
+        let token = &rest[..token_length(rest)];
+        if token.is_empty() {
+            return at;
+        }
+        let mut end = at.end();
+        for character in token.chars() {
+            if character == '\n' {
+                end.new_line();
+            }
+            end.advance();
+        }
+        span(at.start(), end)
+    }
+
+    /// Whether the next token is a name that no field, method, index,
+    /// call, path or macro goes on from: a local used whole.
+    pub(super) fn lone_name_ahead(&self) -> bool {
+        let mut ahead = self.input.clone();
+        matches!(ahead.next(), Some((Token::Identifier(_), _)))
+            && !matches!(
+                ahead.next(),
+                Some((
+                    Token::Period
+                        | Token::LeftParen
+                        | Token::Unit
+                        | Token::LeftBracket
+                        | Token::LeftBrace
+                        | Token::DoubleColon
+                        | Token::Bang,
+                    _
+                ))
+            )
+    }
+
     /// Where `name` is in `written`, the inside of a `{...}` that starts
     /// at char `at` of a `format!` string's value, in the literal at
     /// `literal`: rustc points at it there. None for a literal the source
@@ -652,6 +694,83 @@ pub(super) fn text_end(mut position: Position, text: &str) -> Position {
     position
 }
 
+/// The length in bytes of the Rust token `text` starts with: a string,
+/// byte string or raw string literal to its closing quote, a char literal,
+/// a word or number, or else one character.
+fn token_length(text: &str) -> usize {
+    let word = |character: char| character == '_' || character.is_alphanumeric();
+    let prefix = text
+        .char_indices()
+        .take_while(|(_, character)| matches!(character, 'b' | 'c' | 'r'))
+        .count();
+    let after_prefix = &text[prefix..];
+    let hashes = after_prefix
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    let raw = text[..prefix].contains('r');
+    if after_prefix[hashes..].starts_with('"') && (raw || hashes == 0) {
+        let body = prefix + hashes + 1;
+        let closing = format!("\"{}", "#".repeat(hashes));
+        let mut escaped = false;
+        for (at, character) in text[body..].char_indices() {
+            if !raw && escaped {
+                escaped = false;
+            } else if !raw && character == '\\' {
+                escaped = true;
+            } else if text[body + at..].starts_with(&closing) {
+                return body + at + closing.len();
+            }
+        }
+        return text.len();
+    }
+    // A char literal is one character or one escape; a lifetime has no
+    // closing quote.
+    if let Some(quoted) = text.strip_prefix('\'').or_else(|| text.strip_prefix("b'")) {
+        let opening = text.len() - quoted.len();
+        let mut characters = quoted.char_indices();
+        let closing = match characters.next() {
+            Some((_, '\\')) => {
+                characters.next();
+                characters.find(|(_, character)| *character == '\'')
+            }
+            Some(_) => characters
+                .next()
+                .filter(|(_, character)| *character == '\''),
+            None => None,
+        };
+        if let Some((at, _)) = closing {
+            return opening + at + 1;
+        }
+    }
+    let identifier = text
+        .strip_prefix("r#")
+        .filter(|rest| rest.starts_with(word));
+    let (text, raw_prefix) = match identifier {
+        Some(rest) => (rest, 2),
+        None => (text, 0),
+    };
+    let mut length = 0;
+    let mut characters = text.char_indices().peekable();
+    let number = text.starts_with(|character: char| character.is_ascii_digit());
+    while let Some((at, character)) = characters.next() {
+        let fraction = number
+            && character == '.'
+            && characters
+                .peek()
+                .is_some_and(|(_, next)| next.is_ascii_digit());
+        if !word(character) && !fraction {
+            break;
+        }
+        length = at + character.len_utf8();
+    }
+    if length == 0 {
+        text.chars().next().map_or(0, char::len_utf8)
+    } else {
+        raw_prefix + length
+    }
+}
+
 /// The source from `start` to `end`. An expression a macro's expansion
 /// makes of an argument and the macro's own tokens, which sit where the
 /// macro is called, may end before it starts, as `$lvl <=
@@ -702,4 +821,30 @@ pub(crate) fn lex_rust(engine: &Engine, source: &str) -> Vec<(Token, Position)> 
         }
     }
     tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_length;
+
+    #[test]
+    fn a_tokens_length_is_its_whole_literal_or_word() {
+        let lengths = [
+            ("\"x\" + y", 3),
+            ("\"a\\\"b\")", 6),
+            ("r#\"a\"b\"#;", 8),
+            ("b\"ab\"", 5),
+            ("'x')", 3),
+            ("'\\'')", 4),
+            ("'a, x: &'b", 1),
+            ("12.5f32 ", 7),
+            ("1..2", 1),
+            ("r#type.x", 6),
+            ("value)", 5),
+            (") + 1", 1),
+        ];
+        for (text, length) in lengths {
+            assert_eq!(token_length(text), length, "{text}");
+        }
+    }
 }

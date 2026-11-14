@@ -125,6 +125,10 @@ pub enum Category {
     /// An integer literal its type can't hold, rustc's deny-by-default
     /// `overflowing_literals` lint.
     OverflowingLiteral,
+    /// An operation on values known when the body is compiled that would
+    /// overflow or panic, rustc's deny-by-default `arithmetic_overflow` and
+    /// `unconditional_panic` lints.
+    KnownPanic,
     /// A local used before it is given a value, as rustc's E0381.
     Uninitialized,
     /// A local whose type nothing settles where rustc needs it, as rustc's
@@ -187,8 +191,39 @@ impl fmt::Display for Category {
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
             Self::PrivateItem => formatter.write_str("private item"),
             Self::OverflowingLiteral => formatter.write_str("literal out of range"),
+            Self::KnownPanic => formatter.write_str("operation will panic"),
             Self::Uninitialized => formatter.write_str("used binding isn't initialized"),
             Self::LocalTypeNeeded => formatter.write_str("type annotations needed"),
+        }
+    }
+}
+
+/// The deny-by-default lint that refuses an operation known to panic.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Lint {
+    /// `arithmetic_overflow`: an operation that would overflow.
+    ArithmeticOverflow,
+    /// `unconditional_panic`: a division by zero, a division that would
+    /// overflow, or an index past an array's end.
+    UnconditionalPanic,
+}
+
+impl Lint {
+    /// The lint's name, as `#[deny(..)]` names it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ArithmeticOverflow => "arithmetic_overflow",
+            Self::UnconditionalPanic => "unconditional_panic",
+        }
+    }
+
+    /// rustc's message for the lint.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::ArithmeticOverflow => "this arithmetic operation will overflow",
+            Self::UnconditionalPanic => "this operation will panic at runtime",
         }
     }
 }
@@ -352,12 +387,58 @@ impl fmt::Display for ArgumentCount {
 /// Why a use after a move is one: the moved local's type isn't `Copy`.
 /// rustc labels its declaration "move occurs because `x` has type `T`,
 /// which does not implement the `Copy` trait".
+/// A partial move's cause is rustc's note instead, "partial move occurs
+/// because `p.a` has type `String`, ...", naming the part that moved.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MoveCause {
-    /// The local's name where it is declared.
-    pub declaration: Span,
-    /// The local's type, as rustc writes it.
+    /// The local's name where it is declared, or for a partial move the
+    /// part that moved, as rustc names it (`p.a`).
+    pub moved: MovedPlace,
+    /// The type of what moved, as rustc writes it.
     pub ty: ImmutableString,
+    /// How rustc suggests keeping the value: cloning it at the move.
+    pub cloning: Cloning,
+    /// The parameter the move passes the value to, which rustc suggests
+    /// making a borrow.
+    pub parameter: Option<OwningParameter>,
+}
+
+/// What moved: a whole local, labelled where it is declared, or a part
+/// of one, named in rustc's note.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum MovedPlace {
+    /// The local's name where it is declared.
+    Local(Span),
+    /// The part, as rustc names it (`p.a`).
+    Part(ImmutableString),
+}
+
+/// rustc's suggestion for keeping a moved value.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Cloning {
+    /// The type is `Clone`: "consider cloning the value", with
+    /// `.clone()` after the moved local.
+    Clone,
+    /// The type is the crate's own and not `Clone`: "if `T` implemented
+    /// `Clone`, you could clone the value".
+    Derivable(ImmutableString),
+    /// Neither: rustc suggests nothing.
+    None,
+}
+
+/// A function's or method's parameter that takes ownership of a value
+/// passed to it: rustc's note "consider changing this parameter type in
+/// function `f` to borrow instead if owning the value isn't necessary".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct OwningParameter {
+    /// The function's name.
+    pub function: ImmutableString,
+    /// rustc's noun for it: `function` or `method`.
+    pub kind: &'static str,
+    /// The function's name where it is declared.
+    pub name: Span,
+    /// The parameter's type where it is written.
+    pub ty: Span,
 }
 
 /// One program item whose crate derives need expanding (#593).
@@ -948,6 +1029,19 @@ pub enum Error {
         /// The literal.
         literal: Span,
     },
+    /// An operation on values known when the body is compiled that would
+    /// overflow, divide by zero or index past an array's end, which rustc's
+    /// deny-by-default `arithmetic_overflow` and `unconditional_panic` lints
+    /// refuse.
+    KnownPanic {
+        /// The lint that refuses it.
+        lint: Lint,
+        /// rustc's label: what the operation attempts, as "attempt to
+        /// compute `u8::MAX + 1_u8`, which would overflow".
+        label: ImmutableString,
+        /// The operation.
+        at: Span,
+    },
     /// A call of a generic function that gives one of its type parameters
     /// no type, which rustc refuses (E0282).
     TypeAnnotationsNeeded {
@@ -1006,6 +1100,23 @@ impl Error {
     pub(crate) fn borrowing(mut self) -> Self {
         if let Self::MovedValue { borrowed, .. } = &mut self {
             *borrowed = true;
+        }
+        self
+    }
+
+    /// This error, a use of a moved value that the borrow at `borrow`
+    /// takes whole, as `&v` does: rustc's "borrow of moved value",
+    /// labelled over the borrow.
+    pub(crate) fn borrowed_by(mut self, borrow: Span) -> Self {
+        if let Self::MovedValue {
+            borrowed,
+            reference,
+            previous_iteration: false,
+            ..
+        } = &mut self
+        {
+            *borrowed = true;
+            *reference = borrow;
         }
         self
     }
@@ -1154,6 +1265,7 @@ impl Error {
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
             Self::PrivateItem { .. } => Category::PrivateItem,
             Self::OverflowingLiteral { .. } => Category::OverflowingLiteral,
+            Self::KnownPanic { .. } => Category::KnownPanic,
             Self::Uninitialized { .. } => Category::Uninitialized,
             Self::LocalTypeNeeded { .. } => Category::LocalTypeNeeded,
         }
@@ -1181,6 +1293,7 @@ impl Error {
             Self::NotInModule { module, .. } => module.as_str(),
             Self::PrivateItem { name, .. } => name.as_str(),
             Self::OverflowingLiteral { ty, .. } => ty.as_str(),
+            Self::KnownPanic { label, .. } => label.as_str(),
             Self::Uninitialized { name, .. }
             | Self::LocalTypeNeeded { name, .. }
             | Self::UnboundAlternative { name, .. } => name.as_str(),
@@ -1240,6 +1353,7 @@ impl Error {
             | Self::NotInModule { reference, .. }
             | Self::PrivateItem { reference, .. } => *reference,
             Self::OverflowingLiteral { literal, .. } => *literal,
+            Self::KnownPanic { at, .. } => *at,
             Self::Uninitialized { reference, .. } => *reference,
             Self::LocalTypeNeeded { declaration, .. } => *declaration,
             Self::UnknownFunction { reference, .. } => *reference,
@@ -1354,7 +1468,8 @@ impl Error {
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
             | Self::ArgumentSignature { .. }
-            | Self::OverflowingLiteral { .. } => None,
+            | Self::OverflowingLiteral { .. }
+            | Self::KnownPanic { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -2186,6 +2301,9 @@ impl fmt::Display for Written<'_> {
             }
             Error::OverflowingLiteral { ty, literal, .. } => {
                 write!(formatter, "literal out of range for `{ty}` at {literal}")
+            }
+            Error::KnownPanic { lint, label, at } => {
+                write!(formatter, "{} at {at}: {label}", lint.message())
             }
             Error::TypeAnnotationsNeeded {
                 parameter,

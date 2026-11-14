@@ -34,6 +34,18 @@ pub(super) enum BindingKind {
     Receiver { owner: ImmutableString },
 }
 
+/// A by-value use that moved a local or a part of one, which a later use
+/// of the moved value reports.
+#[derive(Clone)]
+pub(super) struct MoveSite {
+    /// The moved expression, whole.
+    pub(super) span: Span,
+    /// The type of what moved.
+    pub(super) ty: Ty,
+    /// The crate function's parameter the move passes the value to.
+    pub(super) parameter: Option<crate::resolve::OwningParameter>,
+}
+
 /// An array literal being parsed, for the frames its elements open: a
 /// call that opens one runs ahead of the statement, so each element before
 /// its own is bound ahead of that frame, as Rust evaluates elements in

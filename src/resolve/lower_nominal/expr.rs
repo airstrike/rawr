@@ -323,9 +323,11 @@ impl<'a> Parser<'a> {
                 self.next();
                 let operand_start = self.position();
                 let lent = self.lent_mut_field.replace(operand_start);
+                let lone = self.lone_name_ahead();
                 let operand = self.parse_operand();
                 self.lent_mut_field = lent;
-                let mut operand = operand?;
+                let mut operand =
+                    operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
                 let whole = span(start, operand.span.end());
                 if operand.lvalue.is_none() {
                     // `twice(&mut |x| v.push(x))`: the closure is the
@@ -364,9 +366,10 @@ impl<'a> Parser<'a> {
             }
             let operand_start = self.position();
             let lent = self.lent_field.replace(operand_start);
+            let lone = self.lone_name_ahead();
             let operand = self.parse_operand();
             self.lent_field = lent;
-            let mut operand = operand?;
+            let mut operand = operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
             let whole = span(start, operand.span.end());
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
@@ -594,6 +597,7 @@ impl<'a> Parser<'a> {
             .surrounded(&format!("{operator}("), ")");
         let value = self.operator_expr(source, ty, span(start, operand.span.end()));
         Ok(if operator == "-" {
+            self.note_known_negation(operand.span, &value);
             self.checked_arithmetic(value, "neg")
         } else {
             value
@@ -626,7 +630,11 @@ impl<'a> Parser<'a> {
                 } else {
                     value.to_string()
                 };
-                Ok(self.literal(text, ty, token_span))
+                let literal = self.literal(text, ty, token_span);
+                if !float {
+                    self.note_known_literal(&literal, value);
+                }
+                Ok(literal)
             }
             Token::CharConstant(value) => {
                 Ok(self.literal(format!("{value:?}"), Ty::Char, token_span))
@@ -928,6 +936,7 @@ impl<'a> Parser<'a> {
             if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
                 self.unmovable.insert(span(open, end), unmovable);
             }
+            self.note_known_parenthesized(value.span, span(open, end));
             value.span = span(open, end);
             value.lvalue = None;
             value.source.cover(value.span);

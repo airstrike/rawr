@@ -456,21 +456,15 @@ impl<'a> Parser<'a> {
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         if let Some(declaration) = immutable {
             let assignment = span(value.span.start(), replacement.span.end());
-            return Err(self.immutable_assignment(&lvalue, declaration, assignment));
+            return Err(self.immutable_assignment(
+                &lvalue,
+                self.expression_span(declaration),
+                self.expression_span(assignment),
+            ));
         }
         if let Some(receiver) = receiver {
             let assignment = span(value.span.start(), replacement.span.end());
             return Err(self.receiver_assignment(&receiver, assignment));
-        }
-        // A `let x;` drops its value where its scope ends only on the paths
-        // that gave it one, which needs drop flags Rawr doesn't keep.
-        if deferred.is_some() && self.needs_drop(lvalue.ty(), replacement.span)? {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `let` without a value whose type implements `Drop`: dropping it \
-                            where Rust does is not supported in Rawr yet"
-                    .into(),
-                source: span(value.span.start(), replacement.span.end()),
-            });
         }
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;

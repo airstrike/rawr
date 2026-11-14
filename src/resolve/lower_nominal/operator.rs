@@ -246,7 +246,9 @@ impl<'a> Parser<'a> {
                 rhs.prelude = origin::Fragment::default();
                 rhs.lvalue = None;
             }
-            lhs = self.apply_binary(operator, Some(operator_at), lhs, rhs)?;
+            let operands = (lhs.span, rhs.span);
+            lhs = self.apply_binary(operator.clone(), Some(operator_at), lhs, rhs)?;
+            self.note_known_binary(&operator, operands, &lhs);
             if precedence == COMPARISON && binary_precedence(&self.peek()) == Some(COMPARISON) {
                 return Err(self.unsupported("chained comparison operators"));
             }

@@ -407,6 +407,75 @@ fn a_let_without_a_value_assigned_twice_is_e0384() {
 }
 
 #[test]
+fn a_let_without_a_value_assigned_on_a_path_that_may_have_assigned_it_is_e0384() {
+    // After a branch that assigned it in one arm.
+    assert_eq!(
+        rendered(
+            "fn main() {\n    let c = true;\n    let x;\n    if c { x = 1; }\n    x = 2;\n    \
+             println!(\"{x}\");\n}\n"
+        ),
+        concat!(
+            "error[E0384]: cannot assign twice to immutable variable `x`\n",
+            " --> main.rs:5:5-5:10\n",
+            " 5 |     x = 2;\n",
+            "   |     ^^^^^ cannot assign twice to immutable variable\n",
+            " ::: main.rs:4:12-4:17\n",
+            " 4 |     if c { x = 1; }\n",
+            "   |            ----- first assignment to `x`\n",
+            "  = help: consider making this binding mutable: `mut x`\n",
+        )
+    );
+    // In a loop, whose next iteration assigns it again: no other
+    // assignment to label.
+    assert_eq!(
+        rendered(
+            "fn main() {\n    let x: i32;\n    loop {\n        if true { break; }\n        x = \
+             1;\n    }\n}\n"
+        ),
+        concat!(
+            "error[E0384]: cannot assign twice to immutable variable `x`\n",
+            " --> main.rs:5:9-5:14\n",
+            " 5 |         x = 1;\n",
+            "   |         ^^^^^ cannot assign twice to immutable variable\n",
+            "  = help: consider making this binding mutable: `mut x`\n",
+        )
+    );
+    // A match arm's assignment after one before the match.
+    let arm = rendered(
+        "fn main() {\n    let n = 0;\n    let x;\n    x = 0;\n    match n {\n        0 => x = \
+         10,\n        _ => {}\n    }\n}\n",
+    );
+    assert!(
+        arm.starts_with(
+            "error[E0384]: cannot assign twice to immutable variable `x`\n --> main.rs:6:14-6:20\n"
+        ),
+        "{arm}"
+    );
+    // Separate paths each assign it once, and a `let x;` in a loop is a
+    // new local each iteration.
+    let printed = |source: &str| {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let mut engine = Engine::new();
+        let sink = lines.clone();
+        engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+        engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+        lines.lock().unwrap().clone()
+    };
+    assert_eq!(
+        printed(
+            "fn branches(c: bool) -> i32 {\n    let x;\n    if c { x = 1; } else { x = 2; }\n    \
+             x\n}\nfn arms(n: i32) -> i32 {\n    let x;\n    match n {\n        0 => x = 10,\n        \
+             _ => x = 12,\n    }\n    x\n}\nfn each() -> i32 {\n    let mut total = 0;\n    for i \
+             in 0..3 {\n        let y;\n        y = i * 2;\n        total += y;\n    }\n    \
+             total\n}\nfn breaking() -> i32 {\n    let x;\n    loop {\n        x = 5;\n        \
+             break;\n    }\n    x\n}\nprintln!(\"{} {} {} {}\", branches(true), arms(1), each(), \
+             breaking());\n"
+        ),
+        "1 12 6 5\n"
+    );
+}
+
+#[test]
 fn a_let_without_a_value_or_a_type_where_one_is_needed_is_e0283() {
     // rustlings' variables2: the comparison needs `x`'s type.
     let (code, message, _) = refused(
@@ -1476,4 +1545,211 @@ fn changing_a_collection_behind_a_shared_reference_is_e0596() {
             label("`r` is a `&` reference, so it cannot be borrowed as mutable")
         )
     );
+}
+
+#[test]
+fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
+    // rustlings' move_semantics2.
+    assert_eq!(
+        rendered(
+            "fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n    vec\n}\n\nfn main() {\n    let vec0 = \
+             vec![22, 44, 66];\n    let vec1 = fill_vec(vec0);\n    assert_eq!(vec0, [22, 44, \
+             66]);\n    assert_eq!(vec1, [22, 44, 66]);\n}\n"
+        ),
+        concat!(
+            "error[E0382]: borrow of moved value: `vec0`\n",
+            " --> main.rs:8:5-8:35\n",
+            " 8 |     assert_eq!(vec0, [22, 44, 66]);\n",
+            "   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ value borrowed here after move\n",
+            " ::: main.rs:6:9-6:13\n",
+            " 6 |     let vec0 = vec![22, 44, 66];\n",
+            "   |         ---- move occurs because `vec0` has type `Vec<i32>`, which does not \
+             implement the `Copy` trait\n",
+            " ::: main.rs:7:25-7:29\n",
+            " 7 |     let vec1 = fill_vec(vec0);\n",
+            "   |                         ---- value moved here\n",
+            " ::: main.rs:1:18-1:26\n",
+            " 1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
+            "   |                  -------- this parameter takes ownership of the value\n",
+            " ::: main.rs:1:4-1:12\n",
+            " 1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
+            "   |    -------- in this function\n",
+            "  = help: consider cloning the value if the performance cost is acceptable: \
+             `vec0.clone()`\n",
+            "  = note: consider changing this parameter type in function `fill_vec` to borrow \
+             instead if owning the value isn't necessary\n",
+        )
+    );
+    // A method's parameter, and a `&` of the moved local.
+    let method = rendered(
+        "struct S;\nimpl S {\n    fn eat(&self, v: Vec<i32>) -> usize {\n        v.len()\n    \
+         }\n}\nfn main() {\n    let v = vec![1];\n    S.eat(v);\n    let r = &v;\n}\n",
+    );
+    assert!(
+        method.starts_with("error[E0382]: borrow of moved value: `v`\n --> main.rs:10:13-10:15\n"),
+        "{method}"
+    );
+    assert!(
+        method.contains("   |        --- in this method\n"),
+        "{method}"
+    );
+    assert!(
+        method.contains("parameter type in method `eat` to borrow"),
+        "{method}"
+    );
+    // A generic parameter: no note.
+    let generic = rendered(
+        "fn take<T>(t: T) -> T {\n    t\n}\nfn main() {\n    let s = String::new();\n    \
+         take(s);\n    let t = s;\n}\n",
+    );
+    assert!(!generic.contains("this parameter"), "{generic}");
+    assert!(
+        generic.ends_with(
+            "  = help: consider cloning the value if the performance cost is acceptable: \
+             `s.clone()`\n"
+        ),
+        "{generic}"
+    );
+}
+
+#[test]
+fn a_moved_value_that_is_not_clone_gets_rustcs_note_instead_of_the_clone_help() {
+    let report = rendered(
+        "#[derive(Debug)]\nstruct N;\nfn main() {\n    let n = N;\n    let m = n;\n    \
+         println!(\"{n:?} {m:?}\");\n}\n",
+    );
+    assert!(
+        report.ends_with("  = note: if `N` implemented `Clone`, you could clone the value\n"),
+        "{report}"
+    );
+    assert!(!report.contains("help"), "{report}");
+}
+
+#[test]
+fn a_use_after_a_partial_move_notes_the_moved_parts_type() {
+    assert_eq!(
+        rendered(
+            "struct P {\n    a: String,\n    b: String,\n}\nfn main() {\n    let p = P { a: \
+             String::new(), b: String::new() };\n    let a = p.a;\n    let q = p;\n}\n"
+        ),
+        concat!(
+            "error[E0382]: use of partially moved value: `p`\n",
+            " --> main.rs:8:13-8:14\n",
+            " 8 |     let q = p;\n",
+            "   |             ^ value used here after partial move\n",
+            " ::: main.rs:7:13-7:16\n",
+            " 7 |     let a = p.a;\n",
+            "   |             --- value partially moved here\n",
+            "  = note: partial move occurs because `p.a` has type `String`, which does not \
+             implement the `Copy` trait\n",
+        )
+    );
+}
+
+#[test]
+fn a_moved_local_whose_literal_type_is_unsettled_names_rustcs_fallback() {
+    let report = rendered(
+        "fn main() {\n    let v = vec![1];\n    drop(v);\n    println!(\"{:?}\", v);\n}\n",
+    );
+    assert!(report.contains("has type `Vec<i32>`"), "{report}");
+}
+
+#[test]
+fn a_mismatched_argument_is_underlined_whole() {
+    // #1729: the argument, not its first character.
+    let report = rendered(
+        "fn main() {\n    let a: Option<String> = None;\n    let _ = a == Some(\"x\");\n}\n",
+    );
+    assert!(
+        report.contains(
+            " --> main.rs:3:23-3:26\n 3 |     let _ = a == Some(\"x\");\n   |                       \
+             ^^^ expected `String`, found `&str`\n"
+        ),
+        "{report}"
+    );
+    let report = rendered("fn take(s: String) {}\nfn main() {\n    take(1 + 23);\n}\n");
+    assert!(
+        report.contains("   |          ^^^^^^ expected `String`, found integer"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_operation_known_to_overflow_or_panic_is_rustcs_deny_lint() {
+    // #947: each message, label and note as rustc 1.96 gives them.
+    let cases = [
+        (
+            "let x: u8 = 255 + 1;",
+            "this arithmetic operation will overflow",
+            "attempt to compute `u8::MAX + 1_u8`, which would overflow",
+            "arithmetic_overflow",
+        ),
+        (
+            "let y = 0u32 - 1;",
+            "this arithmetic operation will overflow",
+            "attempt to compute `0_u32 - 1_u32`, which would overflow",
+            "arithmetic_overflow",
+        ),
+        (
+            "let z = 1i32 << 40;",
+            "this arithmetic operation will overflow",
+            "attempt to shift left by `40_i32`, which would overflow",
+            "arithmetic_overflow",
+        ),
+        (
+            "let q = 1 / 0;",
+            "this operation will panic at runtime",
+            "attempt to divide `1_i32` by zero",
+            "unconditional_panic",
+        ),
+        (
+            "let r = 7 % (2 - 2);",
+            "this operation will panic at runtime",
+            "attempt to calculate the remainder of `7_i32` with a divisor of zero",
+            "unconditional_panic",
+        ),
+        (
+            "let s = -128i8 / -1;",
+            "this operation will panic at runtime",
+            "attempt to compute `i8::MIN / -1_i8`, which would overflow",
+            "unconditional_panic",
+        ),
+        (
+            "let a = [1, 2, 3];\n    let w = a[5];",
+            "this operation will panic at runtime",
+            "index out of bounds: the length is 3 but the index is 5",
+            "unconditional_panic",
+        ),
+    ];
+    for (body, message, label, lint) in cases {
+        let source = format!("fn main() {{\n    {body}\n}}\n");
+        let error = Engine::new()
+            .compile(&source)
+            .map(|_| ())
+            .expect_err("rawr refuses this program");
+        let evidence = Source::new("main.rs", &source).expect("a test source has an identity");
+        let report = Report::from_parse(evidence, &error).expect("the error is in the source");
+        assert_eq!(report.code().as_str(), "", "{body}");
+        assert_eq!(report.message(), message, "{body}");
+        assert_eq!(
+            report.labels().first().and_then(|label| label.message()),
+            Some(label),
+            "{body}"
+        );
+        assert_eq!(
+            report.notes().collect::<Vec<_>>(),
+            [format!("`#[deny({lint})]` on by default")],
+            "{body}"
+        );
+    }
+    // The operation is underlined whole.
+    assert!(rendered("fn main() {\n    let x: u8 = 255 + 1;\n}\n")
+        .contains(" 2 |     let x: u8 = 255 + 1;\n   |                 ^^^^^^^ attempt"),);
+    // What doesn't overflow or panic runs.
+    let program = "fn main() {\n    let a = -128i8;\n    let b = 0xFFu8 & 0x0F;\n    let c = \
+                   255u8 << 1;\n    let d = (3 + 4) * 2;\n    let f: u64 = 1 << 40;\n    let g = \
+                   [1, 2, 3][2];\n    let h = -(5 - 2);\n    let _ = (a, b, c, d, f, g, h);\n}\n";
+    Engine::new()
+        .compile(program)
+        .unwrap_or_else(|error| panic!("{error}"));
 }
