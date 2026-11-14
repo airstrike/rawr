@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 202;
+const CLASSIFIER_VERSION: u32 = 205;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8127,7 +8127,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 )));
             }
             model::Kind::Struct { fields, generics } => self
-                .structure(definition_index, fields, generics)
+                .structure(definition_index, fields, generics, None)
                 .map(Representability::Struct),
             model::Kind::Enum {
                 variants,
@@ -8143,10 +8143,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             model::Kind::TypeAlias { ty, generics }
                 if self.instance_aliases().contains(&definition_index) =>
             {
-                Ok(Representability::Struct(
-                    self.instance_alias_plan(ty)
-                        .with_dropped(dropped_parameters(ty, generics).unwrap_or(0)),
-                ))
+                self.instance_alias_plan(ty).map(|plan| {
+                    Representability::Struct(
+                        plan.with_dropped(dropped_parameters(ty, generics).unwrap_or(0)),
+                    )
+                })
             }
             model::Kind::TypeAlias { ty, generics } => {
                 self.value(ty, generics).map(Representability::Value)
@@ -8186,13 +8187,32 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
     }
 
+    /// The struct at `definition`. With `instance`, the arguments an
+    /// instance alias fixes (`instance_alias_plan`), it is that instance:
+    /// no parameters, and each field of its type at those arguments.
     fn structure(
         &self,
         definition: usize,
         fields: &model::FieldSet,
         generics: &model::Generics,
+        instance: Option<&[model::Argument]>,
     ) -> Result<representability::structure::Plan, Failure> {
-        let parameters = self.sole_alias_defaults(definition, self.parameters(generics)?)?;
+        let parameters = match instance {
+            Some(_) => Box::default(),
+            None => self.sole_alias_defaults(definition, self.parameters(generics)?)?,
+        };
+        let substitutions = instance.map_or_else(Vec::new, |arguments| {
+            generics
+                .parameters()
+                .zip(arguments)
+                .filter_map(|(parameter, argument)| match argument {
+                    model::Argument::Type(ty) => {
+                        Some(((parameter.owner().clone(), parameter.index()), ty.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        });
         // A struct whose every parameter has a default, as palette's
         // `Rgb<S = Srgb, T = f32>`, is made and read at that instance,
         // which its path names as a Rust type.
@@ -8210,7 +8230,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // A public field of a type Rawr cannot hold is unavailable by
             // itself. The struct stays, without a constructor, and a
             // literal of it names the field (D664).
-            let ty = match self.convert_field(field.ty()) {
+            let ty = match self.convert_field(&substitute_parameters(field.ty(), &substitutions)) {
                 Ok(ty) => ty,
                 Err(Failure::Reject(_)) => {
                     constructible = false;
@@ -9701,7 +9721,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // future holds. An `async fn` method that borrows its receiver holds
         // the borrow across its awaits: its future holds a copy of a `Clone`
         // receiver or the receiver itself, lent from Rawr until the future
-        // ends (D513.6).
+        // ends (D513.6). A borrowing method's `impl Future` that captures
+        // none of the call's lifetimes, as wgpu's `request_device(&self,
+        // ..)` gives, holds no borrow, so it crosses as a free function's.
         let rewritten = rewrite(signature.output());
         // An opaque `impl Trait` the function gives is a type of its own,
         // at the type parameters the caller fixes (`iced::widget::iced`).
@@ -9716,6 +9738,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .chain(valued.iter().copied().filter(|_| values))
                 .collect(),
         );
+        let detached_future = matches!(signature.receiver(), model::Receiver::Reference { .. })
+            && !signature.async_function()
+            && matches!(rewritten, model::Type::ImplTrait { .. })
+            && !names_late_lifetime(&rewritten)
+            && self.future_type_output(&rewritten).is_some();
         let output = match signature.receiver() {
             // `-> !`: the call never gives a value. `!` is no other
             // position's type on stable Rust.
@@ -9725,7 +9752,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             model::Receiver::None | model::Receiver::Value { .. } => {
                 self.convert_output(&rewritten, rewrite)
             }
-            model::Receiver::Reference { .. } if signature.async_function() => {
+            model::Receiver::Reference { .. } if signature.async_function() || detached_future => {
                 self.convert_output(&rewritten, rewrite)
             }
             // A `&[T]` the method lends from its receiver, typed as the
@@ -9946,6 +9973,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 ..
             }
         ))
+        .with_detached_future(detached_future)
         .with_opaques(opaques.into_boxed_slice());
         // A receiver of an impl that fixes its type's arguments, as
         // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.
@@ -10990,15 +11018,36 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             })
     }
 
-    /// An instance alias's type: opaque, with no fields or constructor,
-    /// and the core traits its target's definition implements.
-    fn instance_alias_plan(&self, target: &model::Type) -> representability::structure::Plan {
-        let index = match target {
-            model::Type::Definition { id, .. } => self.graph.definition_index(id),
-            _ => None,
+    /// An instance alias's type. Of a struct, as wgpu's `pub type
+    /// SurfaceConfiguration = wgt::SurfaceConfiguration<Vec<TextureFormat>>`
+    /// is, it is the struct at the alias's arguments, with its fields and
+    /// constructor, as rustc builds the alias's literal (#1961). Any other
+    /// is opaque, with no fields or constructor, and the core traits its
+    /// target's definition implements.
+    fn instance_alias_plan(
+        &self,
+        target: &model::Type,
+    ) -> Result<representability::structure::Plan, Failure> {
+        let (index, arguments) = match target {
+            model::Type::Definition { id, arguments } => {
+                (self.graph.definition_index(id), &arguments[..])
+            }
+            _ => (None, &[][..]),
         };
+        if let Some(index) = index
+            && !arguments
+                .iter()
+                .any(|argument| !matches!(argument, model::Argument::Type(_)))
+            && let Some(model::Kind::Struct { fields, generics }) = self
+                .graph
+                .definitions()
+                .nth(index)
+                .map(model::Definition::kind)
+        {
+            return self.structure(index, fields, generics, Some(arguments));
+        }
         let implements = |name| index.is_some_and(|index| self.implements_for_any(index, name));
-        representability::structure::Plan::new(
+        Ok(representability::structure::Plan::new(
             None,
             Box::default(),
             model::FieldForm::Unit,
@@ -11014,7 +11063,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             implements("Hash"),
         )
         .with_order(implements("PartialOrd"), implements("Ord"))
-        .with_error(implements("Error"))
+        .with_error(implements("Error")))
     }
 
     /// A function's output. A Rust future, an `impl Future<Output = T>` or

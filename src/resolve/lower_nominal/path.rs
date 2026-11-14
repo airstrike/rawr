@@ -425,7 +425,13 @@ impl<'a> Parser<'a> {
                 )
             {
                 let owner = self.models.host.type_owner(&full).cloned();
-                return self.parse_imported_struct(full.into(), definition, owner, path_span);
+                return self.parse_imported_struct(full.into(), definition, owner, &[], path_span);
+            }
+            // A crate's struct through the crate's type alias, as
+            // `wgpu::DeviceDescriptor { label: None, .. }` (#1961).
+            #[cfg(feature = "rust-import")]
+            if let Some(value) = self.parse_aliased_struct(&full, path_span)? {
+                return Ok(value);
             }
         }
         // `iced::Degrees(90.0)`: a facade tuple struct's constructor named

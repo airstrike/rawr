@@ -163,6 +163,11 @@ pub struct Signature {
     /// A method's receiver is `&'static self`: only a static fills it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lasting_receiver: bool,
+    /// A method that borrows its receiver gives a future that holds none
+    /// of the call's borrows, as wgpu's `request_device(&self, ..) -> impl
+    /// Future<..>` does: the call makes the future, as a free function's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    detached_future: bool,
     /// A function that changes its first input in place, as a crate's
     /// `impl AddAssign<Turn> for f32` changes its `&mut self`: the call
     /// takes the number by value, lends the impl's function a `&mut` of
@@ -698,6 +703,7 @@ impl Signature {
             statics: Box::new([]),
             regional: Box::new([]),
             lasting_receiver: false,
+            detached_future: false,
             assigns: false,
         }
     }
@@ -816,6 +822,18 @@ impl Signature {
     #[must_use]
     pub const fn lasting_receiver(&self) -> bool {
         self.lasting_receiver
+    }
+
+    pub(crate) fn with_detached_future(mut self, detached: bool) -> Self {
+        self.detached_future = detached;
+        self
+    }
+
+    /// Whether a method that borrows its receiver gives a future that
+    /// holds none of the call's borrows, which the call makes.
+    #[must_use]
+    pub const fn detached_future(&self) -> bool {
+        self.detached_future
     }
 
     pub(crate) fn with_assigns(mut self, assigns: bool) -> Self {

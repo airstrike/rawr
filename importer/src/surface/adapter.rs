@@ -1212,6 +1212,7 @@ fn clone_signature_at(
     .with_statics(source.statics().into())
     .with_regional(source.regional().into())
     .with_lasting_receiver(source.lasting_receiver())
+    .with_detached_future(source.detached_future())
     .with_assigns(source.assigns()))
 }
 

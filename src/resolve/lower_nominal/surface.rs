@@ -1106,10 +1106,13 @@ pub(super) fn instance_surface_type(
         // An `Option` or a `Result` that holds a crate value is Rust's own,
         // as iced's `font::list()` gives `Task<Result<Vec<Family>, Error>>`
         // and `.map(Result::ok)` takes it: native code holds the crate
-        // value as itself.
+        // value as itself. So is an `Option` of Rust's own types, as a
+        // tuple of them is: wgpu's `DeviceDescriptor<'a>` is
+        // `wgt::DeviceDescriptor<Option<&'a str>>`, which a function that
+        // takes it names (#1961).
         Ty::Option(element)
-            if let Some(element) =
-                instance_surface_type(inference, models, element).filter(holds_crate_value) =>
+            if let Some(element) = instance_surface_type(inference, models, element)
+                .filter(|element| !is_erased(element) || holds_crate_value(element)) =>
         {
             Type::Option(Box::new(element))
         }
