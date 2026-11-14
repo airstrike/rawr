@@ -14,6 +14,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `Option::insert`, `get_or_insert`, `get_or_insert_with` and `get_or_insert_default` give the payload's place, so `*o.get_or_insert_with(f) += 1` works. (#1001)
 - `Receiver::try_recv`, `recv_timeout`, `sync_channel`, `thread::scope` and `thread::Builder` run as std's, and a receive's errors are std's own. (#950)
 - A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work. (#1927; part of #949)
+- Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain. (#1928)
 
 ## 0.3.213 (2026-11-13)
 

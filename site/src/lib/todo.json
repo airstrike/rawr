@@ -20,7 +20,8 @@
         {"text":"The std table records each constant's type, and the std facade declares `UNIX_EPOCH` and the numeric constants from it.","issues":[925]},
         {"text":"`Option::insert`, `get_or_insert`, `get_or_insert_with` and `get_or_insert_default` give the payload's place, so `*o.get_or_insert_with(f) += 1` works.","issues":[1001]},
         {"text":"`Receiver::try_recv`, `recv_timeout`, `sync_channel`, `thread::scope` and `thread::Builder` run as std's, and a receive's errors are std's own.","issues":[950]},
-        {"text":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work.","issues":[1927],"refs":[949]}
+        {"text":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work.","issues":[1927],"refs":[949]},
+        {"text":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain.","issues":[1928]}
       ]
     },
     "releases": [
@@ -4257,7 +4258,10 @@
     {"issue":1924,"title":"A lock or cell guard inside a Result: `if let Ok(g) = m.lock()`, `try_lock`, `RefCell::try_borrow_mut`","state":"open","category":"Divergences from rustc"},
     {"issue":1925,"title":"A std enum the std facade holds has no variants for match coverage","state":"open","category":"Divergences from rustc"},
     {"issue":1926,"title":"SyncSender::try_send and TrySendError<T> don't run yet","state":"open","category":"Divergences from rustc"},
-    {"issue":1927,"title":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and…","state":"closed","category":"Divergences from rustc"}
+    {"issue":1927,"title":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and…","state":"closed","category":"Divergences from rustc"},
+    {"issue":1928,"title":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the…","state":"closed","category":"Health"},
+    {"issue":1929,"title":"A rawr-import panic on a broken invariant prints as a bare thread panic, not as rustc's internal compiler error","state":"open","category":"Health"},
+    {"issue":1930,"title":"Runtime errors and island refusals print through Display, uncoloured and hand-formatted","state":"open","category":"Health"}
   ],
   "groups": [
     {
