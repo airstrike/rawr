@@ -611,14 +611,41 @@ impl Model {
         if let Some(ty) = self.associated.get(path) {
             return Some(self.default_for_type(ty, &mut BTreeSet::new()));
         }
-        // The script type the runner names by its index: the crate's own
-        // where a module with its own `main` counts one there too.
+        let (identity, definition) = self.script_by_path(path)?;
+        Some(self.materialize_default(identity, &definition.schema))
+    }
+
+    /// The unit variant `variant` of the script enum the runner names by
+    /// `path`, as a runner's holder of a fieldless `Copy` enum makes the
+    /// value it holds (#1940). `None` when the program has no such type.
+    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    pub(crate) fn variant_by_path(
+        &self,
+        path: &str,
+        variant: &str,
+    ) -> Option<Result<Dynamic, construction::Error>> {
+        let (identity, definition) = self.script_by_path(path)?;
+        let variant = nominal::variant::Id::from_text(variant);
+        Some(
+            self.prove_enum(identity, &definition.schema, &variant, Box::default())
+                .and_then(|proof| {
+                    nominal::Enum::construct(self, identity, &definition.schema, &variant, proof)
+                })
+                .map(Into::into),
+        )
+    }
+
+    /// The script type the runner names by `path` (D594): the crate's own
+    /// where a module with its own `main` counts one there too, named by
+    /// its index in a universe runner.
+    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    fn script_by_path(&self, path: &str) -> Option<(&type_def::Identity, &Definition)> {
         let named = || self.crossing.iter().filter(|known| known.name == path);
         let path = named()
             .find(|known| known.root)
             .or_else(|| named().next())
             .map_or(path, |known| known.path.as_str());
-        let (identity, definition) = self.definitions.iter().find(|(identity, _)| {
+        self.definitions.iter().find(|(identity, _)| {
             let type_def::Identity::Script(key) = identity else {
                 return false;
             };
@@ -630,8 +657,7 @@ impl Model {
                     .rev()
                     .map(ImmutableString::as_str)
                     .eq(segments)
-        })?;
-        Some(self.materialize_default(identity, &definition.schema))
+        })
     }
 
     pub(crate) fn materialize_default(

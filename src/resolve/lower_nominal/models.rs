@@ -1165,10 +1165,75 @@ impl Models {
             .chain([ImmutableString::from(key.name())])
             .collect::<Box<[_]>>();
         if self.mirrors.contains(&path) {
-            Holder::Mirror
-        } else {
-            Holder::Proxy
+            return Holder::Mirror;
         }
+        let nominal = self.definition(id);
+        match nominal {
+            Nominal::Enum { item, .. }
+                if item.generics.is_empty()
+                    && item.lifetimes == 0
+                    && nominal.capabilities().contains(capability::Kind::Copy)
+                    && item
+                        .variants
+                        .iter()
+                        .all(|variant| variant.payload.is_empty() && variant.fields.is_none()) =>
+            {
+                // In the order of their discriminants, which a derived
+                // `PartialOrd` compares by: each one written, or one past
+                // the one before.
+                let mut next: crate::INT = 0;
+                let mut variants = item
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        let discriminant = variant.discriminant.unwrap_or(next);
+                        next = discriminant.wrapping_add(1);
+                        (discriminant, variant.name.text.as_str())
+                    })
+                    .collect::<Vec<_>>();
+                variants.sort_by_key(|(discriminant, _)| *discriminant);
+                Holder::Variant {
+                    variants: variants.into_iter().map(|(_, name)| name.into()).collect(),
+                    traits: self.traits(id),
+                }
+            }
+            _ => Holder::Proxy,
+        }
+    }
+
+    /// The std traits the script type `id` has, each as derived or as an
+    /// `impl` the program writes, which a holder of it in the runner
+    /// implements as the type does (#1940).
+    #[cfg(feature = "rust-import")]
+    fn traits(&self, id: type_def::Id) -> rawr_import::classify::representability::convert::Traits {
+        use rawr_import::classify::representability::convert::{Trait, Traits};
+        let capabilities = self.definition(id).capabilities();
+        [
+            (capability::Kind::Clone, Trait::Clone, "clone"),
+            (capability::Kind::Copy, Trait::Copy, ""),
+            (capability::Kind::Debug, Trait::Debug, "fmt"),
+            (capability::Kind::Default, Trait::Default, "default"),
+            (capability::Kind::PartialEq, Trait::PartialEq, "eq"),
+            (capability::Kind::Eq, Trait::Eq, ""),
+            (
+                capability::Kind::PartialOrd,
+                Trait::PartialOrd,
+                "partial_cmp",
+            ),
+            (capability::Kind::Ord, Trait::Ord, "cmp"),
+            (capability::Kind::Hash, Trait::Hash, "hash"),
+        ]
+        .into_iter()
+        .filter(|(kind, ..)| capabilities.contains(*kind))
+        .fold(Traits::default(), |traits, (kind, trait_, method)| {
+            // A marker trait has no method to tell a written impl by; its
+            // impl gives nothing but the bound, as its derive does.
+            if !method.is_empty() && self.std_impl(id, kind.name(), method).is_some() {
+                traits.with_written(trait_)
+            } else {
+                traits.with_derived(trait_)
+            }
+        })
     }
 
     /// The marked type `definition` mirrors in rawr's copy of a native

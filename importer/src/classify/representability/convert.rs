@@ -126,7 +126,7 @@ impl Builtin {
 
 /// The Rust type a runner holds a script type's values as where native
 /// generic code takes one, as `Task<Message>` of a program's `Message`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Holder {
     /// The runner's proxy, which holds the script value (D594).
     #[default]
@@ -135,6 +135,73 @@ pub enum Holder {
     /// native code names as the marked module's type and which holds the
     /// value as native code has it, its native parts moved in (#1249).
     Mirror,
+    /// A `Copy` enum whose variants carry nothing, held as which of its
+    /// `variants` (in declaration order) the value is, so the holder is
+    /// `Copy` too and has the `traits` the script type has (#1940).
+    Variant {
+        variants: Box<[Box<str>]>,
+        traits: Traits,
+    },
+}
+
+/// The std traits a script type has, each derived or written by the
+/// program, which the runner's holder of it implements as the type does.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Traits {
+    derived: u16,
+    written: u16,
+}
+
+/// One std trait a script type can derive or implement.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Trait {
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+}
+
+impl Trait {
+    const fn bit(self) -> u16 {
+        1 << self as u16
+    }
+}
+
+impl Traits {
+    /// These traits and `derived`, which the type's `#[derive]` gives.
+    #[must_use]
+    pub const fn with_derived(self, derived: Trait) -> Self {
+        Self {
+            derived: self.derived | derived.bit(),
+            ..self
+        }
+    }
+
+    /// These traits and `written`, which an `impl` of the program gives.
+    #[must_use]
+    pub const fn with_written(self, written: Trait) -> Self {
+        Self {
+            written: self.written | written.bit(),
+            ..self
+        }
+    }
+
+    /// Whether the type derives `trait_`.
+    #[must_use]
+    pub const fn derives(self, trait_: Trait) -> bool {
+        self.derived & trait_.bit() != 0
+    }
+
+    /// Whether the type has `trait_`, derived or written.
+    #[must_use]
+    pub const fn has(self, trait_: Trait) -> bool {
+        (self.derived | self.written) & trait_.bit() != 0
+    }
 }
 
 impl Holder {

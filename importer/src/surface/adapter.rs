@@ -1149,7 +1149,7 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
         } => convert::Type::Script {
             path: path.clone(),
             arguments: all(arguments)?,
-            holder: *holder,
+            holder: holder.clone(),
         },
         convert::Type::FunctionItem { input, output } => convert::Type::FunctionItem {
             input: one(input)?,
@@ -1303,7 +1303,7 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
         } => convert::Type::Script {
             path: clone_str(path)?,
             arguments: clone_types(arguments)?,
-            holder: *holder,
+            holder: clone_holder(holder)?,
         },
         convert::Type::Parameter(index) => convert::Type::Parameter(*index),
         convert::Type::Object(object) => {
@@ -1365,6 +1365,26 @@ fn clone_constants(source: &[convert::Constant]) -> Result<Box<[convert::Constan
         constants.push(clone_constant(constant)?);
     }
     Ok(constants.into_boxed_slice())
+}
+
+fn clone_holder(source: &convert::Holder) -> Result<convert::Holder, Error> {
+    Ok(match source {
+        convert::Holder::Proxy => convert::Holder::Proxy,
+        convert::Holder::Mirror => convert::Holder::Mirror,
+        convert::Holder::Variant { variants, traits } => {
+            let mut retained = Vec::new();
+            retained
+                .try_reserve_exact(variants.len())
+                .map_err(|_| Error::Allocation)?;
+            for variant in variants {
+                retained.push(clone_str(variant)?);
+            }
+            convert::Holder::Variant {
+                variants: retained.into_boxed_slice(),
+                traits: *traits,
+            }
+        }
+    })
 }
 
 fn clone_str(source: &str) -> Result<Box<str>, Error> {
