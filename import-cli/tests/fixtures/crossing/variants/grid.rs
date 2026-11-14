@@ -4,7 +4,7 @@
 // closure may change what it captures and the program reads it after (#715).
 // Function pointers take any number of inputs.
 
-use events::grid::{combine, produce, Grid};
+use events::grid::{combine, labeled, produce, tagged, Grid};
 
 fn add(sum: u32, cell: u8) -> u32 {
     sum + cell as u32
@@ -16,6 +16,10 @@ fn mix(a: i64, b: i64, c: i64) -> i64 {
 
 fn seven() -> i64 {
     7
+}
+
+fn describe(grid: &Grid) -> String {
+    format!("grid {}", grid.size())
 }
 
 fn main() {
@@ -35,4 +39,7 @@ fn main() {
     println!("{} seen, {} at (3, 2)", seen.len(), doubled.get(3, 2));
     println!("sum {}", doubled.fold(0, add));
     println!("{} {}", combine(1, 2, 3, mix), produce(seven));
+    println!("{}", labeled(&doubled, describe));
+    let target = String::from("events");
+    println!("{}", tagged(&(target.as_str(), "grid", 7)));
 }

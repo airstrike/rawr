@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 65;
+const SCHEMA: u32 = 66;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -4812,6 +4812,15 @@ fn input_ty(
             }
             Type::Tuple(converted.into_boxed_slice())
         }
+        // A shared borrow of a tuple that holds borrows, as log's `&(&str,
+        // &'static str, ..)`: a borrow of the tuple of what each lends.
+        Source::Borrowed {
+            mutable: false,
+            ty: target,
+        } if matches!(**target, Source::Tuple(_)) => Type::Reference {
+            mutable: false,
+            target: Box::new(input_ty(target, parameters)?),
+        },
         source => ty(source, parameters)?,
     })
 }
