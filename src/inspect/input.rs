@@ -23,7 +23,7 @@
 //! "y": ..} or null}`, or `{"error": ..}`.
 
 #[cfg(target_os = "macos")]
-mod appkit;
+pub(super) mod appkit;
 
 use std::fmt;
 

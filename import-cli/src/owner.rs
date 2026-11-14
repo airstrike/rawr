@@ -1285,6 +1285,15 @@ fn reaped(
             rawr_cli::events::restarting(reason);
             Ok(Some(Ended::Restart(reason.to_owned(), None)))
         }
+        // rawr's Restart item in the program's menu bar asked for a new
+        // start (#1990), and the runner said so.
+        Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
+            rawr::process::RESTART,
+        )))) if lifecycle == rawr_import::process::Lifecycle::Run => {
+            let reason = "its menu asked for a restart";
+            rawr_cli::events::restarting(reason);
+            Ok(Some(Ended::Restart(reason.to_owned(), None)))
+        }
         Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(code))))
             if lifecycle == rawr_import::process::Lifecycle::Run =>
         {

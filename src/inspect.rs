@@ -47,6 +47,9 @@
 //! "paused": ..}` while it is paused, with `"taken": true` when the input
 //! made it pause.
 //!
+//! And it reads the program's menu bar, or chooses one of rawr's own
+//! items in it, with `{"op": "menu"}` (#1990, see [`menu`]).
+//!
 //! Under `rawr mcp`, a pause and its end are also told as `paused` (with
 //! the file, line, function and reason) and `resumed` events in the file
 //! `RAWR_MCP_DEBUG_EVENTS` names, so `wait` and `status` say so (#535).
@@ -59,7 +62,9 @@
 //! called pauses at the program's next call from it.
 #![cfg(feature = "debugging")]
 
+pub mod capture;
 mod input;
+pub mod menu;
 mod stops;
 
 use std::collections::HashSet;
@@ -707,6 +712,8 @@ impl Shared {
         let gone = || gone(&stream);
         let answer = match request.get("op").and_then(Value::as_str) {
             Some("input") => self.input(&request, &gone),
+            Some("menu") => menu::answer(&request, &gone)
+                .unwrap_or_else(|| json!({ "error": "the tool went away" })),
             Some("break") => self.set(&request),
             Some("clear") => self.clear(&request),
             Some("continue") => self.resume(Resume::Continue, &gone),

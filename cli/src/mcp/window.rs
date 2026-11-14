@@ -113,27 +113,9 @@ pub fn windows(_pids: &[u32]) -> Vec<Window> {
 }
 
 /// Capture `window` alone, without its shadow, into `path`, and return the
-/// PNG.
-#[cfg(target_os = "macos")]
+/// PNG, as rawr's Take Screenshot item does (#1990).
 pub fn capture(window: &Window, path: &Path) -> Result<Vec<u8>, String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let status = std::process::Command::new("screencapture")
-        .args(["-x", "-o", &format!("-l{}", window.number)])
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .status()
-        .map_err(|error| error.to_string())?;
-    if !status.success() {
-        return Err(format!("screencapture failed: {status}"));
-    }
-    std::fs::read(path).map_err(|error| error.to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn capture(_window: &Window, _path: &Path) -> Result<Vec<u8>, String> {
-    Err("a window capture needs macOS here".to_owned())
+    rawr::inspect::capture::window(window.number, path).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

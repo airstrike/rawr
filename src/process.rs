@@ -22,6 +22,10 @@ pub fn unblock_signals() {
     }
 }
 
+/// The status a runner ends with when rawr's Restart item asked it to:
+/// `rawr run` starts the program again (#1990).
+pub const RESTART: i32 = 76;
+
 /// End the runner with `status` once its owner has ended it, to restart
 /// the program or because it refused a generation: what it wrote reaches
 /// stdout and stderr, and no exit handler runs. The owner starts the next
