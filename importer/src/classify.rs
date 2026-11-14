@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 208;
+const CLASSIFIER_VERSION: u32 = 210;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8459,6 +8459,48 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// Whether a function with no receiver gives a struct or enum that
+    /// declares a lifetime and names an early-bound one, and each input
+    /// that borrows at an early lifetime is a `&'a T` or `&'a mut T`, at
+    /// least one of them `&mut`, of a crate type that declares no lifetime,
+    /// as `clear<'a>(&'a TextureView, &'a mut CommandEncoder, Color) ->
+    /// RenderPass<'a>`: the output keeps those places borrowed for as long
+    /// as it lives, which a scope frame holds them for.
+    fn lends_places(&self, signature: &model::Signature) -> bool {
+        let lifetimes = |id: &api::identity::Definition| {
+            self.graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| match definition.kind() {
+                    model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
+                        Some(lifetime_parameters(generics))
+                    }
+                    _ => None,
+                })
+        };
+        let model::Type::Definition { id, .. } = signature.output() else {
+            return false;
+        };
+        let place = |input: &model::Type| {
+            matches!(input, model::Type::Reference {
+                lifetime: model::Lifetime::Early { .. },
+                ty,
+                ..
+            } if matches!(&**ty, model::Type::Definition { id, arguments }
+                if lifetimes(id) == Some(0)
+                    && !arguments.iter().any(|argument| matches!(argument,
+                        model::Argument::Type(ty) if borrows_at_early_lifetime(ty)))))
+        };
+        matches!(signature.receiver(), model::Receiver::None)
+            && matches!(lifetimes(id), Some(count) if count != 0)
+            && names_early_lifetime(signature.output())
+            && signature.inputs().any(borrows_mutably_at_early_lifetime)
+            && signature
+                .inputs()
+                .filter(|input| borrows_at_early_lifetime(input))
+                .all(place)
+    }
+
+    /// Whether a function with no receiver gives a struct or enum that
     /// declares a lifetime, and each input that borrows at an early lifetime is a
     /// shared reference to a crate type that declares none, as iced's
     /// `qr_code<'a, Theme>(data: &'a Data) -> QRCode<'a, Theme>`: its output
@@ -9616,6 +9658,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     .filter_map(|(index, _)| u32::try_from(index).ok())
                     .collect();
                 None
+            } else if self.lends_places(signature) {
+                // A value that keeps an exclusive borrow of a crate value
+                // it takes, as wgpu's `RenderPass<'a>` of `clear(&'a
+                // TextureView, &'a mut CommandEncoder, ..)` does: a scope
+                // frame holds each borrowed place for the rest of the
+                // scope, and rustc's rules apply to its later uses.
+                lends = signature
+                    .inputs()
+                    .enumerate()
+                    .filter(|(_, input)| borrows_at_early_lifetime(input))
+                    .filter_map(|(index, _)| u32::try_from(index).ok())
+                    .collect();
+                Some(representability::signature::Scope::Opens)
             } else if !names_early_lifetime(signature.output()) {
                 // A lifetime the output doesn't name, as serde_json's
                 // `from_str<'a, T: Deserialize<'a>>(s: &'a str) -> Result<T>`

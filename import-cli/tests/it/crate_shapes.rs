@@ -249,6 +249,20 @@ fn an_opaque_iterator_that_borrows_its_text_is_iterated() {
     );
 }
 
+/// An associated function whose output keeps a `&'a T` and a `&'a mut U`
+/// it takes at one early-bound lifetime, as iced's integration
+/// `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`:
+/// the output holds both places for the rest of its block, its drop
+/// writes into the one it borrows exclusively, and the program uses that
+/// one again after the block, as rustc's borrow ends there (#1973).
+#[test]
+fn a_value_keeps_an_exclusive_borrow_of_what_it_was_made_from() {
+    runs_as_cargo_does(
+        "passes",
+        "frame\nclear frame to 7, draw 1 on frame, draw 2 on frame, end\n",
+    );
+}
+
 /// A type whose method gives an opaque iterator, reached through a module
 /// that re-exports the type's module, as ratatui's
 /// `macros::ratatui_core::text::Line` is, by a program that never calls the
