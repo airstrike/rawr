@@ -342,7 +342,7 @@ fn compile<B>(
     let mirrored = std::str::from_utf8(generated_manifest)
         .ok()
         .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
-    let version = runner_version(context.project());
+    let version = runner_version(context);
     // The project's own lock, which a runner linked to the shared runtime
     // starts from (#1912).
     let project_lock = fs::read(workspace.join("Cargo.lock")).ok();
@@ -766,15 +766,17 @@ fn runner_lock(
     (pruned.is_some() || versioned.is_some() || filled.is_some()).then(|| document.to_string())
 }
 
-/// The runner's version for `project`: none for a project's own runner, and
-/// `0.0.0+<digest>` of its path under the workspace root for a workspace
-/// member's. Every member's runner builds in the workspace's one build
-/// directory, and Cargo keys a package that roots its own workspace by its
-/// name and version alone. Without a version of its own, a member's runner
-/// would take another's build script and units as its own (#1421).
-fn runner_version(project: &Path) -> Option<String> {
-    let member = rawr_location::member_path(project)?;
-    let digest = Sha256::digest(member.as_os_str().as_encoded_bytes());
+/// The runner's version for the project of `context`: `0.0.0+<digest>` of
+/// what tells its Rawr directory apart from the others in its target
+/// directory ([`rawr_location::shared_path`]), and none for a workspace
+/// root's runner in its own. Cargo keys a package that roots its own
+/// workspace by its name and version alone, so without a version of its
+/// own a workspace member's runner (#1421), or a runner of any project
+/// that shares the target directory (#1984), would take another's build
+/// scripts and units as its own, and with them the runtime they link.
+fn runner_version(context: &crate::context::Context) -> Option<String> {
+    let shared = rawr_location::shared_path(context.rawr(), context.project())?;
+    let digest = Sha256::digest(shared.as_os_str().as_encoded_bytes());
     let mut version = String::from("0.0.0+");
     for byte in &digest[..8] {
         version.push_str(&format!("{byte:02x}"));
