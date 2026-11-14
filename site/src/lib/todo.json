@@ -4073,7 +4073,7 @@
     {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
     {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
-    {"issue":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
     {"issue":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open","category":"Divergences from rustc"},
     {"issue":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open","category":"Shared dependency cache (D607)"},
@@ -4182,7 +4182,7 @@
     {"issue":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1863,"title":"The owner remembers the copies it wrote and hands its loaded program to the preparation","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.205"},
     {"issue":1864,"title":"The check of a preparation reloads and revalidates the whole program it was handed","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1866,"title":"A start whose API is current reads it, its classification and its facade once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.206"},
     {"issue":1867,"title":"Fragment read keys re-hash each decoded fragment, and kept fragment bodies are deep-cloned into each read","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1868,"title":"A native pull from a program's kept iterator removes its first item, O(n) per pull","state":"open","category":"Shared dependency cache (D607)"},
@@ -4234,7 +4234,8 @@
     {"issue":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"open","category":"Hot reload of a marked `main` (D555)"}
   ],
   "groups": [
     {
@@ -5525,7 +5526,7 @@
             {"number":1661,"title":"A runner's kept lowering on disk stores each host type definition by value, 600 KB for one fixture file","state":"open"},
             {"number":1662,"title":"A runner's warm start still resolves the whole program and compiles the whole generated text","state":"open"},
             {"number":1712,"title":"In a dev build, a project's stored runner is reused across rawr source changes","state":"closed"},
-            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"open"},
+            {"number":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"closed"},
             {"number":1759,"title":"The resolution owner's Cargo view replay is redone for every check in a running owner","state":"closed"},
             {"number":1760,"title":"A start walks its runner's read-set closure six times","state":"closed"},
             {"number":1761,"title":"A restart after a full preparation prepares again","state":"closed"},
@@ -5543,7 +5544,7 @@
             {"number":1812,"title":"Delete the unused state-carry path: ExportState and SeedState frames and Slot::carry_state","state":"closed"},
             {"number":1813,"title":"A marked main keeps taking swaps while its new runner builds","state":"open"},
             {"number":1814,"title":"Carry window frames across restarts on Windows and X11","state":"open"},
-            {"number":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"open"},
+            {"number":1865,"title":"A marked type native code holds but never opens crosses as a fixed-layout handle, so a field edit builds nothing native","state":"closed"},
             {"number":1873,"title":"A start that replays shared bindings keeps no record of what native code uses","state":"open"},
             {"number":1874,"title":"A rustc auto-trait error about a handle-held struct names rawr's hidden marker","state":"open"},
             {"number":1875,"title":"A `&mut` of a handle-held struct crosses as an argument beside the receiver","state":"open"},
@@ -5604,7 +5605,8 @@
             {"number":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed"},
             {"number":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open"},
             {"number":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open"},
-            {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"}
+            {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"},
+            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"open"}
           ]
         }
       ]
