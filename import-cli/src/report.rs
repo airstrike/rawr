@@ -37,6 +37,9 @@ pub fn report(
 pub enum Task {
     /// Building the program's runner: its Rust dependencies and bindings.
     Build,
+    /// Starting the built program: keeping what it was built from while it
+    /// runs.
+    Start,
     /// Watching the program's files for saves.
     Watch,
 }
@@ -54,6 +57,8 @@ impl Task {
                 )
             }
             (Self::Build, None) => "rawr could not build the program's Rust dependencies".into(),
+            (Self::Start, Some(file)) => format!("rawr could not start `{}`", shown(file)),
+            (Self::Start, None) => "rawr could not start the program".into(),
             (Self::Watch, Some(file)) => {
                 format!(
                     "rawr could not watch the files of `{}` for saves",
@@ -121,5 +126,11 @@ mod tests {
             )
         );
         assert_eq!(report.code(), diagnostic::code::FRAMEWORK_NATIVE);
+        // A failure once the program is built says rawr was starting it
+        // (#1933).
+        assert_eq!(
+            Task::Start.headline(Some("/project/src/main.rs")),
+            "rawr could not start `/project/src/main.rs`"
+        );
     }
 }

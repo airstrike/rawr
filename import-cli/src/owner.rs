@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use rawr::diagnostic;
 use rawr_cli::color;
 
+use crate::report::Task;
+
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const IDLE_POLL: Duration = Duration::from_millis(25);
 const REFRESH_POLL: Duration = Duration::from_millis(250);
@@ -992,17 +994,18 @@ fn session(
                         }
                         let (request, snapshot) = miss.into_parts();
                         let kept = request.kept().ok();
-                        let mut report = |error: &dyn std::fmt::Display, again: bool| {
+                        let mut report = |task, error: &dyn std::fmt::Display, again: bool| {
                             stale |= again;
-                            framework(error, source.clone())
+                            crate::report::failure(task, error, Some(source.clone()))
                         };
                         let walks = rawr_import::progress::read_set_walks();
                         let built = request
                             .generate()
-                            .map_err(|error| report(&error, restarts.again(&error)))
+                            .map_err(|error| report(Task::Build, &error, restarts.again(&error)))
                             .and_then(|generated| {
-                                lane.build(generated)
-                                    .map_err(|error| report(&error, restarts.again(&error)))
+                                lane.build(generated).map_err(|error| {
+                                    report(Task::Build, &error, restarts.again(&error))
+                                })
                             })
                             .inspect(|_| {
                                 if let Some(kept) = &kept {
@@ -1010,9 +1013,9 @@ fn session(
                                 }
                             })
                             .and_then(|mut built| {
-                                built
-                                    .retain_startup(&snapshot)
-                                    .map_err(|error| report(&error, restarts.again(&error)))?;
+                                built.retain_startup(&snapshot).map_err(|error| {
+                                    report(Task::Start, &error, restarts.again(&error))
+                                })?;
                                 Ok(built)
                             });
                         // A program that exited with status 0 as its next
@@ -1047,7 +1050,9 @@ fn session(
                                     watch_request,
                                     handover,
                                 )
-                                .map_err(|error| report(&error, restarts.again(&error)))
+                                .map_err(|error| {
+                                    report(Task::Start, &error, restarts.again(&error))
+                                })
                             })
                             .inspect(|_| {
                                 if rawr_cli::cells::verbose() {
@@ -1595,7 +1600,11 @@ fn prepare_on_lane(
             }
             Err(rawr_import::node::Error::SourceChanged(_)) => saved = Some(discover(target)?),
             Err(error) if restarts.again(&error) => {}
-            Err(error) => return Err(framework(error, source.clone()).into()),
+            Err(error) => {
+                return Err(
+                    crate::report::failure(Task::Start, error, Some(source.clone())).into(),
+                );
+            }
         }
     }
 }
