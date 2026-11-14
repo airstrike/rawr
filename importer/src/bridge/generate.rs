@@ -135,7 +135,7 @@ pub static PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 thread_local! {
     /// The arena each [`arrive`] on this thread took the place of, if
     /// any, which its [`depart`] gives back.
-    pub static VISITED: RefCell<Vec<Option<Arena>>> = const { RefCell::new(Vec::new()) };
+    pub static VISITED: RefCell<Vec<Visit>> = const { RefCell::new(Vec::new()) };
     /// Whether this thread's [`REHOMES`], [`RELENDS`] or [`UNLENDS`] may
     /// hold an entry.
     pub static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -412,15 +412,36 @@ pub struct Moved {
 /// script value is made there. What holds the proxy, as the `Some` of a
 /// `filter_map`, is known now.
 #[allow(dead_code)]
-pub fn script_proxy(mut value: Dynamic) -> __rawr_internal::crossing::Proxy {
+pub fn script_proxy(value: Dynamic) -> __rawr_internal::crossing::Proxy {
+    carried_proxy(value).unwrap_or_else(__rawr_internal::crossing::Proxy::new)
+}
+
+/// A script future's output, polled in an arena of its own call or its
+/// own future's, which ends with the future: the native values it holds
+/// move with it to the arena where it is first used, as a crate value made
+/// on the thread that polls the future reaches the owner thread (#1957). An
+/// output made in the owner's arena is left as it is.
+#[allow(dead_code)]
+pub fn future_output(value: Dynamic) -> Dynamic {
+    match carried_proxy(value) {
+        Ok(proxy) => proxy.into_pending(),
+        Err(value) => value,
+    }
+}
+
+/// The deferred proxy of `value` on a thread whose arena is a call's own,
+/// with the native values it holds there moved out with it, which go to
+/// the arena where it is first used (`script_proxy`); `value` back when
+/// it holds none there.
+fn carried_proxy(mut value: Dynamic) -> Result<__rawr_internal::crossing::Proxy, Dynamic> {
     let moved = arena_access(|arena| arena.call.then(|| (arena.epoch, arena.move_out(&mut value))))
         .flatten()
         .filter(|(_, moved)| !moved.is_empty());
     let Some((epoch, moved)) = moved else {
-        return __rawr_internal::crossing::Proxy::new(value);
+        return Err(value);
     };
     let mut pending = Some((value, moved));
-    __rawr_internal::crossing::Proxy::deferred(move || {
+    Ok(__rawr_internal::crossing::Proxy::deferred(move || {
         let (value, released) = arena_access(|arena| {
             let (mut value, moved) = pending.take()?;
             let released = arena.move_in(&mut value, epoch, moved);
@@ -430,7 +451,7 @@ pub fn script_proxy(mut value: Dynamic) -> __rawr_internal::crossing::Proxy {
         // The handles on the call's slots go once the arena is free.
         drop(released);
         Some(value)
-    })
+    }))
 }
 
 pub fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
@@ -1526,18 +1547,41 @@ impl Drop for Departed {
     }
 }
 
+/// The arena an [`arrive`] took the place of: the one in this thread's
+/// cell, if any, or the one a native call running here lends.
+pub enum Visit {
+    Cell(Option<Arena>),
+    Lent(Arena),
+}
+
 /// Make this thread's arena the one `departed` holds, or a call arena of
 /// its own when it holds none, where the thread has no arena: `false`,
-/// with `departed` left, when it has one, as a call running here lends.
+/// with `departed` left, when it has one, as a call running here lends,
+/// unless `departed` holds a carried arena, which takes that one's place.
 pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
     // The arena a future or a closure carries its native values in (#1985)
     // takes the place of the one this thread has, which `depart` gives
     // back, as on the owner thread.
-    let home = departed
-        .as_ref()
-        .filter(|away| away.is::<Departed>())
-        .and_then(|_| NATIVE_ARENA.try_with(|cell| cell.try_borrow_mut().ok().map(|mut arena| arena.take())).ok().flatten());
+    let carried = departed.as_ref().is_some_and(|away| away.is::<Departed>());
+    let home = if carried {
+        NATIVE_ARENA.try_with(|cell| cell.try_borrow_mut().ok().map(|mut arena| arena.take())).ok().flatten()
+    } else {
+        None
+    };
     if arena_access(|_| ()).is_some() {
+        // So does it of one a native call running here lends, as an event
+        // loop that polls a task on the owner thread does (#2016).
+        if carried
+            && home.is_none()
+            && __rawr_internal::island::lend::with::<Arena, _>(|_| ()).is_some()
+            && let Some(mut away) = departed.take().and_then(|away| away.downcast::<Departed>().ok())
+        {
+            let arena = arena_of(&mut away);
+            if let Some(lent) = __rawr_internal::island::lend::with(|lent: &mut Arena| std::mem::replace(lent, arena)) {
+                VISITED.with_borrow_mut(|visited| visited.push(Visit::Lent(lent)));
+                return true;
+            }
+        }
         if let Some(home) = home {
             NATIVE_ARENA.with(|cell| *cell.borrow_mut() = home);
         }
@@ -1555,11 +1599,19 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
             cell.borrow().as_ref().is_some_and(|arena| arena.epoch == epoch)
         });
         if arrived {
-            VISITED.with_borrow_mut(|visited| visited.push(None));
+            VISITED.with_borrow_mut(|visited| visited.push(Visit::Cell(None)));
         }
         return arrived;
     };
-    VISITED.with_borrow_mut(|visited| visited.push(home.flatten()));
+    VISITED.with_borrow_mut(|visited| visited.push(Visit::Cell(home.flatten())));
+    let arena = arena_of(&mut away);
+    NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(arena));
+    true
+}
+
+/// The arena `away` holds, made again with its epoch and slots, its values
+/// back in them.
+fn arena_of(away: &mut Departed) -> Arena {
     away.arrived = true;
     let mut arena = Arena { call: true, ..Arena::new(away.epoch) };
     arena.free = std::mem::take(&mut away.free);
@@ -1584,8 +1636,7 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
             entry.name = moved.name;
         }
     }
-    NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(arena));
-    true
+    arena
 }
 
 /// This thread's call arena out of its cell, as [`arrive`] made it, to go
@@ -1593,11 +1644,19 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
 /// to another thread, as rustc refuses a future that holds one across an
 /// `.await` where it must be `Send` (E0277).
 pub fn depart() -> Option<Box<dyn Any + Send>> {
-    let mut arena = NATIVE_ARENA.with(|cell| cell.borrow_mut().take())?;
-    // The arena `arrive` took the place of, back in its cell.
-    if let Some(home) = VISITED.with_borrow_mut(Vec::pop).flatten() {
-        NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(home));
-    }
+    // The arena `arrive` took the place of, back where it was.
+    let mut arena = match VISITED.with_borrow_mut(Vec::pop) {
+        Some(Visit::Lent(home)) => {
+            __rawr_internal::island::lend::with(|lent: &mut Arena| std::mem::replace(lent, home))?
+        }
+        visit => {
+            let arena = NATIVE_ARENA.with(|cell| cell.borrow_mut().take())?;
+            if let Some(Visit::Cell(Some(home))) = visit {
+                NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(home));
+            }
+            arena
+        }
+    };
     arena.release_dropped();
     let generations = arena.slots.iter().map(|slot| slot.generation).collect();
     let mut moved = Vec::new();
@@ -2058,8 +2117,21 @@ impl Arena {
 
     /// The values `value`'s handles hold in this call's arena, out of their
     /// slots to move with it (`script_proxy`): each of a `Send` type, held
-    /// by value. Another stays, as its thread can't give it away.
+    /// by value. Another stays, as its thread can't give it away. One that
+    /// a handle outside `value` holds too, as a copy of a `Copy` value
+    /// shares its slot with the value it was copied from, stays for that
+    /// handle, and `value` takes a clone of it.
     pub fn move_out(&mut self, value: &mut Dynamic) -> Vec<Moved> {
+        // How many of each slot's handles `value` holds, and how many there
+        // are in all.
+        let mut held_here = std::collections::HashMap::<u32, (usize, usize)>::new();
+        value.deep_scan(|held| {
+            if let Some(handle) = held.read_lock::<NativeHandle>().filter(|handle| handle.epoch == self.epoch) {
+                let all = handle.release.as_ref().map_or(0, std::sync::Arc::strong_count);
+                held_here.entry(handle.slot).or_insert((0, all)).0 += 1;
+            }
+        });
+        let shared = |slot: u32| held_here.get(&slot).is_some_and(|(here, all)| all > here);
         let mut moved = Vec::<Moved>::new();
         value.deep_scan(|held| {
             let Some((slot, generation)) = held
@@ -2078,7 +2150,11 @@ impl Arena {
             let Some(send) = entry.send.filter(|_| entry.generation == generation && !entry.leased) else {
                 return;
             };
-            let Some(stored) = entry.value.take() else {
+            let copied = entry
+                .clone
+                .filter(|_| shared(slot))
+                .and_then(|clone| clone(entry.value.as_deref()?));
+            let Some(stored) = copied.or_else(|| entry.value.take()) else {
                 return;
             };
             match send(stored) {
@@ -2974,6 +3050,7 @@ pub fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::lodges(lodge);
     __rawr_internal::island::arenas(|| Box::new(CallArena::enter()));
     __rawr_internal::island::travels(arrive, depart);
+    __rawr_internal::island::outputs(future_output);
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();
@@ -3537,8 +3614,19 @@ pub fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<_
         .and_then(|value| value.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
 }
 
+/// The value in a scope frame's region that the `Some` at argument `index`
+/// holds, as an `Option` of an opaque type holds a value a slot made in its
+/// region.
+#[allow(dead_code)]
+pub fn scoped_some(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
+    let option = arguments.values.get(index)?.read_lock::<__rawr_internal::option::Value>()?;
+    let scoped = option.as_ref()?.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
+    scoped
+}
+
 /// The value among the arguments at `indices`, and in the arrays there,
-/// as `column![..]`'s elements are, and the options, as `column![..,
+/// as `column![..]`'s elements are, the tuples in those, as an array of
+/// `(key, element)` pairs holds them, and the options, as `column![..,
 /// maybe.map(|x| text(x))]`'s `Option<Text>` is, whose scope frame's
 /// region ends first: a call that takes values of several frames runs in
 /// it, as `with_children([a, b])` of two `let`s does (#1329).
@@ -3552,7 +3640,17 @@ pub fn scoped_innermost(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) ->
         } else if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
             handles.extend(option.as_ref().and_then(scoped));
         } else if let Some(items) = value.read_lock::<__rawr_internal::Array>() {
-            handles.extend(items.iter().filter_map(scoped));
+            for item in items.iter() {
+                match scoped(item) {
+                    Some(handle) => handles.push(handle),
+                    // A tuple, as each `(key, element)` of an array.
+                    None => {
+                        if let Some(members) = item.read_lock::<__rawr_internal::Array>() {
+                            handles.extend(members.iter().filter_map(scoped));
+                        }
+                    }
+                }
+            }
         }
     }
     __rawr_internal::scope::innermost(handles)
@@ -11588,11 +11686,25 @@ fn lent_inputs_of(
 }
 
 /// The receiver of an opaque type's method in a region (`family`): its
-/// family, and the call of it when the region holds it boxed, through its
-/// trait's method.
+/// family, the call of it when the region holds it boxed, through its
+/// trait's method, and whether the call takes it in an `Option`, as a
+/// trait's method implemented for `Option<T>` takes an `Option<impl Trait>`.
 struct Operand {
     family: family::Family,
     call: Option<String>,
+    optional: bool,
+}
+
+impl Operand {
+    /// The runner's function that finds the receiver's region handle among
+    /// a call's arguments: the argument itself, or what its `Some` holds.
+    fn scoped(&self) -> &'static str {
+        if self.optional {
+            "scoped_some"
+        } else {
+            "scoped_value"
+        }
+    }
 }
 
 /// The call of an opaque type's method `plan`, the `consumer`-th call on
@@ -11633,11 +11745,16 @@ fn region_operand(
             _ => return Ok(String::new()),
         };
     // The receiver a region holds boxed, by its own type, as a container's
-    // method takes `Container<'x, impl Widget<..>>`.
-    let boxed = first_operand(plan)?
-        .and_then(|(key, receiver)| Some((family::Ops::held(&key)?, key, receiver)));
+    // method takes `Container<'x, impl Widget<..>>`, or in an `Option`.
+    let first = match first_operand(plan)? {
+        Some((key, receiver)) if family::Ops::held(&key).is_some() => Some((key, receiver, false)),
+        _ => optional_operand(plan)?.map(|key| (key, Receiver::Owned, true)),
+    };
+    let boxed = first.and_then(|(key, receiver, optional)| {
+        Some((family::Ops::held(&key)?, key, receiver, optional))
+    });
     let (receiver, operand) = match boxed {
-        Some((held, key, receiver)) => {
+        Some((held, key, receiver, optional)) => {
             let lent = match receiver {
                 Receiver::Owned => "receiver",
                 Receiver::Shared => "&**receiver",
@@ -11656,18 +11773,25 @@ fn region_operand(
                 Operand {
                     family,
                     call: Some(call),
+                    optional,
                 },
             )
         }
         None => match (plan.operation(), family_of(operand)) {
-            (Operation::Method { receiver, .. }, Some(family)) if family.named().is_none() => {
-                (*receiver, Operand { family, call: None })
-            }
+            (Operation::Method { receiver, .. }, Some(family)) if family.named().is_none() => (
+                *receiver,
+                Operand {
+                    family,
+                    call: None,
+                    optional: false,
+                },
+            ),
             _ => return Ok(String::new()),
         },
     };
     // In the receiver's region, where an argument that carries its lifetime
     // is too, as pane_grid's `content.title_bar(title_bar)` takes one.
+    let scoped = operand.scoped();
     let mut body = Vec::new();
     {
         let _region = InRegion::enter();
@@ -11716,7 +11840,7 @@ fn region_operand(
     body.push_str("    Err(Error::TypeMismatch)");
     let body = within_lent(lent, body);
     Ok(format!(
-        "\n    if let Some(scoped) = scoped_value(arguments, 0) {{
+        "\n    if let Some(scoped) = {scoped}(arguments, 0) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
 {body}
         }})
@@ -11763,9 +11887,17 @@ fn render_adapter(
         if !by_handle(&operand, &key)
             && let Some(producer) = opaque_producer(cohort, &key)?
         {
+            // One a region holds, as a `Some` of what a view made there,
+            // is reached in it through the trait it is held boxed by.
+            let scoped = if position == 0 {
+                let lent = lent_inputs_of(plan, cohort, profile, facade)?;
+                region_operand(plan, &operand, index, &lent)?
+            } else {
+                String::new()
+            };
             return writeln!(
                 output,
-                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{{scoped}
     super::{module}::{producer}_opaque().call({index}, arguments)
 }}
 ",
@@ -12166,24 +12298,90 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
         // A value of a region, an array of them, as `Column::
         // with_children` takes `column![..]`'s elements, or an option of
         // one, as a crate's impl of its trait for `Option<T>` takes
-        // `maybe.map(|x| text(x))`.
-        let element = match &ty {
+        // `maybe.map(|x| text(x))`, or an array of tuples that hold them,
+        // as a call that takes `(key, element)` pairs.
+        let (element, sequence) = match &ty {
             convert::Type::Sequence {
                 element,
                 owned: true,
                 length: None,
-            }
-            | convert::Type::Option(element) => element,
-            ty => ty,
+            } => (&**element, true),
+            convert::Type::Option(element) => (&**element, false),
+            ty => (ty, false),
         };
-        // One a region holds boxed is reached through its trait alone
-        // (`region_operand`), as the call can't take its type.
-        let boxed = scoped_type(element).is_some_and(|key| family::Ops::held(&key).is_some());
-        if family_of(element).is_some() && !boxed {
+        if region_value(element) || (sequence && region_tuple(element)) {
             region.push(index);
         }
     }
     Ok(region)
+}
+
+/// Whether a value of `ty` is a region's: one of a family the call can
+/// take by its type. One a region holds boxed is reached through its trait
+/// alone (`region_operand`), as the call can't take its type.
+fn region_value(ty: &convert::Type) -> bool {
+    let boxed = scoped_type(ty).is_some_and(|key| family::Ops::held(&key).is_some());
+    family_of(ty).is_some() && !boxed
+}
+
+/// Whether a value of `ty` in a tuple is a region's of a family struct the
+/// runner declares, which the tuple's conversion takes by its name.
+fn region_member(ty: &convert::Type) -> bool {
+    region_value(ty) && family_of(ty).is_some_and(|family| family.named().is_some())
+}
+
+/// Whether `ty` is a tuple that holds a region's value at any depth, as
+/// each `(key, element)` pair of an array of them does when a slot made
+/// the element in its region.
+fn region_tuple(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Tuple(members) => members
+            .iter()
+            .any(|member| region_member(member) || region_tuple(member)),
+        _ => false,
+    }
+}
+
+/// The conversion of `value`, a tuple of type `ty` that holds a region's
+/// values (`region_tuple`), each moved out of its region, or of the arena
+/// when made outside any region, and each other member as `render_from_dynamic`
+/// takes it.
+fn render_region_tuple(
+    ty: &convert::Type,
+    value: &str,
+    depth: usize,
+) -> Result<String, request::Error> {
+    let convert::Type::Tuple(members) = ty else {
+        return Err(request::drift("a region tuple that is no tuple"));
+    };
+    let items = format!("items_{depth}");
+    let mut converted = Vec::with_capacity(members.len());
+    for (position, member) in members.iter().enumerate() {
+        let item = format!("member_{depth}_{position}");
+        let made = if region_member(member) {
+            let family =
+                family_of(member).ok_or_else(|| request::drift("a region member's family"))?;
+            let taken = family.call(family::Reach::Take, "scoped");
+            let arena = region_arena(member)?;
+            format!(
+                "{{ let item = {item}; let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}"
+            )
+        } else if region_tuple(member) {
+            render_region_tuple(member, &item, depth + 1)?
+        } else {
+            let mut made = String::new();
+            render_from_dynamic(member, &item, depth + 1, &mut made)?;
+            made
+        };
+        converted.push(format!(
+            "{{ let {item} = {items}.next().ok_or(Error::TypeMismatch)?; ({made})? }}"
+        ));
+    }
+    Ok(format!(
+        "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|{items}| {{ if {items}.len() != {count} {{ return Err(Error::TypeMismatch); }} let mut {items} = {items}.into_iter(); Ok::<_, Error>(({members},)) }})",
+        count = members.len(),
+        members = converted.join(", "),
+    ))
 }
 
 thread_local! {
@@ -15384,8 +15582,11 @@ fn render_scoped_receiver(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
-    let (family, call) = match operand {
-        Some(Operand { family, call }) => (family, call),
+    let (family, call, scoped) = match operand {
+        Some(operand) => {
+            let scoped = operand.scoped();
+            (operand.family, operand.call, scoped)
+        }
         None => {
             let mut container = Vec::new();
             render_container_path(
@@ -15399,7 +15600,7 @@ fn render_scoped_receiver(
             )?;
             let container = String::from_utf8(container).map_err(request::unwritable)?;
             match container_family(path, &container) {
-                Some(family) => (family, None),
+                Some(family) => (family, None, "scoped_value"),
                 None => return Ok(()),
             }
         }
@@ -15508,7 +15709,7 @@ fn render_scoped_receiver(
         };
         return writeln!(
             output,
-            "    if let Some(scoped) = scoped_value(arguments, 0) {{{pinned}
+            "    if let Some(scoped) = {scoped}(arguments, 0) {{{pinned}
         #[allow(unused_mut)]
         let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
         let output = {call};
@@ -15529,7 +15730,7 @@ fn render_scoped_receiver(
     };
     writeln!(
         output,
-        "    if let Some(scoped) = scoped_value(arguments, 0) {{
+        "    if let Some(scoped) = {scoped}(arguments, 0) {{
         {given} __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{{pinned}
             #[allow(unused_mut)]
             let mut receiver = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
@@ -16123,10 +16324,37 @@ fn first_operand(plan: &Plan) -> Result<Option<(String, Receiver)>, request::Err
     }
 }
 
-/// The call of a function `plan` whose first input is `receiver` and whose
-/// others are `argument_0`, ..., as a method of the trait a region holds
-/// that input boxed through (`declare_ops`) makes it.
-fn scoped_function_call(plan: &Plan) -> Result<String, request::Error> {
+/// The value in an `Option` at the first runtime position of `plan`, a
+/// function's, spelled at `'x`, as a trait's method implemented for
+/// `Option<T>` takes an `Option<impl Trait>`: the call takes it owned. None
+/// for another call.
+fn optional_operand(plan: &Plan) -> Result<Option<String>, request::Error> {
+    let Operation::Function {
+        signature,
+        substitutions,
+        functions,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(None);
+    };
+    if functions.iter().any(|function| function.position() == 0) {
+        return Ok(None);
+    }
+    let Some(input) = signature.inputs().first() else {
+        return Ok(None);
+    };
+    Ok(match substituted(input, signature, substitutions)? {
+        convert::Type::Option(element) => scoped_type(&element),
+        _ => None,
+    })
+}
+
+/// The call of a function `plan` whose first input is `first`, the
+/// receiver or what holds it, and whose others are `argument_0`, ..., as a
+/// method of the trait a region holds the receiver boxed through
+/// (`declare_ops`) makes it.
+fn scoped_function_call(plan: &Plan, first: &str) -> Result<String, request::Error> {
     let Operation::Function {
         signature,
         substitutions,
@@ -16155,7 +16383,7 @@ fn scoped_function_call(plan: &Plan) -> Result<String, request::Error> {
         *container_parameters,
         &mut call,
     )?;
-    let mut inputs = vec!["receiver".to_owned()];
+    let mut inputs = vec![first.to_owned()];
     inputs
         .extend((1..signature.inputs().len()).map(|position| format!("argument_{}", position - 1)));
     write!(call, "({})", inputs.join(", ")).map_err(request::unwritable)?;
@@ -16325,12 +16553,15 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
         if !matches!(opaque_operand(plan)?, Some((0, ..))) {
             continue;
         }
-        let Some((operand, receiver)) = first_operand(plan)? else {
-            continue;
+        // The value itself, or the value in the `Option` a function takes,
+        // which the method gives it as `Some`.
+        let (receiver, first) = match first_operand(plan)? {
+            Some((operand, receiver)) if operand == key => (receiver, "receiver"),
+            _ if optional_operand(plan)?.as_ref() == Some(&key) => {
+                (Receiver::Owned, "Some(receiver)")
+            }
+            _ => continue,
         };
-        if operand != key {
-            continue;
-        }
         let (signature, substitutions, skip, closure, call) = match plan.operation() {
             Operation::Method {
                 signature,
@@ -16363,7 +16594,7 @@ fn declare_ops(plans: &[Plan], ty: &convert::Type) -> Result<(), request::Error>
                 substitutions,
                 1,
                 closure.as_ref(),
-                scoped_function_call(plan)?,
+                scoped_function_call(plan, first)?,
             ),
             _ => continue,
         };
@@ -19783,6 +20014,24 @@ fn render_take_input(
         return writeln!(
             output,
             "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.{taken}.map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
+        )
+        .map_err(request::unwritable);
+    }
+    // An array of tuples that hold a scope frame's region's values, each
+    // moved out of it into the call, as a call that takes `(key, element)`
+    // pairs does.
+    if REGION_ARGUMENTS.get()
+        && let convert::Type::Sequence {
+            element,
+            owned: true,
+            length: None,
+        } = substituted(ty, signature, substitutions)?
+        && region_tuple(&element)
+    {
+        let converted = render_region_tuple(&element, "item", 0)?;
+        return writeln!(
+            output,
+            "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {converted}).collect::<Result<Vec<_>, Error>>())?;"
         )
         .map_err(request::unwritable);
     }

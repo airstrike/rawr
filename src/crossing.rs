@@ -100,6 +100,12 @@ impl Proxy {
         }
     }
 
+    /// The value as it is held, still to be made where it is first used
+    /// when it is deferred ([`settled`]).
+    pub fn into_pending(self) -> Dynamic {
+        self.value
+    }
+
     /// The value, given back to script code: the value itself when no
     /// handle to it remains elsewhere.
     pub fn into_dynamic(self) -> Dynamic {
@@ -156,6 +162,16 @@ impl Proxy {
             Err(error) => panic!("{}", crate::future::message(&error)),
         }
     }
+}
+
+/// `value`, made where it is used now when it is one [`Proxy::into_pending`]
+/// gave of a deferred value, as the output of a future polled on another
+/// thread is made in the arena of the call that takes it (#1957).
+pub fn settled(value: Dynamic) -> Dynamic {
+    if value.read_lock::<Deferred>().is_none() {
+        return value;
+    }
+    Proxy::new(value).into_dynamic()
 }
 
 /// A value [`Proxy::deferred`] makes, shared by the proxy's copies.

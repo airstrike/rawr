@@ -2767,6 +2767,18 @@ fn a_crate_takes_a_program_conversion_a_collected_line_and_a_closure_off_thread(
     assert_eq!(rawr, "[Rust] [Elm]\ntrunk\n12");
 }
 
+/// #1957, #1986: a script future polled on a thread of its own, as a tokio
+/// worker polls pokedex's `Pokemon::search()`, gives its output with the
+/// crate values it made there to the function that maps it, as
+/// `Task::perform(future, Message::PokemonFound)` does, and the program
+/// reads them on its own thread. The output is `cargo run`'s.
+#[test]
+fn a_future_s_output_brings_the_crate_values_it_made_off_thread() {
+    let (rawr, cargo) = both_printed("searched.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "found [1, 2, 3]\nfault Empty\nfound [1, 2, 3, 4, 5]");
+}
+
 /// #856: pushing to the items while a wrapped result that borrows them
 /// lives is rustc's E0502, which stops the program before anything runs,
 /// with cargo's report alone.
