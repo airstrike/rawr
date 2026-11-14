@@ -1601,6 +1601,19 @@ impl<'a> Parser<'a> {
             }
             return self.symbolic_associated(&definition, false, expression);
         } else {
+            // A parameter's type with no generic in it is its argument's
+            // expected type, as a free function's is: `State::with_life(
+            // cells.collect())` collects into the `Life` it takes.
+            if definition.generics().is_empty() {
+                self.argument_hints = definition
+                    .parameters()
+                    .iter()
+                    .map(|parameter| {
+                        (!mentions_parameter(&parameter.ty))
+                            .then(|| Ty::from_resolved(&parameter.ty))
+                    })
+                    .collect();
+            }
             self.parse_borrowing_arguments("associated function arguments")?
         };
         let substitution =
