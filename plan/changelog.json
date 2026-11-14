@@ -35,7 +35,8 @@
       {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]},
       {"text":"A struct declared in a function body with a crate's derive, as pokedex's `#[derive(Deserialize)] struct Entry`, works again, and its derived impl's generic functions build in the runner.","issues":[1938]},
       {"text":"A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules.","issues":[1932]},
-      {"text":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to.","issues":[1963],"refs":[610]}
+      {"text":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to.","issues":[1963],"refs":[610]},
+      {"text":"rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window.","issues":[1947]}
     ]
   },
   "releases": [

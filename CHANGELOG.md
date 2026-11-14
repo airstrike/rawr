@@ -36,6 +36,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A struct declared in a function body with a crate's derive, as pokedex's `#[derive(Deserialize)] struct Entry`, works again, and its derived impl's generic functions build in the runner. (#1938)
 - A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules. (#1932)
 - A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to. (#1963; part of #610)
+- rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window. (#1947)
 
 ## 0.3.213 (2026-11-13)
 
