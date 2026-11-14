@@ -49,7 +49,9 @@
         {"text":"A crate builder method that keeps a borrow in Self, as loading_spinners' `Linear::easing(&'a Easing)` does, takes a static or the program's value for as long as the value it is kept in.","issues":[610]},
         {"text":"A script closure can take a crate trait's object that native code lends for the call, as iced's `window::run` lends `&dyn Window`, and pass it on to another crate call.","issues":[1967],"refs":[28]},
         {"text":"A crate function's opaque value that borrows a string it is given, such as iced's `markdown::parse(&text)`, lives beside the string, so iced's changelog builds and runs.","issues":[1966]},
-        {"text":"A struct literal or pattern written through a crate's type alias, as wgpu's `DeviceDescriptor { label: None, .. }` and `SurfaceConfiguration { .. }`, builds the aliased struct with the alias's arguments, and a `&self` method's `impl Future` that borrows nothing, as `request_device`, can be awaited.","issues":[1961],"refs":[1953]}
+        {"text":"A struct literal or pattern written through a crate's type alias, as wgpu's `DeviceDescriptor { label: None, .. }` and `SurfaceConfiguration { .. }`, builds the aliased struct with the alias's arguments, and a `&self` method's `impl Future` that borrows nothing, as `request_device`, can be awaited.","issues":[1961],"refs":[1953]},
+        {"text":"Calling a `&self` method on a crate struct's field, as wgpu's `capabilities.formats.iter()` does, borrows the field where it is and leaves the struct usable, as in Rust.","issues":[1969]},
+        {"text":"A crate struct's `Option<&str>` field can be read in a pattern and filled from `..Default::default()`.","issues":[1970]}
       ]
     },
     "releases": [
@@ -4328,10 +4330,12 @@
     {"issue":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"closed","category":"No glue (D593)"},
     {"issue":1967,"title":"A script closure can take a crate trait's object that native code lends for the call, as iced's…","state":"closed","category":"No glue (D593)"},
     {"issue":1968,"title":"A borrowing opaque value bounded by a core trait besides Iterator (`impl Iterator + Clone`) can't be kept","state":"open","category":"No glue (D593)"},
-    {"issue":1969,"title":"Reading a crate struct's Vec<Copy crate value> field for a &self method moves the struct (integration)","state":"open","category":"No glue (D593)"},
-    {"issue":1970,"title":"A crate struct's Option<&str> field read in a pattern panics on the adapter's field copy flag (proof.rs:97)","state":"open","category":"Divergences from rustc"},
+    {"issue":1969,"title":"Reading a crate struct's Vec<Copy crate value> field for a &self method moves the struct (integration)","state":"closed","category":"No glue (D593)"},
+    {"issue":1970,"title":"A crate struct's Option<&str> field read in a pattern panics on the adapter's field copy flag (proof.rs:97)","state":"closed","category":"Divergences from rustc"},
     {"issue":1971,"title":"`..Default::default()` as a generic crate struct's base with a &str argument calls Described::<Value>::default()","state":"open","category":"No glue (D593)"},
-    {"issue":1972,"title":"A match on a crate struct pattern with refutable fields is E0004 though its arms cover every value","state":"open","category":"Divergences from rustc"}
+    {"issue":1972,"title":"A match on a crate struct pattern with refutable fields is E0004 though its arms cover every value","state":"open","category":"Divergences from rustc"},
+    {"issue":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"open","category":"No glue (D593)"},
+    {"issue":1974,"title":"A crate struct's non-Clone field borrowed by a &self method is not read in place","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4983,8 +4987,9 @@
             {"number":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"closed"},
             {"number":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open"},
             {"number":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"closed"},
-            {"number":1969,"title":"Reading a crate struct's Vec<Copy crate value> field for a &self method moves the struct (integration)","state":"open"},
-            {"number":1971,"title":"`..Default::default()` as a generic crate struct's base with a &str argument calls Described::<Value>::default()","state":"open"}
+            {"number":1969,"title":"Reading a crate struct's Vec<Copy crate value> field for a &self method moves the struct (integration)","state":"closed"},
+            {"number":1971,"title":"`..Default::default()` as a generic crate struct's base with a &str argument calls Described::<Value>::default()","state":"open"},
+            {"number":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"open"}
           ],
           "milestone": "0.3"
         },
