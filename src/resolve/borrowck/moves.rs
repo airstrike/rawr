@@ -23,6 +23,10 @@ pub(crate) struct UseAfterMove {
     pub(crate) borrowed: bool,
     /// What moved is a part of the place used: rustc's "partially moved".
     pub(crate) partial: bool,
+    /// What moved, as rustc names it: the part of a partial move.
+    pub(crate) moved_place: String,
+    /// Where the moved place's local is declared.
+    pub(crate) declaration: Span,
 }
 
 /// The first use of a moved place in `body`, in the order the body runs.
@@ -97,6 +101,8 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
                     access: span,
                     borrowed,
                     partial: known.projection.len() > place.projection.len(),
+                    moved_place: describe(body, known),
+                    declaration: body.locals[known.local.0 as usize].declaration,
                 });
             },
         );

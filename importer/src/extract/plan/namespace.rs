@@ -225,13 +225,13 @@ impl Retained {
                     if let Some(index) = member {
                         let member = &self.members[index];
                         if member.digest != Some(expected)
-                            || !expected_facts(member, frozen).holds(facts(metadata).map_err(
-                                |_| {
+                            || !expected_facts(member, frozen).holds(
+                                facts(&member.path, metadata).map_err(|_| {
                                     crate::node::Error::Codec(
                                         "joint namespace physical facts invalid",
                                     )
-                                },
-                            )?)
+                                })?,
+                            )
                         {
                             return Err(crate::node::Error::Codec(
                                 "joint inventory/namespace obligations disagree",
@@ -366,7 +366,7 @@ fn verify_content_with(
                 .filter(|(_, member)| member.selected)
             {
                 let metadata = metadata(&member.path, allocation)?;
-                if !expected_facts(member, frozen).holds(facts(&metadata)?) {
+                if !expected_facts(member, frozen).holds(facts(&member.path, &metadata)?) {
                     return Err(invalid("selected namespace physical facts changed"));
                 }
                 if shared(index) {
@@ -470,7 +470,7 @@ fn observe(
             Ok((|| {
                 for member in members.iter_mut().filter(|member| member.candidate) {
                     let metadata = metadata(&member.path, allocation)?;
-                    if !member.facts.holds(facts(&metadata)?) {
+                    if !member.facts.holds(facts(&member.path, &metadata)?) {
                         return Err(invalid("namespace physical facts changed before hashing"));
                     }
                     member.digest = Some(hashes.hash(&member.path, &metadata).map_err(node)?);
@@ -489,9 +489,14 @@ fn push_member(
     explicit: bool,
     allocation: &mut Allocation,
 ) -> Result<()> {
+    if !explicit && crate::input::split_debuginfo(&path) {
+        // Packed debug info (`.dSYM`, which Cargo links beside a build
+        // script) is never a crate rustc can find, and never read.
+        return Ok(());
+    }
     bounded(members.len().saturating_add(1))?;
     let metadata = metadata(&path, allocation)?;
-    let facts = facts(&metadata)?;
+    let facts = facts(&path, &metadata)?;
     if explicit && facts.kind != 1 {
         return Err(invalid("explicit candidate is not a file"));
     }
@@ -533,12 +538,19 @@ fn metadata(path: &Path, allocation: &mut Allocation) -> Result<fs::Metadata> {
     }
 }
 
-fn facts(metadata: &fs::Metadata) -> Result<Facts> {
+fn facts(path: &Path, metadata: &fs::Metadata) -> Result<Facts> {
     if metadata.file_type().is_symlink()
         || !(metadata.is_dir() || metadata.is_file())
         || metadata.is_file() && bundle::hard_linked(metadata)
     {
-        return Err(invalid("namespace member has unsupported type or links"));
+        return Err(Error::Extraction {
+            code: "compiler-namespace",
+            reason: format!(
+                "namespace member `{}` has unsupported type or links",
+                path.display()
+            )
+            .into(),
+        });
     }
     Ok(Facts {
         kind: if metadata.is_dir() { 0 } else { 1 },

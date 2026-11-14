@@ -2021,6 +2021,7 @@ impl<'a> Parser<'a> {
         if let Some(indexed) = self.index_impl(&value, &mut index, end)? {
             return Ok(indexed);
         }
+        self.note_known_index(&value.ty, index.span, span(value.span.start(), end));
         // `value[index]` of a crate type: its `impl Index<Idx>`'s `index`,
         // which the importer brings as any member of the type (#709).
         #[cfg(feature = "rust-import")]

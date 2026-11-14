@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-13",
+  "updated": "2026-11-14",
   "version": "0.3.213",
   "examples": {
     "running": 34,
@@ -9,7 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A use after a move gives rustc's note on the parameter that took the value and its clone suggestion, and a borrow of a moved local says 'borrow of moved value' over the borrow.","issues":[921]},
+        {"text":"`let x;` follows rustc: a second assignment on any path is E0384, a match arm can assign it, `let (a, b);` works, and a Drop type drops only where it was assigned.","issues":[946]},
+        {"text":"Arithmetic on literals that overflows or divides by zero, and an array index past its length, are refused with rustc's arithmetic_overflow and unconditional_panic errors.","issues":[947]},
+        {"text":"A type mismatch underlines the whole expression, as rustc does.","issues":[1729]},
+        {"text":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo names or links beside a build script is no longer read as a build output, a crate rustc can find, or part of the runner's build.","issues":[1923]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.213",
@@ -3239,7 +3248,7 @@
     {"issue":918,"title":"A parse whose target its own chain gives is lost when a closure in the chain formats","state":"closed","category":"Divergences from rustc","release":"0.3.132"},
     {"issue":919,"title":"E0382 says borrow or use as rustc does, at the name, with the move's type","state":"closed","category":"Divergences from rustc","release":"0.3.132"},
     {"issue":920,"title":"Restore the test that every playground example prints what rustc's build prints","state":"closed","category":"Health","release":"0.3.132"},
-    {"issue":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open","category":"Divergences from rustc"},
+    {"issue":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"closed","category":"Divergences from rustc"},
     {"issue":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":923,"title":"`Chars::as_str` is E0599","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":924,"title":"Operator traits on a std facade type","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
@@ -3264,8 +3273,8 @@
     {"issue":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":944,"title":"Type::try_from(&v[..]) of untyped integers picks the [T; N] impl","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":945,"title":"`-` on an unsigned value or literal is E0600","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
-    {"issue":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"open","category":"Divergences from rustc"},
-    {"issue":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"open","category":"Divergences from rustc"},
+    {"issue":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"closed","category":"Divergences from rustc"},
+    {"issue":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"closed","category":"Divergences from rustc"},
     {"issue":948,"title":"A spawned thread's panic message lacks its file:line:col","state":"closed","category":"Divergences from rustc","release":"0.3.179"},
     {"issue":949,"title":"Mutex methods besides lock().unwrap(), and LockResult as a value","state":"open","category":"Divergences from rustc"},
     {"issue":950,"title":"mpsc try_recv, recv_timeout, sync_channel; thread::scope and Builder","state":"open","category":"Divergences from rustc"},
@@ -4047,7 +4056,7 @@
     {"issue":1726,"title":"Adding or removing a struct or enum re-lowers every file that reaches a type numbered after it","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.186"},
     {"issue":1727,"title":"Adding or removing a marked file re-lowers every marked file","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1728,"title":"A derive added to a private struct prepares a native build and restarts the program as if its fields changed","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.186"},
-    {"issue":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"open","category":"Divergences from rustc"},
+    {"issue":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"closed","category":"Divergences from rustc"},
     {"issue":1730,"title":"A macro_rules! defined after an inserted declaration changes every file's lowering key","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
     {"issue":1731,"title":"rawr fills the disk: 24 GB of install-profile incremental state and 11 GB of import-cli scratch projects","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1732,"title":"Superseded rawr and it units pile up in target/debug, and plain cargo has no hook to prune them","state":"closed","category":"Shared dependency cache (D607)"},
@@ -4235,7 +4244,12 @@
     {"issue":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":1919,"title":"E0308 in a call argument lacks rustc's 'arguments to this function are incorrect' label and notes","state":"open","category":"Divergences from rustc"},
+    {"issue":1920,"title":"arithmetic_overflow and unconditional_panic through locals and 128-bit integer types","state":"open","category":"Divergences from rustc"},
+    {"issue":1921,"title":"E0382 suggestions for moves by method call and for loop, and labels on the derive-Clone note","state":"open","category":"Divergences from rustc"},
+    {"issue":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1923,"title":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo…","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5057,7 +5071,7 @@
           "start": 74,
           "size": 4,
           "state": "next",
-          "note": "rustlings at f7b9b3c in its own package (tokio): 95 of 95 solutions run and match, 132 of 132 tests pass, and 95 of 95 exercises fail as rustc fails them (#1653). Left: rustc's notes and lints (#921, #946, #947). Left beyond rustlings: std members (#949, #950, #1001), constant types (#925) and macro calls in item, type and pattern positions (#961).",
+          "note": "rustlings at f7b9b3c in its own package (tokio): 95 of 95 solutions run and match, 132 of 132 tests pass, and 95 of 95 exercises fail as rustc fails them (#1653), now with rustc's E0382 notes, `let x;` rules and deny lints (#921, #946, #947). Left: call-argument E0308 notes (#1919), lints through locals (#1920), move suggestions (#1921). Beyond rustlings: std members (#949, #950, #1001), constant types (#925), macro calls in item, type and pattern positions (#961).",
           "issues": [
             {"number":236,"title":"A `macro_rules!` the program itself defines is unsupported","state":"closed"},
             {"number":898,"title":"`rawr test` runs a file's or crate's #[test] functions","state":"closed"},
@@ -5074,7 +5088,7 @@
             {"number":909,"title":"Unknown names and immutable bindings report rustc's codes","state":"closed"},
             {"number":910,"title":"Errors rustc gives without a code don't get a rawr code","state":"closed"},
             {"number":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"closed"},
-            {"number":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"open"},
+            {"number":921,"title":"E0382: rustc's parameter note and clone suggestion","state":"closed"},
             {"number":922,"title":"`std::num::ParseIntError` written in full in a let annotation is an unknown type","state":"closed"},
             {"number":923,"title":"`Chars::as_str` is E0599","state":"closed"},
             {"number":924,"title":"Operator traits on a std facade type","state":"closed"},
@@ -5091,8 +5105,8 @@
             {"number":938,"title":"A `&self` method changing a std collection is a type mismatch, not E0596","state":"closed"},
             {"number":944,"title":"Type::try_from(&v[..]) of untyped integers picks the [T; N] impl","state":"closed"},
             {"number":945,"title":"`-` on an unsigned value or literal is E0600","state":"closed"},
-            {"number":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"open"},
-            {"number":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"open"},
+            {"number":946,"title":"`let x;` follow-ups: Drop types, patterns, flow-exact E0384","state":"closed"},
+            {"number":947,"title":"arithmetic_overflow and unconditional_panic lints","state":"closed"},
             {"number":948,"title":"A spawned thread's panic message lacks its file:line:col","state":"closed"},
             {"number":949,"title":"Mutex methods besides lock().unwrap(), and LockResult as a value","state":"open"},
             {"number":950,"title":"mpsc try_recv, recv_timeout, sync_channel; thread::scope and Builder","state":"open"},
@@ -5115,7 +5129,10 @@
             {"number":1624,"title":"A recursion more than 64 calls deep panics with Stack overflow, where a Rust build runs it","state":"closed"},
             {"number":1625,"title":"Assigning to a field through &self is RAWR-RESOLVE-RECEIVER-MUTATION, not rustc's E0594","state":"closed"},
             {"number":1653,"title":"rawr test of a program in a package with Rust dependencies goes to rawr-import, which has no test command","state":"closed"},
-            {"number":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"open"}
+            {"number":1729,"title":"E0308 inside a call's argument underlines one character where rustc underlines the argument","state":"closed"},
+            {"number":1919,"title":"E0308 in a call argument lacks rustc's 'arguments to this function are incorrect' label and notes","state":"open"},
+            {"number":1920,"title":"arithmetic_overflow and unconditional_panic through locals and 128-bit integer types","state":"open"},
+            {"number":1921,"title":"E0382 suggestions for moves by method call and for loop, and labels on the derive-Clone note","state":"open"}
           ]
         },
         {
@@ -5510,7 +5527,8 @@
             {"number":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"open"},
             {"number":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open"},
             {"number":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open"},
-            {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"}
+            {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"},
+            {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"}
           ]
         },
         {

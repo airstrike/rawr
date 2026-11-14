@@ -12326,6 +12326,58 @@ fn main() {
 }
 
 #[test]
+fn language_drop_of_a_let_without_a_value_runs_on_the_paths_that_gave_it_one() {
+    // Each expected text is what the program built by rustc prints.
+    let printed = dropped(
+        r#"
+fn pick(c: bool) {
+    let n;
+    if c {
+        n = Noisy("a");
+        println!("assigned");
+    }
+    println!("end {c}");
+}
+fn main() {
+    pick(true);
+    pick(false);
+    let n = Noisy("outer");
+    let n;
+    n = Noisy("inner");
+    println!("shadowed {}", n.0);
+    for i in 0..2 {
+        let k;
+        match i {
+            0 => k = Noisy("zero"),
+            _ => k = Noisy("other"),
+        }
+        println!("k {}", k.0);
+    }
+    let taken;
+    taken = Noisy("taken");
+    drop(taken);
+    println!("end");
+}
+"#,
+    );
+    assert_eq!(
+        printed,
+        "assigned\nend true\ndrop a\nend false\nshadowed inner\nk zero\ndrop zero\nk other\n\
+         drop other\ndrop taken\nend\ndrop inner\ndrop outer\n"
+    );
+}
+
+#[test]
+fn language_a_tuple_let_without_a_value_declares_each_name() {
+    let printed = printed(
+        "fn main() {\n    let (a, (mut b, _)): (i32, (String, u8));\n    let (c, d);\n    a = \
+         1;\n    b = String::from(\"x\");\n    b.push('y');\n    c = 'c';\n    d = 2.5;\n    \
+         println!(\"{a} {b} {c} {d}\");\n}\nmain();",
+    );
+    assert_eq!(printed, "1 xy c 2.5\n");
+}
+
+#[test]
 fn language_drop_ends_top_level_statements_as_a_body() {
     // A snippet of statements is a body: its locals drop at its end, after
     // its final value.

@@ -124,6 +124,7 @@ impl<'a> Parser<'a> {
             binding.available = false;
         }
         self.moved_at.insert(declaration, value.span);
+        self.note_move(value);
         if plain {
             value.source =
                 origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
@@ -242,8 +243,51 @@ impl<'a> Parser<'a> {
                 source: value.span,
             });
         }
+        self.note_move(value);
         self.flow().moved(value.span.start());
         Ok(())
+    }
+
+    /// `error`, from the operand of the borrow starting at `start`: when
+    /// the operand is a `lone` local that moved, the borrow is what uses
+    /// it, rustc's "borrow of moved value" over `&v`.
+    pub(super) fn borrowed_operand(&self, error: Error, lone: bool, start: Position) -> Error {
+        if !lone {
+            return error;
+        }
+        let borrow = span(start, error.primary_span().end());
+        error.borrowed_by(borrow)
+    }
+
+    /// `value`, a by-value use that moves a local or a part of one: what a
+    /// later use of the moved value says of the move.
+    fn note_move(&mut self, value: &ParsedExpr) {
+        self.move_sites.insert(
+            value.span.start(),
+            MoveSite {
+                span: self.expression_span(value.span),
+                ty: value.ty.clone(),
+                parameter: None,
+            },
+        );
+    }
+
+    /// `argument`, passed to `parameter`, a parameter of the crate's own
+    /// function written with the type `written`, which owns what the
+    /// argument moves: rustc's note suggests a borrow instead. A reference
+    /// or a type that names a generic gets no such note.
+    pub(super) fn note_owning_parameter(
+        &mut self,
+        argument: &ParsedExpr,
+        written: &type_ref::Type,
+        parameter: OwningParameter,
+    ) {
+        if matches!(written, type_ref::Type::Reference { .. }) || mentions_parameter(written) {
+            return;
+        }
+        if let Some(site) = self.move_sites.get_mut(&argument.span.start()) {
+            site.parameter = Some(parameter);
+        }
     }
 
     /// Whether the method's receiver is an owned `self` (or `mut self`),
@@ -404,11 +448,12 @@ impl<'a> Parser<'a> {
         // closure, its capture is by value (T152). A type with `impl Drop`
         // keeps its fields, as its `drop` must see them (E0509).
         self.reject_drop_move(field.definition.id(), true, value.span)?;
+        let held = (matches!(binding.kind, BindingKind::Local) || owned_self)
+            && matches!(self.inference.resolve(&binding.ty), Ty::Script(..))
+            && !captured;
+        self.note_move(value);
         self.flow().moved(value.span.start());
-        if !(matches!(binding.kind, BindingKind::Local) || owned_self)
-            || !matches!(self.inference.resolve(&binding.ty), Ty::Script(..))
-            || captured
-        {
+        if !held {
             return Ok(());
         }
         // A field with drop glue moves out: `()` is left in the local, whose
@@ -681,17 +726,83 @@ impl<'a> Parser<'a> {
             reference: self.name_span(reference, name),
             borrowed,
             partial: false,
-            cause: Some(self.move_cause(name, binding)),
+            cause: Some(self.move_cause(name, binding, moved)),
             previous_iteration: false,
         }
     }
 
-    /// Why using the local `name` after its move is rustc's E0382: its
-    /// type, which isn't `Copy`, labelled at its declaration.
-    pub(super) fn move_cause(&self, name: &str, binding: &Binding) -> MoveCause {
+    /// Why using the local `name` after its move at `moved` is rustc's
+    /// E0382: its type, which isn't `Copy`, labelled at its declaration,
+    /// and how rustc suggests keeping the value.
+    pub(super) fn move_cause(&self, name: &str, binding: &Binding, moved: Span) -> MoveCause {
+        let site = self.move_sites.get(&moved.start());
         MoveCause {
-            declaration: self.name_span(binding.declaration, name),
-            ty: self.inference.resolve(&binding.ty).name(&self.models),
+            moved: MovedPlace::Local(self.name_span(binding.declaration, name)),
+            ty: self.settled_name(&binding.ty),
+            cloning: site.map_or(Cloning::None, |_| self.cloning(&binding.ty)),
+            parameter: site.and_then(|site| site.parameter.clone()),
         }
+    }
+
+    /// Why the borrow check's use of a moved place is rustc's E0382, from
+    /// the move at `moved` the lowering noted, of the place `place`
+    /// declared at `declaration`: `None` for a move it didn't note.
+    pub(super) fn checked_move_cause(
+        &self,
+        moved: Span,
+        place: &str,
+        declaration: Span,
+        partial: bool,
+    ) -> Option<MoveCause> {
+        let site = self.move_sites.get(&moved.start())?;
+        let local = place.split('.').next().unwrap_or(place);
+        Some(MoveCause {
+            moved: if partial {
+                MovedPlace::Part(place.into())
+            } else {
+                MovedPlace::Local(self.name_span(declaration, local))
+            },
+            ty: self.settled_name(&site.ty),
+            // rustc suggests no clone of a part.
+            cloning: if partial {
+                Cloning::None
+            } else {
+                self.cloning(&site.ty)
+            },
+            parameter: site.parameter.clone(),
+        })
+    }
+
+    /// Where the move at `moved` is, whole: `p.a`, not its first token.
+    pub(super) fn move_span(&self, moved: Span) -> Span {
+        self.move_sites
+            .get(&moved.start())
+            .map_or(moved, |site| site.span)
+    }
+
+    /// rustc's suggestion for keeping a value of type `ty` that moved.
+    fn cloning(&self, ty: &Ty) -> Cloning {
+        let ty = self.inference.resolve(ty);
+        if self.type_provides(&ty, capability::Kind::Clone) {
+            return Cloning::Clone;
+        }
+        match &ty {
+            Ty::Script(id, _) if self.models.declared_here(*id) => {
+                Cloning::Derivable(self.settled_name(&ty))
+            }
+            _ => Cloning::None,
+        }
+    }
+
+    /// `ty`'s name as rustc writes it once the body is checked: a literal
+    /// whose kind nothing settled is rustc's fallback `i32` or `f64`.
+    pub(super) fn settled_name(&self, ty: &Ty) -> ImmutableString {
+        let name = self.inference.resolve(ty).name(&self.models);
+        if !name.contains('{') {
+            return name;
+        }
+        name.replace("{integer}", "i32")
+            .replace("{float}", "f64")
+            .into()
     }
 }

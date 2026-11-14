@@ -4,7 +4,8 @@
 //! and the body's control flow. [`check`] solves it after the body, with a
 //! [`Rule`] that says where each loan is live; NLL's is [`nll::Nll`].
 //! [`moves::check`] follows what the body moves over the same facts: a use
-//! of a place that may be moved is rustc's E0382.
+//! of a place that may be moved is rustc's E0382, and [`assigns::check`]
+//! what it assigns: a second value for a `let x;` is rustc's E0384.
 //!
 //! The facts are the rule's input and nothing else, so another rule, such
 //! as the Polonius alpha stable rustc is expected to adopt, takes the same
@@ -14,6 +15,7 @@
 //! and the background `cargo check` decides (D572.5). A loan this module
 //! does model is never left to rustc.
 
+pub(crate) mod assigns;
 pub(crate) mod moves;
 pub(crate) mod nll;
 pub(crate) mod record;
@@ -231,6 +233,9 @@ pub(crate) struct Body {
     /// a capture by, or one of its parameters, which has its value again
     /// each time the body starts.
     pub(crate) closure_entries: Vec<(Block, Local)>,
+    /// Each `let x;` not declared `mut`, where it is declared: it is given
+    /// its value once on each path from there (`assigns::check`).
+    pub(crate) single_assignments: Vec<(Point, Local)>,
 }
 
 /// A function's own signature, as its body is checked against it.

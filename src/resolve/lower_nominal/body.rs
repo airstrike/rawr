@@ -39,6 +39,7 @@ impl<'a> Parser<'a> {
         self.finish_uninitialized()?;
 
         self.check_borrows()?;
+        self.check_known_panics()?;
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;
@@ -82,6 +83,7 @@ impl<'a> Parser<'a> {
             self.coerce_tail(&expected, definition.body())?;
             self.finish_uninitialized()?;
             self.check_borrows()?;
+            self.check_known_panics()?;
             self.finish_conversions()?;
             self.finish_bounds()?;
             self.finish_witnesses()?;
@@ -128,6 +130,7 @@ impl<'a> Parser<'a> {
             self.coerce_tail(&output, definition.body())?;
             self.finish_uninitialized()?;
             self.check_borrows()?;
+            self.check_known_panics()?;
             self.finish_conversions()?;
             self.finish_bounds()?;
             self.finish_witnesses()?;
@@ -203,6 +206,7 @@ impl<'a> Parser<'a> {
         self.finish_uninitialized()?;
 
         self.check_borrows()?;
+        self.check_known_panics()?;
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;
@@ -579,6 +583,7 @@ impl<'a> Parser<'a> {
         self.finish_uninitialized()?;
 
         self.check_borrows()?;
+        self.check_known_panics()?;
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;

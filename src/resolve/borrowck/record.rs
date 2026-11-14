@@ -571,6 +571,15 @@ impl Recorder {
         local
     }
 
+    /// The local `let x;` declares at `declaration`, not `mut`, which is
+    /// given its value once on each path from here.
+    pub(crate) fn single_assignment(&mut self, name: &str, declaration: Span) -> Local {
+        let local = self.local(name, declaration);
+        let at = self.push(Fact::Nop);
+        self.body.single_assignments.push((at, local));
+        local
+    }
+
     fn hidden(&mut self, name: &str, declaration: Span) -> Local {
         self.body.locals.push(LocalInfo {
             name: name.into(),
