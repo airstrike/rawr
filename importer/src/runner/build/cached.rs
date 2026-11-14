@@ -343,13 +343,19 @@ fn compile<B>(
         .ok()
         .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
     let version = runner_version(context.project());
+    // The project's own lock, which a runner linked to the shared runtime
+    // starts from (#1912).
+    let project_lock = fs::read(workspace.join("Cargo.lock")).ok();
     let sources = |runtime: Option<&crate::runner::runtime::Runtime>| {
         runner_sources(
             manifest,
-            mirrored.as_deref(),
-            runtime,
-            &level,
-            version.as_deref(),
+            Rewrites {
+                mirrored: mirrored.as_deref(),
+                project_lock: project_lock.as_deref(),
+                runtime,
+                level: &level,
+                version: version.as_deref(),
+            },
         )
     };
     // The sources, with `settled` in place of their lock, and the carrier.
@@ -597,21 +603,39 @@ fn runner_executable(messages: &crate::cargo::messages::Messages<'_>) -> Option<
         .find_map(|message| message.executable().map(PathBuf::from))
 }
 
+/// What [`runner_sources`] makes of the generated sources.
+struct Rewrites<'a, 'r> {
+    /// The runner's manifest with the project's path packages placed
+    /// ([`crate::runner::mirror`]).
+    mirrored: Option<&'a str>,
+    /// The project's own `Cargo.lock`.
+    project_lock: Option<&'a [u8]>,
+    /// The shared runtime the runner links, when it can.
+    runtime: Option<&'r crate::runner::runtime::Runtime>,
+    level: &'r toml_edit::Item,
+    version: Option<&'r str>,
+}
+
 /// The runner's sources as Cargo builds them: the generated files with the
 /// mirrored manifest, linked to the shared `runtime` when there is one, else
 /// with the `rawr` crate at the opt-level setting (T302), and with the
-/// runner at `version` when it has one ([`runner_version`]). Each member's
-/// manifest and lock entry take the runner's dependencies and version from
-/// the runner's as rewritten (`bridge::generate::member`).
+/// runner at `version` when it has one ([`runner_version`]). A runner linked
+/// to the shared runtime starts from the project's own lock (#1912). Each
+/// member's manifest and lock entry take the runner's dependencies and
+/// version from the runner's as rewritten (`bridge::generate::member`).
 fn runner_sources<'a, B>(
     manifest: &'a super::super::Manifest<super::super::Generated, B>,
-    mirrored: Option<&'a str>,
-    runtime: Option<&crate::runner::runtime::Runtime>,
-    level: &toml_edit::Item,
-    version: Option<&str>,
+    rewrites: Rewrites<'a, '_>,
 ) -> Vec<(&'a str, std::borrow::Cow<'a, [u8]>)> {
     use crate::bridge::generate;
     use std::borrow::Cow;
+    let Rewrites {
+        mirrored,
+        project_lock,
+        runtime,
+        level,
+        version,
+    } = rewrites;
     // Each member's manifest, parsed once for the packages it leaves out,
     // which no rewrite changes, and for its rewrite.
     let members = manifest
@@ -638,10 +662,16 @@ fn runner_sources<'a, B>(
                         .and_then(|text| runner_manifest(text, runtime, level, version))
                         .map_or(Cow::Borrowed(base), |text| Cow::Owned(text.into_bytes()))
                 }
-                "Cargo.lock" => runner_lock(file.bytes(), runtime, version, &without)
-                    .map_or(Cow::Borrowed(file.bytes()), |text| {
-                        Cow::Owned(text.into_bytes())
-                    }),
+                "Cargo.lock" => {
+                    // Linked to the shared runtime, the runner doesn't link
+                    // rawr's crate graph, whose version floors raise the
+                    // harness's lock. Its lock starts from the project's own,
+                    // which cargo settles to what the runner adds, keeping
+                    // every version the project pins (#1912).
+                    let base = runtime.and(project_lock).unwrap_or(file.bytes());
+                    runner_lock(base, runtime, version, &without)
+                        .map_or(Cow::Borrowed(base), |text| Cow::Owned(text.into_bytes()))
+                }
                 path => {
                     let rewired = match (runtime, std::str::from_utf8(file.bytes()).ok()) {
                         (Some(runtime), Some(text)) if generate::is_build_script(path) => {

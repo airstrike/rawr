@@ -374,11 +374,14 @@ impl Runtime {
     /// Settle the runner's lockfile in `work`, written from the `pruned`
     /// lock and `manifest`, to what cargo resolves without rawr, for a
     /// build that found no lock an earlier build settled
-    /// ([`Self::settled_lock`]). Pruning walks the lock's edges, which name a
-    /// shared package's dependencies at the features rawr turned on too:
-    /// ahash keeps `const-random` from rawr's `compile-time-rng`. Cargo
-    /// drops what no remaining feature needs and keeps every version, so
-    /// the build's `--locked` holds.
+    /// ([`Self::settled_lock`]). The `pruned` lock is the project's own when
+    /// it has one (#1912): cargo adds what the runner adds and keeps every
+    /// version the project pins, so the runner's units are the ones the
+    /// project's `cargo build` made. Otherwise it is the harness's, pruned
+    /// of rawr, whose edges name a shared package's dependencies at the
+    /// features rawr turned on too: ahash keeps `const-random` from rawr's
+    /// `compile-time-rng`. Cargo drops what no remaining feature needs and
+    /// keeps every version, so the build's `--locked` holds.
     pub(crate) fn settle_lock(
         &self,
         work: &Path,
