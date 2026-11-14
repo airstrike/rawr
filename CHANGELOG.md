@@ -16,6 +16,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work. (#1927; part of #949)
 - Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain. (#1928)
 - A crate function that takes a shared borrow of a tuple holding borrows, as log's `&(&str, &'static str, &Location)`, or a `fn(&T) -> U` pointer is no longer refused as having a higher-ranked lifetime; marked code passes the tuple and a script function as rustc does. (#1559, #966)
+- A project's Cargo.lock never has to change for rawr: rawr's own dependency floors no longer raise a package the project pins, such as toml_datetime. (#1914)
 
 ## 0.3.213 (2026-11-13)
 

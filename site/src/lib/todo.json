@@ -22,7 +22,8 @@
         {"text":"`Receiver::try_recv`, `recv_timeout`, `sync_channel`, `thread::scope` and `thread::Builder` run as std's, and a receive's errors are std's own.","issues":[950]},
         {"text":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work.","issues":[1927],"refs":[949]},
         {"text":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the source line under every label, cargo's errors keep their colours, and rawr's internal failures read `error: rawr could not ...` with the detail in a `= note:`. Colour follows cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`); pipes, logs and `rawr mcp` stay plain.","issues":[1928]},
-        {"text":"A crate function that takes a shared borrow of a tuple holding borrows, as log's `&(&str, &'static str, &Location)`, or a `fn(&T) -> U` pointer is no longer refused as having a higher-ranked lifetime; marked code passes the tuple and a script function as rustc does.","issues":[1559,966]}
+        {"text":"A crate function that takes a shared borrow of a tuple holding borrows, as log's `&(&str, &'static str, &Location)`, or a `fn(&T) -> U` pointer is no longer refused as having a higher-ranked lifetime; marked code passes the tuple and a script function as rustc does.","issues":[1559,966]},
+        {"text":"A project's Cargo.lock never has to change for rawr: rawr's own dependency floors no longer raise a package the project pins, such as toml_datetime.","issues":[1914]}
       ]
     },
     "releases": [
@@ -4246,7 +4247,7 @@
     {"issue":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.213"},
     {"issue":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.213"},
     {"issue":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.213"},
-    {"issue":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open","category":"Shared dependency cache (D607)"},
@@ -4279,7 +4280,8 @@
     {"issue":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"open","category":"No glue (D593)"},
     {"issue":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"open","category":"No glue (D593)"},
     {"issue":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open","category":"No glue (D593)"},
-    {"issue":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open","category":"No glue (D593)"}
+    {"issue":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open","category":"No glue (D593)"},
+    {"issue":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5574,11 +5576,12 @@
             {"number":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"closed"},
             {"number":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"closed"},
             {"number":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"closed"},
-            {"number":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"open"},
+            {"number":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"closed"},
             {"number":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open"},
             {"number":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open"},
             {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"},
-            {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"}
+            {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"},
+            {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"}
           ]
         },
         {
