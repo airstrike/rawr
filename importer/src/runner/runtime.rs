@@ -647,6 +647,64 @@ fn prune_lock(document: &mut DocumentMut) -> Option<()> {
     Some(())
 }
 
+/// Why the runner's settled `runner` lock can't build the bindings the
+/// harness generated from its `harness` lock: a package both resolve, from
+/// one source and in one semver series, at two versions. The harness
+/// resolves rawr's crates with the project's, so their version floors can
+/// raise a package the project pins; the runner, linked to the shared
+/// runtime, keeps the project's version, and a binding naming an item only
+/// the raised one has would not compile (#1912). `None` when they agree.
+pub(crate) fn disagreement(harness: &[u8], runner: &str) -> Option<String> {
+    let versions = |lock: &str| -> BTreeMap<(String, String, Series), String> {
+        let Ok(document) = lock.parse::<DocumentMut>() else {
+            return BTreeMap::new();
+        };
+        let text =
+            |table: &Table, key: &str| table.get(key).and_then(Item::as_str).map(str::to_owned);
+        document
+            .get("package")
+            .and_then(Item::as_array_of_tables)
+            .into_iter()
+            .flatten()
+            .filter_map(|package| {
+                let version = text(package, "version")?;
+                let series = Series::of(&version)?;
+                Some((
+                    (text(package, "name")?, text(package, "source")?, series),
+                    version,
+                ))
+            })
+            .collect()
+    };
+    let harness = versions(std::str::from_utf8(harness).ok()?);
+    versions(runner).into_iter().find_map(|(key, pinned)| {
+        let raised = harness.get(&key).filter(|raised| **raised != pinned)?;
+        let name = key.0;
+        Some(format!(
+            "rawr's own crates need `{name}` {raised}, and this project's Cargo.lock pins \
+                 `{name}` {pinned}. The bindings rawr generated name `{name}` {raised}, so \
+                 they would not build against the pinned one. Run \
+                 `cargo update -p {name}@{pinned} --precise {raised}` in the project"
+        ))
+    })
+}
+
+/// The versions Cargo keeps as one in a lock: those of one major version,
+/// or for 0.x those of one minor, or for 0.0.x one patch.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Series([u64; 3]);
+
+impl Series {
+    fn of(version: &str) -> Option<Self> {
+        let version = semver::Version::parse(version).ok()?;
+        Some(Self(match (version.major, version.minor) {
+            (0, 0) => [0, 0, version.patch],
+            (0, minor) => [0, minor, 0],
+            (major, _) => [major, 0, 0],
+        }))
+    }
+}
+
 /// The project's compiler, as its `cargo build` finds it.
 #[derive(Clone)]
 struct Toolchain {
@@ -1415,6 +1473,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         assert!(clash.contains("`sha2-asm`"), "{clash}");
         let empty = crate::cargo::messages::Messages::parse(b"{}\n");
         assert_eq!(runtime().native_clash(&empty), None);
+    }
+
+    /// A package the harness resolved above the version the runner builds
+    /// is named; one series apart, or one only rawr's crates reach, is not
+    /// a disagreement (#1912).
+    #[test]
+    fn a_package_the_harness_raised_above_the_runner_s_is_named() {
+        let package = |name: &str, version: &str| {
+            format!(
+                "[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n\
+                 source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n"
+            )
+        };
+        let harness = [
+            package("libc", "0.2.191"),
+            package("getrandom", "0.3.4"),
+            package("itoa", "1.0.15"),
+        ]
+        .concat();
+        let runner = [
+            package("libc", "0.2.183"),
+            package("getrandom", "0.2.17"),
+            package("itoa", "1.0.15"),
+        ]
+        .concat();
+        let reason = super::disagreement(harness.as_bytes(), &runner).unwrap();
+        assert!(
+            reason.contains("`libc` 0.2.191") && reason.contains("`libc` 0.2.183"),
+            "{reason}"
+        );
+        let kept = [package("libc", "0.2.183"), package("itoa", "1.0.15")].concat();
+        assert_eq!(super::disagreement(kept.as_bytes(), &runner), None);
     }
 
     #[test]

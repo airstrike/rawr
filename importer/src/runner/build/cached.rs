@@ -400,6 +400,19 @@ fn compile<B>(
         )?;
     }
     drop(linked);
+    // Settled from the project's lock, the runner must build each package
+    // at the version the bindings were generated against (#1912).
+    if runtime.is_some() {
+        let lock = work.join("Cargo.lock");
+        let settled = fs::read_to_string(&lock).map_err(|source| node::Error::Io {
+            operation: "read the runner's settled lockfile",
+            path: lock,
+            source,
+        })?;
+        if let Some(reason) = crate::runner::runtime::disagreement(generated_lock, &settled) {
+            return Err(node::Error::Transform(reason.into_boxed_str()));
+        }
+    }
     let before = crate::deps::project::Before::take(&build);
     #[cfg(feature = "rustc-driver")]
     let _ = fs::remove_file(work.join(crate::bindings::RUNNER_SCRIPTS));
