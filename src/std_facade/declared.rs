@@ -99,6 +99,27 @@ pub(super) static STEPS: &[Step] = &[
         target: "io::Stdout",
     },
     Step::Held {
+        std: "std::io::Cursor",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::io::SeekFrom",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
         std: "std::char::ToUppercase",
         capabilities: &[
             capability::Kind::Debug,
@@ -937,6 +958,87 @@ pub(super) static STEPS: &[Step] = &[
     },
     Step::Item {
         path: "io::Stdout::flush",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::Cursor::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Parameter("T")],
+        output: Ty::Applied {
+            path: "io::Cursor",
+            arguments: &[Ty::Parameter("T")],
+        },
+    },
+    Step::Item {
+        path: "io::Cursor::into_inner",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Parameter("T"),
+    },
+    Step::Item {
+        path: "io::Cursor::get_ref",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Reference {
+            mutable: false,
+            target: &Ty::Parameter("T"),
+        },
+    },
+    Step::Item {
+        path: "io::Cursor::position",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "io::Cursor::set_position",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::U64)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "io::Cursor::read_to_end",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Vec(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::Cursor::read_to_string",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::Cursor::read_line",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::Cursor::seek",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Registered("io::SeekFrom")],
+        output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::Cursor::stream_position",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "io::Cursor::rewind",
         kind: Kind::Method(Mode::Mutable),
         inputs: &[],
         output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
@@ -3116,10 +3218,6 @@ pub(super) static STEPS: &[Step] = &[
         std: "std::io::Chain",
     },
     Step::StdAlias {
-        path: "io::Cursor",
-        std: "std::io::Cursor",
-    },
-    Step::StdAlias {
         path: "io::Empty",
         std: "std::io::Empty",
     },
@@ -3174,10 +3272,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "io::Seek",
         std: "std::io::Seek",
-    },
-    Step::StdAlias {
-        path: "io::SeekFrom",
-        std: "std::io::SeekFrom",
     },
     Step::StdAlias {
         path: "io::SimpleMessage",

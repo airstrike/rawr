@@ -1063,3 +1063,36 @@ main();
         "Ok(3) Err(ParseIntError { kind: InvalidDigit }) 2s true 3s name!\n6 4 5 true 59s\ntrue false Greater\n"
     );
 }
+
+/// std's `io::Cursor<T>` is std's own generic type, held at the program's
+/// value of `T`: it reads, seeks and gives back the bytes it holds as std's
+/// `Read`, `BufRead` and `Seek` do (#87).
+#[test]
+fn a_cursor_reads_and_seeks_the_bytes_it_holds() {
+    let source = r#"
+use std::io::{BufRead, Cursor, Read, Seek};
+
+fn main() {
+    let mut cursor = Cursor::new(vec![104u8, 105, 10, 33, 63]);
+    let mut line = String::new();
+    let read = cursor.read_line(&mut line).unwrap();
+    println!("{line:?} {read} {}", cursor.position());
+    let mut rest = Vec::new();
+    cursor.read_to_end(&mut rest).unwrap();
+    println!("{rest:?} {}", cursor.position());
+    cursor.rewind().unwrap();
+    println!("{}", cursor.stream_position().unwrap());
+    cursor.set_position(3);
+    let mut text = String::new();
+    cursor.read_to_string(&mut text).unwrap();
+    println!("{text} {:?}", cursor.get_ref());
+    let bytes: Vec<u8> = cursor.into_inner();
+    println!("{}", bytes.len());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "\"hi\\n\" 3 3\n[33, 63] 5\n0\n!? [104, 105, 10, 33, 63]\n5\n"
+    );
+}

@@ -10235,6 +10235,7 @@ fn lendable(ty: &convert::Type) -> bool {
         && !is_duration(ty)
         && !is_facade_value(ty)
         && boxed_element(ty).is_none()
+        && std_generic(ty).is_none()
         && counted_element(ty).is_none()
         && keyed_element(ty).is_none()
         && joined_element(ty).is_none()
@@ -14017,6 +14018,7 @@ fn render_opening(
             && !is_value(&ty)
             && !is_duration(&ty)
             && boxed_element(&ty).is_none()
+            && std_generic(&ty).is_none()
             && counted_element(&ty).is_none()
             && keyed_element(&ty).is_none()
             && joined_element(&ty).is_none()
@@ -19582,6 +19584,7 @@ impl Lease {
                     **lent,
                     convert::Type::Nominal { .. } | convert::Type::Parameter(_)
                 ) && std_value(lent).is_none()
+                    && std_generic(lent).is_none()
                     && counted_element(lent).is_none()
                     && keyed_element(lent).is_none()
                     && !is_made_for_call(lent) =>
@@ -20115,6 +20118,7 @@ fn render_callable_closure(
             || is_value(ty)
             || is_duration(ty)
             || boxed_element(ty).is_some()
+            || std_generic(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
             || joined_element(ty).is_some()
@@ -20563,6 +20567,7 @@ fn render_take(
                 && !is_value(item)
                 && !is_duration(item)
                 && boxed_element(item).is_none()
+                && std_generic(item).is_none()
                 && counted_element(item).is_none()
                 && keyed_element(item).is_none()
                 && joined_element(item).is_none();
@@ -20627,6 +20632,7 @@ fn render_take(
         }
         ty if range_inclusive_element(ty).is_some()
             || boxed_element(ty).is_some()
+            || std_generic(ty).is_some()
             || keyed_element(ty).is_some()
             || joined_element(ty).is_some() =>
         {
@@ -20758,6 +20764,7 @@ fn render_give(
             writeln!(output, "    {frame}.give_{slot}(arguments.arena, {value})")
         }
         ty if boxed_element(ty).is_some()
+            || std_generic(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
             || joined_element(ty).is_some()
@@ -20976,6 +20983,17 @@ fn render_from_dynamic(
             let mut converted = String::new();
             render_from_dynamic(element, value, depth, &mut converted)?;
             write!(output, "({converted}).map(Box::new)")
+        }
+        // std's generic value rawr holds, as the crate's at its own `T`,
+        // whose value is made from rawr's (`crossing::StdOf`).
+        ty if let Some((_, element)) = std_generic(ty) => {
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("a held std type's Rust type"))?;
+            let mut converted = String::new();
+            render_from_dynamic(element, &format!("inner_{depth}"), depth + 1, &mut converted)?;
+            write!(
+                output,
+                "<{rust} as __rawr_internal::crossing::StdOf<_>>::take({value}, |inner_{depth}: Dynamic| {converted}).ok_or(Error::TypeMismatch).and_then(|taken| taken)"
+            )
         }
         // Rawr's thread handle, as the crate's own `JoinHandle<T>` it holds
         // or as one that joins the program's thread and makes its value
@@ -21265,6 +21283,15 @@ fn render_to_dynamic(
         // Rust's `Box`, as rawr's, which holds its value as itself.
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
+        }
+        // std's generic value, as the one rawr holds at its own values.
+        ty if let Some((_, element)) = std_generic(ty) => {
+            let mut converted = String::new();
+            render_to_dynamic(element, &format!("inner_{depth}"), depth + 1, &mut converted)?;
+            write!(
+                output,
+                "__rawr_internal::crossing::StdOf::give({value}, |inner_{depth}| {converted})"
+            )
         }
         // A crate's thread, as rawr's handle of it: what it gives becomes
         // rawr's where the program joins it (#1266), in the arena of the
@@ -21571,6 +21598,7 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         ty if let Some(element) = boxed_element(ty) => holds_native(element),
+        ty if let Some((_, element)) = std_generic(ty) => holds_native(element),
         ty if counted_element(ty).is_some() => true,
         // What a crate's thread gives crosses by value (#1266).
         ty if joined_element(ty).is_some() => false,
@@ -21708,6 +21736,24 @@ fn boxed_element(ty: &convert::Type) -> Option<&convert::Type> {
 /// handle: its `T` becomes rawr's where the program joins it (#1266).
 fn joined_element(ty: &convert::Type) -> Option<&convert::Type> {
     ty.joined_element()
+}
+
+/// One of std's generic types Rawr's std holds as its Rust value at Rawr's
+/// values (`crossing::StdOf`), when `ty` is one: its Rust path and its `T`,
+/// as `std::io::Cursor` and `Bytes` of `Cursor<Bytes>`. It crosses as the
+/// value rawr holds, its `T` made where it crosses.
+fn std_generic(ty: &convert::Type) -> Option<(String, &convert::Type)> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => match arguments.as_ref() {
+            [element] => crate::surface::identity::Definition::std_path(definition.as_bytes())
+                .map(|path| (format!("std::{path}"), element)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Rust's `Rc<T>` or `Arc<T>` of a crate's `T` (#775), when `ty` is one:
@@ -25782,6 +25828,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
         ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
+        ty if let Some((rust, element)) = std_generic(ty) => {
+            format!("{rust}<{}>", concrete_type(element)?)
+        }
         ty if let Some(element) = joined_element(ty) => {
             format!("std::thread::JoinHandle<{}>", concrete_type(element)?)
         }

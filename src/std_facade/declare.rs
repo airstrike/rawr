@@ -69,7 +69,12 @@ impl Sink for facade::Builder {
         value: &held::Value,
         capabilities: &[capability::Kind],
     ) -> Result<(), host::Error> {
-        (value.register)(self, held::Value::facade(value.std), capabilities)
+        (value.register)(
+            self,
+            held::Value::facade(value.std),
+            value.parameters,
+            capabilities,
+        )
     }
 
     fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error> {
@@ -344,9 +349,10 @@ fn declarations<'a>(
     name: &str,
 ) -> Vec<(&'static str, reader::Reader<'a>)> {
     let functions = std_table::trait_functions(name);
+    let reader = reader.with_parameters(value.parameters);
     let mut found = Vec::new();
     for form in value.forms() {
-        let own = solve::read(form);
+        let own = own(form, value);
         if let Some(item) = std_table::item(&format!("{}::{name}", solve::definition(form)))
             && item.kind == "assoc-fn"
         {
@@ -367,7 +373,7 @@ fn declarations<'a>(
                 })
                 .unwrap_or_default();
             for implementation in solve::impls(trait_, Some(&own)) {
-                for binding in solve::instances(&implementation, &own) {
+                for binding in solve::instances(&implementation, &own, value.parameters) {
                     let arguments = implementation.arguments();
                     let mut names = vec![("Self", own.clone())];
                     for (index, parameter) in parameters.iter().enumerate() {
@@ -387,6 +393,23 @@ fn declarations<'a>(
         }
     }
     found
+}
+
+/// The type `form` of `value` is, at the held type's own parameters:
+/// `std::io::Cursor<T>`.
+fn own(form: &'static str, value: &held::Value) -> Written {
+    match solve::read(form) {
+        Written::Path { path, bindings, .. } if !value.parameters.is_empty() => Written::Path {
+            path,
+            arguments: value
+                .parameters
+                .iter()
+                .map(|parameter| solve::read(parameter))
+                .collect(),
+            bindings,
+        },
+        own => own,
+    }
 }
 
 /// Declare the free function or constant at `path`, std's `std::{path}`.

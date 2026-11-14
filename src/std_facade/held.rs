@@ -5,10 +5,10 @@
 use crate::capability;
 use crate::host::{self, facade};
 
-/// Declares a held type's Rust value at its facade path, with the
-/// capabilities std gives it that rawr runs.
+/// Declares a held type's Rust value at its facade path, with its type
+/// parameters and the capabilities std gives it that rawr runs.
 pub(crate) type Register =
-    fn(&mut facade::Builder, &str, &[capability::Kind]) -> Result<(), host::Error>;
+    fn(&mut facade::Builder, &str, &[&str], &[capability::Kind]) -> Result<(), host::Error>;
 
 /// A std type rawr represents.
 #[derive(Clone, Copy)]
@@ -34,6 +34,9 @@ pub(crate) struct Value {
     /// Its public path, which is its facade path under `std`:
     /// `std::path::PathBuf` is `path::PathBuf`.
     pub std: &'static str,
+    /// std's type parameters of it, which rawr holds at its own value:
+    /// `T` of `io::Cursor<T>`, whose Rust value is a `Cursor<Dynamic>`.
+    pub parameters: &'static [&'static str],
     /// The unsized types a borrow of it stands for: `std::path::Path` of
     /// `PathBuf`, whose methods are its own through `Deref`.
     pub lent: &'static [&'static str],

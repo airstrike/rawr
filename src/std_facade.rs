@@ -15,6 +15,7 @@
 //! ([`step`]): a start reads nothing of the table (#1526).
 
 mod case;
+mod cursor;
 #[cfg(test)]
 mod declare;
 mod declared;
@@ -62,6 +63,11 @@ trait Bind {
         path: &str,
         callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
     );
+
+    /// Attest that a value is the generic held type at `path` when it
+    /// holds `T`, its Rust value at every argument: `io::Cursor`'s
+    /// `Cursor<Dynamic>`.
+    fn attest<T: Clone + 'static>(&mut self, path: &str);
 }
 
 /// The bound paths.
@@ -82,6 +88,9 @@ impl Bind for Vec<String> {
     ) {
         self.push(path.to_owned());
     }
+
+    /// A held type's attestation declares no item.
+    fn attest<T: Clone + 'static>(&mut self, _: &str) {}
 }
 
 /// The runtime's bindings: the definition declares every bound path.
@@ -102,6 +111,13 @@ impl Bind for host::runtime::Builder {
     ) {
         self.bind_with_context(format!("{ROOT}::{path}"), callback)
             .unwrap_or_else(|_| panic!("the std table does not declare `std::{path}`"));
+    }
+
+    fn attest<T: Clone + 'static>(&mut self, path: &str) {
+        self.bind_type_attestation(format!("{ROOT}::{path}"), |value, expected| {
+            expected.attest(value.is::<T>())
+        })
+        .unwrap_or_else(|_| panic!("the std facade holds `std::{path}` once, generic"));
     }
 }
 
@@ -151,6 +167,7 @@ pub(crate) fn definition() -> facade::Definition {
 fn build() -> Result<facade::Definition, host::Error> {
     path::register_debug();
     io::register_debug();
+    cursor::register_debug();
     num::register_debug();
     panic::register_debug();
     case::register_debug();
@@ -167,6 +184,7 @@ fn held() -> Vec<held::Held> {
     [
         path::HELD.as_slice(),
         io::HELD.as_slice(),
+        cursor::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),
         panic::HELD.as_slice(),
@@ -181,6 +199,7 @@ fn held() -> Vec<held::Held> {
 fn bind(binds: &mut impl Bind) {
     path::bind(binds);
     io::bind(binds);
+    cursor::bind(binds);
     env::bind(binds);
     fs::bind(binds);
     process::bind(binds);

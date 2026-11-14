@@ -20,11 +20,12 @@ const RUNS: &[capability::Kind] = &[
 pub(super) const HELD: [Held; 2] = [
     Held::Value(held::Value {
         std: "std::char::ToUppercase",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .type_::<ToUppercase>(path, &[], capabilities)
+                .type_::<ToUppercase>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
@@ -32,11 +33,12 @@ pub(super) const HELD: [Held; 2] = [
     }),
     Held::Value(held::Value {
         std: "std::char::ToLowercase",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .type_::<ToLowercase>(path, &[], capabilities)
+                .type_::<ToLowercase>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,

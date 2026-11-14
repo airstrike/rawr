@@ -18,12 +18,13 @@ use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
 pub(super) const HELD: [Held; 2] = [
     Held::Value(held::Value {
         std: "std::time::SystemTime",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             crate::host::value::register_ordering::<SystemTime>();
             builder
-                .value_type::<SystemTime>(path, &[], capabilities)
+                .value_type::<SystemTime>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
@@ -41,11 +42,12 @@ pub(super) const HELD: [Held; 2] = [
     }),
     Held::Value(held::Value {
         std: "std::time::SystemTimeError",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .type_::<SystemTimeError>(path, &[], capabilities)
+                .type_::<SystemTimeError>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,

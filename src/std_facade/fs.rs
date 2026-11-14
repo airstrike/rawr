@@ -124,7 +124,7 @@ fn path(value: &Dynamic) -> Result<PathBuf, Box<EvalAltResult>> {
 }
 
 /// The contents argument: a `String` or bytes, as Rust's `AsRef<[u8]>`.
-fn contents(value: &Dynamic) -> Result<Vec<u8>, Box<EvalAltResult>> {
+pub(super) fn contents(value: &Dynamic) -> Result<Vec<u8>, Box<EvalAltResult>> {
     if let Some(text) = value.read_lock::<ImmutableString>() {
         return Ok(text.as_bytes().to_vec());
     }

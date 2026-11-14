@@ -26,10 +26,13 @@ const STREAM: &[capability::Kind] = &[
 pub(super) const HELD: [Held; 4] = [
     Held::Value(held::Value {
         std: "std::io::Error",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
-            builder.type_::<Error>(path, &[], capabilities).map(drop)
+        register: |builder, path, parameters, capabilities| {
+            builder
+                .type_::<Error>(path, parameters, capabilities)
+                .map(drop)
         },
         crosses: true,
         runs: &[
@@ -40,11 +43,12 @@ pub(super) const HELD: [Held; 4] = [
     }),
     Held::Value(held::Value {
         std: "std::io::ErrorKind",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .value_type::<ErrorKind>(path, &[], capabilities)
+                .value_type::<ErrorKind>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
@@ -61,11 +65,12 @@ pub(super) const HELD: [Held; 4] = [
     }),
     Held::Value(held::Value {
         std: "std::io::Stdin",
+        parameters: &[],
         lent: &[],
         also: &["std::io::StdinLock"],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .default_value_type::<Stdin>(path, &[], capabilities)
+                .default_value_type::<Stdin>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: false,
@@ -73,11 +78,12 @@ pub(super) const HELD: [Held; 4] = [
     }),
     Held::Value(held::Value {
         std: "std::io::Stdout",
+        parameters: &[],
         lent: &[],
         also: &["std::io::StdoutLock"],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .default_value_type::<Stdout>(path, &[], capabilities)
+                .default_value_type::<Stdout>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: false,
@@ -200,7 +206,7 @@ pub(crate) fn register_debug() {
 /// What one read of stdin into the `&mut String` `buffer` gives: its
 /// `io::Result`, then the buffer with what it read appended, which goes
 /// back to the place it was borrowed from.
-fn appended(
+pub(super) fn appended(
     buffer: &Dynamic,
     read: impl FnOnce(&mut String) -> std::io::Result<usize>,
 ) -> Result<Dynamic, Box<EvalAltResult>> {

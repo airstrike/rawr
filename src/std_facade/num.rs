@@ -9,11 +9,12 @@ use crate::{capability, Dynamic};
 /// The types the module holds.
 pub(super) const HELD: [Held; 1] = [Held::Value(held::Value {
     std: "std::num::IntErrorKind",
+    parameters: &[],
     lent: &[],
     also: &[],
-    register: |builder, path, capabilities| {
+    register: |builder, path, parameters, capabilities| {
         builder
-            .value_type::<IntErrorKind>(path, &[], capabilities)
+            .value_type::<IntErrorKind>(path, parameters, capabilities)
             .map(drop)
     },
     crosses: true,
