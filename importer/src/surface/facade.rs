@@ -214,6 +214,10 @@ pub struct TraitHeader {
     /// callable, a [`Type::Callable`] (#1981).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     call: Option<Type>,
+    /// Its methods' opaque outputs, as the runner's impl of it for a
+    /// program's type gives a value of one through a box (#2013).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outputs: Option<representability::signature::Outputs>,
 }
 
 impl TraitHeader {
@@ -243,6 +247,12 @@ impl TraitHeader {
     #[must_use]
     pub const fn call(&self) -> Option<&Type> {
         self.call.as_ref()
+    }
+    /// Its methods' opaque outputs, when some method gives one
+    /// (`signature::Outputs`).
+    #[must_use]
+    pub const fn outputs(&self) -> Option<&representability::signature::Outputs> {
+        self.outputs.as_ref()
     }
 }
 
@@ -1228,7 +1238,12 @@ impl Plan {
         let mut variants = Vec::<(Box<str>, Box<str>, [u8; 32], Box<str>)>::new();
         // Each trait Rawr code names: its root, its path and its identity,
         // whose header is written once every type is in (D604).
-        let mut named_traits = Vec::<(Box<str>, Box<str>, [u8; 32])>::new();
+        let mut named_traits = Vec::<(
+            Box<str>,
+            Box<str>,
+            [u8; 32],
+            Option<representability::signature::Outputs>,
+        )>::new();
         for outcome in outcomes {
             let named_trait = matches!(
                 outcome.representability(),
@@ -1290,7 +1305,12 @@ impl Plan {
                     named_traits
                         .try_reserve(1)
                         .map_err(|_| super::Error::Allocation)?;
-                    named_traits.push((copy(root)?, copy(&relative)?, *definition.as_bytes()));
+                    named_traits.push((
+                        copy(root)?,
+                        copy(&relative)?,
+                        *definition.as_bytes(),
+                        outcome.outputs().cloned(),
+                    ));
                 }
                 // The methods of the trait's impls for `&str`, each a
                 // function whose first input is Rawr's string
@@ -1874,8 +1894,8 @@ impl Plan {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let traits = named_traits
                 .iter()
-                .filter(|(root, _, _)| *root == facade.root)
-                .map(|(_, path, identity)| (path.clone(), *identity))
+                .filter(|(root, _, _, _)| *root == facade.root)
+                .map(|(_, path, identity, _)| (path.clone(), *identity))
                 .collect::<Vec<_>>();
             let (trait_headers, impls) =
                 super::headers::headers(graph, &declared, &opaque, &traits);
@@ -1912,12 +1932,19 @@ impl Plan {
                         output: Box::new(ty(output, &header.parameters).ok()?),
                     })
                 });
+                let outputs = named_traits
+                    .iter()
+                    .find(|(root, _, identity, _)| {
+                        *root == facade.root && *identity == header.identity
+                    })
+                    .and_then(|(_, _, _, outputs)| outputs.clone());
                 converted.push(TraitHeader {
                     path: header.path,
                     identity: header.identity,
                     parameters: parameters(&header.parameters)?,
                     defaults,
                     call,
+                    outputs,
                 });
             }
             facade.trait_headers = converted.into_boxed_slice();

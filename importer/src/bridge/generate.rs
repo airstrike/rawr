@@ -12538,6 +12538,35 @@ fn witnessed(plan: &Plan, cohort: &[Plan]) -> Result<bool, request::Error> {
     Ok(false)
 }
 
+/// Whether the value `plan` gives may borrow what the call takes: the call
+/// borrows its receiver, or an input is a reference or carries a lifetime.
+fn borrows_inputs(plan: &Plan) -> Result<bool, request::Error> {
+    let (signature, substitutions, receiver) = match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            ..
+        } => (signature, substitutions, None),
+        Operation::Method {
+            signature,
+            substitutions,
+            receiver,
+            ..
+        } => (signature, substitutions, Some(*receiver)),
+        _ => return Ok(true),
+    };
+    if matches!(receiver, Some(Receiver::Shared | Receiver::Mutable)) {
+        return Ok(true);
+    }
+    for input in signature.inputs() {
+        let input = substituted(input, signature, substitutions)?;
+        if matches!(input, convert::Type::Borrowed { .. }) || carries_lifetime(&input) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The table of calls that take the value `plan` gives, when its type holds
 /// an opaque type: each call's body is compiled here, where rustc knows the
 /// value's type, and takes it at that type (`take_like`).
@@ -12570,6 +12599,7 @@ fn opaque_table_source(
     let owned = lends_cell(plan)?;
     let cell = owned.is_some();
     let forwarded = owned.is_some_and(|owned| owned.forwards.is_some());
+    let borrows = borrows_inputs(plan)?;
     let mut entries = Vec::new();
     for (index, consumer) in opaque_consumers(cohort, &key)?.into_iter().enumerate() {
         let Some((position, _, operand)) = opaque_operand(consumer)? else {
@@ -12629,12 +12659,14 @@ fn opaque_table_source(
             let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
             let _cell = OpaqueCell::enter(reach);
             let mut body = Vec::new();
-            // What a region holds boxed is made of a receiver in the region
-            // (`region_operand`), never of this value, which is in the
-            // arena.
+            // A call that takes a region's value beside this one, which is
+            // in the arena, makes its output in the region. What the region
+            // holds boxed is made of a receiver in the region
+            // (`region_operand`), or of this value where it borrows nothing,
+            // so it outlives any region (#2013).
             let boxed = scoped_type(&produced).is_some_and(|key| family::Ops::held(&key).is_some());
             let region = region_inputs(consumer)?;
-            if !region.is_empty() && !boxed {
+            if !region.is_empty() && (!boxed || !borrows) {
                 let indices = region
                     .iter()
                     .map(usize::to_string)
@@ -23529,7 +23561,9 @@ fn owned_cell(
     // The one trait, and its supertraits, the value implements through the
     // proxy (#856), at the trait's arguments.
     let forwards = match (&traits[..], opaque.forwards()) {
-        ([(_, _, written)], Some(forwarding)) => render_forwards(written, forwarding),
+        ([(_, _, written)], Some(forwarding)) => {
+            render_forwards(written, forwarding, Implementor::Lent)
+        }
         _ => None,
     };
     Ok(Some(Owned {
@@ -23540,10 +23574,11 @@ fn owned_cell(
 }
 
 /// How a value that lives beside what it borrows implements its opaque
-/// type's one trait and each of its supertraits (#856, #1997): a method of
-/// the proxy for each of theirs, which calls the method of the value
-/// inside, and an impl of each trait for `LentValue`, whose methods call
-/// the proxy's.
+/// type's one trait and each of its supertraits (#856, #1997), or a value a
+/// region holds boxed implements the trait a script impl's function gives
+/// (#2013): a method of the proxy for each of theirs, which calls the
+/// method of the value inside, and an impl of each trait for the type that
+/// holds the proxy, whose methods call the proxy's.
 struct Forwards {
     /// The proxy trait's methods.
     methods: String,
@@ -23553,12 +23588,47 @@ struct Forwards {
     implementation: String,
 }
 
+/// The type that holds a value behind its proxy trait and implements the
+/// value's traits through it (`Forwards`).
+#[derive(Clone, Copy)]
+enum Implementor<'a> {
+    /// `LentValue`, which reaches its proxy through its cell
+    /// (`render_lent_cell`).
+    Lent,
+    /// A region's box of the trait the type is held through, as `Box<dyn
+    /// RawrOpaque0<'x> + 'x>` (`family::Ops`).
+    Boxed(&'a str),
+}
+
+impl Implementor<'_> {
+    /// The head of its impl of the trait at `path`.
+    fn head(self, path: &str) -> String {
+        match self {
+            Self::Lent => format!("impl {path} for LentValue"),
+            Self::Boxed(held) => format!("impl<'x> {path} for {held}"),
+        }
+    }
+
+    /// The call of the proxy's method `proxy` with `names`, through a
+    /// `&mut self` when `mutable`.
+    fn call(self, mutable: bool, proxy: &str, names: &str) -> String {
+        match self {
+            Self::Lent => {
+                let reach = if mutable { "mutable" } else { "shared" };
+                format!("self.{reach}(move |value| value.{proxy}({names}))")
+            }
+            Self::Boxed(_) => format!("(**self).{proxy}({names})"),
+        }
+    }
+}
+
 /// The parts of `Forwards` for `forwarding`, whose trait is at the Rust
-/// types `arguments`, or `None` when a trait or a type of one of its
-/// methods has no Rust spelling.
+/// types `arguments`, implemented for `implementor`, or `None` when a trait
+/// or a type of one of its methods has no Rust spelling.
 fn render_forwards(
     arguments: &[String],
     forwarding: &crate::classify::representability::signature::Forwarding,
+    implementor: Implementor<'_>,
 ) -> Option<Forwards> {
     let mut traits = Vec::new();
     for implemented in forwarding.traits() {
@@ -23608,19 +23678,15 @@ fn render_forwards(
         let head = |name: &str| format!("fn {name}{generics}({receiver}{parameters}) -> {output}");
         let proxy = format!("__rawr_forward_{owner}_{name}");
         let separator = if names.is_empty() { "" } else { ", " };
-        let reach = if forward.receiver().mutable() {
-            "mutable"
-        } else {
-            "shared"
-        };
         methods.push_str(&format!("        {};\n", head(&proxy)));
         bodies.push_str(&format!(
             "        {} {{\n            <Self as {path}>::{name}(self{separator}{names})\n        }}\n",
             head(&proxy)
         ));
         implementations[owner].push_str(&format!(
-            "        {} {{\n            self.{reach}(move |value| value.{proxy}({names}))\n        }}\n",
-            head(name)
+            "        {} {{\n            {}\n        }}\n",
+            head(name),
+            implementor.call(forward.receiver().mutable(), &proxy, &names)
         ));
     }
     // A trait the crate implements for every type, the value has by that
@@ -23630,7 +23696,10 @@ fn render_forwards(
         .zip(implementations)
         .filter(|((_, blanket), _)| !blanket)
         .map(|((path, _), body)| {
-            format!("    #[allow(clippy::all)]\n    impl {path} for LentValue {{\n{body}    }}\n")
+            format!(
+                "    #[allow(clippy::all)]\n    {} {{\n{body}    }}\n",
+                implementor.head(path)
+            )
         })
         .collect();
     Some(Forwards {
@@ -25448,6 +25517,10 @@ fn render_impl(
         .map(|argument| impl_type(argument, generics))
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| drift("a script impl's trait arguments"))?;
+    let revealed = trait_outputs(script.trait_path(), cohort.facade).map(|outputs| Revealed {
+        outputs,
+        arguments: &arguments,
+    });
     // Each lifetime argument is the impl's own, as `'_` writes it, or by
     // its name where a generic function's bound names it (#593).
     let named = frame::named_lifetimes(script);
@@ -25457,7 +25530,7 @@ fn render_impl(
                 .and_then(|names| names.get(index))
                 .map_or_else(|| "'_".to_owned(), ToString::to_string)
         })
-        .chain(arguments)
+        .chain(arguments.iter().cloned())
         .collect::<Vec<_>>();
     let trait_ = if arguments.is_empty() {
         script.trait_path().to_owned()
@@ -25489,7 +25562,12 @@ fn render_impl(
             items.push_str(&frame.render(script, cohort)?);
             Some(frame)
         };
-        body.push_str(&render_impl_function(function, generics, frame.as_ref())?);
+        body.push_str(&render_impl_function(
+            function,
+            generics,
+            frame.as_ref(),
+            revealed.as_ref(),
+        )?);
     }
     writeln!(
         output,
@@ -25502,11 +25580,74 @@ impl{parameters} {trait_} for {owner} {{
     .map_err(request::unwritable)
 }
 
+/// The opaque outputs of the methods of the crate trait at `path`, as
+/// the facade's header of it has them (`signature::Outputs`).
+fn trait_outputs<'a>(
+    path: &str,
+    facade: Option<&'a crate::surface::facade::Plan>,
+) -> Option<&'a crate::classify::representability::signature::Outputs> {
+    let identity = PATH_IDENTITIES
+        .with_borrow(|identities| identities.get(path.trim_start_matches("::")).copied())?;
+    facade?
+        .facades()
+        .flat_map(crate::surface::facade::Facade::trait_headers)
+        .find(|header| *header.identity() == identity)?
+        .outputs()
+}
+
+/// A script impl's trait's opaque outputs, at the impl's type arguments
+/// as Rust writes them: what a function of the impl gives where its body
+/// reveals a type no Rust signature names (#2013).
+struct Revealed<'a> {
+    outputs: &'a crate::classify::representability::signature::Outputs,
+    arguments: &'a [String],
+}
+
+impl Revealed<'_> {
+    /// The family struct of `returned`, the type the body of the impl's
+    /// function `name` revealed, when a region holds it boxed, as a crate
+    /// type that holds a crate's opaque type is held as `Box<dyn
+    /// RawrOpaque0<'x> + 'x>`, and the box can implement the trait of the
+    /// function's opaque output: each method of the trait, and of its
+    /// supertraits, calls the boxed value's (`Implementor::Boxed`). The impl
+    /// gives the box, as rustc lets an impl refine its trait's `impl
+    /// Trait`.
+    fn boxed_family(&self, name: &str, returned: &convert::Type) -> Option<String> {
+        let key = scoped_type(returned)?;
+        let held = family::Ops::held(&key)?;
+        let opaque = self.outputs.method(name)?;
+        let forwarding = opaque.forwards()?;
+        let [convert::Type::Nominal { arguments, .. }] = opaque.traits() else {
+            return None;
+        };
+        // Each of the trait's parameters, as the impl writes it or by its
+        // default.
+        let parameters = self
+            .outputs
+            .defaults()
+            .iter()
+            .enumerate()
+            .map(|(position, default)| match self.arguments.get(position) {
+                Some(argument) => Some(Box::<str>::from(argument.as_str())),
+                None => concrete_type(default.as_ref()?).map(Box::from),
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let written = arguments
+            .iter()
+            .map(|argument| impl_type(argument, &parameters))
+            .collect::<Option<Vec<_>>>()?;
+        let forwards = render_forwards(&written, forwarding, Implementor::Boxed(&held))?;
+        family::Ops::forward(&key, forwards);
+        family_of(returned)?.named().map(str::to_owned)
+    }
+}
+
 /// One function of a script impl, as `render_impls` writes it.
 fn render_impl_function(
     function: &crate::surface::instance::ScriptImplFunction,
     generics: &[Box<str>],
     frame: Option<&frame::Frame>,
+    revealed: Option<&Revealed<'_>>,
 ) -> Result<String, request::Error> {
     use crate::surface::instance::ImplReceiver;
     let drift = request::drift;
@@ -25757,9 +25898,16 @@ fn render_impl_function(
     // outlive any lifetime of the impl's, and taken out of it at
     // `'static`.
     // The member's signature names the output's type, which a wrapper's
-    // family can't (`family`).
+    // family can't (`family`), or the box a region holds it in, which
+    // implements the trait's opaque output (`Revealed::boxed_family`).
     let family = carries_lifetime(returned)
-        .then(|| written_family(returned))
+        .then(|| {
+            written_family(returned).or_else(|| {
+                revealed
+                    .filter(|_| frame.is_none())
+                    .and_then(|revealed| revealed.boxed_family(function.name(), returned))
+            })
+        })
         .flatten();
     // Native code may call the impl on a thread with no arena, as tokio's
     // workers run reqwest's `json()` and its `Deserialize` (D740.3): the

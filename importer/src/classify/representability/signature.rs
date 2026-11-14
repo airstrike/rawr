@@ -219,6 +219,44 @@ pub struct Forwarding {
     methods: Box<[Forward]>,
 }
 
+/// The opaque outputs of a trait's methods, as `fn shape(&self) -> impl
+/// Shape<T> + 'a` gives one, each with the traits it is bounded by and how a value behind a box of the
+/// runner's own implements them (#2013). A program's impl of the trait
+/// whose body reveals a type no Rust signature names gives that box. The
+/// traits' arguments name the trait's type parameters other than `Self`
+/// by position (`convert::Type::Parameter`), and each parameter has its
+/// default, as an impl that writes no argument for it takes.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Outputs {
+    defaults: Box<[Option<super::convert::Type>]>,
+    methods: Box<[(Box<str>, Opaque)]>,
+}
+
+impl Outputs {
+    pub(crate) const fn new(
+        defaults: Box<[Option<super::convert::Type>]>,
+        methods: Box<[(Box<str>, Opaque)]>,
+    ) -> Self {
+        Self { defaults, methods }
+    }
+
+    /// The default of each of the trait's type parameters other than
+    /// `Self`, by position.
+    #[must_use]
+    pub fn defaults(&self) -> &[Option<super::convert::Type>] {
+        &self.defaults
+    }
+
+    /// The opaque output of the method `name`, when it gives one.
+    #[must_use]
+    pub fn method(&self, name: &str) -> Option<&Opaque> {
+        self.methods
+            .iter()
+            .find(|(method, _)| **method == *name)
+            .map(|(_, opaque)| opaque)
+    }
+}
+
 /// One trait a value held through the proxy implements (`Forwarding`).
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Implemented {
