@@ -45,6 +45,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A struct literal or pattern written through a crate's type alias, as wgpu's `DeviceDescriptor { label: None, .. }` and `SurfaceConfiguration { .. }`, builds the aliased struct with the alias's arguments, and a `&self` method's `impl Future` that borrows nothing, as `request_device`, can be awaited. (#1961; part of #1953)
 - Calling a `&self` method on a crate struct's field, as wgpu's `capabilities.formats.iter()` does, borrows the field where it is and leaves the struct usable, as in Rust. (#1969)
 - A crate struct's `Option<&str>` field can be read in a pattern and filled from `..Default::default()`. (#1970)
+- A script function that returns an async block can fill a crate's generic type, a crate function that takes a future, as `.then(Task::future)`, runs it, and an `Rc` or `Arc` of a string or number crosses as Rust's own pointer to it, so iced's editor builds and starts unchanged. (#551)
 
 ## 0.3.213 (2026-11-13)
 

@@ -51,7 +51,8 @@
         {"text":"A crate function's opaque value that borrows a string it is given, such as iced's `markdown::parse(&text)`, lives beside the string, so iced's changelog builds and runs.","issues":[1966]},
         {"text":"A struct literal or pattern written through a crate's type alias, as wgpu's `DeviceDescriptor { label: None, .. }` and `SurfaceConfiguration { .. }`, builds the aliased struct with the alias's arguments, and a `&self` method's `impl Future` that borrows nothing, as `request_device`, can be awaited.","issues":[1961],"refs":[1953]},
         {"text":"Calling a `&self` method on a crate struct's field, as wgpu's `capabilities.formats.iter()` does, borrows the field where it is and leaves the struct usable, as in Rust.","issues":[1969]},
-        {"text":"A crate struct's `Option<&str>` field can be read in a pattern and filled from `..Default::default()`.","issues":[1970]}
+        {"text":"A crate struct's `Option<&str>` field can be read in a pattern and filled from `..Default::default()`.","issues":[1970]},
+        {"text":"A script function that returns an async block can fill a crate's generic type, a crate function that takes a future, as `.then(Task::future)`, runs it, and an `Rc` or `Arc` of a string or number crosses as Rust's own pointer to it, so iced's editor builds and starts unchanged.","issues":[551]}
       ]
     },
     "releases": [
@@ -2913,7 +2914,7 @@
     {"issue":548,"title":"Remove the limit figures that no longer bound anything","state":"open","category":"Importer"},
     {"issue":549,"title":"Generator panicked on every program whose closures cross as slots","state":"closed","category":"Importer","release":"0.3.57"},
     {"issue":550,"title":"An unannotated closure input of an opaque program's P::State is typed _","state":"closed","category":"No glue (D593)","release":"0.3.58"},
-    {"issue":551,"title":"A closure that returns a future runs where a crate function takes one","state":"open","category":"No glue (D593)"},
+    {"issue":551,"title":"A closure that returns a future runs where a crate function takes one","state":"closed","category":"No glue (D593)"},
     {"issue":552,"title":"Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc"},
     {"issue":553,"title":"Request builder methods return a Result that can no longer fail","state":"closed","category":"Importer"},
     {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"closed","category":"Health"},
@@ -4335,7 +4336,8 @@
     {"issue":1971,"title":"`..Default::default()` as a generic crate struct's base with a &str argument calls Described::<Value>::default()","state":"open","category":"No glue (D593)"},
     {"issue":1972,"title":"A match on a crate struct pattern with refutable fields is E0004 though its arms cover every value","state":"open","category":"Divergences from rustc"},
     {"issue":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"open","category":"No glue (D593)"},
-    {"issue":1974,"title":"A crate struct's non-Clone field borrowed by a &self method is not read in place","state":"open","category":"Divergences from rustc"}
+    {"issue":1974,"title":"A crate struct's non-Clone field borrowed by a &self method is not read in place","state":"open","category":"Divergences from rustc"},
+    {"issue":1975,"title":"A program's Rc or Arc of a by-value type passed as a crate call's argument doesn't cross as Rust's pointer","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4989,7 +4991,8 @@
             {"number":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"closed"},
             {"number":1969,"title":"Reading a crate struct's Vec<Copy crate value> field for a &self method moves the struct (integration)","state":"closed"},
             {"number":1971,"title":"`..Default::default()` as a generic crate struct's base with a &str argument calls Described::<Value>::default()","state":"open"},
-            {"number":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"open"}
+            {"number":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"open"},
+            {"number":1975,"title":"A program's Rc or Arc of a by-value type passed as a crate call's argument doesn't cross as Rust's pointer","state":"open"}
           ],
           "milestone": "0.3"
         },
