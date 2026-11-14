@@ -32,7 +32,10 @@
       {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]},
       {"text":"A crate function that borrows a value whose type holds a borrow inside a type argument, as wgpu's `request_device(&DeviceDescriptor<'_>)` does, can be called.","issues":[1958],"refs":[1953]},
       {"text":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does, can be called, and a native module's path works beside a `use` that binds the crate's own name, as iced's markdown calls `icon::copy()` beside `use iced::widget::markdown`.","issues":[1959],"refs":[801]},
-      {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]}
+      {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]},
+      {"text":"A struct declared in a function body with a crate's derive, as pokedex's `#[derive(Deserialize)] struct Entry`, works again, and its derived impl's generic functions build in the runner.","issues":[1938]},
+      {"text":"A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules.","issues":[1932]},
+      {"text":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to.","issues":[1963],"refs":[610]}
     ]
   },
   "releases": [

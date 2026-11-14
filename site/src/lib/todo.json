@@ -39,7 +39,10 @@
         {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]},
         {"text":"A crate function that borrows a value whose type holds a borrow inside a type argument, as wgpu's `request_device(&DeviceDescriptor<'_>)` does, can be called.","issues":[1958],"refs":[1953]},
         {"text":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does, can be called, and a native module's path works beside a `use` that binds the crate's own name, as iced's markdown calls `icon::copy()` beside `use iced::widget::markdown`.","issues":[1959],"refs":[801]},
-        {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]}
+        {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]},
+        {"text":"A struct declared in a function body with a crate's derive, as pokedex's `#[derive(Deserialize)] struct Entry`, works again, and its derived impl's generic functions build in the runner.","issues":[1938]},
+        {"text":"A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules.","issues":[1932]},
+        {"text":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to.","issues":[1963],"refs":[610]}
       ]
     },
     "releases": [
@@ -4281,13 +4284,13 @@
     {"issue":1929,"title":"A rawr-import panic on a broken invariant prints as a bare thread panic, not as rustc's internal compiler error","state":"open","category":"Health"},
     {"issue":1930,"title":"Runtime errors and island refusals print through Display, uncoloured and hand-formatted","state":"open","category":"Health"},
     {"issue":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"closed","category":"No glue (D593)"},
-    {"issue":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"open","category":"No glue (D593)"},
+    {"issue":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"closed","category":"No glue (D593)"},
     {"issue":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open","category":"No glue (D593)"},
     {"issue":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open","category":"No glue (D593)"},
     {"issue":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"closed","category":"No glue (D593)"},
     {"issue":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"closed","category":"No glue (D593)"},
     {"issue":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed","category":"No glue (D593)"},
-    {"issue":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open","category":"No glue (D593)"},
+    {"issue":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"closed","category":"No glue (D593)"},
     {"issue":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"closed","category":"No glue (D593)"},
     {"issue":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"closed","category":"No glue (D593)"},
     {"issue":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"closed","category":"No glue (D593)"},
@@ -4311,7 +4314,8 @@
     {"issue":1959,"title":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does…","state":"closed","category":"No glue (D593)"},
     {"issue":1960,"title":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the…","state":"closed","category":"No glue (D593)"},
     {"issue":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"open","category":"No glue (D593)"},
-    {"issue":1962,"title":"A native module's path spelled through the crate's name ignores `use` bindings inside the call's arguments too","state":"open","category":"Divergences from rustc"}
+    {"issue":1962,"title":"A native module's path spelled through the crate's name ignores `use` bindings inside the call's arguments too","state":"open","category":"Divergences from rustc"},
+    {"issue":1963,"title":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to","state":"closed","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4935,13 +4939,13 @@
             {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open"},
             {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open"},
             {"number":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"closed"},
-            {"number":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"open"},
+            {"number":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"closed"},
             {"number":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open"},
             {"number":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open"},
             {"number":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"closed"},
             {"number":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"closed"},
             {"number":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed"},
-            {"number":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open"},
+            {"number":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"closed"},
             {"number":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"closed"},
             {"number":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"closed"},
             {"number":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"closed"},

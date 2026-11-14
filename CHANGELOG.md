@@ -33,6 +33,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate function that borrows a value whose type holds a borrow inside a type argument, as wgpu's `request_device(&DeviceDescriptor<'_>)` does, can be called. (#1958; part of #1953)
 - A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does, can be called, and a native module's path works beside a `use` that binds the crate's own name, as iced's markdown calls `icon::copy()` beside `use iced::widget::markdown`. (#1959; part of #801)
 - A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object. (#1960; part of #28)
+- A struct declared in a function body with a crate's derive, as pokedex's `#[derive(Deserialize)] struct Entry`, works again, and its derived impl's generic functions build in the runner. (#1938)
+- A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules. (#1932)
+- A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to. (#1963; part of #610)
 
 ## 0.3.213 (2026-11-13)
 
