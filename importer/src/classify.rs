@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 177;
+const CLASSIFIER_VERSION: u32 = 178;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -3174,13 +3174,16 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 // Core's `Into` by its path, so the check rejects an
                 // argument none of the cases takes as rustc does (#1891).
-                let cases = self.conversion_cases(target)?;
+                let (cases, exhaustive) = self.conversion_cases(target)?;
                 if !cases.is_empty() {
                     self.retain_array::<Case>(cases.len())?;
-                    relations.push(
-                        Relation::new(*index, converted, cases)
-                            .of_std(Some("core::convert::Into".into())),
-                    );
+                    let relation = Relation::new(*index, converted, cases)
+                        .of_std(Some("core::convert::Into".into()));
+                    relations.push(if exhaustive {
+                        relation.exhaustive()
+                    } else {
+                        relation
+                    });
                 }
                 continue;
             }
@@ -3371,15 +3374,24 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
 
     /// The cases of `P: Into<target>`: each implementation of `From<S>`
     /// for `target` whose `S` names no parameter, as a self type `S` with
-    /// the trait argument `target`, once each. rustc's reflexive `From<T>
-    /// for T` is none of them: an argument that is already `target` needs
-    /// nothing inferred.
+    /// the trait argument `target`, once each, and whether they are every
+    /// implementation for `target`. rustc's reflexive `From<T> for T` is
+    /// none of them: an argument that is already `target` needs nothing
+    /// inferred. An implementation for `target` whose `S` is generic, as
+    /// ratatui's `impl<T: Into<Cow<str>>> From<T> for Line`, or one Rawr
+    /// can't name, or one for `target`'s type at other arguments, is no
+    /// case, and the cases are then not every one.
     fn conversion_cases(
         &self,
         target: &representability::convert::Type,
-    ) -> Result<Box<[representability::signature::Case]>, Failure> {
+    ) -> Result<(Box<[representability::signature::Case]>, bool), Failure> {
         use representability::signature::Case;
         let mut cases = Vec::<Case>::new();
+        let mut exhaustive = true;
+        let target_definition = match target {
+            representability::convert::Type::Nominal { definition, .. } => Some(definition),
+            _ => None,
+        };
         for implementation in self.core_implementations("From") {
             let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
                 continue;
@@ -3389,9 +3401,18 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             };
             if implementation.polarity() != model::Polarity::Positive
                 || !self.is_core_trait(id, "From")
-                || self.convert(implementation.self_type()).ok().as_ref() != Some(target)
             {
                 continue;
+            }
+            match self.convert(implementation.self_type()) {
+                Ok(this) if this == *target => {}
+                Ok(representability::convert::Type::Nominal { definition, .. })
+                    if Some(&definition) == target_definition =>
+                {
+                    exhaustive = false;
+                    continue;
+                }
+                _ => continue,
             }
             // A tuple, as `(u8, u8, u8)`, is a value Rawr holds, and so is
             // an array of a known length, as `Padding`'s `From<[u16; 2]>`
@@ -3410,9 +3431,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 source => self.convert_value(source).map_err(|_| ()),
             };
             let Ok(source) = source else {
+                exhaustive = false;
                 continue;
             };
             if names_other_parameter(&source, u32::MAX) {
+                exhaustive = false;
                 continue;
             }
             let case = Case::new(source, Box::new([target.clone()]));
@@ -3421,7 +3444,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 cases.push(case);
             }
         }
-        Ok(cases.into_boxed_slice())
+        Ok((cases.into_boxed_slice(), exhaustive))
     }
 
     /// What a projection bound `<_ as trait_id>::Name` reads, `Name` the

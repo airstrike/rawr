@@ -347,6 +347,11 @@ pub struct Relation {
     /// `impl AsRef<[Span<'a, L>]>` from a `Vec<Span<'static, ()>>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     std_trait: Option<Box<str>>,
+    /// Whether the cases are every impl of the trait for the bound's
+    /// arguments: none was left out for a generic source or a type Rawr
+    /// can't name, so an argument no case takes is rustc's E0277.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    exhaustive: bool,
 }
 
 /// An associated type of a trait, by the trait's definition identity and
@@ -443,6 +448,7 @@ impl Relation {
             trait_identity: None,
             associated: None,
             std_trait: None,
+            exhaustive: false,
         }
     }
 
@@ -481,6 +487,20 @@ impl Relation {
     #[must_use]
     pub fn std_trait(&self) -> Option<&str> {
         self.std_trait.as_deref()
+    }
+
+    /// The relation whose cases are every impl of its trait for its
+    /// arguments.
+    pub(crate) const fn exhaustive(mut self) -> Self {
+        self.exhaustive = true;
+        self
+    }
+
+    /// Whether the cases are every impl of the trait for the bound's
+    /// arguments.
+    #[must_use]
+    pub const fn is_exhaustive(&self) -> bool {
+        self.exhaustive
     }
 
     /// The type parameter the bound is on.

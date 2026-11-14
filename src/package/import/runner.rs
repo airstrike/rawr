@@ -1394,6 +1394,7 @@ pub(crate) fn signature(
             relation.trait_identity(),
             relation.associated(),
             relation.std_trait(),
+            relation.is_exhaustive(),
             |source| {
                 pattern(source, &|nominal| {
                     ty(nominal).ok().and_then(|ty| rooted(root, ty))

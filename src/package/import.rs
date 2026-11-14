@@ -4494,6 +4494,7 @@ fn relations(
                 .associated()
                 .map(|associated| (associated.trait_identity(), associated.name())),
             source.std_trait(),
+            source.is_exhaustive(),
             |ty| converted_pattern(ty, parameters),
         ) {
             builder.relation(relation)?;
@@ -4509,7 +4510,10 @@ pub(crate) type CaseProjections<'a, T> = Vec<(&'a T, &'a T, Vec<(&'a T, &'a T)>)
 /// A relation on `parameter`, its types made patterns by `pattern`: `None`
 /// when one of its trait arguments can't be one. A case that can't be is
 /// dropped, and a relation without cases, a trait or an associated type is
-/// none. A case's projection that can't be is dropped from it.
+/// none. A case's projection that can't be is dropped from it. Its cases
+/// are every impl of its trait when `exhaustive` says the source's are and
+/// none was dropped.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn relation<'a, T: 'a>(
     parameter: &str,
     arguments: &'a [T],
@@ -4517,8 +4521,10 @@ pub(crate) fn relation<'a, T: 'a>(
     trait_identity: Option<[u8; 32]>,
     associated: Option<([u8; 32], &str)>,
     std_trait: Option<&str>,
+    exhaustive: bool,
     pattern: impl Fn(&T) -> Option<host::signature::Pattern>,
 ) -> Option<host::signature::Relation> {
+    let mut dropped = false;
     let arguments = arguments
         .iter()
         .map(&pattern)
@@ -4538,16 +4544,17 @@ pub(crate) fn relation<'a, T: 'a>(
                     })
                 })
                 .collect();
-            Some(
-                host::signature::Case::new(
+            let case = (|| {
+                Some(host::signature::Case::new(
                     pattern(this)?,
                     implemented
                         .iter()
                         .map(&pattern)
                         .collect::<Option<Box<[_]>>>()?,
-                )
-                .with_projections(projections),
-            )
+                ))
+            })();
+            dropped |= case.is_none();
+            Some(case?.with_projections(projections))
         })
         .collect::<Box<[_]>>();
     (!cases.is_empty() || trait_identity.is_some() || associated.is_some()).then(|| {
@@ -4555,6 +4562,7 @@ pub(crate) fn relation<'a, T: 'a>(
             .of_trait(trait_identity)
             .of_associated(associated.map(|(identity, name)| (identity, name.into())))
             .of_std(std_trait.map(Into::into))
+            .of_exhaustive(exhaustive && !dropped)
     })
 }
 

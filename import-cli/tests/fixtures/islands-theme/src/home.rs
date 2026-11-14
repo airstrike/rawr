@@ -260,7 +260,7 @@ impl State {
     ) -> Element<'a, Message> {
         let top_bar = crate::inbox::view(&self.title, theme).map(Message::Inbox);
 
-        let mut content = column![top_bar].spacing(0).width(Fill);
+        let mut content = column![top_bar].spacing(0).width(Fill).title("home");
 
         content = content.push(crate::widget::void());
 
