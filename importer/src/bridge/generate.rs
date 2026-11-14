@@ -10061,16 +10061,25 @@ fn copy_scalar(ty: &convert::Type) -> bool {
 }
 
 /// Whether a struct's field of type `ty` is Copy: as `copy_scalar`, a
-/// shared borrow, as iced's `LineDash::segments: &'a [f32]` is, and an
-/// array of a length of Copy elements, as `SolidVertex2D::position: [f32;
-/// 2]` is.
+/// shared borrow, as iced's `LineDash::segments: &'a [f32]` is, an array
+/// of a length of Copy elements, as `SolidVertex2D::position: [f32; 2]`
+/// is, and an `Option` or `Result` of them, as wgpu's `DeviceDescriptor::
+/// label: Option<&str>` is (#1970). The runner's `copy_scalar` agrees.
 fn copy_field(ty: &convert::Type) -> bool {
-    copy_scalar(ty)
-        || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
+    match ty {
+        convert::Type::Option(inner) => copy_field(inner),
+        convert::Type::Result(ok, err) => copy_field(ok) && copy_field(err),
+        convert::Type::Borrowed { mutable: false, .. } => true,
         // A `&dyn Trait` is a shared borrow too, as `Held(&'static dyn
         // Shape)` holds one (#1593).
-        || matches!(ty, convert::Type::Object(object) if !object.pointer().owns())
-        || matches!(ty, convert::Type::Sequence { element, length: Some(_), .. } if copy_scalar(element))
+        convert::Type::Object(object) => !object.pointer().owns(),
+        convert::Type::Sequence {
+            element,
+            length: Some(_),
+            ..
+        } => copy_scalar(element),
+        ty => copy_scalar(ty),
+    }
 }
 
 /// Whether reading a struct's field of type `ty` leaves the struct whole:
@@ -27053,6 +27062,18 @@ mod tests {
             Box::new(Type::Unit)
         )));
         assert!(!super::copy_scalar(&Type::Option(Box::new(Type::Builtin(
+            Builtin::String
+        )))));
+    }
+
+    #[test]
+    fn an_option_of_a_shared_borrow_is_a_copy_field() {
+        let borrowed = Type::Borrowed {
+            mutable: false,
+            ty: Box::new(Type::Builtin(Builtin::Str)),
+        };
+        assert!(super::copy_field(&Type::Option(Box::new(borrowed))));
+        assert!(!super::copy_field(&Type::Option(Box::new(Type::Builtin(
             Builtin::String
         )))));
     }

@@ -2009,3 +2009,42 @@ pub type Configuration = surface::Configuration<Vec<u32>>;
 pub fn configure(configuration: &Configuration) -> u32 {
     configuration.width + configuration.views.iter().sum::<u32>()
 }
+
+/// A struct whose fields are collections of crate values, as wgpu's
+/// `SurfaceCapabilities::formats: Vec<TextureFormat>` is: a `&self`
+/// method reads such a field where it is, and the struct stays whole.
+pub mod capabilities {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum Format {
+        Plain,
+        Srgb,
+    }
+
+    impl Format {
+        pub fn is_srgb(&self) -> bool {
+            matches!(self, Format::Srgb)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Tag {
+        pub name: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Capabilities {
+        pub formats: Vec<Format>,
+        pub tag: Option<Tag>,
+        pub count: u32,
+    }
+
+    pub fn capabilities() -> Capabilities {
+        Capabilities {
+            formats: vec![Format::Plain, Format::Srgb],
+            tag: Some(Tag {
+                name: "main".to_string(),
+            }),
+            count: 2,
+        }
+    }
+}
