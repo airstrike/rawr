@@ -25,6 +25,9 @@
 #[cfg(target_os = "macos")]
 mod appkit;
 
+#[cfg(target_os = "macos")]
+pub(super) use appkit::capture;
+
 use std::fmt;
 
 use serde_json::{json, Value};

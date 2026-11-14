@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::process::{self, Cancel};
-use super::{content, extension, session, window, Progress, Server, POLL};
+use super::{content, extension, session, Progress, Server, POLL};
 use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
@@ -192,7 +192,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "screenshot",
-            "description": "Capture the started program's window alone and return the PNG.",
+            "description": "Capture the started program's window alone and return the PNG. The program draws the capture itself, so it shows the window as it is while another window covers it, it is off screen or the session is locked, and it needs no Screen Recording permission. The PNG is the window's size in points, title bar included, at its backing scale: the input tools take positions in those points.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1121,8 +1121,10 @@ fn exchange(
     Err(std::io::Error::other("reading values needs a Unix socket"))
 }
 
-/// `screenshot`: an extension's own capture first (iced's socket needs no
-/// permission), else the started program's window by its pids.
+/// `screenshot`: an extension's own capture first, else the started
+/// program's own (#1989): it draws its window through its own renderer
+/// and writes the PNG, asked over its socket, so nothing asks the window
+/// server for the window's pixels.
 fn screenshot(
     server: &Server,
     path: Option<&str>,
@@ -1151,13 +1153,6 @@ fn screenshot(
             reasons.push(format!("{}: {reason}", offered.extension));
         }
     }
-    // rawr's own capture asks macOS for the window. Elsewhere only an
-    // extension's screenshot tool can capture one.
-    if !cfg!(target_os = "macos") {
-        reasons
-            .push("a window capture without an extension's screenshot tool needs macOS".to_owned());
-        return Err(reasons.join("\n"));
-    }
     let Some(session) = session else {
         reasons.push(format!(
             "nothing was started for {}: call `start`",
@@ -1165,44 +1160,51 @@ fn screenshot(
         ));
         return Err(reasons.join("\n"));
     };
-    let windows = window::windows(&process::tree(session.pid));
-    let chosen = title
-        .and_then(|title| windows.iter().find(|window| window.title == title))
-        .or_else(|| windows.first());
-    let Some(chosen) = chosen else {
-        reasons.push(format!(
-            "the program started for {} shows no window yet (state: {})",
-            place.root.display(),
-            session.phase().name()
-        ));
-        return Err(reasons.join("\n"));
-    };
     let file = place.directory().join("screenshot.png");
-    let bytes = window::capture(chosen, &file)?;
-    let points = window::points(&bytes);
-    let mut summary = format!(
-        "window {} of pid {} ({}): {}",
-        chosen.number,
-        chosen.pid,
-        if chosen.title.is_empty() {
-            "untitled"
-        } else {
-            &chosen.title
-        },
-        file.display()
-    );
-    if let Some((width, height)) = points {
-        summary.push_str(&format!(
-            "\n{width} × {height} points: `click` and the other input tools take positions in these points, from the top-left corner"
-        ));
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
+    let request = json!({ "op": "screenshot", "title": title, "file": file });
+    let answer = ask(&session, &request, cancel)?;
+    match answer["error"].as_str() {
+        Some("paused") => {
+            let paused = &answer["paused"];
+            reasons.push(format!(
+                "the program is paused at {}:{}, which holds its window's event loop: its window draws once `continue` or `step` lets it go on",
+                paused["file"].as_str().unwrap_or_default(),
+                paused["line"]
+            ));
+            return Err(reasons.join("\n"));
+        }
+        Some(error) => {
+            reasons.push(format!(
+                "{error} (the program started for {} is {})",
+                session.root.display(),
+                session.phase().name()
+            ));
+            return Err(reasons.join("\n"));
+        }
+        None => {}
+    }
+    let bytes = std::fs::read(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let shown = match answer["title"].as_str() {
+        Some("") | None => "the untitled window".to_owned(),
+        Some(title) => format!("`{title}`"),
+    };
+    let summary = format!(
+        "{shown}: {}\n{} × {} points: `click` and the other input tools take positions in these points, from the top-left corner, title bar included",
+        file.display(),
+        answer["width"],
+        answer["height"]
+    );
     Ok(content::success(
         json!({
             "file": file,
-            "title": chosen.title,
-            "pid": chosen.pid,
-            "window": chosen.number,
-            "points": points.map(|(width, height)| json!({ "width": width, "height": height })),
+            "title": answer["title"],
+            "pid": session.pid,
+            "points": { "width": answer["width"], "height": answer["height"] },
+            "scale": answer["scale"],
+            "windows": answer["windows"],
         }),
         summary,
         vec![content::png(&bytes)],
