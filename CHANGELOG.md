@@ -7,6 +7,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees. (#1897; part of #1755)
 - A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema. (#1885)
+- A save to a marked file of an idle windowed program on macOS is applied at once on its main thread, with no input, and code its frames call shows on the next redraw. (#1889)
+- A restart no longer names rawr's own generated files, such as the store's Cargo.lock, as the change that caused it, and rawr never watches them. (#1890)
 
 ## 0.3.212 (2026-11-13)
 

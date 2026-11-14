@@ -13,7 +13,9 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"A restarted program's runner reads its image's facade outline from disk instead of decoding every facade body again, and the first runner decodes each body without building JSON trees.","issues":[1897],"refs":[1755]},
-        {"text":"A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema.","issues":[1885]}
+        {"text":"A save that adds a private field of a plain type to a struct no longer lowers again the other modules that name it: their kept lowerings are reused with the struct's new schema.","issues":[1885]},
+        {"text":"A save to a marked file of an idle windowed program on macOS is applied at once on its main thread, with no input, and code its frames call shows on the next redraw.","issues":[1889]},
+        {"text":"A restart no longer names rawr's own generated files, such as the store's Cargo.lock, as the change that caused it, and rawr never watches them.","issues":[1890]}
       ]
     },
     "releases": [
@@ -4192,8 +4194,8 @@
     {"issue":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.211"},
     {"issue":1887,"title":"A cold rawr run on a large program no longer stalls in reveal's instance digests","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.212"},
     {"issue":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1889,"title":"A queued swap is applied only at the program's next input event, so an untouched window stays stale","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1890,"title":"rawr watches its own generated output and restarts the program when its store's Cargo.lock changes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1889,"title":"A queued swap is applied only at the program's next input event, so an untouched window stays stale","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1890,"title":"rawr watches its own generated output and restarts the program when its store's Cargo.lock changes","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1891,"title":"A type error in a marked file is found only by the native cargo build, minutes later and in generated code","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1892,"title":"Fixing a save whose native build failed needs another full native build and a restart that loses state","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1893,"title":"Assigning a field of a field that isn't Copy is refused as unsupported syntax","state":"open","category":"Shared dependency cache (D607)"},
@@ -4205,7 +4207,8 @@
     {"issue":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1901,"title":"A private field added to a tuple struct lowers again every module that names it","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1902,"title":"A program with any impl Drop keys every struct whole for other modules' lowerings","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1902,"title":"A program with any impl Drop keys every struct whole for other modules' lowerings","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1903,"title":"An iced view-only edit of an idle app shows only at iced's next message","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5456,8 +5459,8 @@
             {"number":1885,"title":"A private-field save lowers again every source that names a type of that name","state":"closed"},
             {"number":1886,"title":"Declarations reach each other by bare name, so a common name ties unrelated modules together","state":"closed"},
             {"number":1888,"title":"No test runs a program at inboard's scale, so a per-round cost that grows with the program ships unseen","state":"open"},
-            {"number":1889,"title":"A queued swap is applied only at the program's next input event, so an untouched window stays stale","state":"open"},
-            {"number":1890,"title":"rawr watches its own generated output and restarts the program when its store's Cargo.lock changes","state":"open"},
+            {"number":1889,"title":"A queued swap is applied only at the program's next input event, so an untouched window stays stale","state":"closed"},
+            {"number":1890,"title":"rawr watches its own generated output and restarts the program when its store's Cargo.lock changes","state":"closed"},
             {"number":1891,"title":"A type error in a marked file is found only by the native cargo build, minutes later and in generated code","state":"open"},
             {"number":1892,"title":"Fixing a save whose native build failed needs another full native build and a restart that loses state","state":"open"},
             {"number":1893,"title":"Assigning a field of a field that isn't Copy is refused as unsupported syntax","state":"open"},
@@ -5466,7 +5469,8 @@
             {"number":1896,"title":"`.into()` from a widget to Element fails as an unknown member Element::from","state":"open"},
             {"number":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open"},
             {"number":1901,"title":"A private field added to a tuple struct lowers again every module that names it","state":"open"},
-            {"number":1902,"title":"A program with any impl Drop keys every struct whole for other modules' lowerings","state":"open"}
+            {"number":1902,"title":"A program with any impl Drop keys every struct whole for other modules' lowerings","state":"open"},
+            {"number":1903,"title":"An iced view-only edit of an idle app shows only at iced's next message","state":"open"}
           ]
         },
         {
