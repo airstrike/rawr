@@ -1367,10 +1367,14 @@ impl Parser<'_> {
 
     /// Whether `field.member(..)` of a crate struct's field of type `ty`
     /// borrows the field shared, as rustc's autoref does: a `&self` method
-    /// of its own, or one of its `Deref` target's.
+    /// of its own, or one of its `Deref` target's. A field of std's types,
+    /// as a `Vec` or an `Option`, is borrowed by std's `&self` methods,
+    /// through `Deref` as `Vec::iter` is `[T]`'s.
     #[cfg(feature = "rust-import")]
     pub(super) fn borrows_for_method(&mut self, ty: &Ty, member: &str) -> bool {
-        if self.host_own_member(ty, member) {
+        if !matches!(self.inference.resolve(ty), Ty::Host { .. })
+            || self.host_own_member(ty, member)
+        {
             return self.member_receiver(ty, member) == Some(receiver::Mode::Shared);
         }
         self.host_deref_target(ty, false).is_some_and(|target| {

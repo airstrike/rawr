@@ -9,6 +9,17 @@ fn main() {
         label: Some("gpu"),
         count: 3,
     };
+    if let natives::described::Described {
+        label: Some(label), ..
+    } = named
+    {
+        println!("{label}");
+    }
+    let defaulted = natives::Labeled {
+        label: Some("cpu"),
+        ..Default::default()
+    };
+    println!("{:?} {}", defaulted.label, defaulted.count);
     let natives::Labeled { count, .. } = named;
     println!("{count}");
     println!(

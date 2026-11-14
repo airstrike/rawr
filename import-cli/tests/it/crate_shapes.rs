@@ -139,10 +139,24 @@ fn a_crates_type_aliases_name_their_targets_with_defaults() {
 /// str>>` does (#1961). A `&self` method's `impl Future` that captures no
 /// lifetime is a future the call makes, as wgpu's `request_device` is. An
 /// alias that is its struct's only public name, as wgpu's
-/// `SurfaceConfiguration`, has the struct's fields at its arguments.
+/// `SurfaceConfiguration`, has the struct's fields at its arguments. A
+/// pattern reads its `Option<&str>` field, and a struct update fills the
+/// rest from `Default::default()` (#1970).
 #[test]
 fn struct_literals_and_patterns_through_a_crates_type_alias() {
-    runs_as_cargo_does("described", "4 2\n3\ntrue\n5 10\n10\n7\n");
+    runs_as_cargo_does(
+        "described",
+        "4 2\ngpu\nSome(\"cpu\") 1\n3\ntrue\n5 10\n10\n7\n",
+    );
+}
+
+/// A `&self` method on a crate struct's field reads the field where it is,
+/// as rustc borrows the place, so the struct stays whole: a `Vec` of a Copy
+/// crate type, as wgpu's `capabilities.formats.iter()`, and an `Option` of
+/// a crate struct (#1969).
+#[test]
+fn a_fields_shared_method_borrows_the_field_in_place() {
+    runs_as_cargo_does("capabilities", "Srgb 2\ntrue\nSome(\"main\") 2\n2\n");
 }
 
 /// A module and a function of the same name (`mod text` and `fn text`),

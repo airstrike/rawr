@@ -3146,7 +3146,12 @@ impl<'a> Parser<'a> {
             }
             return self.scoped_call(lent, true, &[]);
         }
-        if shared {
+        // Any other field a `&` or a `&self` method borrows, as wgpu's
+        // `capabilities.formats.iter()` borrows a `Vec<TextureFormat>`, is
+        // read where it is too: the reader copies it out of the struct the
+        // program still names, which stays whole (#1969).
+        let borrowed = !shared && self.borrows_field(&receiver, &ty);
+        if shared || borrowed {
             self.shared_field_reads.insert(operation);
             // `&theme.name` borrows the field where it is, as Rust's place
             // `theme.name` is, not a copy of it: a `fn name(&self) -> &str`
