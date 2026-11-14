@@ -3,7 +3,9 @@
 //! Cargo keeps a project's build output in the project's target directory, and
 //! so does Rawr: `<target>/rawr` holds what Rawr builds and keeps for a
 //! project, and `<target>/rawr/members/<path>` for a workspace member
-//! ([`rawr_directory`]). `cargo clean` removes it.
+//! ([`rawr_directory`]). A target directory several workspaces share keeps
+//! each one's under `<target>/rawr/projects/<name>-<key>`. `cargo clean`
+//! removes it.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -220,13 +222,61 @@ pub fn rawr_directory<'a>(
 }
 
 /// [`rawr_directory`] for `project` when its target directory is `target`.
+///
+/// A target directory other than the workspace's own `target` may be
+/// shared, as Cargo allows: a `CARGO_TARGET_DIR` or a `build.target-dir`
+/// several projects name. Each workspace then keeps its products under
+/// `<target>/rawr/projects/<name>-<key>`, the key a digest of the
+/// workspace root's path, so one project never builds from another's crate,
+/// runner or store.
 #[must_use]
 pub fn rawr_directory_in(target: &Path, project: &Path) -> PathBuf {
-    let rawr = target.join("rawr");
+    let root = physical(&workspace_root(project));
+    let rawr = if physical(target) == root.join("target") {
+        target.join("rawr")
+    } else {
+        target.join("rawr").join(PROJECTS).join(project_key(&root))
+    };
     match member_path(project) {
         Some(member) => rawr.join("members").join(member),
         None => rawr,
     }
+}
+
+/// The directory under `<target>/rawr` that holds each workspace's products
+/// when the target directory is not the workspace's own.
+pub const PROJECTS: &str = "projects";
+
+/// `<name>-<16 hex digits>` for the workspace at `root`: its directory's
+/// name and an FNV-1a digest of its path, the same in every process.
+fn project_key(root: &Path) -> String {
+    let name = root
+        .file_name()
+        .map_or_else(|| "root".into(), |name| name.to_string_lossy());
+    let digest = root
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("{name}-{digest:016x}")
+}
+
+/// `path` past its symlinks: the path itself when it exists, else its
+/// parent's with its last name, else `path` as given.
+fn physical(path: &Path) -> PathBuf {
+    if let Ok(path) = fs::canonicalize(path) {
+        return path;
+    }
+    path.parent()
+        .zip(path.file_name())
+        .and_then(|(parent, name)| {
+            fs::canonicalize(parent)
+                .ok()
+                .map(|parent| parent.join(name))
+        })
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 /// `project`'s directory under its workspace root, when it is a member of
@@ -387,6 +437,42 @@ mod tests {
         assert_eq!(
             target_directory(&project, environment, None),
             Path::new("/elsewhere")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// #1934: two projects that name one target directory each keep their
+    /// own products there, so neither builds from the other's crate.
+    #[test]
+    fn projects_sharing_a_target_directory_keep_their_products_apart() {
+        let root = fixture("shared");
+        write(
+            &root.join(".cargo/config.toml"),
+            "[build]\ntarget-dir = \"_target\"\n",
+        );
+        for name in ["one", "two"] {
+            write(
+                &root.join(name).join("Cargo.toml"),
+                &format!("[package]\nname = \"{name}\"\n[workspace]\n"),
+            );
+        }
+        let none = |_: &str| None;
+        let one = rawr_directory(&root.join("one"), none, None);
+        let two = rawr_directory(&root.join("two"), none, None);
+        assert_ne!(one, two);
+        for (directory, name) in [(&one, "one"), (&two, "two")] {
+            let keyed = directory
+                .strip_prefix(root.join("_target/rawr/projects"))
+                .unwrap();
+            assert!(keyed.to_string_lossy().starts_with(&format!("{name}-")));
+        }
+        // The same project spelled through `..` keeps the same directory.
+        assert_eq!(rawr_directory(&root.join("two/../one"), none, None), one);
+        // A project's own `target` stays as it was.
+        let environment = |key: &str| (key == "CARGO_TARGET_DIR").then_some("target");
+        assert_eq!(
+            rawr_directory(&root.join("one"), environment, None),
+            root.join("one/target/rawr")
         );
         fs::remove_dir_all(root).unwrap();
     }

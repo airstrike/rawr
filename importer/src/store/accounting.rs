@@ -1791,7 +1791,14 @@ pub(crate) fn references(
             actual: entries.len(),
         });
     }
-    references_with(&*Ledger::current(root)?, entries)
+    // A pin binds a read set walked before it. An entry the registry no
+    // longer holds was evicted since: the read set went stale and the run
+    // starts again (#609), as a walk would have found it (#1760, #1933).
+    references_with(&*Ledger::current(root)?, entries, |entry, _| {
+        Error::StaleReadSet {
+            action: entry.action,
+        }
+    })
 }
 
 pub(super) fn references_recovery(
@@ -1800,12 +1807,15 @@ pub(super) fn references_recovery(
     budget: &mut super::recovery::Budget,
 ) -> Result<Box<[Reference]>, Error> {
     let ledger = Ledger::read_recovery(root, budget)?;
-    references_with(&ledger, entries)
+    references_with(&ledger, entries, |_, absent| Error::CleanupRequired(absent))
 }
 
+/// The references of `entries` in `ledger`, `absent` giving the failure of
+/// an entry whose action or content the ledger does not register.
 fn references_with(
     ledger: &Ledger,
     entries: &[crate::node::read_set::Entry],
+    absent: impl Fn(&crate::node::read_set::Entry, &'static str) -> Error,
 ) -> Result<Box<[Reference]>, Error> {
     if entries.len() > PROJECT_ALLOCATIONS {
         return Err(Error::Limit {
@@ -1829,9 +1839,12 @@ fn references_with(
                 charge: Charge::zero(),
                 record: [0; 32],
             })
-            .ok_or(Error::CleanupRequired(
-                "a read-set action is absent from the installation registry",
-            ))?;
+            .ok_or_else(|| {
+                absent(
+                    entry,
+                    "a read-set action is absent from the installation registry",
+                )
+            })?;
         let content = ledger
             .find_registered(Allocation {
                 class: Class::Content,
@@ -1841,9 +1854,12 @@ fn references_with(
                 charge: Charge::zero(),
                 record: [0; 32],
             })
-            .ok_or(Error::CleanupRequired(
-                "a read-set content is absent from the installation registry",
-            ))?;
+            .ok_or_else(|| {
+                absent(
+                    entry,
+                    "a read-set content is absent from the installation registry",
+                )
+            })?;
         if action.content != entry.content || content.content != entry.content {
             return Err(Error::CleanupRequired(
                 "a read-set allocation changed its whole-unit content ownership",
@@ -3485,6 +3501,28 @@ mod tests {
             references(&root, &[entry]),
             Err(Error::CleanupRequired(
                 "a bundled read-set action is missing its co-owned immutable bundle"
+            ))
+        ));
+        // #1933: an entry the registry no longer holds was evicted after the
+        // read set was walked, so pinning it finds the read set stale and
+        // the run starts again, where recovery still asks for cleanup.
+        let evicted = crate::node::read_set::Entry {
+            action: ActionKey::from_bytes([0x75; 32]),
+            bundled: false,
+            ..entry
+        };
+        assert!(matches!(
+            references(&root, &[evicted]),
+            Err(Error::StaleReadSet { action }) if action == evicted.action
+        ));
+        assert!(matches!(
+            references_recovery(
+                &root,
+                &[evicted],
+                &mut super::super::recovery::Budget::new()
+            ),
+            Err(Error::CleanupRequired(
+                "a read-set action is absent from the installation registry"
             ))
         ));
         fs::remove_dir_all(root).expect("the runner-reference fixture retires");

@@ -399,7 +399,12 @@ pub struct Place {
 impl Place {
     /// Where the server keeps its own files for this root.
     fn directory(&self) -> PathBuf {
-        self.target_dir.join("rawr").join("mcp")
+        let project = if self.root.is_dir() {
+            &self.root
+        } else {
+            self.root.parent().unwrap_or(&self.root)
+        };
+        rawr_location::rawr_directory_in(&self.target_dir, project).join("mcp")
     }
 }
 
