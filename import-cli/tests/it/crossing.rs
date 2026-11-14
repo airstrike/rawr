@@ -3029,7 +3029,10 @@ fn a_crate_generics_parameter_is_inferred_through_an_arguments_bound() {
 /// A borrowed tuple that holds borrows, as log's `&(&str, &'static str,
 /// &'static Location)`, is lent as rustc lends it (#1559). A
 /// `#[track_caller]` function's `&'static Location` is the program's call,
-/// and crosses back as the `'static` borrow it was (#1560). The output is
+/// and crosses back as the `'static` borrow it was (#1560). A `&str` inside
+/// a borrowed value's type argument, as wgpu's `&DeviceDescriptor<'_>`
+/// holds, is lent for the call (#1953), and a builder holds a borrow of a
+/// `?Sized` key, as iced's `Sensor::key_ref` does (#801). The output is
 /// `cargo run`'s.
 #[test]
 fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
@@ -3037,7 +3040,7 @@ fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7\ngrid 4x3\nevents grid:7\nlocated src/main.rs:46:40"
+        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7\ngrid 4x3\nevents grid:7\nlocated src/main.rs:50:40\nrequested 5\nkeyed \"north\" 5"
     );
 }
 

@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 189;
+const CLASSIFIER_VERSION: u32 = 192;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -295,6 +295,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// its output's late-bound lifetimes are the frame's, as its early
     /// ones are `'static`, and are written by neither.
     scope_lifetimes: Cell<bool>,
+    /// A nominal type's type argument is being converted: a shared borrow
+    /// in it, at any depth, is one the type holds (`held_borrow`), as
+    /// wgpu's `DeviceDescriptor<Option<&'a str>>` holds its label.
+    type_argument: Cell<bool>,
     /// The inputs of the function being classified that a region's value
     /// may fill (`regional_inputs`), read before its late-bound lifetimes
     /// are chosen.
@@ -832,6 +836,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
+            type_argument: Cell::new(false),
             regional: std::cell::RefCell::new(Box::default()),
             shared,
             opaque_output: std::cell::RefCell::new(None),
@@ -962,6 +967,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     fn start_item(&self) {
         self.trait_self.set(None);
         self.scope_lifetimes.set(false);
+        self.type_argument.set(false);
         *self.regional.borrow_mut() = Box::default();
         *self.opaque_output.borrow_mut() = None;
         self.opaque_excluded.borrow_mut().clear();
@@ -9979,8 +9985,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         })
     }
 
-    /// A shared borrow of `target`, a slice of scalars or `str`, that
-    /// `borrowed_argument` admits.
+    /// A shared borrow of `target`, a slice of scalars, `str` or a type
+    /// parameter, that `borrowed_argument` or `held_borrow` admits.
     fn convert_borrowed(
         &self,
         target: &model::Type,
@@ -9994,9 +10000,54 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     owned: false,
                     length: None,
                 },
+                model::Type::Parameter { index, .. } => Type::Parameter(*index),
                 _ => Type::Builtin(Builtin::Str),
             }),
         })
+    }
+
+    /// `ty`, the value an input borrows, converted where each late-bound
+    /// lifetime it names is the call's, as wgpu's `request_device(&self,
+    /// desc: &DeviceDescriptor<'_>)` takes a `DeviceDescriptor<Option<&str>>`
+    /// whose label borrows for the call: `lends_late_borrows` holds that
+    /// nothing the call is given keeps them past it.
+    fn convert_lent(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        let outer = self.scope_lifetimes.replace(true);
+        let converted = self.convert(ty);
+        self.scope_lifetimes.set(outer);
+        converted
+    }
+
+    /// What a type argument's shared borrow `ty` lends, when a nominal
+    /// type can hold it (D558 tier 1): a slice of scalars or a `str`, as
+    /// `Reader<&'a [u8]>` holds, alone or inside another type, as wgpu's
+    /// `DeviceDescriptor<Option<&'a str>>` holds its label, or a type
+    /// parameter, as iced's `Sensor<'a, &'a K, ..>` holds the key that
+    /// `key_ref(self, key: &'a K)` takes, which a call fills with `str`.
+    /// At an early or `'static` lifetime, or at a late-bound one a scope
+    /// frame's value or a call's lent input borrows at, as iced's
+    /// `Key::as_ref(&self) -> Key<&str>` gives.
+    fn held_borrow<'ty>(&self, ty: &'ty model::Type) -> Option<&'ty model::Type> {
+        let model::Type::Reference {
+            lifetime,
+            mutability: model::Mutability::Shared,
+            ty: target,
+        } = ty
+        else {
+            return None;
+        };
+        let held = match lifetime {
+            model::Lifetime::Early { .. } | model::Lifetime::Static => true,
+            model::Lifetime::Late { .. } => self.scope_lifetimes.get(),
+            _ => false,
+        };
+        if !held {
+            return None;
+        }
+        match &**target {
+            model::Type::Parameter { .. } => Some(target),
+            _ => lent_target(ty),
+        }
     }
 
     /// `dyn Trait + auto` of the object `bounds`, behind `pointer` (D872):
@@ -10507,21 +10558,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                                             .into(),
                                     ),
                                 };
-                            // `Reader<&'a [u8]>`: a shared slice of scalars or
-                            // a `&str` a type argument names, which a scope
-                            // frame's value borrows (D558 tier 1), at the
-                            // frame's own lifetime too, as iced's
-                            // `Key::as_ref(&self) -> Key<&str>` gives.
-                            let borrowed = borrowed_argument(argument).or_else(|| {
-                                self.scope_lifetimes
-                                    .get()
-                                    .then(|| late_borrowed_argument(argument))
-                                    .flatten()
-                            });
-                            converted.push(match borrowed {
-                                Some(target) => self.convert_borrowed(target)?,
-                                None => self.convert(argument)?,
-                            });
+                            // Each borrow it holds is `held_borrow`'s.
+                            let outer = self.type_argument.replace(true);
+                            let argument = self.convert(argument);
+                            self.type_argument.set(outer);
+                            converted.push(argument?);
                         }
                         Type::Nominal {
                             definition: self
@@ -10578,6 +10619,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 ty: target,
             } if let model::Type::TraitObject { bounds, .. } = target.as_ref() => {
                 self.convert_object(representability::object::Pointer::Lasting, bounds)?
+            }
+            model::Type::Reference { .. }
+                if self.type_argument.get()
+                    && let Some(target) = self.held_borrow(ty) =>
+            {
+                self.convert_borrowed(target)?
             }
             model::Type::Reference { .. } => {
                 return Err(representability::reject::Kind::ReferenceType.into())
@@ -12029,7 +12076,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // the call (D558.5), as `render_stateful_widget`'s `&mut W::State`.
         if let model::Type::Reference { mutability, ty, .. } = ty
             && let converted @ (representability::convert::Type::Nominal { .. }
-            | representability::convert::Type::Parameter(_)) = self.convert(ty)?
+            | representability::convert::Type::Parameter(_)) = self.convert_lent(ty)?
         {
             return Ok(representability::convert::Type::Borrowed {
                 mutable: *mutability == model::Mutability::Mutable,
@@ -14484,20 +14531,6 @@ fn lifetime_only(generics: &model::Generics) -> bool {
 fn borrowed_argument(ty: &model::Type) -> Option<&model::Type> {
     let model::Type::Reference {
         lifetime: model::Lifetime::Early { .. } | model::Lifetime::Static,
-        mutability: model::Mutability::Shared,
-        ..
-    } = ty
-    else {
-        return None;
-    };
-    lent_target(ty)
-}
-
-/// As `borrowed_argument`, of a late-bound lifetime: a scope frame's,
-/// which the receiver it holds borrowed outlives.
-fn late_borrowed_argument(ty: &model::Type) -> Option<&model::Type> {
-    let model::Type::Reference {
-        lifetime: model::Lifetime::Late { .. },
         mutability: model::Mutability::Shared,
         ..
     } = ty

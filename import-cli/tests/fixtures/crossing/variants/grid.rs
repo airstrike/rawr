@@ -3,9 +3,13 @@
 // takes an `FnMut` with no `'static` bound, borrowed for the call, so the
 // closure may change what it captures and the program reads it after (#715).
 // Function pointers take any number of inputs. A `#[track_caller]`
-// function's location is the program's call (#1560).
+// function's location is the program's call (#1560). A borrow inside a
+// type argument is lent for the call (#1953), and a builder holds a
+// borrowed `?Sized` key (#801).
 
-use events::grid::{combine, here, labeled, placed, produce, tagged, Grid};
+use events::grid::{
+    combine, described, here, labeled, placed, produce, requested, tagged, Grid, Keyed,
+};
 
 fn add(sum: u32, cell: u8) -> u32 {
     sum + cell as u32
@@ -44,4 +48,10 @@ fn main() {
     let target = String::from("events");
     println!("{}", tagged(&(target.as_str(), "grid", 7)));
     println!("{}", placed(&("located", here())));
+    println!("requested {}", requested(&described(Some("four"), 1)));
+    let name = String::from("north");
+    println!(
+        "keyed {}",
+        Keyed::new(2).key_ref(name.as_str()).width(5).shown()
+    );
 }
