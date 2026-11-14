@@ -199,6 +199,9 @@ impl Stored {
             .ok_or(node::Error::Allocation)?;
         let mut file_bytes = 0_u64;
         while let Some(path) = pending.pop() {
+            if crate::input::split_debuginfo(&path) {
+                continue;
+            }
             let metadata = fs::symlink_metadata(&path)
                 .map_err(|source| io("inspect retained member", &path, source))?;
             if metadata.file_type().is_symlink()
@@ -846,7 +849,10 @@ impl Stored {
                                 .rposition(|byte| *byte == b'/')
                                 .is_some_and(|index| &child.path[..index] == entry.path)
                         });
-                    for child in children {
+                    for child in children
+                        .into_iter()
+                        .filter(|child| !crate::input::split_debuginfo(child))
+                    {
                         let relative = child
                             .strip_prefix(root)
                             .map_err(|_| corrupt(&child))?

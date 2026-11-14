@@ -617,6 +617,9 @@ impl State<'_> {
         pending.push(root);
         let mut total = Charge::zero();
         while let Some(path) = pending.pop() {
+            if crate::input::split_debuginfo(&path) {
+                continue;
+            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
                 operation: "inspect typed store legacy or unregistered allocation",
                 path: path.clone(),

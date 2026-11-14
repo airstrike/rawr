@@ -1858,6 +1858,11 @@ fn survey_observed_members(
                     actual: usize::try_from(members).unwrap_or(usize::MAX),
                 });
             }
+            if crate::input::split_debuginfo(&path) {
+                // Packed debug info Cargo links beside a build script: no
+                // part of the bundle Rawr reads, charges or freezes.
+                continue;
+            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
                 operation: "inspect runner bundle member",
                 path: path.clone(),
@@ -1940,6 +1945,9 @@ fn freeze_with_budget(root: &Path, budget: Option<&crate::node::GraphBudget>) ->
     let mut directories = buffer::Buffer::new();
     let mut pending = traversal(root, budget)?;
     while let Some(path) = pending.pop() {
+        if crate::input::split_debuginfo(&path) {
+            continue;
+        }
         let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
             operation: "inspect runner bundle before freezing",
             path: path.clone(),
@@ -2013,6 +2021,9 @@ fn push(
 fn validate_frozen(root: &Path) -> Result<(), Error> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
+        if crate::input::split_debuginfo(&path) {
+            continue;
+        }
         let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
             operation: "inspect immutable runner bundle",
             path: path.clone(),
