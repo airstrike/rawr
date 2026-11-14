@@ -117,7 +117,7 @@ impl Unrun {
 }
 
 /// Each std definition rawr represents, by its definition path.
-pub(crate) const BINDING: [(&[&str], Std); 25] = [
+pub(crate) const BINDING: [(&[&str], Std); 26] = [
     (&["alloc", "borrow", "Cow"], Std::Cow),
     (&["alloc", "boxed", "Box"], Std::Box),
     (
@@ -154,6 +154,13 @@ pub(crate) const BINDING: [(&[&str], Std); 25] = [
         Std::RangeInclusive,
     ),
     (&["core", "option", "Option"], Std::Option),
+    (
+        &["core", "panic", "location", "Location"],
+        Std::Held {
+            path: "panic::Location",
+            clone: true,
+        },
+    ),
     (&["core", "result", "Result"], Std::Result),
     (&["core", "time", "Duration"], Std::Duration),
     (

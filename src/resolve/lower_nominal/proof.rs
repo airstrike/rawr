@@ -208,10 +208,12 @@ impl<'a> Parser<'a> {
                     .into_boxed_slice();
                 #[cfg(not(feature = "rust-import"))]
                 let instance = None;
+                let caller = self.location_caller(&output, span);
                 ExecutableOp::Intrinsic {
                     proof: intrinsic::Proof::new(facade, owner, &item, operands, output, span)
                         .with_instance(instance)
-                        .with_copies(copies),
+                        .with_copies(copies)
+                        .with_caller(caller),
                 }
             }
             Op::Projection { operation } => {
@@ -335,6 +337,26 @@ impl<'a> Parser<'a> {
                 item: *item,
             },
         })
+    }
+
+    /// Where a call at `span` that gives `output` is made, as rustc places
+    /// it, when `output` is a `std::panic::Location`: the location a
+    /// crate's `#[track_caller]` function sees there is the call's own, as
+    /// `file!()`, `line!()` and `column!()` there name it.
+    fn location_caller(
+        &self,
+        output: &intrinsic::Type,
+        span: Span,
+    ) -> Option<crate::std_facade::panic::Site> {
+        if output.runtime() != std::any::TypeId::of::<std::panic::Location<'static>>() {
+            return None;
+        }
+        let at = span.start();
+        Some(crate::std_facade::panic::Site::new(
+            self.file_name(),
+            u32::try_from(at.line()?).ok()?,
+            u32::try_from(at.position()?).ok()?,
+        ))
     }
 
     pub(super) fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {

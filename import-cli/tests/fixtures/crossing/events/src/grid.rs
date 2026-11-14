@@ -76,3 +76,21 @@ pub fn tagged(tag: &(&str, &'static str, u32)) -> String {
     let &(target, module, line) = tag;
     format!("{target} {module}:{line}")
 }
+
+/// Where it is called from, as log's `__private_api::loc()` gives (#1560).
+#[track_caller]
+pub fn here() -> &'static std::panic::Location<'static> {
+    std::panic::Location::caller()
+}
+
+/// The place a borrowed tuple's location names, as log's `log` reads the
+/// `&'static Location` beside its target (#1560).
+pub fn placed(tag: &(&str, &'static std::panic::Location<'static>)) -> String {
+    let &(target, location) = tag;
+    format!(
+        "{target} {}:{}:{}",
+        location.file(),
+        location.line(),
+        location.column()
+    )
+}

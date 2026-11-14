@@ -32,6 +32,10 @@ pub(super) struct Proof {
     /// How many `&mut` arrays and strings a host call copies in and
     /// gives back after its value, as `[value, copies..]` (D558 slice 2).
     copies: u8,
+    /// Where the program makes a call that gives a `std::panic::Location`,
+    /// which the location a crate's `#[track_caller]` function sees there
+    /// stands for (`std_facade::panic::calling`).
+    caller: Option<crate::std_facade::panic::Site>,
 }
 
 impl Operand {
@@ -69,7 +73,14 @@ impl Proof {
                 Some(host::item::Guard::Mutable | host::item::Guard::OptionMutable)
             ),
             copies: 0,
+            caller: None,
         }
+    }
+
+    /// This call, made at the program's `caller`.
+    pub(super) fn with_caller(mut self, caller: Option<crate::std_facade::panic::Site>) -> Self {
+        self.caller = caller;
+        self
     }
 
     /// This call, which gives back `copies` `&mut` arrays and strings after
@@ -246,7 +257,9 @@ impl Proof {
 
         // A field a pattern borrows is lent to the call alone.
         let result = crate::scope::opened(args, &mut |args| {
-            runtime.invoke(requirement, args, invocation, equal, access)
+            crate::std_facade::panic::calling(self.caller.as_ref(), || {
+                runtime.invoke(requirement, args, invocation, equal, access)
+            })
         });
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {

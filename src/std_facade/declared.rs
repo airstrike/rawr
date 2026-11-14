@@ -14,6 +14,7 @@ pub(super) static STEPS: &[Step] = &[
     Step::Module("fs"),
     Step::Module("io"),
     Step::Module("num"),
+    Step::Module("panic"),
     Step::Module("path"),
     Step::Module("process"),
     Step::Module("sync"),
@@ -125,6 +126,20 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Copy,
             capability::Kind::PartialEq,
             capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::panic::Location",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::PartialOrd,
+            capability::Kind::Ord,
             capability::Kind::Send,
             capability::Kind::Static,
         ],
@@ -2592,6 +2607,27 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Registered("num::IntErrorKind"),
     },
     Step::Item {
+        path: "panic::Location::file",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        },
+    },
+    Step::Item {
+        path: "panic::Location::line",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
+        path: "panic::Location::column",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U32),
+    },
+    Step::Item {
         path: "char::ToUppercase::next",
         kind: Kind::Method(Mode::Mutable),
         inputs: &[],
@@ -3302,6 +3338,78 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "num::ZeroablePrimitive",
         std: "std::num::ZeroablePrimitive",
+    },
+    Step::StdAlias {
+        path: "panic::AssertUnwindSafe",
+        std: "std::panic::AssertUnwindSafe",
+    },
+    Step::StdAlias {
+        path: "panic::BacktraceStyle",
+        std: "std::panic::BacktraceStyle",
+    },
+    Step::StdAlias {
+        path: "panic::PanicHookInfo",
+        std: "std::panic::PanicHookInfo",
+    },
+    Step::StdAlias {
+        path: "panic::PanicInfo",
+        std: "std::panic::PanicInfo",
+    },
+    Step::StdAlias {
+        path: "panic::RefUnwindSafe",
+        std: "std::panic::RefUnwindSafe",
+    },
+    Step::StdAlias {
+        path: "panic::UnwindSafe",
+        std: "std::panic::UnwindSafe",
+    },
+    Step::StdAlias {
+        path: "panic::abort_unwind",
+        std: "std::panic::abort_unwind",
+    },
+    Step::StdAlias {
+        path: "panic::always_abort",
+        std: "std::panic::always_abort",
+    },
+    Step::StdAlias {
+        path: "panic::catch_unwind",
+        std: "std::panic::catch_unwind",
+    },
+    Step::StdAlias {
+        path: "panic::get_backtrace_style",
+        std: "std::panic::get_backtrace_style",
+    },
+    Step::StdAlias {
+        path: "panic::panic_2015",
+        std: "std::panic::panic_2015",
+    },
+    Step::StdAlias {
+        path: "panic::panic_2021",
+        std: "std::panic::panic_2021",
+    },
+    Step::StdAlias {
+        path: "panic::panic_any",
+        std: "std::panic::panic_any",
+    },
+    Step::StdAlias {
+        path: "panic::resume_unwind",
+        std: "std::panic::resume_unwind",
+    },
+    Step::StdAlias {
+        path: "panic::set_backtrace_style",
+        std: "std::panic::set_backtrace_style",
+    },
+    Step::StdAlias {
+        path: "panic::set_hook",
+        std: "std::panic::set_hook",
+    },
+    Step::StdAlias {
+        path: "panic::take_hook",
+        std: "std::panic::take_hook",
+    },
+    Step::StdAlias {
+        path: "panic::update_hook",
+        std: "std::panic::update_hook",
     },
     Step::StdAlias {
         path: "path::Ancestors",

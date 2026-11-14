@@ -1,8 +1,8 @@
 //! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `char`,
-//! `sync::mpsc`, `thread` and `time` items for every program (D528.4). Every
-//! [`Engine`](crate::Engine) made by `Engine::new` declares them, and every
-//! runtime registry binds them, so a plain program, an embedding and an
-//! iced app all name `std::path::PathBuf`
+//! `panic`, `sync::mpsc`, `thread` and `time` items for every program
+//! (D528.4). Every [`Engine`](crate::Engine) made by `Engine::new` declares
+//! them, and every runtime registry binds them, so a plain program, an
+//! embedding and an iced app all name `std::path::PathBuf`
 //! (`resolve::std_reexport` sends those modules here). The `fs` functions,
 //! `env::args` and `process::id` reach the operating system only as far as
 //! the calling program's [`Access`](crate::Access) grants (D683.4).
@@ -23,6 +23,7 @@ mod fs;
 mod held;
 mod io;
 mod num;
+pub(crate) mod panic;
 mod path;
 mod process;
 mod step;
@@ -151,6 +152,7 @@ fn build() -> Result<facade::Definition, host::Error> {
     path::register_debug();
     io::register_debug();
     num::register_debug();
+    panic::register_debug();
     case::register_debug();
     sync::register_debug();
     thread::register_debug();
@@ -167,6 +169,7 @@ fn held() -> Vec<held::Held> {
         io::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),
+        panic::HELD.as_slice(),
         sync::HELD.as_slice(),
         thread::HELD.as_slice(),
         time::HELD.as_slice(),
@@ -182,6 +185,7 @@ fn bind(binds: &mut impl Bind) {
     fs::bind(binds);
     process::bind(binds);
     num::bind(binds);
+    panic::bind(binds);
     case::bind(binds);
     sync::bind(binds);
     thread::bind(binds);
