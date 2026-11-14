@@ -2841,23 +2841,53 @@ impl<'a> Parser<'a> {
             self.move_local(&mut assigned)?;
             assigned
         } else {
-            // The field below: read, changed in it, and set back.
+            let inner_ty = self.imported_field_type(&local, &definition, field.ty(), &path)?;
+            let inner_ty = self.inference.resolve(&inner_ty);
+            let Ty::Host { proof, .. } = &inner_ty else {
+                return Err(
+                    self.unsupported("assigning a field of a field that isn't a crate's struct")
+                );
+            };
+            let inner = proof.definition.clone();
+            if !self.type_provides(&inner_ty, capability::Kind::Copy) {
+                // `theme.colors.accent = error`: the field below is lent
+                // `&mut` for the store, which changes it where it is, as
+                // rustc's place `theme.colors.accent` is (#1893).
+                if !definition.parameters().is_empty() {
+                    return Err(self.unsupported(
+                        "assigning a field of a field that isn't `Copy`, of a generic struct",
+                    ));
+                }
+                let lend = ImportedOperation {
+                    kind: crate::host::structural::Kind::LendMut,
+                    operands: vec![(local.ty.clone(), local.span, true)].into_boxed_slice(),
+                    output: inner_ty.clone(),
+                    receiver: Some(crate::receiver::Mode::Mutable),
+                };
+                let helper = self.push_imported_op(
+                    &path,
+                    &selector,
+                    Some(lend),
+                    span(start, member_span.end()),
+                )?;
+                let lent = self.temporary("lent");
+                prelude.push_text(format!("let {lent} = "));
+                prelude.push(origin::Fragment::call(&helper, [local.source]));
+                prelude.push_text("; ");
+                let lent = self.operator_expr(origin::Fragment::plain(lent), inner_ty, member_span);
+                let changed =
+                    self.store_imported_field(lent, inner, &fields[1..], true, assigned)?;
+                let operation = span(start, changed.span.end());
+                prelude.push(changed.rendered_source());
+                return Ok(self.operator_expr(prelude.surrounded("{ ", " }"), Ty::Unit, operation));
+            }
+            // The field below, a copy: read, changed in it, and set back.
             let read = self.read_imported_field(
                 local.clone(),
                 definition.clone(),
                 member.clone(),
                 member_span,
             )?;
-            let inner_ty = self.inference.resolve(&read.ty);
-            let Ty::Host { proof, .. } = &inner_ty else {
-                return Err(
-                    self.unsupported("assigning a field of a field that isn't a crate's struct")
-                );
-            };
-            if !self.type_provides(&inner_ty, capability::Kind::Copy) {
-                return Err(self.unsupported("assigning a field of a field that isn't `Copy`"));
-            }
-            let inner = proof.definition.clone();
             let below = self.temporary("field");
             prelude.push_text(format!("let {below} = "));
             prelude.push(read.rendered_source());
@@ -2931,8 +2961,9 @@ impl<'a> Parser<'a> {
 
     /// Whether the field of type `ty` read from `receiver` is borrowed
     /// where it is read, as rustc borrows it: the whole operand of a `&`,
-    /// or the receiver of a method that takes it `&self`, its own or its
-    /// `Deref` target's.
+    /// the receiver of a method that takes it `&self`, its own or its
+    /// `Deref` target's, or the place a `Copy` field of it is copied out of
+    /// (`copied_below`).
     #[cfg(feature = "rust-import")]
     pub(super) fn borrows_field(&mut self, receiver: &ParsedExpr, ty: &Ty) -> bool {
         match self.peek() {
@@ -2944,13 +2975,62 @@ impl<'a> Parser<'a> {
                     Some((Token::LeftParen | Token::Unit, _)),
                 ) = (ahead.next(), ahead.next())
                 else {
-                    return false;
+                    return self.copied_below(ty).is_some();
                 };
                 self.borrows_for_method(ty, member.as_str())
             }
             Token::LeftParen | Token::Unit | Token::LeftBracket => false,
             _ => self.lent_field == Some(receiver.span.start()),
         }
+    }
+
+    /// The `Copy` field of a crate struct of type `ty` the next tokens read,
+    /// as `.error` of `theme.colors.error`, with its struct's definition:
+    /// rustc copies it out of the place, and `theme.colors` stays whole
+    /// (#1894).
+    #[cfg(feature = "rust-import")]
+    fn copied_below(
+        &mut self,
+        ty: &Ty,
+    ) -> Option<(ImmutableString, Span, crate::host::type_def::Definition)> {
+        let mut ahead = self.input.clone();
+        let (Some((Token::Period, _)), Some((Token::Identifier(member), position))) =
+            (ahead.next(), ahead.next())
+        else {
+            return None;
+        };
+        if matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _))) {
+            return None;
+        }
+        let Ty::Host { proof, .. } = self.inference.resolve(ty) else {
+            return None;
+        };
+        let definition = proof.definition.clone();
+        let crate::host::type_def::Shape::Struct { fields, .. } = definition.shape() else {
+            return None;
+        };
+        let field = fields
+            .iter()
+            .find(|field| field.name() == member.as_str())?;
+        let held = self.operator_expr(origin::Fragment::default(), ty.clone(), Span::NONE);
+        let path = definition.path();
+        let below = self
+            .imported_field_type(&held, &definition, field.ty(), &path)
+            .ok()?;
+        if !self.type_provides(&below, capability::Kind::Copy) {
+            return None;
+        }
+        // `theme.colors.error.darken()` through `&mut self` changes the
+        // field where it is, not a copy of it.
+        if let (Some((Token::Period, _)), Some((Token::Identifier(method), _))) =
+            (ahead.next(), ahead.next())
+            && self.member_receiver(&below, method.as_str()) == Some(crate::receiver::Mode::Mutable)
+        {
+            return None;
+        }
+        let member = ImmutableString::from(member.as_str());
+        let at = Span::new(position, text_end(position, &member));
+        Some((member, at, definition))
     }
 
     #[cfg(feature = "rust-import")]
@@ -3040,6 +3120,30 @@ impl<'a> Parser<'a> {
                 outcome: crate::host::usage::Outcome::Conservative,
                 evaluation: crate::host::usage::Evaluation::Required,
             };
+            // `theme.colors.error`: the `Copy` field below is copied out of
+            // the lent field in a block the lend ends with, as rustc's
+            // borrow of the place ends with the copy (#1893, #1894).
+            if let Some((below, below_span, inner)) = self.copied_below(&lent.ty) {
+                self.next();
+                self.next();
+                let place = self.temporary("lent");
+                let local = self.operator_expr(
+                    origin::Fragment::plain(place.clone()),
+                    lent.ty.clone(),
+                    operation,
+                );
+                let read = self.read_imported_field(local, inner, below, below_span)?;
+                let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
+                source.push(lent.source);
+                source.push_text("; ");
+                source.push(read.rendered_source());
+                source.push_text(" }");
+                return Ok(self.operator_expr(
+                    source,
+                    read.ty,
+                    span(receiver.span.start(), below_span.end()),
+                ));
+            }
             return self.scoped_call(lent, true, &[]);
         }
         if shared {

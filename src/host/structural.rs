@@ -27,7 +27,8 @@ pub(crate) enum Kind {
     Lend,
     /// The fields of a value of the variant, lent mutably for the rest of
     /// the scope that binds them, as a pattern through `&mut T` or a `ref
-    /// mut` binding binds them.
+    /// mut` binding binds them; or, under a field's selector, that field of
+    /// a struct, as `&mut value.field` lends it.
     LendMut,
     /// One field of a value of the variant, copied, as a binding of a
     /// `Copy` field reads it.

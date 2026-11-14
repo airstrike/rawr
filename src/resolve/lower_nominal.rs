@@ -242,6 +242,8 @@ use operator::{cast_value, compound_operator, kind_code, unsigned_negation, unsi
 use pattern::{PatternBinding, Prelude};
 pub(crate) use relocate::relocate;
 use relocate::rewrite_statements;
+#[cfg(feature = "rust-import")]
+use scope::RecordFields;
 use scope::{
     binds_by_value, ArrayElements, Binding, BindingKind, BoundIterator, Branch, Frame, FrameArray,
     LocalType, LoopElement, LoopFrame, UninitializedUse,

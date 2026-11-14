@@ -56,6 +56,14 @@ pub(super) struct FrameArray {
     pub(super) bound: Vec<(usize, usize)>,
 }
 
+/// A crate struct literal's named fields, each with where its name is,
+/// and its `..base`, each value parsed in source order.
+#[cfg(feature = "rust-import")]
+pub(super) struct RecordFields {
+    pub(super) named: Vec<(ImmutableString, Span, ParsedExpr)>,
+    pub(super) base: Option<ParsedExpr>,
+}
+
 /// An array literal's elements, its array's repeat count and a `vec!`'s
 /// count expression (`[x; 3]`, `vec![x; n]`).
 pub(super) type ArrayElements = (Vec<ParsedExpr>, Option<usize>, Option<ParsedExpr>);

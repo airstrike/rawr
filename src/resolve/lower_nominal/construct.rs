@@ -382,11 +382,7 @@ impl<'a> Parser<'a> {
             if self.element_left_out()? {
                 continue;
             }
-            let frames = self.frames.last().map_or(0, Vec::len);
-            let element = (self.calls_noted, elements.len(), frames);
-            if let Some(array) = self.frame_arrays.last_mut() {
-                array.element = element;
-            }
+            self.start_element(elements.len());
             let outer = std::mem::replace(&mut self.no_struct, false);
             let element = self.parse_expr();
             self.no_struct = outer;
@@ -412,6 +408,104 @@ impl<'a> Parser<'a> {
             }
         }
         Ok((elements, repeat, counted))
+    }
+
+    /// A crate struct literal's fields up to its `}`, from its `{` at
+    /// `open`, and its `..base`, each value in source order. A call in one
+    /// of them that opens a frame ahead of the statement, as
+    /// `..theme.colors.clone()` lends `theme.colors`, has the values before
+    /// it bound ahead of that frame, as an array's elements are (#1895).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn parse_record_fields(
+        &mut self,
+        open: Position,
+        owner: &ImmutableString,
+    ) -> Result<RecordFields, Error> {
+        self.frame_arrays.push(FrameArray {
+            start: open,
+            depth: self.frames.len(),
+            noted: self.calls_noted,
+            element: (self.calls_noted, 0, 0),
+            bound: Vec::new(),
+        });
+        let parsed = self.parse_record_values(owner);
+        let bound = self
+            .frame_arrays
+            .pop()
+            .map(|array| array.bound)
+            .unwrap_or_default();
+        let RecordFields { named, base } = parsed?;
+        let (names, mut values): (Vec<_>, Vec<_>) = named
+            .into_iter()
+            .map(|(field, field_span, value)| ((field, field_span), value))
+            .unzip();
+        values.extend(base);
+        self.bind_framed_elements(&mut values, bound)?;
+        let base = if values.len() > names.len() {
+            values.pop()
+        } else {
+            None
+        };
+        let named = names
+            .into_iter()
+            .zip(values)
+            .map(|((field, field_span), value)| (field, field_span, value))
+            .collect();
+        Ok(RecordFields { named, base })
+    }
+
+    /// The fields `parse_record_fields` parses, before it binds them.
+    #[cfg(feature = "rust-import")]
+    fn parse_record_values(&mut self, owner: &ImmutableString) -> Result<RecordFields, Error> {
+        let mut named = Vec::<(ImmutableString, Span, ParsedExpr)>::new();
+        while !matches!(self.peek(), Token::RightBrace) {
+            if self.element_left_out()? {
+                continue;
+            }
+            self.start_element(named.len());
+            if matches!(self.peek(), Token::ExclusiveRange) {
+                self.next();
+                let base = self.parse_expr()?;
+                if !matches!(self.peek(), Token::RightBrace) {
+                    return Err(self.unsupported("fields after `..base` in a struct expression"));
+                }
+                return Ok(RecordFields {
+                    named,
+                    base: Some(base),
+                });
+            }
+            let (field, field_span) = self.expect_name("imported struct field initializer")?;
+            let value = if matches!(self.peek(), Token::Colon) {
+                self.next();
+                self.parse_expr()?
+            } else {
+                self.parse_name_primary(field.clone(), field_span)?
+            };
+            if named.iter().any(|(name, _, _)| *name == field) {
+                return Err(Error::InvalidConstruction {
+                    owner: owner.clone(),
+                    reason: format!("field `{field}` is initialized more than once").into(),
+                    construction: field_span,
+                });
+            }
+            named.push((field, field_span, value));
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            } else if !matches!(self.peek(), Token::RightBrace) {
+                return Err(self.unsupported("imported struct fields without ','"));
+            }
+        }
+        Ok(RecordFields { named, base: None })
+    }
+
+    /// Marks the element at `index` of the literal `frame_arrays` holds
+    /// last as the one being parsed, for `scoped_call`.
+    fn start_element(&mut self, index: usize) {
+        let frames = self.frames.last().map_or(0, Vec::len);
+        let element = (self.calls_noted, index, frames);
+        if let Some(array) = self.frame_arrays.last_mut() {
+            array.element = element;
+        }
     }
 
     /// Bind the elements before each of `bound`'s, whose call opens a
@@ -1280,7 +1374,6 @@ impl<'a> Parser<'a> {
         let fields = fields.clone();
         let form = *form;
         let selected_owner = self.models.host.type_owner(&path).cloned();
-        let mut base = None::<ParsedExpr>;
         let mut prelude = origin::Fragment::default();
         let (mut arguments, end) = match form {
             crate::host::type_def::Form::Unit => (Vec::new(), name_span.end()),
@@ -1306,49 +1399,18 @@ impl<'a> Parser<'a> {
                 (arguments, end)
             }
             crate::host::type_def::Form::Record => {
-                self.expect(Token::LeftBrace, "'{' after imported record struct")?;
+                let open = self.expect(Token::LeftBrace, "'{' after imported record struct")?;
+                let RecordFields { named, base } = self.parse_record_fields(open, &path)?;
                 let mut values = BTreeMap::<ImmutableString, (ParsedExpr, Span)>::new();
                 let mut order = Vec::new();
-                while !matches!(self.peek(), Token::RightBrace) {
-                    if self.element_left_out()? {
-                        continue;
-                    }
-                    if matches!(self.peek(), Token::ExclusiveRange) {
-                        self.next();
-                        base = Some(self.parse_expr()?);
-                        if !matches!(self.peek(), Token::RightBrace) {
-                            return Err(
-                                self.unsupported("fields after `..base` in a struct expression")
-                            );
-                        }
-                        break;
-                    }
-                    let (field, field_span) =
-                        self.expect_name("imported struct field initializer")?;
+                for (field, field_span, value) in named {
                     order.push(field.clone());
-                    let value = if matches!(self.peek(), Token::Colon) {
-                        self.next();
-                        self.parse_expr()?
-                    } else {
-                        self.parse_name_primary(field.clone(), field_span)?
-                    };
-                    if values.insert(field.clone(), (value, field_span)).is_some() {
-                        return Err(Error::InvalidConstruction {
-                            owner: path,
-                            reason: format!("field `{field}` is initialized more than once").into(),
-                            construction: field_span,
-                        });
-                    }
-                    if matches!(self.peek(), Token::Comma) {
-                        self.next();
-                    } else if !matches!(self.peek(), Token::RightBrace) {
-                        return Err(self.unsupported("imported struct fields without ','"));
-                    }
+                    values.insert(field, (value, field_span));
                 }
                 let end = self.expect(Token::RightBrace, "'}' after imported struct fields")?;
                 // With `..base`, the named fields and then `base` are bound
                 // in source order; `base` supplies the rest.
-                let base_value = match base.take() {
+                let base_value = match base {
                     Some(mut base) => {
                         let ty = Ty::Host {
                             proof: HostTyProof::new(
