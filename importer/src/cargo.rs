@@ -5646,13 +5646,15 @@ mod project_lock_tests {
             .collect()
     }
 
-    /// rawr's own crates resolve in the harness with the project's, so a
-    /// version floor of theirs above what the project pins would raise it:
-    /// the bindings would then name the raised package, and the runner,
-    /// settled from the project's lock, would build the pinned one (#1912).
-    /// The harness keeps an older libc and memchr, and the runner agrees.
+    /// A version floor of rawr's own crates above what the project pins
+    /// would raise the pinned package in the harness: the bindings would
+    /// then name the raised package, and the runner, settled from the
+    /// project's lock, would build the pinned one (#1912). The harness
+    /// names rawr's crate without its dependencies (#1914), so it keeps an
+    /// older libc and memchr, and a `toml_datetime` below the 1.1.2 floor of
+    /// rawr's TOML crate, and the runner agrees.
     #[test]
-    fn rawr_s_own_crates_keep_the_libc_and_memchr_a_project_pins() {
+    fn rawr_s_own_crates_keep_the_packages_a_project_pins() {
         const PINNED_LOCK: &str = "version = 4\n\n\
             [[package]]\nname = \"libc\"\nversion = \"0.2.183\"\n\
             source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
@@ -5661,7 +5663,10 @@ mod project_lock_tests {
             source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
             checksum = \"f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79\"\n\n\
             [[package]]\nname = \"pinned\"\nversion = \"0.1.0\"\n\
-            dependencies = [\n \"libc\",\n \"memchr\",\n]\n";
+            dependencies = [\n \"libc\",\n \"memchr\",\n \"toml_datetime\",\n]\n\n\
+            [[package]]\nname = \"toml_datetime\"\nversion = \"1.1.1+spec-1.1.0\"\n\
+            source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
+            checksum = \"3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7\"\n";
         crate::store::isolate_for_tests();
         let project = crate::store::TestProject::new("rawr-project-floors");
         let root = project.path();
@@ -5675,7 +5680,8 @@ mod project_lock_tests {
         fs::write(
             member.join("Cargo.toml"),
             "[package]\nname = \"pinned\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
-             [dependencies]\nlibc = \"0.2\"\nmemchr = \"2\"\n",
+             [dependencies]\nlibc = \"0.2\"\nmemchr = \"2\"\n\
+             toml_datetime = { version = \"1\", default-features = false }\n",
         )
         .expect("member manifest writes");
         fs::write(member.join("src/lib.rs"), "").expect("member source writes");
@@ -5713,6 +5719,13 @@ mod project_lock_tests {
         let mut memchr = locked_versions(&resolved, "memchr");
         memchr.retain(|version| version.starts_with("2."));
         assert_eq!(memchr, ["2.8.0"]);
+        assert_eq!(
+            locked_versions(&resolved, "toml_datetime"),
+            ["1.1.1+spec-1.1.0"]
+        );
+        // rawr's crate is locked by its identity alone.
+        assert_eq!(locked_versions(&resolved, "rawr").len(), 1);
+        assert!(locked_versions(&resolved, "rawr-import").is_empty());
         // The runner keeps every version the project's lock pins.
         assert_eq!(
             crate::runner::runtime::disagreement(resolved.as_bytes(), PINNED_LOCK),
