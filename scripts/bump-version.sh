@@ -20,7 +20,7 @@ import re
 import sys
 
 CRATES = [".", "codegen", "canonical", "cli", "importer", "directory",
-          "toml", "import-cli", "macros", "location", "play", "reload", "watch",
+          "toml", "import-cli", "hot", "macros", "location", "play", "reload", "watch",
           "web"]
 
 def package_version(text):

@@ -136,6 +136,10 @@ pub mod future;
 pub mod grain;
 /// Host type metadata visible during Rawr resolution.
 pub mod host;
+/// The signal a program opts into with `rawr-hot`: each generation it
+/// takes (#1903).
+#[doc(hidden)]
+pub mod hot;
 /// Reading a running program's values for a debugger.
 #[cfg(feature = "debugging")]
 pub mod inspect;

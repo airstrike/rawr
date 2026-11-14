@@ -17,6 +17,7 @@ members = [
     "location",
     "toml",
     "toml/edit",
+    "hot",
     "macros",
     "reload",
     "watch",

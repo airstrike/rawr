@@ -3020,6 +3020,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rawr-hot"
+version = "0.3.212"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+]
+
+[[package]]
 name = "rawr-import"
 version = "0.3.212"
 dependencies = [
