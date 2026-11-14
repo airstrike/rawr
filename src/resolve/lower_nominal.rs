@@ -49,6 +49,8 @@ mod local_type;
 mod location;
 mod loops;
 mod lvalue;
+#[cfg(feature = "rust-import")]
+mod memo;
 mod method_path;
 mod models;
 mod moves;

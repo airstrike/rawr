@@ -12,6 +12,7 @@ use crate::{ImmutableString, Span};
 /// names them, and the key its instance is named by, which native code's
 /// trampoline calls it by.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Native {
     pub(crate) path: ImmutableString,
     pub(crate) types: Box<[super::type_ref::Type]>,

@@ -4,12 +4,16 @@
 //! another runner's build may hold it (#1725). A kept lowering is reused
 //! only while the reading runner admitted each adapter it calls
 //! (`host::Registry::admits_structural`), so a read names an adapter the
-//! reading carrier holds.
+//! reading carrier holds. A digest's write writes the identity
+//! (`super::digesting`).
 
 pub(crate) fn serialize<S: serde::Serializer>(
-    _identity: &[u8; 32],
+    identity: &[u8; 32],
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
+    if super::is_digesting() {
+        return serde::Serialize::serialize(identity, serializer);
+    }
     serializer.serialize_unit()
 }
 

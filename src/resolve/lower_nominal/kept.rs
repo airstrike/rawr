@@ -49,9 +49,7 @@ use super::constant::{included, Place};
 use super::disk::{self, Disk};
 use super::entry::{Body, Lowered};
 use super::imported::ImplUse;
-use super::interface::{
-    framed, Calls, Instanced, Instances, Interface, Native, Remembered, Written,
-};
+use super::interface::{framed, Calls, Instances, Interface, Native, Remembered, Written};
 use super::models::{Models, Nominal};
 use super::op::ExecutableOp;
 use super::splice::Parsed;
@@ -296,10 +294,9 @@ pub(crate) struct Lowerings {
     /// Reveal's readings, by their keys.
     scanned: BTreeMap<[u8; 32], Vec<Scanned>>,
     /// What the last interfaces made: the outlines of the sources' texts,
-    /// the digests of the items (#1878) and the walks over them.
+    /// the digests of the items (#1878) and of the instances, and the
+    /// walks over the items.
     remembered: Remembered,
-    /// The digests of the instances the last reveal round read.
-    instanced: Instanced,
     /// What the last interface read of the native surface, by how many
     /// facades were registered when it was read: a runner's image doesn't
     /// change while it runs (#1725).
@@ -328,7 +325,6 @@ impl Lowerings {
             kept: BTreeMap::new(),
             scanned: BTreeMap::new(),
             remembered: Remembered::new(),
-            instanced: Instanced::new(),
             native: None,
             lowered: 0,
             revealed: 0,
@@ -463,9 +459,9 @@ impl<'e> Readings<'e> {
     /// Begin a pass over `program` as it is now, whose bodies' readings
     /// read `models`.
     pub(super) fn begin(&mut self, program: &Program, models: &Models) {
-        let mut instanced = std::mem::replace(&mut lock(self.engine).instanced, Instanced::new());
-        let instances = Instances::new(program, &mut instanced);
-        lock(self.engine).instanced = instanced;
+        let instances = remembering(self.engine, |remembered, disk| {
+            Instances::new(self.engine, program, remembered, disk)
+        });
         self.pass = interface(self.engine, program, models)
             .zip(Calls::new(program))
             .zip(instances)
@@ -1037,6 +1033,19 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
         },
         |(_, native)| native,
     );
+    let interface = remembering(engine, |remembered, disk| {
+        Interface::new(engine, program, models, remembered, disk, &native)
+    });
+    lock(engine).native = Some((registered, native));
+    interface
+}
+
+/// What `make` gives from what `engine`'s interfaces made and its disk, a
+/// runner's, which it keeps what it makes in.
+fn remembering<R>(
+    engine: &Engine,
+    make: impl FnOnce(&mut Remembered, Option<&mut Disk>) -> R,
+) -> R {
     let (mut remembered, mut disk) = {
         let mut lowerings = lock(engine);
         (
@@ -1044,23 +1053,11 @@ fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Inte
             lowerings.disk.take(),
         )
     };
-    // A facade's proof is what every source reads of another crate's
-    // facade, and of the program's own, its entries a name reaches.
-    let interface = crate::host::facade::Fingerprint::rooted(|| {
-        Interface::new(
-            engine,
-            program,
-            models,
-            &mut remembered,
-            disk.as_mut(),
-            &native,
-        )
-    });
+    let made = make(&mut remembered, disk.as_mut());
     let mut lowerings = lock(engine);
     lowerings.remembered = remembered;
     lowerings.disk = disk;
-    lowerings.native = Some((registered, native));
-    interface
+    made
 }
 
 /// The outline of `held`: the one an earlier runner of the same image

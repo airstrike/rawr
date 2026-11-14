@@ -186,6 +186,7 @@ pub(crate) struct Instances {
 /// An instance of a script impl of a crate's trait (`Instances::impls`).
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct ImplInstance {
     /// The name of the type each of the impl's parameters takes.
     pub(crate) names: Box<[ImmutableString]>,

@@ -12,6 +12,7 @@ use crate::{item, program, receiver, signature, type_def, ImmutableString, Span}
 /// let _ = rawr::method::Id(0);
 /// ```
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub struct Id(usize);
 
 impl Id {
@@ -33,6 +34,7 @@ impl std::fmt::Debug for Id {
 
 /// One completely resolved inherent method in a compilation generation.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) struct Definition {
     id: Id,
     key: item::Key,
