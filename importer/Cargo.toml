@@ -43,7 +43,9 @@ anstream = { version = "1.0.0", default-features = false }
 icu_collections = { version = "2.2.0", default-features = false, optional = true }
 icu_normalizer = { version = "2.2.0", default-features = false, features = ["compiled_data"], optional = true }
 idna_adapter = { version = "1.2.2", default-features = false, features = ["compiled_data"], optional = true }
-memchr = { version = "2.8.2", default-features = false, features = ["std"] }
+# No floor past what the code uses: rawr resolves its crates with a
+# project's, and a higher one would raise the memchr the project pins (#1912).
+memchr = { version = "2", default-features = false, features = ["std"] }
 rawr-location = { path = "../location" }
 rawr-canonical = { path = "../canonical" }
 rawr-toml = { path = "../toml" }

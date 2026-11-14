@@ -307,6 +307,32 @@ fn profiles(shared: &Path) -> Vec<PathBuf> {
     profiles
 }
 
+/// The directory rawr generates its packages in, and where it resolves to.
+/// A path in it is rawr's unless it resolves outside, as a project's path
+/// package reached through one of the runner's links does (#1777): that
+/// package's units are the ones the project's own `cargo build` makes.
+pub(crate) struct Generated<'a> {
+    directory: &'a Path,
+    resolved: PathBuf,
+}
+
+impl<'a> Generated<'a> {
+    pub(crate) fn new(directory: &'a Path) -> Self {
+        Self {
+            directory,
+            resolved: fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf()),
+        }
+    }
+
+    /// Whether `path` lies in the directory and resolves there. A path that
+    /// no longer resolves, as a removed generated file, is judged by where
+    /// it is.
+    pub(crate) fn holds(&self, path: &Path) -> bool {
+        path.starts_with(self.directory)
+            && fs::canonicalize(path).map_or(true, |path| path.starts_with(&self.resolved))
+    }
+}
+
 /// The member names of the archive at `path`, an rlib: BSD names
 /// (`#1/<length>`, the name after the header) or GNU ones (`/<offset>` into
 /// the `//` table). `None` when it is not an archive.

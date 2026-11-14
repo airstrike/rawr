@@ -5646,6 +5646,80 @@ mod project_lock_tests {
             .collect()
     }
 
+    /// rawr's own crates resolve in the harness with the project's, so a
+    /// version floor of theirs above what the project pins would raise it:
+    /// the bindings would then name the raised package, and the runner,
+    /// settled from the project's lock, would build the pinned one (#1912).
+    /// The harness keeps an older libc and memchr, and the runner agrees.
+    #[test]
+    fn rawr_s_own_crates_keep_the_libc_and_memchr_a_project_pins() {
+        const PINNED_LOCK: &str = "version = 4\n\n\
+            [[package]]\nname = \"libc\"\nversion = \"0.2.183\"\n\
+            source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
+            checksum = \"b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d\"\n\n\
+            [[package]]\nname = \"memchr\"\nversion = \"2.8.0\"\n\
+            source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
+            checksum = \"f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79\"\n\n\
+            [[package]]\nname = \"pinned\"\nversion = \"0.1.0\"\n\
+            dependencies = [\n \"libc\",\n \"memchr\",\n]\n";
+        crate::store::isolate_for_tests();
+        let project = crate::store::TestProject::new("rawr-project-floors");
+        let root = project.path();
+        let member = root.join("pinned");
+        fs::create_dir_all(member.join("src")).expect("member creates");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"pinned\"]\n",
+        )
+        .expect("workspace manifest writes");
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"pinned\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nlibc = \"0.2\"\nmemchr = \"2\"\n",
+        )
+        .expect("member manifest writes");
+        fs::write(member.join("src/lib.rs"), "").expect("member source writes");
+        fs::write(root.join("Cargo.lock"), PINNED_LOCK).expect("project lock writes");
+        let limits = Limits::standard();
+        let request = Request::builder(root, &root.join("target/rawr/cache"), &limits)
+            .expect("request builder seals")
+            .environment(config::Environment::capture().expect("environment captures"))
+            .cargo_authority(&member.join("Cargo.toml"))
+            .policy(crate::extract::Policy::manifest().seal())
+            .dependency(config::Dependency::path("pinned", &member).expect("member seals"))
+            .build()
+            .expect("request seals");
+
+        let harness = prepare_harness(&request).expect("the harness prepares");
+        let output = std::process::Command::new("cargo")
+            .args([
+                "metadata",
+                "--offline",
+                "--format-version=1",
+                "--manifest-path",
+            ])
+            .arg(harness.join(HARNESS_MANIFEST))
+            .env("CARGO_TARGET_DIR", harness.join("target"))
+            .output()
+            .expect("cargo runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let resolved =
+            fs::read_to_string(harness.join("Cargo.lock")).expect("Cargo writes the harness lock");
+        assert_eq!(locked_versions(&resolved, "libc"), ["0.2.183"]);
+        let mut memchr = locked_versions(&resolved, "memchr");
+        memchr.retain(|version| version.starts_with("2."));
+        assert_eq!(memchr, ["2.8.0"]);
+        // The runner keeps every version the project's lock pins.
+        assert_eq!(
+            crate::runner::runtime::disagreement(resolved.as_bytes(), PINNED_LOCK),
+            None
+        );
+    }
+
     /// A harness resolves from the project's `Cargo.lock`, so Cargo keeps
     /// the older compatible version that lock pins instead of the newest one
     /// the registry offers (#1635).
