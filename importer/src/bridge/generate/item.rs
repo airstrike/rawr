@@ -12,6 +12,9 @@ pub(super) struct Item<'a> {
     /// Whether it declares its name, where an `impl` names a type declared
     /// elsewhere.
     pub(super) declares: bool,
+    /// The last segment of the trait an `impl` implements, as `RawrOpaque0`
+    /// of `impl<'x> RawrOpaque0<'x> for Hover<..>`.
+    pub(super) implements: Option<String>,
 }
 
 /// The words before an item's keyword: its visibility and qualifiers.
@@ -133,13 +136,19 @@ fn quote_end(source: &str, at: usize) -> usize {
 }
 
 fn item(text: &str) -> Item<'_> {
+    let declares = words(text)
+        .into_iter()
+        .find(|word| !QUALIFIERS.contains(word))
+        .is_some_and(|word| word != "impl");
     Item {
         text,
         name: name(text),
-        declares: words(text)
-            .into_iter()
-            .find(|word| !QUALIFIERS.contains(word))
-            .is_some_and(|word| word != "impl"),
+        declares,
+        implements: if declares {
+            None
+        } else {
+            implemented_trait(text)
+        },
     }
 }
 
@@ -218,6 +227,22 @@ fn balanced(text: &str, open: u8, close: u8) -> Option<usize> {
 /// The last path segment of the type `text`'s `impl` is for, before its
 /// arguments.
 fn implemented(text: &str) -> Option<String> {
+    let head = impl_head(text)?;
+    let ty = head.split_once(" for ").map_or(head.as_str(), |(_, ty)| ty);
+    last_segment(ty)
+}
+
+/// The last path segment of the trait `text`'s `impl` implements, before
+/// its arguments: `None` for an inherent `impl`.
+fn implemented_trait(text: &str) -> Option<String> {
+    let head = impl_head(text)?;
+    let (implemented, _) = head.split_once(" for ")?;
+    last_segment(implemented)
+}
+
+/// The head of the `impl` `text` is, between `impl` and its body, with
+/// generics and arguments left out: `Trait for Type`, or `Type`.
+fn impl_head(text: &str) -> Option<String> {
     // Its comments and attributes aside, as the generator writes them, one
     // to a line.
     let code = text
@@ -251,11 +276,12 @@ fn implemented(text: &str) -> Option<String> {
             _ => {}
         }
     }
-    let ty = match flat.find(" for ") {
-        Some(at) => &flat[at + 5..],
-        None => &flat,
-    };
-    let segment = ty.trim().rsplit("::").next()?;
+    Some(flat)
+}
+
+/// The last segment of the path `path` spells, before its arguments.
+fn last_segment(path: &str) -> Option<String> {
+    let segment = path.trim().rsplit("::").next()?;
     segment
         .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .find(|word| !word.is_empty() && *word != "mut" && *word != "dyn")
@@ -296,6 +322,27 @@ mod tests {
         assert_eq!(
             items.iter().map(|item| item.text).collect::<String>(),
             source
+        );
+    }
+
+    /// An `impl` of a trait says the trait it implements, by its last
+    /// segment, and an inherent `impl` or a declaration says none (#2001).
+    #[test]
+    fn an_impl_names_the_trait_it_implements() {
+        let source = "pub trait RawrOpaque0<'x> {\n}\n\n\
+            impl<'x, RawrHeld0: iced::Widget<crate::Message> + 'x> RawrOpaque0<'x> for iced::widget::Hover<RawrHeld0, Text<'x>> {\n}\n\n\
+            impl Wrapper {\n}\n";
+        let implements = split(source)
+            .into_iter()
+            .map(|item| (item.name, item.implements))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            implements,
+            [
+                (Some("RawrOpaque0".to_owned()), None),
+                (Some("Hover".to_owned()), Some("RawrOpaque0".to_owned())),
+                (Some("Wrapper".to_owned()), None),
+            ]
         );
     }
 }

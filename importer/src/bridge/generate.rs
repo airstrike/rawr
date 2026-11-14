@@ -8865,11 +8865,28 @@ impl Support {
         let mut by_name = std::collections::BTreeMap::<&str, usize>::new();
         let mut group_of = Vec::new();
         let mut declared = Vec::new();
+        let declares = families
+            .iter()
+            .chain(&impls)
+            .filter(|found| found.declares)
+            .filter_map(|found| found.name.as_deref())
+            .collect::<std::collections::BTreeSet<_>>();
         for found in families.iter().chain(&impls) {
-            // A frame's keys and tables sort with the frame.
+            // A frame's keys and tables sort with the frame. An impl of a
+            // trait the sources declare for a crate's type sorts with the
+            // trait, so rustc's orphan rule finds the trait in its crate, as
+            // `RawrOpaque0` for markdown's `Hover<impl Widget, ..>` (#2001).
             let name = found
                 .name
                 .as_deref()
+                .filter(|name| declares.contains(name))
+                .or_else(|| {
+                    found
+                        .implements
+                        .as_deref()
+                        .filter(|implemented| declares.contains(implemented))
+                })
+                .or(found.name.as_deref())
                 .map(|name| frame::owner(name).unwrap_or(name));
             match name.and_then(|name| by_name.get(name)) {
                 Some(&at) => {
@@ -25683,6 +25700,21 @@ fn render_impl_function(
                 ),
             )
         }
+        // A reference to a crate value the receiver holds, as markdown's
+        // `fn theme(&self) -> &Theme` gives `self.theme` (#2001): the value
+        // where it is, shared from its slot and held in the receiver's pins,
+        // so it lives as long as `&self` is borrowed, as rustc ties the
+        // elided lifetime to it.
+        None if let Some(target) = receiver_borrow(function.receiver(), returned) => (
+            "",
+            rust,
+            format!(
+                "let witnesses = member.witnesses();
+        let mut values: [Dynamic; {count}] = {values};
+        let value = member.call(&mut values, &[{mutable}]);{restores}
+        with_arena(|arena| ViewedArgument::<{target}>::of(arena, value)?.reach(self.0.pins(), None)).unwrap_or_else(|error| panic!(\"rawr: a script function gave back a reference native code can't take: {{error:?}}\"))"
+            ),
+        ),
         None => {
             let mut converted = String::new();
             output(&mut converted)?;
@@ -25727,6 +25759,26 @@ fn render_impl_function(
         function.name(),
         parameters.join(", ")
     ))
+}
+
+/// The Rust type of the crate value a script impl function's `&T` output
+/// borrows from its receiver (#2001), where it takes one by reference: a
+/// value of the arena, whose type carries no lifetime.
+fn receiver_borrow(
+    receiver: crate::surface::instance::ImplReceiver,
+    returned: &convert::Type,
+) -> Option<String> {
+    use crate::surface::instance::ImplReceiver;
+    if !matches!(receiver, ImplReceiver::Shared | ImplReceiver::Mutable) {
+        return None;
+    }
+    let convert::Type::Borrowed { mutable: false, ty } = returned else {
+        return None;
+    };
+    if !matches!(**ty, convert::Type::Nominal { .. }) || is_value(ty) || carries_lifetime(ty) {
+        return None;
+    }
+    concrete_type(ty)
 }
 
 /// A borrowed native value native code gives a script function, lent around

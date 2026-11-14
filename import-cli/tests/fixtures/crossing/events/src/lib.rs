@@ -37,6 +37,7 @@ pub mod signatures;
 pub mod simulator;
 pub mod spans;
 pub mod stock;
+pub mod styled;
 pub mod viewed;
 
 /// What `view` gives: a label borrowed from the state, and the message a
