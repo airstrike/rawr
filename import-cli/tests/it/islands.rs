@@ -89,10 +89,15 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
 /// A save whose native build fails, here at its link, leaves the program
 /// running, and a save back to the sources it was built from owes no
 /// native build: a body edit after it swaps in place, and the program
-/// keeps its count (#1892).
+/// keeps its count (#1892). The project is a fresh copy, whose running
+/// native build is built from exactly these files: a shared slot's runner
+/// may have been checked against a tree an earlier test left otherwise,
+/// and any save there needs a new native build.
 #[test]
 fn a_save_back_from_a_failed_native_build_swaps_in_place() {
-    let root = ISLANDS.project();
+    const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands");
+    let root = crate::support::fresh("islands-failed-build");
+    copy(Path::new(FIXTURE), &root);
     let main = root.join("src/main.rs");
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
@@ -3272,7 +3277,9 @@ fn a_run_of_a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_a
 /// as inboard's `.spacing("zero")` for an `impl Into<Pixels>` (#1891): the
 /// running program's save fails with rustc's E0277 at the argument, with
 /// no preparation or native build, and so does `rawr check`, with nothing
-/// of rawr's generated crates.
+/// of rawr's generated crates. The same line's `.title("home")` stays
+/// good: `Title` takes text through a blanket `impl<T: Into<String>>
+/// From<T>`, which no case of the bound names, so rawr leaves it to rustc.
 #[test]
 fn a_marked_argument_that_misses_a_crate_bound_fails_its_check_at_the_marked_line() {
     let root = THEME.project();

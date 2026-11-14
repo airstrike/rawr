@@ -882,6 +882,10 @@ pub struct Relation {
     /// impls are its cases (`representability::signature::Relation`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     std_trait: Option<Box<str>>,
+    /// Whether the cases are every impl of the trait for the bound's
+    /// arguments (`representability::signature::Relation`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    exhaustive: bool,
 }
 
 /// One implementation of a [`Relation`]'s trait, its impl parameters
@@ -923,6 +927,11 @@ impl Relation {
     /// The bound's trait by its std path, when std declares it.
     pub fn std_trait(&self) -> Option<&str> {
         self.std_trait.as_deref()
+    }
+    /// Whether the cases are every impl of the trait for the bound's
+    /// arguments.
+    pub const fn is_exhaustive(&self) -> bool {
+        self.exhaustive
     }
 }
 
@@ -4543,6 +4552,8 @@ fn relations(
         {
             continue;
         }
+        // A case the facade can't write leaves the rest short of every impl.
+        let exhaustive = relation.is_exhaustive() && cases.len() == relation.cases().len();
         output.push(Relation {
             parameter: copy(parameter.name())?,
             arguments,
@@ -4550,6 +4561,7 @@ fn relations(
             trait_identity: relation.trait_identity(),
             associated: relation.associated().cloned(),
             std_trait: relation.std_trait().map(copy).transpose()?,
+            exhaustive,
         });
     }
     Ok(output.into_boxed_slice())

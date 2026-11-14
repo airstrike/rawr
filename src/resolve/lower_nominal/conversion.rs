@@ -824,10 +824,10 @@ impl<'a> Parser<'a> {
     /// rustc's E0277 for text, a `bool` or a `char` given to a parameter of
     /// the crate item `item` that a bound `Into<T>` holds, `T` a crate type
     /// none of whose `From` impls takes it: `.spacing("zero")` of
-    /// `spacing(impl Into<Pixels>)` (#1891). Only `T`'s own crate can
-    /// implement `From` of a std type for `T`, so the bound's cases, each
-    /// such impl, are every impl there is, and the call is rejected at the
-    /// argument before any native build.
+    /// `spacing(impl Into<Pixels>)` (#1891). Only when the bound's cases are
+    /// every impl of `From` for `T`: an impl generic over its source, as
+    /// ratatui's `impl<T: Into<Cow<str>>> From<T> for Line`, or one Rawr
+    /// can't name, leaves the call to rustc's own check in the native build.
     #[cfg(feature = "rust-import")]
     pub(super) fn check_into_arguments(
         &mut self,
@@ -847,9 +847,11 @@ impl<'a> Parser<'a> {
             .map(|(name, ty, _)| (name.clone(), ty.clone()))
             .collect::<BTreeMap<_, _>>();
         for relation in signature.relations() {
-            let (Some("core::convert::Into"), [target]) =
-                (relation.std_trait(), relation.arguments())
-            else {
+            let (Some("core::convert::Into"), [target], true) = (
+                relation.std_trait(),
+                relation.arguments(),
+                relation.is_exhaustive(),
+            ) else {
                 continue;
             };
             let Some(argument) =

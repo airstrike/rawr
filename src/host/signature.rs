@@ -54,6 +54,10 @@ pub struct Relation {
     /// The bound's trait by its std path, as `core::convert::AsRef`, when
     /// std declares it: std's impls, from the std table, are its cases.
     std_trait: Option<ImmutableString>,
+    /// Whether the cases are every impl of the trait for the bound's
+    /// arguments, so an argument no case takes satisfies no impl.
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    exhaustive: bool,
 }
 
 /// One implementation of a [`Relation`]'s trait.
@@ -131,6 +135,7 @@ impl Relation {
             trait_identity: None,
             associated: None,
             std_trait: None,
+            exhaustive: false,
         }
     }
 
@@ -144,6 +149,19 @@ impl Relation {
     #[cfg(feature = "rust-import")]
     pub(crate) fn std_trait(&self) -> Option<&str> {
         self.std_trait.as_deref()
+    }
+
+    /// The relation whose cases are every impl of its trait for its
+    /// arguments, when `exhaustive`.
+    #[must_use]
+    pub const fn of_exhaustive(mut self, exhaustive: bool) -> Self {
+        self.exhaustive = exhaustive;
+        self
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn is_exhaustive(&self) -> bool {
+        self.exhaustive
     }
 
     /// The relation of a projection's parameter, which stands for the

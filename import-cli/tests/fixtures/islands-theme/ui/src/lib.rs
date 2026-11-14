@@ -230,6 +230,17 @@ impl From<u32> for Length {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pixels(pub f32);
 
+/// A column's title, as ratatui's `Line`: one blanket impl converts any
+/// text into it, so no impl names `&str` itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Title(pub String);
+
+impl<T: Into<String>> From<T> for Title {
+    fn from(text: T) -> Self {
+        Title(text.into())
+    }
+}
+
 impl From<f32> for Pixels {
     fn from(amount: f32) -> Self {
         Pixels(amount)
@@ -281,6 +292,12 @@ impl<W> Column<W> {
 
     pub fn width(mut self, width: impl Into<Length>) -> Self {
         self.width = width.into();
+        self
+    }
+
+    /// The column with its title, which nothing draws.
+    pub fn title(self, title: impl Into<Title>) -> Self {
+        let _ = title.into();
         self
     }
 
