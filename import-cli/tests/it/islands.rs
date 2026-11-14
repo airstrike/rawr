@@ -3942,3 +3942,110 @@ fn a_held_type_s_new_field_runs_and_cargo_builds_beside_rawr() {
     cargo_builds(&root);
     runs(&root);
 }
+
+/// The palette fixture: inboard's marked theme over its native child's
+/// `themedef::Theme`, whose colors aren't `Copy`, and a home screen whose
+/// widgets become a crate's elements.
+const PALETTE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/islands-palette"
+);
+
+/// inboard's theme edits, in a marked module over its native child's
+/// `themedef::Theme`: `theme.colors.accent = theme.colors.error` moves into
+/// a field of a field of an owned local, which isn't `Copy` (#1893);
+/// `theme.colors.error.clone()` copies that place and leaves
+/// `theme.colors` whole for `theme.colors.clone()` (#1894); and a native
+/// struct literal's fields run in source order before its `..base`'s lend
+/// (#1895). A crate's generic `From<Text>` for its `Element`, named
+/// through a re-export, converts `text(..).size(20).into()` (#1896).
+/// `rawr check` passes as `cargo check` does, and `rawr run` prints what
+/// `cargo run` prints.
+#[test]
+fn a_marked_theme_assigns_and_reads_through_native_field_paths_as_cargo_does() {
+    let root = crate::support::fresh("islands-palette");
+    copy(Path::new(PALETTE), &root);
+    let printed = cargo_prints(&root);
+    assert_eq!(
+        printed,
+        "alarmed Selected(Theme { name: \"light\", colors: Colors { accent: Subpalette { s600: 2 }, \
+         error: Subpalette { s600: 2 }, text: Subpalette { s600: 3 }, label: \"light\" }, \
+         palette: Palette { contrast: 7 } })\n\
+         split Subpalette { s600: 2 } Colors { accent: Subpalette { s600: 1 }, error: Subpalette \
+         { s600: 2 }, text: Subpalette { s600: 3 }, label: \"tailwind\" }\n\
+         updated Selected(Theme { name: \"light\", colors: Colors { accent: Subpalette { s600: 2 }, \
+         error: Subpalette { s600: 2 }, text: Subpalette { s600: 3 }, label: \"tailwind\" }, \
+         palette: Palette { contrast: 7 } })\n\
+         title Inbox@20 in ink 3\n\
+         subtitle Mail@12 in ink 3\n"
+    );
+    checks_and_prints(&root, &printed);
+}
+
+/// A read of `theme.colors.error` after `theme.colors` moved, the field
+/// path #1894 copies out of, fails `rawr check` with cargo check's E0382.
+#[test]
+fn a_native_field_path_read_after_its_field_moved_is_cargo_s_e0382() {
+    let root = crate::support::fresh("islands-palette-moved");
+    copy(Path::new(PALETTE), &root);
+    let theme = root.join("src/theme.rs");
+    edit(
+        &theme,
+        "        let base = theme.colors.clone();\n",
+        "        let base = theme.colors;\n        let _error = theme.colors.error;\n",
+    );
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    let cargo = crate::support::cargo_s_report(&stderr);
+    assert!(
+        cargo.contains("error[E0382]: use of moved value: `theme.colors`"),
+        "{stderr}"
+    );
+}
+
+/// A save that first converts a widget into an element by `.into()`, as
+/// inboard's `text(..).size(20).into()`, demands the crate's `From` impl
+/// the running program's native build doesn't cover: the save prepares
+/// again with it, and the program draws the new subtitle (#1896).
+#[test]
+fn a_save_whose_into_needs_a_crate_s_from_impl_prepares_again_with_it() {
+    let root = crate::support::fresh("islands-palette-into");
+    copy(Path::new(PALETTE), &root);
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "text(label).size(20).into()",
+        "text(label).size(20).boxed()",
+    );
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" Mail@12 in ink 3"));
+    edit(
+        &home,
+        "text(label).size(12).boxed()",
+        "text(label).size(14).into()",
+    );
+    run.until(|line| line.starts_with("tick ") && line.ends_with(" Mail@14 in ink 3"));
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+}

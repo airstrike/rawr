@@ -2839,23 +2839,53 @@ impl<'a> Parser<'a> {
             self.move_local(&mut assigned)?;
             assigned
         } else {
-            // The field below: read, changed in it, and set back.
+            let inner_ty = self.imported_field_type(&local, &definition, field.ty(), &path)?;
+            let inner_ty = self.inference.resolve(&inner_ty);
+            let Ty::Host { proof, .. } = &inner_ty else {
+                return Err(
+                    self.unsupported("assigning a field of a field that isn't a crate's struct")
+                );
+            };
+            let inner = proof.definition.clone();
+            if !self.type_provides(&inner_ty, capability::Kind::Copy) {
+                // `theme.colors.accent = error`: the field below is lent
+                // `&mut` for the store, which changes it where it is, as
+                // rustc's place `theme.colors.accent` is (#1893).
+                if !definition.parameters().is_empty() {
+                    return Err(self.unsupported(
+                        "assigning a field of a field that isn't `Copy`, of a generic struct",
+                    ));
+                }
+                let lend = ImportedOperation {
+                    kind: crate::host::structural::Kind::LendMut,
+                    operands: vec![(local.ty.clone(), local.span, true)].into_boxed_slice(),
+                    output: inner_ty.clone(),
+                    receiver: Some(crate::receiver::Mode::Mutable),
+                };
+                let helper = self.push_imported_op(
+                    &path,
+                    &selector,
+                    Some(lend),
+                    span(start, member_span.end()),
+                )?;
+                let lent = self.temporary("lent");
+                prelude.push_text(format!("let {lent} = "));
+                prelude.push(origin::Fragment::call(&helper, [local.source]));
+                prelude.push_text("; ");
+                let lent = self.operator_expr(origin::Fragment::plain(lent), inner_ty, member_span);
+                let changed =
+                    self.store_imported_field(lent, inner, &fields[1..], true, assigned)?;
+                let operation = span(start, changed.span.end());
+                prelude.push(changed.rendered_source());
+                return Ok(self.operator_expr(prelude.surrounded("{ ", " }"), Ty::Unit, operation));
+            }
+            // The field below, a copy: read, changed in it, and set back.
             let read = self.read_imported_field(
                 local.clone(),
                 definition.clone(),
                 member.clone(),
                 member_span,
             )?;
-            let inner_ty = self.inference.resolve(&read.ty);
-            let Ty::Host { proof, .. } = &inner_ty else {
-                return Err(
-                    self.unsupported("assigning a field of a field that isn't a crate's struct")
-                );
-            };
-            if !self.type_provides(&inner_ty, capability::Kind::Copy) {
-                return Err(self.unsupported("assigning a field of a field that isn't `Copy`"));
-            }
-            let inner = proof.definition.clone();
             let below = self.temporary("field");
             prelude.push_text(format!("let {below} = "));
             prelude.push(read.rendered_source());

@@ -7255,10 +7255,17 @@ fn assemble<B: crate::surface::Runner>(
                 2,
             ));
         }
-        // And its lender.
+        // And its lenders.
         if has_lender(plan) {
             entries.push(crate::runner::manifest::Entry::new(
                 lender_identity(plan),
+                *signature,
+                1,
+            ));
+        }
+        if has_lender(plan) {
+            entries.push(crate::runner::manifest::Entry::new(
+                mutable_lender_identity(plan),
                 *signature,
                 1,
             ));
@@ -8353,6 +8360,26 @@ fn render_source(
             .map_err(request::unwritable)?;
             render_structural_instance(plan, output)?;
         }
+        if has_lender(plan) {
+            write!(
+                output,
+                "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
+                plan.export().root_alias(),
+                structural_owner(plan),
+            )
+            .map_err(request::unwritable)?;
+            byte_array(output, selector)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
+            byte_array(output, &mutable_lender_identity(plan))?;
+            output.write_all(b", ").map_err(request::unwritable)?;
+            byte_array(output, signature)?;
+            writeln!(
+                output,
+                ", 1, __rawr_internal::package::import::runner::StructuralKind::LendMut)"
+            )
+            .map_err(request::unwritable)?;
+            render_structural_instance(plan, output)?;
+        }
     }
     output.write_all(b"];\n\n").map_err(request::unwritable)?;
     render_execution_tests(plans, output)?;
@@ -8397,6 +8424,7 @@ fn render_source(
                 }
                 render_store(plan, body)?;
                 render_field_lender(plan, body)?;
+                render_field_lender_mut(plan, body)?;
             }
         }
         for index in modules.values().flatten() {
@@ -9007,6 +9035,23 @@ fn render_rows(
             ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
             plan.export().root_alias(),
             lender_name(plan)
+        )
+        .map_err(request::unwritable)?;
+    }
+    if has_lender(plan) {
+        write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
+        byte_array(file, &mutable_lender_identity(plan))?;
+        write!(file, ", signature: ").map_err(request::unwritable)?;
+        byte_array(file, signature)?;
+        write!(file, ", selector: ").map_err(request::unwritable)?;
+        byte_array(file, plan.selector().unwrap_or(&[0; 32]))?;
+        write!(file, ", instance: ").map_err(request::unwritable)?;
+        byte_array(file, &[0; 32])?;
+        writeln!(
+            file,
+            ", item: \"\", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {}_lend_mut }},",
+            plan.export().root_alias(),
+            adapter_name(plan)
         )
         .map_err(request::unwritable)?;
     }
@@ -10922,7 +10967,8 @@ fn store_name(plan: &Plan) -> String {
 }
 
 /// A field of a struct that is not generic has a lender, which `&value.
-/// field` reads it by (`render_field_lender`).
+/// field` reads it by (`render_field_lender`), and a mutable lender, which
+/// `value.field.inner = v` changes it in place by (`render_field_lender_mut`).
 fn has_lender(plan: &Plan) -> bool {
     matches!(plan.operation(), Operation::StructField { .. })
         && plan.structural_instance().is_empty()
@@ -10938,6 +10984,66 @@ fn lender_identity(plan: &Plan) -> [u8; 32] {
 
 fn lender_name(plan: &Plan) -> String {
     format!("{}_lend", adapter_name(plan))
+}
+
+/// The entry identity of a field's mutable lender: its reader's, tagged.
+fn mutable_lender_identity(plan: &Plan) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rawr-field-lender-mut");
+    hasher.update(plan.identity().as_bytes());
+    hasher.finalize().into()
+}
+
+/// The field of the value the first argument holds, lent mutably for the
+/// rest of the scope that borrows it, as Rust's `&mut value.field` borrows
+/// it: a scope frame that, opened, lends the field by its own type, which a
+/// store into one of its fields changes where it is (#1893). The value
+/// stays where it is, claimed, while the frame lends the field. A field
+/// its type can't lend is no place to store into.
+fn render_field_lender_mut(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let Operation::StructField { field, .. } = plan.operation() else {
+        return Ok(());
+    };
+    if !has_lender(plan) {
+        return Ok(());
+    }
+    let path = structural_type(plan);
+    writeln!(
+        output,
+        "fn {}_lend_mut(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
+        adapter_name(plan)
+    )
+    .map_err(request::unwritable)?;
+    if !lendable(field.ty()) || container_family(&path, &path).is_some() || carries_lifetimes(&path)
+    {
+        return writeln!(
+            output,
+            "    let _ = arguments;\n    Err(Error::TypeMismatch)\n}}\n"
+        )
+        .map_err(request::unwritable);
+    }
+    let rust =
+        concrete_type(field.ty()).ok_or_else(|| request::drift("a lent field's concrete type"))?;
+    render_field_family(0, &rust, true, output)?;
+    writeln!(
+        output,
+        "    let lender = match lent_value(arguments, 0) {{
+        Some(lent) => Lender::Lent(lent),
+        None => Lender::Handle(native_handle(arguments, 0, false)?),
+    }};
+    Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
+        reach_lender_mut::<{path}>(&lender, &mut |input| {{
+            let field_0 = &mut input.{};
+            {} rest({}))
+        }})
+    }})))
+}}
+",
+        field.name(),
+        lend_field(0, true),
+        lent_field(0, &rust, true),
+    )
+    .map_err(request::unwritable)
 }
 
 /// The field of the value the first argument holds, lent for the rest of

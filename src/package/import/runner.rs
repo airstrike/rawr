@@ -699,11 +699,13 @@ fn structural_path<'facade>(
                 .map(|_| StructuralKind::Constructor)
                 .chain(fields.iter().filter_map(|field| {
                     // A field's selector names its reader, its store and
-                    // its lender.
+                    // its lenders.
                     (field.imported_identity().fingerprint() == row.selector).then_some(
                         if matches!(
                             row.kind,
-                            StructuralKind::Store | StructuralKind::Borrow { .. }
+                            StructuralKind::Store
+                                | StructuralKind::Borrow { .. }
+                                | StructuralKind::LendMut
                         ) {
                             row.kind
                         } else if row.instance.is_some() && !definition.parameters().is_empty() {
