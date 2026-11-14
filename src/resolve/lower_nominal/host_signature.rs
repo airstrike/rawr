@@ -2381,7 +2381,12 @@ impl<'a> Parser<'a> {
         if let Some(identity) = item.application() {
             return Ok(Some(*identity));
         }
-        if item.imported_identity().is_none() || (requirements.is_empty() && slots.is_empty()) {
+        // A crate function an argument passes is part of the instance, as
+        // the generator keys it: `.style(text::warning)` reaches its own
+        // adapter, not `.style(text::default)`'s.
+        if item.imported_identity().is_none()
+            || (requirements.is_empty() && slots.is_empty() && items.is_empty())
+        {
             return Ok(None);
         }
         let types = instance_parameters(item, requirements)

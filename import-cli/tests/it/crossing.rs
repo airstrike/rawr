@@ -795,6 +795,22 @@ fn crate_functions_in_a_fn_pointer_array_style_their_toggles() {
     );
 }
 
+/// iced's table and toast (#2003): an `if`, an `else if` and a `match` that
+/// pick one of a crate's functions each style their toggle with the
+/// function their branch picked, and two toggles given one function each
+/// keep their own. The output is `cargo run`'s.
+#[test]
+fn a_branch_picking_crate_functions_styles_with_the_one_it_picked() {
+    let (rawr, cargo) = both_printed("branched.rs", "If,If");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("<If:3> <Match:1> <Else:1> <Primary:2> <Secondary:4>")
+            && rawr.contains("<x If:1> <x Match:3> <x Else:3> <x Primary:2> <x Secondary:4>")
+            && rawr.ends_with("<If:3> <Match:1> <Else:1> <Primary:2> <Secondary:4>"),
+        "{rawr}"
+    );
+}
+
 /// iced's vectorial_text: a closure's parameter that only a slider's
 /// `RangeInclusive<T>` types takes `T` from the closure's `fn(f32) -> _`,
 /// so the call's `2.0..=80.0` is a range of `f32`, as rustc infers it, and
