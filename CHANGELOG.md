@@ -37,6 +37,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules. (#1932)
 - A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to. (#1963; part of #610)
 - rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window. (#1947)
+- Projects that share one target directory keep separate rawr caches, so one project no longer builds from another's generated crate or fails with 'Cargo.toml changed during the build'. (#1934)
+- A start whose cached entries were removed since they were read starts again instead of failing with an internal store error, and a failure while starting a program says rawr could not start it. (#1933)
 
 ## 0.3.213 (2026-11-13)
 

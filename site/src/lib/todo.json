@@ -43,7 +43,9 @@
         {"text":"A struct declared in a function body with a crate's derive, as pokedex's `#[derive(Deserialize)] struct Entry`, works again, and its derived impl's generic functions build in the runner.","issues":[1938]},
         {"text":"A native module can name what the marked crate root re-exports from a crate or a native module, as custom_shader's `use crate::wgpu;`, and marked code reads native fields whose types live in private native modules.","issues":[1932]},
         {"text":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to.","issues":[1963],"refs":[610]},
-        {"text":"rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window.","issues":[1947]}
+        {"text":"rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window.","issues":[1947]},
+        {"text":"Projects that share one target directory keep separate rawr caches, so one project no longer builds from another's generated crate or fails with 'Cargo.toml changed during the build'.","issues":[1934]},
+        {"text":"A start whose cached entries were removed since they were read starts again instead of failing with an internal store error, and a failure while starting a program says rawr could not start it.","issues":[1933]}
       ]
     },
     "releases": [
@@ -4286,8 +4288,8 @@
     {"issue":1930,"title":"Runtime errors and island refusals print through Display, uncoloured and hand-formatted","state":"open","category":"Health"},
     {"issue":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"closed","category":"No glue (D593)"},
     {"issue":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"closed","category":"No glue (D593)"},
-    {"issue":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open","category":"No glue (D593)"},
-    {"issue":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open","category":"No glue (D593)"},
+    {"issue":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"closed","category":"No glue (D593)"},
+    {"issue":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"closed","category":"No glue (D593)"},
     {"issue":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"closed","category":"No glue (D593)"},
     {"issue":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"closed","category":"No glue (D593)"},
     {"issue":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed","category":"No glue (D593)"},
@@ -4317,7 +4319,9 @@
     {"issue":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"open","category":"No glue (D593)"},
     {"issue":1962,"title":"A native module's path spelled through the crate's name ignores `use` bindings inside the call's arguments too","state":"open","category":"Divergences from rustc"},
     {"issue":1963,"title":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to","state":"closed","category":"No glue (D593)"},
-    {"issue":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open","category":"No glue (D593)"}
+    {"issue":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open","category":"No glue (D593)"},
+    {"issue":1965,"title":"expand/ and the resolution cache ignore a configured target directory","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4942,8 +4946,8 @@
             {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open"},
             {"number":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"closed"},
             {"number":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"closed"},
-            {"number":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open"},
-            {"number":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open"},
+            {"number":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"closed"},
+            {"number":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"closed"},
             {"number":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"closed"},
             {"number":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"closed"},
             {"number":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed"},
@@ -4967,7 +4971,8 @@
             {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
             {"number":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open"},
             {"number":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"open"},
-            {"number":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open"}
+            {"number":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open"},
+            {"number":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -5628,7 +5633,8 @@
             {"number":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open"},
             {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"},
             {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"},
-            {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"}
+            {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"},
+            {"number":1965,"title":"expand/ and the resolution cache ignore a configured target directory","state":"open"}
           ]
         },
         {
