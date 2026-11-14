@@ -701,12 +701,14 @@ pub(crate) fn crossing_impls(
         use representability::convert::Type;
         match ty {
             // A mirror's impls are rawr's copy of the crate's own (#1249).
+            // A unit enum's holder takes the script's impls as a proxy
+            // does, as tour's `From<Language> for String` (#1987).
             Type::Script {
                 path,
                 arguments,
                 holder,
             } => {
-                if holder.is_proxy() {
+                if !matches!(holder, representability::convert::Holder::Mirror) {
                     found.push(path);
                 }
                 arguments.iter().for_each(|argument| paths(argument, found));

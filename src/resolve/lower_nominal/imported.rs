@@ -2070,8 +2070,9 @@ pub(super) fn native_impls(
         // `impl canvas::Program<Message> for Arc`, of a dependency's trait
         // for a script type; or `impl From<Shade> for iced::Color`, of the
         // prelude's conversion from a script type into a crate's, which a
-        // crate's `impl Into<Color>` takes. Each crosses with its script
-        // type.
+        // crate's `impl Into<Color>` takes. So is `impl From<Language> for
+        // String`, into a std type the runner names, which a crate's `impl
+        // Into<String>` takes (#1987). Each crosses with its script type.
         let (path, arguments, definition): (&str, &[type_ref::Type], _) =
             match &implementation.trait_ {
                 Some(item::TraitImpl::Native {
@@ -2083,13 +2084,22 @@ pub(super) fn native_impls(
                 Some(item::TraitImpl::User { name, arguments })
                     if name.text == "From"
                         && script(&implementation.owner).is_none()
-                        && matches!(
-                            &implementation.owner,
+                        && match &implementation.owner {
                             type_ref::Type::Path(type_ref::Path {
                                 target: type_ref::Target::Host { .. },
                                 ..
-                            })
-                        ) =>
+                            }) => true,
+                            type_ref::Type::Path(type_ref::Path {
+                                target: type_ref::Target::Builtin,
+                                ..
+                            }) => impl_surface_type(
+                                models,
+                                &Ty::from_resolved(&implementation.owner),
+                                &[],
+                            )
+                            .is_some(),
+                            _ => false,
+                        } =>
                 {
                     match arguments.as_ref() {
                         [argument] => match script(argument) {

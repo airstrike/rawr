@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 226;
+const CLASSIFIER_VERSION: u32 = 227;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1228,6 +1228,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             parameters.push(declared.with_default(default));
         }
         Ok(parameters.into_boxed_slice())
+    }
+
+    /// Whether `generics` bound the parameter at `index` by `Send`.
+    fn send_bound(&self, generics: &model::Generics, index: u32) -> bool {
+        generics.predicates().any(|predicate| {
+            matches!(
+                predicate,
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound: model::Bound::Trait {
+                        trait_id,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+                } if *bounded == index && self.is_core_trait(trait_id, "Send")
+            )
+        })
     }
 
     /// Whether `generics` bound the parameter at `index` by `Fn`, `FnMut`
@@ -9938,10 +9955,25 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             inputs.push(match input {
                 // An argument's `impl IntoIterator<Item = X>`, as iced's
                 // `Column::with_children` takes: a `Vec<X>`, which Rawr's
-                // array is, so the call's `X` is its elements' type.
+                // array is, so the call's `X` is its elements' type. So is
+                // a parameter only this input names, as `FromIterator::
+                // from_iter<T: IntoIterator<Item = A>>(iter: T)` takes, which
+                // the call infers from the `Vec<X>` as it infers an `impl`
+                // (#1988).
                 model::Type::Parameter { index, .. }
-                    if let Some(item) = self.iterated_item(generics, *index) =>
+                    if let Some(item) = self.iterated_item(generics, *index).filter(|_| {
+                        generics.parameters().any(|parameter| {
+                            parameter.index() == *index && parameter.name().starts_with("impl ")
+                        }) || names_only_as_input(signature, *index)
+                    }) =>
                 {
+                    if let Some(parameter) = parameters
+                        .iter_mut()
+                        .find(|parameter| parameter.index() == *index)
+                        .filter(|parameter| !parameter.is_argument_impl())
+                    {
+                        *parameter = parameter.clone().into_argument_impl();
+                    }
                     representability::convert::Type::Sequence {
                         element: Box::new(self.convert_value(item)?),
                         owned: true,
@@ -10248,7 +10280,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     .map(|input| self.convert_closure_input(input))
                     .collect::<Option<Box<[_]>>>()?;
                 let returned = self.convert_value(&returned).ok()?;
-                Some(callable::Call::new(parameter, inputs, returned))
+                Some(
+                    callable::Call::new(parameter, inputs, returned)
+                        .sending(self.send_bound(generics, parameter)),
+                )
             });
             // A closure input that is an associated type of a type
             // parameter, as `Task::sip`'s `S::Item`, has no type until the
@@ -11950,19 +11985,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             == 1
     }
 
-    /// `X` of an argument's `impl IntoIterator<Item = X>` at the parameter
-    /// `index`, when that is its only bound besides `Sized`.
+    /// `X` of an argument's `impl IntoIterator<Item = X>`, or of a type
+    /// parameter `T: IntoIterator<Item = X>`, at the parameter `index`, when
+    /// that is its only bound besides `Sized`.
     fn iterated_item<'g>(
         &self,
         generics: &'g model::Generics,
         index: u32,
     ) -> Option<&'g model::Type> {
-        let parameter = generics
+        generics
             .parameters()
             .find(|parameter| parameter.index() == index)?;
-        if !parameter.name().starts_with("impl ") {
-            return None;
-        }
         let mut item = None;
         for predicate in generics.predicates() {
             match predicate {
@@ -12885,6 +12918,26 @@ pub(crate) fn dropped_parameters(ty: &model::Type, generics: &model::Generics) -
         })
         .then(|| u32::try_from(generics.parameters().len()).ok())
         .flatten()
+}
+
+/// Whether the type parameter `index` is the whole type of exactly one of
+/// `signature`'s inputs and named nowhere else in it, so the argument alone
+/// fills it, as an argument's `impl Trait` is filled (#1988).
+fn names_only_as_input(signature: &model::Signature, index: u32) -> bool {
+    let names = |ty: &model::Type| {
+        let mut found = BTreeSet::new();
+        type_parameter_indices(ty, &mut found);
+        found.contains(&index) || projects_parameter(ty)
+    };
+    let mut whole = 0_usize;
+    for input in signature.inputs() {
+        match input {
+            model::Type::Parameter { index: named, .. } if *named == index => whole += 1,
+            input if names(input) => return false,
+            _ => {}
+        }
+    }
+    whole == 1 && !names(signature.output())
 }
 
 /// The indices of the type parameters `ty` names.

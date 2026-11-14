@@ -54,14 +54,19 @@ pub trait MaybeSend {}
 #[cfg(not(feature = "sync"))]
 impl<T> MaybeSend for T {}
 
+/// The native values a future's bodies hold, in an arena that goes with it
+/// to the threads that poll it (`island::arrive`).
+type Away = Box<dyn std::any::Any + Send>;
+
 /// A future as Rawr code holds it.
 #[derive(Clone)]
 pub struct Future(Arc<Mutex<Option<Kind>>>);
 
 enum Kind {
-    /// An async body's step function, not yet started, and the program
-    /// that made it, as any thread may call it.
-    Script(item::Value, Option<Program>),
+    /// An async body's step function, not yet started, the program that
+    /// made it, as any thread may call it, and the arena it carries the
+    /// native values it captured in ([`Future::carry`]).
+    Script(item::Value, Option<Program>, Option<Away>),
     /// A native future, made when first polled.
     Native(Make),
     /// Futures polled together; their outputs in order, as a tuple.
@@ -97,7 +102,7 @@ impl Future {
     /// with `()` it starts, and called with a [`Frame`] it goes on.
     #[must_use]
     pub fn script(step: item::Value) -> Self {
-        Self::of(Kind::Script(step, here()))
+        Self::of(Kind::Script(step, here(), None))
     }
 
     /// A native future that `make` makes on the thread that first polls it.
@@ -127,9 +132,34 @@ impl Future {
     /// that runs again panics, as a moved future can't be polled twice.
     #[must_use]
     pub fn into_script(self) -> Script {
+        let away = match &mut *self.0.lock().unwrap_or_else(PoisonError::into_inner) {
+            Some(Kind::Script(_, _, away)) => away.take(),
+            _ => None,
+        };
         Script {
             poller: Poller::from(&self),
-            away: None,
+            away,
+        }
+    }
+
+    /// Give `carry` the step function of this future's body, whose
+    /// captures it may change, to carry the native values they hold on
+    /// this thread to the threads that poll it, in the arena it gives
+    /// back, as a tokio worker polls gallery's `async move { .. bytes ..
+    /// }` (#1985). Where an owner serves the steps, they run on it, where
+    /// the values are, and nothing is carried.
+    pub fn carry(&self, carry: impl FnOnce(&mut Dynamic) -> Option<Away>) {
+        if served() {
+            return;
+        }
+        let mut kind = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(Kind::Script(step, _, away @ None)) = &mut *kind else {
+            return;
+        };
+        let mut value = Dynamic::from(step.clone());
+        *away = carry(&mut value);
+        if let Ok(rebound) = value.try_cast_result::<item::Value>() {
+            *step = rebound;
         }
     }
 
@@ -253,8 +283,10 @@ impl Script {
     /// `Task::perform` future, that is inside the arena the script takes
     /// from poll to poll, so the native values a body holds across an
     /// `.await` are there on whichever thread polls it next (#1949).
+    /// A script that carries the native values its body captured polls in
+    /// their arena on the owner thread too (`Future::carry`).
     fn polled<R>(&mut self, work: impl FnOnce(&mut Poller) -> R) -> R {
-        if owns() || served() {
+        if (owns() || served()) && self.away.is_none() {
             return work(&mut self.poller);
         }
         #[cfg(feature = "rust-import")]
@@ -322,7 +354,7 @@ impl From<&Future> for Poller {
             .take();
         match kind {
             None => Self::Failed(Some(failure("rawr: this future was already awaited"))),
-            Some(Kind::Script(step, program)) => {
+            Some(Kind::Script(step, program, _)) => {
                 Self::Script(Box::new(Stepper::new(step, program)))
             }
             Some(Kind::Native(make)) => Self::Native {

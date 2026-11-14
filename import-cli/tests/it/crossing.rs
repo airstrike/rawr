@@ -2754,6 +2754,19 @@ fn a_script_impl_gives_native_code_a_reference_to_a_crate_value_it_holds() {
     assert_eq!(rawr, "lent dusk true\nagain noon true\nowned dawn true");
 }
 
+/// #1987, #1988, #1985: what iced's tour and gallery hand iced and tokio. A
+/// crate's `impl Into<String>` takes a unit enum by the program's own
+/// `impl From<Language> for String`; `FromIterator::from_iter<T:
+/// IntoIterator<Item = Span>>` takes an array of spans; and a `Send`
+/// closure run on another thread reads the crate value it captured. The
+/// output is `cargo run`'s.
+#[test]
+fn a_crate_takes_a_program_conversion_a_collected_line_and_a_closure_off_thread() {
+    let (rawr, cargo) = both_printed("handed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[Rust] [Elm]\ntrunk\n12");
+}
+
 /// #856: pushing to the items while a wrapped result that borrows them
 /// lives is rustc's E0502, which stops the program before anything runs,
 /// with cargo's report alone.

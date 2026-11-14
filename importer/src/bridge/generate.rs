@@ -133,6 +133,9 @@ pub static RELEASES: std::sync::Mutex<std::collections::BTreeMap<[u8; 32], Vec<(
 pub static PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
+    /// The arena each [`arrive`] on this thread took the place of, if
+    /// any, which its [`depart`] gives back.
+    pub static VISITED: RefCell<Vec<Option<Arena>>> = const { RefCell::new(Vec::new()) };
     /// Whether this thread's [`REHOMES`], [`RELENDS`] or [`UNLENDS`] may
     /// hold an entry.
     pub static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1421,10 +1424,8 @@ pub struct CallArena(pub Option<[u8; 32]>);
 
 #[allow(dead_code)]
 impl CallArena {
-    pub fn enter() -> Self {
-        if arena_access(|_| ()).is_some() {
-            return Self(None);
-        }
+    /// A new call arena's epoch, live from now on ([`CALL_EPOCHS`]).
+    pub fn epoch() -> [u8; 32] {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut epoch = [0xca; 32];
         epoch[..8].copy_from_slice(
@@ -1432,6 +1433,18 @@ impl CallArena {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 .to_le_bytes(),
         );
+        CALL_EPOCHS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(epoch);
+        epoch
+    }
+
+    pub fn enter() -> Self {
+        if arena_access(|_| ()).is_some() {
+            return Self(None);
+        }
+        let epoch = Self::epoch();
         let installed = NATIVE_ARENA.with(|cell| match cell.try_borrow_mut() {
             Ok(mut arena) if arena.is_none() => {
                 *arena = Some(Arena { call: true, ..Arena::new(epoch) });
@@ -1440,12 +1453,12 @@ impl CallArena {
             _ => false,
         });
         if !installed {
+            CALL_EPOCHS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|live| *live != epoch);
             return Self(None);
         }
-        CALL_EPOCHS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(epoch);
         Self(Some(epoch))
     }
 }
@@ -1517,7 +1530,17 @@ impl Drop for Departed {
 /// its own when it holds none, where the thread has no arena: `false`,
 /// with `departed` left, when it has one, as a call running here lends.
 pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
+    // The arena a future or a closure carries its native values in (#1985)
+    // takes the place of the one this thread has, which `depart` gives
+    // back, as on the owner thread.
+    let home = departed
+        .as_ref()
+        .filter(|away| away.is::<Departed>())
+        .and_then(|_| NATIVE_ARENA.try_with(|cell| cell.try_borrow_mut().ok().map(|mut arena| arena.take())).ok().flatten());
     if arena_access(|_| ()).is_some() {
+        if let Some(home) = home {
+            NATIVE_ARENA.with(|cell| *cell.borrow_mut() = home);
+        }
         return false;
     }
     let Some(mut away) = departed.take().and_then(|away| away.downcast::<Departed>().ok()) else {
@@ -1528,10 +1551,15 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
         // The arena outlives the guard: `depart` takes it, and `Departed`
         // frees its epoch.
         std::mem::forget(guard);
-        return NATIVE_ARENA.with(|cell| {
+        let arrived = NATIVE_ARENA.with(|cell| {
             cell.borrow().as_ref().is_some_and(|arena| arena.epoch == epoch)
         });
+        if arrived {
+            VISITED.with_borrow_mut(|visited| visited.push(None));
+        }
+        return arrived;
     };
+    VISITED.with_borrow_mut(|visited| visited.push(home.flatten()));
     away.arrived = true;
     let mut arena = Arena { call: true, ..Arena::new(away.epoch) };
     arena.free = std::mem::take(&mut away.free);
@@ -1566,6 +1594,10 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
 /// `.await` where it must be `Send` (E0277).
 pub fn depart() -> Option<Box<dyn Any + Send>> {
     let mut arena = NATIVE_ARENA.with(|cell| cell.borrow_mut().take())?;
+    // The arena `arrive` took the place of, back in its cell.
+    if let Some(home) = VISITED.with_borrow_mut(Vec::pop).flatten() {
+        NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(home));
+    }
     arena.release_dropped();
     let generations = arena.slots.iter().map(|slot| slot.generation).collect();
     let mut moved = Vec::new();
@@ -1604,6 +1636,91 @@ pub fn depart() -> Option<Box<dyn Any + Send>> {
         moved,
         arrived: false,
     }))
+}
+
+/// The native values the script value `value` captured in `arena`, each
+/// of a `Send` type, out of it and into an arena of their own whose
+/// handles the captures hold from now on: what a future or a closure that
+/// native code may run on another thread carries there (#1985), as
+/// gallery's `async move { .. bytes .. }` that a tokio worker polls. Each
+/// poll or call arrives in it (`arrive`). `None` when the captures hold
+/// none.
+#[allow(dead_code)]
+pub fn carry(value: &mut Dynamic, arena: &mut Arena) -> Option<Box<dyn Any + Send>> {
+    let home = arena.epoch;
+    let mut moved = Vec::new();
+    __rawr_internal::crossing::rebind_captures(value, |capture| {
+        moved.extend(arena.move_out(capture));
+    });
+    if moved.is_empty() {
+        return None;
+    }
+    let epoch = CallArena::epoch();
+    let mut given = Vec::with_capacity(moved.len());
+    for (slot, value) in (0_u32..).zip(&mut moved) {
+        let release = Release { epoch, slot, generation: 1 };
+        given.push((
+            (value.slot, value.generation),
+            NativeHandle { epoch, slot, generation: 1, release: Some(std::sync::Arc::new(release)) },
+        ));
+        value.slot = slot;
+        value.generation = 1;
+    }
+    let mut released = Vec::new();
+    __rawr_internal::crossing::rebind_captures(value, |capture| {
+        capture.deep_scan(|held| {
+            let Some(mut handle) = held.write_lock::<NativeHandle>() else {
+                return;
+            };
+            if handle.epoch != home {
+                return;
+            }
+            let key = (handle.slot, handle.generation);
+            if let Some((_, new)) = given.iter().find(|(old, _)| *old == key) {
+                released.push(std::mem::replace(&mut *handle, new.clone()));
+            }
+        });
+    });
+    // The handles on the old slots go once the arena is free.
+    drop(given);
+    drop(released);
+    let generations = vec![1; moved.len()];
+    Some(Box::new(Departed {
+        epoch,
+        generations,
+        free: Vec::new(),
+        moved,
+        arrived: false,
+    }))
+}
+
+/// What a script closure native code may call on another thread carries
+/// ([`carry`]), as tokio's `spawn_blocking` calls gallery's `move ||
+/// .. bytes.as_slice()`.
+#[allow(dead_code)]
+pub struct Carried(std::sync::Mutex<Option<Box<dyn Any + Send>>>);
+
+#[allow(dead_code)]
+impl Carried {
+    /// The native values `value`'s captures hold in `arena`, carried.
+    pub fn carry(value: &mut Dynamic, arena: &mut Arena) -> Self {
+        Self(std::sync::Mutex::new(carry(value, arena)))
+    }
+
+    /// `call` in the arena the closure carries, wherever it runs.
+    pub fn around<R>(&self, call: impl FnOnce() -> R) -> R {
+        let mut carried = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if carried.is_none() {
+            drop(carried);
+            return call();
+        }
+        let arrived = arrive(&mut carried);
+        let output = call();
+        if arrived {
+            *carried = depart();
+        }
+        output
+    }
 }
 
 /// `call` with this thread's arena: the one in its cell, or else the one a
@@ -3258,9 +3375,13 @@ pub fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Resul
         let mut values = [&mut value];
         value = table.future(&mut Arguments { values: &mut values, arena: arguments.arena })?;
     }
-    value
+    let future = value
         .try_cast_result::<__rawr_internal::future::Future>()
-        .map_err(|_| Error::TypeMismatch)
+        .map_err(|_| Error::TypeMismatch)?;
+    // Native code may poll it on another thread: the native values its body
+    // captured go with it (`carry`).
+    future.carry(|step| carry(step, arguments.arena));
+    Ok(future)
 }
 
 /// Check script values that came back from an erased generic against the
@@ -20441,6 +20562,7 @@ fn render_callable_closure(
         Some(pins) => regional(call, signature, substitutions)?.map(|family| (pins, family)),
         None => None,
     };
+    let sent = call.sent() && regional.is_none();
     let by_value = |ty: &convert::Type| {
         !matches!(ty, convert::Type::Nominal { .. })
             || is_value(ty)
@@ -20706,8 +20828,19 @@ fn render_callable_closure(
         Some((pins, _)) => (format!("\n        let pins = {pins};"), String::new()),
         None => (String::new(), format!(" -> {rust}")),
     };
+    // A closure native code may call on another thread carries the native
+    // values its captures hold to the thread it runs on (`Carried`).
+    let (source, body) = if sent {
+        (
+            format!("{{ let mut closure = {source}; carried = Carried::carry(&mut closure, arguments.arena); closure }}"),
+            format!("carried.around(|| {{\n            {body}\n            }})"),
+        )
+    } else {
+        (source.to_owned(), body)
+    };
+    let carried = if sent { "\n        let carried;" } else { "" };
     Ok(format!(
-        "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}{pinned}\n        move |{}|{returns} {{\n            {body}\n        }}\n    }}",
+        "{{{carried}\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}{pinned}\n        move |{}|{returns} {{\n            {body}\n        }}\n    }}",
         parameters.join(", "),
     ))
 }

@@ -43,6 +43,11 @@ pub struct Call {
     /// inputs, as `for<'a> Fn(&'a S) -> Element<'a, M>`'s does.
     #[serde(default)]
     borrows: bool,
+    /// The callable is bound `Send`, as tokio's `spawn_blocking(f: F)`'s
+    /// `F: FnOnce() -> R + Send + 'static` is: native code may call it on
+    /// another thread.
+    #[serde(default)]
+    sent: bool,
 }
 
 impl Call {
@@ -56,12 +61,25 @@ impl Call {
             inputs,
             output,
             borrows: false,
+            sent: false,
         }
     }
 
     pub(crate) const fn borrowing(mut self, borrows: bool) -> Self {
         self.borrows = borrows;
         self
+    }
+
+    pub(crate) const fn sending(mut self, sent: bool) -> Self {
+        self.sent = sent;
+        self
+    }
+
+    /// Whether the callable is bound `Send`, so native code may call it on
+    /// another thread.
+    #[must_use]
+    pub const fn sent(&self) -> bool {
+        self.sent
     }
 
     /// Whether the output borrows at the lifetime of the inputs.
