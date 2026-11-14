@@ -22,8 +22,8 @@ use std::time::Duration;
 use super::{Button, Error, Gesture, Key, Modifiers, Point, Sent, Unit};
 use crate::inspect::screenshot;
 
-type Id = *mut c_void;
-type Sel = *const c_void;
+pub(in crate::inspect) type Id = *mut c_void;
+pub(in crate::inspect) type Sel = *const c_void;
 
 /// The name the agent cursor's layer goes by among the view's layers.
 const CURSOR: &CStr = c"rawr-agent-cursor";
@@ -93,15 +93,16 @@ enum Motion {
     Dragged,
 }
 
-/// The functions an input calls, found in the process.
-struct Runtime {
-    send: unsafe extern "C" fn(),
+/// The functions an input calls, found in the process. rawr's menu bar
+/// items call them too (#1990).
+pub(in crate::inspect) struct Runtime {
+    pub(in crate::inspect) send: unsafe extern "C" fn(),
     #[cfg(target_arch = "x86_64")]
     send_rect: unsafe extern "C" fn(),
     class: unsafe extern "C" fn(*const c_char) -> Id,
     selector: unsafe extern "C" fn(*const c_char) -> Sel,
-    push: unsafe extern "C" fn() -> *mut c_void,
-    pop: unsafe extern "C" fn(*mut c_void),
+    pub(in crate::inspect) push: unsafe extern "C" fn() -> *mut c_void,
+    pub(in crate::inspect) pop: unsafe extern "C" fn(*mut c_void),
     release: unsafe extern "C" fn(*const c_void),
     scroll: unsafe extern "C" fn(*const c_void, u32, u32, i32, i32, i32) -> *mut c_void,
     mouse: unsafe extern "C" fn(*const c_void, u32, Vector, u32) -> *mut c_void,
@@ -145,8 +146,8 @@ const LOADED: *mut c_void = -2_isize as *mut c_void;
 /// for a result of type `$result`.
 macro_rules! msg {
     ($runtime:expr, $result:ty; $receiver:expr, $selector:literal $(, $argument:expr => $kind:ty)* $(,)?) => {{
-        let runtime: &Runtime = $runtime;
-        let receiver: Id = $receiver;
+        let runtime: &$crate::inspect::input::appkit::Runtime = $runtime;
+        let receiver: $crate::inspect::input::appkit::Id = $receiver;
         let selector = runtime.selector(concat!($selector, "\0"));
         // SAFETY: `objc_msgSend` calls the receiver's method for the
         // selector with the arguments as they are passed, so called through
@@ -156,17 +157,22 @@ macro_rules! msg {
         // An argument may be a `msg!` of its own.
         #[allow(unused_unsafe)]
         let result = unsafe {
-            let function: unsafe extern "C" fn(Id, Sel $(, $kind)*) -> $result =
+            let function: unsafe extern "C" fn(
+                $crate::inspect::input::appkit::Id,
+                $crate::inspect::input::appkit::Sel
+                $(, $kind)*
+            ) -> $result =
                 std::mem::transmute(runtime.send);
             function(receiver, selector $(, $argument)*)
         };
         result
     }};
 }
+pub(in crate::inspect) use msg;
 
 impl Runtime {
     /// The functions, once AppKit is loaded: `None` before.
-    fn get() -> Option<&'static Self> {
+    pub(in crate::inspect) fn get() -> Option<&'static Self> {
         static RUNTIME: OnceLock<Runtime> = OnceLock::new();
         if let Some(runtime) = RUNTIME.get() {
             return Some(runtime);
@@ -222,18 +228,18 @@ impl Runtime {
         }
     }
 
-    fn selector(&self, name: &'static str) -> Sel {
+    pub(in crate::inspect) fn selector(&self, name: &'static str) -> Sel {
         // SAFETY: `name` ends in NUL, as `msg!` writes it.
         unsafe { (self.selector)(name.as_ptr().cast()) }
     }
 
-    fn class(&self, name: &CStr) -> Id {
+    pub(in crate::inspect) fn class(&self, name: &CStr) -> Id {
         // SAFETY: `objc_getClass` reads a NUL-terminated name.
         unsafe { (self.class)(name.as_ptr()) }
     }
 
     /// The application, or nil before the program made one.
-    fn application(&self) -> Id {
+    pub(in crate::inspect) fn application(&self) -> Id {
         let variable = symbol(c"NSApp").cast::<Id>();
         if variable.is_null() {
             return std::ptr::null_mut();
@@ -270,12 +276,12 @@ impl Runtime {
         }
     }
 
-    fn string(&self, text: &str) -> Id {
+    pub(in crate::inspect) fn string(&self, text: &str) -> Id {
         let text = CString::new(text.replace('\0', "")).unwrap_or_default();
         msg!(self, Id; self.class(c"NSString"), "stringWithUTF8String:", text.as_ptr() => *const c_char)
     }
 
-    fn text(&self, string: Id) -> String {
+    pub(in crate::inspect) fn text(&self, string: Id) -> String {
         let characters = msg!(self, *const c_char; string, "UTF8String");
         if characters.is_null() {
             return String::new();
@@ -461,7 +467,7 @@ impl Modifiers {
 
 /// Run `work` on the main thread, where AppKit's views take events, and
 /// wait for it, looking at each [`POLL`] whether `interrupted` gives it up.
-fn main<T: Send + 'static>(
+pub(in crate::inspect) fn main<T: Send + 'static>(
     interrupted: &dyn Fn() -> bool,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Error> {
@@ -568,7 +574,7 @@ fn deliver(runtime: &Runtime, event: &Event, title: Option<&str>) -> Option<Sent
 
 /// The window titled `title`, or the front one: a visible window with a
 /// view.
-fn window(runtime: &Runtime, title: Option<&str>) -> Option<Id> {
+pub(in crate::inspect) fn window(runtime: &Runtime, title: Option<&str>) -> Option<Id> {
     windows(runtime).into_iter().find(|&window| {
         title.is_none_or(|title| runtime.text(msg!(runtime, Id; window, "title")) == title)
     })
@@ -1354,7 +1360,7 @@ unsafe extern "C" fn occlusion_state(window: Id, selector: Sel) -> usize {
 /// # Safety
 ///
 /// `F` is the function's C signature.
-unsafe fn function<F: Copy>(name: &CStr) -> Option<F> {
+pub(in crate::inspect) unsafe fn function<F: Copy>(name: &CStr) -> Option<F> {
     const {
         assert!(std::mem::size_of::<F>() == std::mem::size_of::<*mut c_void>());
     }
@@ -1364,7 +1370,7 @@ unsafe fn function<F: Copy>(name: &CStr) -> Option<F> {
     (!found.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, F>(&found) })
 }
 
-fn symbol(name: &CStr) -> *mut c_void {
+pub(in crate::inspect) fn symbol(name: &CStr) -> *mut c_void {
     // SAFETY: `dlsym` reads a NUL-terminated name and looks it up in every
     // image the process loaded.
     unsafe { dlsym(LOADED, name.as_ptr()) }

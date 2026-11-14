@@ -119,8 +119,9 @@ impl Shot {
     }
 }
 
-/// Capture the window titled `title`, or the front one, into `file`.
-fn capture(
+/// Capture the window titled `title`, or the front one, into `file`, for
+/// the socket or for rawr's Take Screenshot item (#1990).
+pub(super) fn capture(
     title: Option<&str>,
     file: &Path,
     interrupted: &dyn Fn() -> bool,

@@ -52,6 +52,9 @@
 //! through its own renderer, written as a PNG to `file` (see
 //! [`screenshot`]); `{"error": "paused", ..}` while it is paused.
 //!
+//! And it reads the program's menu bar, or chooses one of rawr's own
+//! items in it, with `{"op": "menu"}` (#1990, see [`menu`]).
+//!
 //! Under `rawr mcp`, a pause and its end are also told as `paused` (with
 //! the file, line, function and reason) and `resumed` events in the file
 //! `RAWR_MCP_DEBUG_EVENTS` names, so `wait` and `status` say so (#535).
@@ -65,6 +68,7 @@
 #![cfg(feature = "debugging")]
 
 mod input;
+pub mod menu;
 mod screenshot;
 mod stops;
 
@@ -714,6 +718,8 @@ impl Shared {
         let answer = match request.get("op").and_then(Value::as_str) {
             Some("input") => self.input(&request, &gone),
             Some("screenshot") => self.screenshot(&request, &gone),
+            Some("menu") => menu::answer(&request, &gone)
+                .unwrap_or_else(|| json!({ "error": "the tool went away" })),
             Some("break") => self.set(&request),
             Some("clear") => self.clear(&request),
             Some("continue") => self.resume(Resume::Continue, &gone),

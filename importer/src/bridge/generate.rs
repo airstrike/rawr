@@ -6278,6 +6278,10 @@ fn admitted() {
 pub(super) fn main() {
     __rawr_internal::process::unblock_signals();
     __rawr_internal::hot::publish();
+    // A program `rawr run` runs shows rawr's menus beside its own (#1990).
+    if std::env::var_os("RAWR_RUNNER_LIFECYCLE").is_some_and(|lifecycle| lifecycle == "run") {
+        __rawr_internal::inspect::menu::install();
+    }
     owner::main()
 }
 

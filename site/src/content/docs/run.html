@@ -254,6 +254,18 @@ sum 5050</span></div>
 <p>When the program ends and stdin is a terminal, <code>rawr run</code> waits. The next save runs the program again, with the same arguments. Ctrl-C ends the wait. When stdin isn&rsquo;t a terminal, <code>rawr run</code> ends with the program and gives its exit status.</p>
 <p>With rawr-import, a crate whose native code didn&rsquo;t change reuses its earlier build.</p>
 
+<h2 id="menu">The menu bar</h2>
+<p>A window program that <code>rawr run</code> runs on macOS gets a <code>rawr</code> menu in the menu bar. The menu comes after the program&rsquo;s own menus. It never replaces them.</p>
+<table class="wide">
+  <tr><th>Item</th><th>What it does</th></tr>
+  <tr><td>Restart</td><td>Starts the program again, as a save that needs a restart does.</td></tr>
+  <tr><td>Take Screenshot</td><td>Saves a PNG of the program&rsquo;s window in a <code>screenshots</code> directory under <code>target/rawr</code>. It is the same capture the <a href="/docs/agents">agent tools&rsquo;</a> <code>screenshot</code> takes. One line on stderr names the file.</td></tr>
+  <tr><td>About rawr</td><td>Shows the version of rawr that runs the program.</td></tr>
+  <tr><td>Exit</td><td>Ends the run, as the program ending with status 0 does.</td></tr>
+</table>
+<p>The program keeps its own name. The menu bar, the Dock and the program&rsquo;s own app menu show its binary&rsquo;s name, as under <code>cargo run</code>. The program&rsquo;s window keeps the title the program gives it.</p>
+<p>Under <code>cargo run</code> the program has no <code>rawr</code> menu. Other systems have no <code>rawr</code> menu yet.</p>
+
 <h2 id="release">Release builds</h2>
 <p><code>cargo build --release</code> compiles the marked files natively too. No interpreter ships with the build.</p>
 <p>The <code>#[preview]</code> attribute comes from the <code>rawr-macros</code> crate. Under Cargo it leaves the item as written.</p>
