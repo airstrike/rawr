@@ -27,6 +27,7 @@ pub mod paired;
 pub mod pixels;
 pub mod plane;
 pub mod pointers;
+pub mod rack;
 pub mod results;
 pub mod selector;
 pub mod sequences;

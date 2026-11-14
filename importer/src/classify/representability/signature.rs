@@ -200,36 +200,182 @@ pub struct Opaque {
     /// #849).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     traits: Box<[super::convert::Type]>,
-    /// Each method of its one trait, when the value held through the proxy
-    /// implements the trait by calling the method of the value inside
-    /// (#856), as a crate call that takes the value by value needs.
+    /// How the value held through the proxy implements its one trait and
+    /// each of the trait's supertraits, by calling the methods of the value
+    /// inside (#856), as a crate call that takes the value by value needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    forwards: Option<Box<[Forward]>>,
+    forwards: Option<Forwarding>,
 }
 
-/// One method of an opaque type's trait, which the value held through the
-/// proxy forwards to the value inside (`Opaque::forwards`).
+/// The impls of a value held through the proxy (`Opaque::forwards`): the
+/// opaque type's trait and each of its supertraits, as iced's `Widget<
+/// Message, Theme, Renderer>` has `Meta`, each with every method a value
+/// of the trait has.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Forwarding {
+    /// The opaque type's trait first, at the opaque type's arguments, then
+    /// each supertrait, at arguments written in the first's.
+    traits: Box<[Implemented]>,
+    methods: Box<[Forward]>,
+}
+
+/// One trait a value held through the proxy implements (`Forwarding`).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Implemented {
+    definition: [u8; 32],
+    /// Its arguments after `Self`, each written in the arguments of the
+    /// opaque type's trait (`Written::Parameter`).
+    arguments: Box<[Written]>,
+    /// The crate implements it for every type its bounds admit, as
+    /// iced_widget's `Widget` is for every `core::Widget`: the value has it
+    /// by that impl, and none of its methods is forwarded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    blanket: bool,
+}
+
+/// One method a value held through the proxy forwards to the value inside
+/// (`Forwarding`), with its signature as the trait writes it, lifetimes
+/// and all, as `overlay<'a>(&'a mut self, tree: &'a mut Tree, ..) ->
+/// Vec<overlay::Element<'a, ..>>` borrows its receiver for its output.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Forward {
+    /// The trait that declares it, by its index in `Forwarding::traits`.
+    owner: u32,
     name: Box<str>,
-    mutable: bool,
-    inputs: Box<[super::convert::Type]>,
-    output: super::convert::Type,
+    receiver: Receiver,
+    /// How many lifetimes the method names (`Lifetime::Named`).
+    lifetimes: u32,
+    inputs: Box<[Written]>,
+    output: Written,
+}
+
+/// How a forwarded method takes `self`: `&self` or `&mut self`, at a
+/// lifetime.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Receiver {
+    pub(crate) mutable: bool,
+    pub(crate) lifetime: Lifetime,
+}
+
+/// A type in a forwarded method's signature (`Forward`), as Rust writes
+/// it there.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Written {
+    /// A type that names no lifetime and no parameter, as Rawr reads it.
+    Converted(super::convert::Type),
+    /// A primitive, as `str` behind a reference.
+    Primitive(Box<str>),
+    /// The type argument of the opaque type's trait at this index.
+    Parameter(u32),
+    Reference {
+        lifetime: Lifetime,
+        mutable: bool,
+        ty: Box<Written>,
+    },
+    /// A crate's type at its lifetimes and type arguments, as `Layout<'a>`.
+    Nominal {
+        definition: [u8; 32],
+        lifetimes: Box<[Lifetime]>,
+        arguments: Box<[Written]>,
+    },
+    /// core's or alloc's type by its path, as `::std::vec::Vec`.
+    Std {
+        path: Box<str>,
+        arguments: Box<[Written]>,
+    },
+    /// A trait object of a crate's trait, as `dyn Operation + 'a`.
+    Object {
+        definition: [u8; 32],
+        arguments: Box<[Written]>,
+        lifetime: Lifetime,
+    },
+    Tuple(Box<[Written]>),
+    Slice(Box<Written>),
+}
+
+/// A lifetime in a forwarded method's signature (`Written`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Lifetime {
+    Static,
+    /// One Rust infers, written `'_`.
+    Elided,
+    /// The method's own lifetime at this index.
+    Named(u32),
+}
+
+impl Forwarding {
+    pub(crate) const fn new(traits: Box<[Implemented]>, methods: Box<[Forward]>) -> Self {
+        Self { traits, methods }
+    }
+
+    /// The opaque type's trait, then each supertrait.
+    #[must_use]
+    pub const fn traits(&self) -> &[Implemented] {
+        &self.traits
+    }
+
+    /// Each method of each trait.
+    #[must_use]
+    pub const fn methods(&self) -> &[Forward] {
+        &self.methods
+    }
+}
+
+impl Implemented {
+    pub(crate) const fn new(
+        definition: [u8; 32],
+        arguments: Box<[Written]>,
+        blanket: bool,
+    ) -> Self {
+        Self {
+            definition,
+            arguments,
+            blanket,
+        }
+    }
+
+    /// Whether the crate implements it for every type its bounds admit.
+    #[must_use]
+    pub const fn blanket(&self) -> bool {
+        self.blanket
+    }
+
+    /// The trait, by its definition identity.
+    #[must_use]
+    pub const fn definition(&self) -> &[u8; 32] {
+        &self.definition
+    }
+
+    /// Its arguments after `Self`.
+    #[must_use]
+    pub const fn arguments(&self) -> &[Written] {
+        &self.arguments
+    }
 }
 
 impl Forward {
     pub(crate) const fn new(
+        owner: u32,
         name: Box<str>,
-        mutable: bool,
-        inputs: Box<[super::convert::Type]>,
-        output: super::convert::Type,
+        receiver: Receiver,
+        lifetimes: u32,
+        inputs: Box<[Written]>,
+        output: Written,
     ) -> Self {
         Self {
+            owner,
             name,
-            mutable,
+            receiver,
+            lifetimes,
             inputs,
             output,
         }
+    }
+
+    /// The trait that declares it, by its index in `Forwarding::traits`.
+    #[must_use]
+    pub const fn owner(&self) -> u32 {
+        self.owner
     }
 
     /// The method's name.
@@ -238,22 +384,42 @@ impl Forward {
         &self.name
     }
 
-    /// Whether it takes `&mut self`, else `&self`.
+    /// How it takes `self`.
     #[must_use]
-    pub const fn mutable(&self) -> bool {
-        self.mutable
+    pub const fn receiver(&self) -> Receiver {
+        self.receiver
+    }
+
+    /// How many lifetimes the method names.
+    #[must_use]
+    pub const fn lifetimes(&self) -> u32 {
+        self.lifetimes
     }
 
     /// The types it takes after its receiver.
     #[must_use]
-    pub const fn inputs(&self) -> &[super::convert::Type] {
+    pub const fn inputs(&self) -> &[Written] {
         &self.inputs
     }
 
     /// The type it gives.
     #[must_use]
-    pub const fn output(&self) -> &super::convert::Type {
+    pub const fn output(&self) -> &Written {
         &self.output
+    }
+}
+
+impl Receiver {
+    /// Whether it is `&mut self`, else `&self`.
+    #[must_use]
+    pub const fn mutable(self) -> bool {
+        self.mutable
+    }
+
+    /// Its lifetime.
+    #[must_use]
+    pub const fn lifetime(self) -> Lifetime {
+        self.lifetime
     }
 }
 
@@ -262,7 +428,7 @@ impl Opaque {
         definition: [u8; 32],
         associated: Box<[(Associated, u32)]>,
         traits: Box<[super::convert::Type]>,
-        forwards: Option<Box<[Forward]>>,
+        forwards: Option<Forwarding>,
     ) -> Self {
         Self {
             definition,
@@ -272,11 +438,11 @@ impl Opaque {
         }
     }
 
-    /// Each method of its one trait the value held through the proxy
-    /// forwards, when it can implement the trait so.
+    /// How the value held through the proxy implements its one trait,
+    /// when it can.
     #[must_use]
-    pub fn forwards(&self) -> Option<&[Forward]> {
-        self.forwards.as_deref()
+    pub const fn forwards(&self) -> Option<&Forwarding> {
+        self.forwards.as_ref()
     }
 
     /// Its traits besides auto traits, at the bound's arguments after
