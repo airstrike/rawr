@@ -27,7 +27,7 @@ const REQUEST_SCHEMA: u32 = 12;
 /// keep their own versions and stay (#1766). An installed rawr's request
 /// key also carries the rawr sources' digest (#1712), so there this
 /// version matters for a development checkout and the store's eviction.
-const GENERATOR_VERSION: u32 = 342;
+const GENERATOR_VERSION: u32 = 346;
 
 /// Exact pre-build cache lookup identity.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

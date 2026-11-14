@@ -654,6 +654,12 @@ pub fn counted(value: Dynamic, link: Link) -> Dynamic {
     crate::resolve::lower_nominal::counted::native(value, link)
 }
 
+/// A new rawr `Rc` or `Arc` of `value`, the value Rust's own pointer to a
+/// value that crosses by value held, as an `Arc<String>` a crate gives.
+pub fn shared(value: Dynamic) -> Dynamic {
+    crate::resolve::lower_nominal::counted::new(value)
+}
+
 /// The value the rawr `Rc` or `Arc` `pointer` points to, rawr's strong
 /// count of it, and whether `pointer` is rawr's only pointer to it, strong
 /// or weak.

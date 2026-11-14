@@ -18790,6 +18790,24 @@ fn render_function_callable(plan: &Plan, output: &mut Vec<u8>) -> Result<(), req
     if !constants.is_empty() || !functions.is_empty() || !mappers.is_empty() {
         return Err(request::drift("generated nested static function item"));
     }
+    // A function that takes a future, where the callable's input is a
+    // script future a crate's `T` carried as a `rawr::Value`, as
+    // `.then(Task::future)` takes what `window::run` gave back (#551): a
+    // closure that polls the input as the script future.
+    let futures = signature.inputs().iter().any(is_future);
+    if futures {
+        output.write_all(b"|").map_err(request::unwritable)?;
+        for (position, ty) in signature.inputs().iter().enumerate() {
+            write!(output, "argument_{position}").map_err(request::unwritable)?;
+            if is_future(ty) {
+                output
+                    .write_all(b": __rawr_internal::Value")
+                    .map_err(request::unwritable)?;
+            }
+            output.write_all(b", ").map_err(request::unwritable)?;
+        }
+        output.write_all(b"| ").map_err(request::unwritable)?;
+    }
     render_function_path(
         plan,
         signature,
@@ -18805,7 +18823,50 @@ fn render_function_callable(plan: &Plan, output: &mut Vec<u8>) -> Result<(), req
         constants,
         *container_parameters,
         output,
-    )
+    )?;
+    if futures {
+        output.write_all(b"(").map_err(request::unwritable)?;
+        for (position, ty) in signature.inputs().iter().enumerate() {
+            if position != 0 {
+                output.write_all(b", ").map_err(request::unwritable)?;
+            }
+            if is_future(ty) {
+                render_held_future(
+                    position,
+                    &substituted(ty, signature, substitutions)?,
+                    output,
+                )?;
+            } else {
+                write!(output, "argument_{position}").map_err(request::unwritable)?;
+            }
+        }
+        output.write_all(b")").map_err(request::unwritable)?;
+    }
+    Ok(())
+}
+
+/// The std future of the script future a `rawr::Value` holds at
+/// `argument_{position}`, of a future input `ty`: one of Rawr values, or
+/// one whose output becomes the native type `ty` names on the owner
+/// thread, as `take_future` makes it (D683.5).
+fn render_held_future(
+    position: usize,
+    ty: &convert::Type,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let held = format!("__rawr_internal::future::Future::held(argument_{position})");
+    match future_output(ty) {
+        Some(element) if !is_value(element) && *element != convert::Type::Inferred => {
+            let mut converted = String::new();
+            render_from_dynamic(element, "value", 0, &mut converted)?;
+            write!(
+                output,
+                "{held}.into_native(|value: Dynamic| with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}).unwrap_or_else(|error| panic!(\"rawr: an async block gave back a value native code can't take: {{error:?}}\")))"
+            )
+            .map_err(request::unwritable)
+        }
+        _ => write!(output, "{held}.into_script()").map_err(request::unwritable),
+    }
 }
 
 fn render_take_profile(
@@ -21011,6 +21072,20 @@ fn render_from_dynamic(
                 "{{ let value = {value}; value.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{entry}| {converted}).collect::<Result<{rust}, Error>>()) }}"
             )
         }
+        // Rawr's `Rc` or `Arc` of a value Rust holds as its own, as the
+        // `Arc<String>` editor's async block gives `Task::perform`: Rust's
+        // pointer to that value, which crosses by value.
+        ty if let Some((pointer, element)) = counted_element(ty)
+            && element.crosses_by_value() =>
+        {
+            let pointee = format!("pointee_{depth}");
+            let mut converted = String::new();
+            render_from_dynamic(element, &pointee, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "__rawr_internal::crossing::pointee(&{value}).ok_or(Error::TypeMismatch).and_then(|({pointee}, _, _)| {converted}).map({pointer}::new)"
+            )
+        }
         // Rawr's `Rc` or `Arc` of a crate value, as the crate's own pointer
         // its value is in, made the first time it crosses (#775).
         ty if let Some((pointer, element)) = counted_element(ty) => {
@@ -21353,6 +21428,21 @@ fn render_to_dynamic(
             write!(
                 output,
                 "{{ #[allow(unused_mut)] let mut entries = {value}.into_iter().collect::<Vec<_>>(); {sort}entries.into_iter().map({entry}).collect::<Result<Vec<Dynamic>, Error>>().map(Dynamic::from_array) }}"
+            )
+        }
+        // Rust's `Rc` or `Arc` of a value that crosses by value, as the
+        // `Arc<String>` editor's `Task::perform` gives its message: rawr's
+        // pointer to that value, which moves out when the pointer is the
+        // only one.
+        ty if let Some((pointer, element)) = counted_element(ty)
+            && element.crosses_by_value() =>
+        {
+            let pointee = format!("pointee_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(element, &pointee, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "{{ let {pointee} = {pointer}::unwrap_or_clone({value}); {converted} }}.map(__rawr_internal::crossing::shared)"
             )
         }
         // The crate's own `Rc` or `Arc`, as rawr's pointer whose value is in
@@ -28000,5 +28090,61 @@ mod tests {
         .expect("a callable parameter of an instance renders");
         assert_eq!(expression, b"<gallery_ui::Map<bool, _, i64>>");
         super::TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+    }
+
+    /// A crate function that takes a future, filling a callable whose input
+    /// is a script future a `rawr::Value` carries, polls the held future as
+    /// the script future: of Rawr values where its output is one or rustc
+    /// infers it (#551).
+    #[test]
+    fn a_held_script_future_runs_as_the_script_future() {
+        for element in [
+            Type::Inferred,
+            Type::Nominal {
+                definition: crate::surface::identity::Definition::value(),
+                arguments: Box::default(),
+            },
+        ] {
+            let future = Type::Nominal {
+                definition: crate::surface::identity::Definition::future(),
+                arguments: Box::new([element]),
+            };
+            let mut rendered = Vec::new();
+            super::render_held_future(0, &future, &mut rendered).expect("a held future renders");
+            assert_eq!(
+                rendered,
+                b"__rawr_internal::future::Future::held(argument_0).into_script()"
+            );
+        }
+    }
+
+    /// An `Arc<String>` an async block gives native code, as editor's
+    /// `load_file` does, is Rust's `Arc` of the string rawr's `Arc` points
+    /// to, never a crate value's pointer it would look for in the arena.
+    /// The one native code gives back is rawr's `Arc` of the string.
+    #[test]
+    fn a_counted_string_crosses_as_rusts_pointer_to_it() {
+        let counted = Type::Nominal {
+            definition: crate::surface::identity::Definition::counted(true),
+            arguments: Box::new([Type::Builtin(Builtin::String)]),
+        };
+        let mut rendered = String::new();
+        super::render_from_dynamic(&counted, "value", 0, &mut rendered)
+            .expect("an `Arc<String>` renders");
+        assert!(
+            rendered.starts_with("__rawr_internal::crossing::pointee(&value)")
+                && rendered.ends_with(".map(std::sync::Arc::new)")
+                && !rendered.contains("take_pointer"),
+            "{rendered}"
+        );
+        let mut given = String::new();
+        super::render_to_dynamic(&counted, "value", 0, &mut given)
+            .expect("an `Arc<String>` renders");
+        assert!(
+            given.starts_with("{ let pointee_0 = std::sync::Arc::unwrap_or_clone(value);")
+                && given.ends_with(".map(__rawr_internal::crossing::shared)")
+                && !given.contains("give_pointer"),
+            "{given}"
+        );
     }
 }

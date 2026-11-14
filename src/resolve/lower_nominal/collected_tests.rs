@@ -785,6 +785,39 @@ fn unsupported_type_arguments_name_the_program_type() {
     }
 }
 
+/// A script future a crate's `T` holds, as iced's `window::run(id, f)` gives
+/// back what a script `f` returns, crosses as rawr's holder for it, which a
+/// later `Future` bound polls as the script future (#551).
+#[test]
+fn a_script_future_crosses_as_a_crate_type_argument_as_its_holder() {
+    let engine = crate::future::facade::engine();
+    let definition = engine
+        .host_registry
+        .type_(crate::future::facade::FUTURE)
+        .expect("the core future facade declares its future")
+        .clone();
+    let ty = super::Ty::Host {
+        proof: super::HostTyProof::new(definition, None, None),
+        arguments: Box::new([super::Ty::Unit]),
+    };
+    let holder = convert::Type::Nominal {
+        definition: identity::Definition::value(),
+        arguments: Box::default(),
+    };
+    let inference = super::Inference::default();
+    let models = empty_models();
+    let mut allocation = host::TestImportAllocation::new(4, 4096);
+    let (converted, failure) = with_import_context(&mut allocation, |context| {
+        super::imported_surface_type(&inference, &models, &ty, crate::Span::NONE, context)
+    });
+    assert!(failure.is_none());
+    assert_eq!(converted.ok(), Some(holder.clone()));
+    assert_eq!(
+        super::instance_surface_type(&inference, &models, &ty),
+        Some(holder)
+    );
+}
+
 #[test]
 fn executable_use_collection_retains_elided_imported_selections() {
     let mut engine = Engine::new();
