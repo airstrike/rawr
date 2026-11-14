@@ -25,7 +25,8 @@ pub(crate) struct Unit {
     /// Whether this build compiled it.
     rebuilt: bool,
     /// Whether its package is one rawr generates: the runner's, a member's,
-    /// or one under rawr's own directory.
+    /// or one whose manifest lies in rawr's own directory. A project's path
+    /// package reached through one of the runner's links is not (#1777).
     generated: bool,
     /// Whether it is a crate rustc compiles, with an incremental directory
     /// of its crate's name: not a build script or its run.
@@ -42,6 +43,7 @@ impl Named {
     ) -> Self {
         let mut named = Self::default();
         let mut hashed = None;
+        let rawr = rawr.map(super::Generated::new);
         for message in messages.iter() {
             let generated = message
                 .package_id()
@@ -49,8 +51,8 @@ impl Named {
                 .is_some_and(member::is_runner_package)
                 || message
                     .manifest_path()
-                    .zip(rawr)
-                    .is_some_and(|(manifest, rawr)| Path::new(manifest).starts_with(rawr));
+                    .zip(rawr.as_ref())
+                    .is_some_and(|(manifest, rawr)| rawr.holds(Path::new(manifest)));
             let crate_target = message.reason() == Some("compiler-artifact")
                 && message.target_kind() != Some("custom-build");
             let rebuilt = message.fresh() == Some(false);

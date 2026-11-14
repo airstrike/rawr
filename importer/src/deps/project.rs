@@ -2,7 +2,8 @@
 //!
 //! The directory is the one `cargo build` uses, so only rawr's units are
 //! rawr's to remove: the units of the packages rawr generates (the runner,
-//! its members and what lives under rawr's own directory), the units its
+//! its members and its copies, under rawr's own directory, but not a
+//! project's package the runner reaches through its links), the units its
 //! build compiled that weren't there before it, and the copies of rawr's own
 //! crates. After each runner build, those that no current build of any
 //! workspace there names go. A unit of rawr's that one of Cargo's own units
@@ -70,8 +71,10 @@ struct Record {
     made: BTreeSet<String>,
 }
 
-/// The records' format. A record of another is read as gone.
-const VERSION: u32 = 1;
+/// The records' format. A record of another is read as gone. Version 1
+/// counted a project's path package reached through the runner's links
+/// among what rawr made (#1777).
+const VERSION: u32 = 2;
 
 /// Where the records live in the build directory.
 const RECORDS: &str = "rawr-units";
@@ -98,6 +101,7 @@ pub(crate) fn prune(
     let profiles = super::profiles(shared);
     let rawr = work.parent();
     let named = Named::read(messages, &profiles, rawr);
+    let rawr = rawr.map(super::Generated::new);
     if named.is_empty() {
         return;
     }
@@ -151,7 +155,9 @@ pub(crate) fn prune(
                     || rawr_crate(&unit.krate)
                     || ((used.contains(unit.krate.as_str())
                         || unit.krate.starts_with(RUNNER_CRATE))
-                        && rawr.is_some_and(|rawr| generated_sources(unit, rawr))))
+                        && rawr
+                            .as_ref()
+                            .is_some_and(|rawr| generated_sources(unit, rawr))))
         })
         .map(|(hash, _)| hash.as_str())
         .collect();
@@ -240,16 +246,16 @@ fn present(profiles: &[PathBuf]) -> BTreeMap<String, Present> {
 }
 
 /// Whether `unit`'s dep-info names a first source rawr generated: one
-/// under `rawr`, the directory rawr generates its packages in, or, as Cargo
+/// in `rawr`, the directory rawr generates its packages in, or, as Cargo
 /// writes a workspace member's, one relative to the runner's root, which
 /// for any crate but the runner's own lies in its members' or copies'
 /// directories. The runner's binary of the script crate's name, whose first
 /// source is a `src/main.rs` as the project's own is, names the program's
 /// directory among its sources (#1793).
-fn generated_sources(unit: &Present, rawr: &Path) -> bool {
+fn generated_sources(unit: &Present, rawr: &super::Generated<'_>) -> bool {
     let generated = |source: &Path| {
         if source.is_absolute() {
-            return source.starts_with(rawr);
+            return rawr.holds(source);
         }
         unit.krate.starts_with(RUNNER_CRATE)
             || source.components().next().is_some_and(|first| {
@@ -547,7 +553,7 @@ mod tests {
         fs::write(
             shared.join("rawr-units/gone.json"),
             format!(
-                r#"{{"version":1,"workspace":"{}","named":["{}"],"made":["{}"]}}"#,
+                r#"{{"version":2,"workspace":"{}","named":["{}"],"made":["{}"]}}"#,
                 project.path().join("gone").display(),
                 hash('8'),
                 hash('8')
@@ -628,6 +634,114 @@ mod tests {
             Some("libc".to_owned())
         );
         assert_eq!(super::super::unit_key("invoked.timestamp"), None);
+    }
+
+    /// A project's path package the runner reaches through one of its links
+    /// is the unit the project's `cargo build` made, so no runner build
+    /// records it as rawr's or prunes it; a copy rawr generates under the
+    /// runner is rawr's (#1777).
+    #[cfg(unix)]
+    #[test]
+    fn a_path_package_reached_through_the_runners_link_is_never_rawrs() {
+        let project = crate::store::TestProject::new("rawr-deps-linked");
+        let shared = project.path().join("target");
+        let profile = shared.join("debug");
+        for directory in ["deps", ".fingerprint", "build", "incremental"] {
+            fs::create_dir_all(profile.join(directory)).unwrap();
+        }
+        let work = shared.join("rawr/runner");
+        let package = |root: &Path, name: &str| {
+            fs::create_dir_all(root.join("src")).unwrap();
+            fs::write(
+                root.join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\n"),
+            )
+            .unwrap();
+            fs::write(root.join("src/lib.rs"), b"").unwrap();
+        };
+        let core = project.path().join("core");
+        package(&core, "core");
+        fs::create_dir_all(&work).unwrap();
+        std::os::unix::fs::symlink(&core, work.join("core")).unwrap();
+        let copy = work.join(super::mirror::COPIES).join("shown");
+        package(&copy, "shown");
+        // Cargo's `core`, which the runner names through its link, and the
+        // runner's copy of a generated package, both fresh.
+        let linked = unit(
+            &profile,
+            "core",
+            'c',
+            Path::new("core/src/lib.rs"),
+            (12, &[]),
+        );
+        let copied = unit(
+            &profile,
+            "shown",
+            'e',
+            &Path::new(super::mirror::COPIES).join("shown/src/lib.rs"),
+            (14, &[]),
+        );
+        let message = |output: &Path, package: &str, manifest: &Path| {
+            format!(
+                r#"{{"reason":"compiler-artifact","package_id":"{package}","manifest_path":"{}","fresh":true,"filenames":["{}"]}}"#,
+                manifest.display(),
+                output.display()
+            )
+        };
+        let first = [
+            message(
+                &linked[0],
+                "path+file:///p/core#0.1.0",
+                &work.join("core/Cargo.toml"),
+            ),
+            message(
+                &copied[0],
+                "path+file:///r/shown#0.1.0",
+                &copy.join("Cargo.toml"),
+            ),
+        ]
+        .join("\n");
+        let before = later();
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(first.as_bytes()),
+            &before,
+            &work,
+        );
+        let record: super::Record = serde_json::from_slice(
+            &fs::read(
+                shared
+                    .join(super::RECORDS)
+                    .join(format!("{}.json", super::digest(&work))),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !record.made.contains(&hash('c')),
+            "the linked package is Cargo's"
+        );
+        assert!(record.made.contains(&hash('e')), "the copy is rawr's");
+
+        // A later build names neither: rawr's copy goes, Cargo's unit stays.
+        let program = unit(&profile, "app", 'f', Path::new("src/main.rs"), (15, &[]));
+        let second = artifact(
+            &program[0],
+            "path+file:///runner#rawr-generated-runner@0.0.0",
+            false,
+        );
+        let before = later();
+        super::prune(
+            &shared,
+            &crate::cargo::messages::Messages::parse(second.as_bytes()),
+            &before,
+            &work,
+        );
+        assert!(
+            linked.iter().all(|path| path.exists()),
+            "Cargo's unit stays"
+        );
+        assert!(copied.iter().all(|path| !path.exists()), "rawr's copy goes");
     }
 
     /// A rebuilt runner keeps the codegen objects its binary's debug map
