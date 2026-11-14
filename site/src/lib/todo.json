@@ -30,7 +30,10 @@
         {"text":"A path that starts with `::` after a keyword, as gallery's `match ::image::load_from_memory(..)`, names its crate.","issues":[1935]},
         {"text":"A crate trait that a `use` inside a function brings into scope, as game_of_life's `use itertools::Itertools;`, gives its methods to calls in that function.","issues":[1936]},
         {"text":"`std::convert::identity` runs, a std function passed as a value (`.on_link_click(std::convert::identity)`, `.map(std::mem::take)`) is the closure that calls it, and a one-argument call accepts a trailing comma.","issues":[1944]},
-        {"text":"`log::error!`, `warn!` and `info!` in marked code run as under Cargo: `std::panic::Location` crosses as std's own value, and a crate's `#[track_caller]` function sees the program's call site, so a logger prints the user's file and line.","issues":[1560]}
+        {"text":"`log::error!`, `warn!` and `info!` in marked code run as under Cargo: `std::panic::Location` crosses as std's own value, and a crate's `#[track_caller]` function sees the program's call site, so a logger prints the user's file and line.","issues":[1560]},
+        {"text":"Crate structs with a PhantomData field, as palette's Rgb and Hsl, build in the runner when the program has moved another of their fields out, so iced's color_palette runs.","issues":[1931]},
+        {"text":"`image(&handle)` boxed at iced's renderer takes iced's Handle, as rustc infers it, so iced's screenshot runs.","issues":[1939]},
+        {"text":"A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called.","issues":[1937]}
       ]
     },
     "releases": [
@@ -4271,15 +4274,15 @@
     {"issue":1928,"title":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the…","state":"closed","category":"Health"},
     {"issue":1929,"title":"A rawr-import panic on a broken invariant prints as a bare thread panic, not as rustc's internal compiler error","state":"open","category":"Health"},
     {"issue":1930,"title":"Runtime errors and island refusals print through Display, uncoloured and hand-formatted","state":"open","category":"Health"},
-    {"issue":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"open","category":"No glue (D593)"},
+    {"issue":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"closed","category":"No glue (D593)"},
     {"issue":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"open","category":"No glue (D593)"},
     {"issue":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open","category":"No glue (D593)"},
     {"issue":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open","category":"No glue (D593)"},
     {"issue":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"closed","category":"No glue (D593)"},
     {"issue":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"closed","category":"No glue (D593)"},
-    {"issue":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"open","category":"No glue (D593)"},
+    {"issue":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed","category":"No glue (D593)"},
     {"issue":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open","category":"No glue (D593)"},
-    {"issue":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"open","category":"No glue (D593)"},
+    {"issue":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"closed","category":"No glue (D593)"},
     {"issue":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"open","category":"No glue (D593)"},
     {"issue":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"closed","category":"No glue (D593)"},
     {"issue":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"closed","category":"No glue (D593)"},
@@ -4292,7 +4295,9 @@
     {"issue":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"open","category":"No glue (D593)"},
     {"issue":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open","category":"No glue (D593)"},
     {"issue":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open","category":"No glue (D593)"},
-    {"issue":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open","category":"No glue (D593)"}
+    {"issue":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open","category":"No glue (D593)"},
+    {"issue":1953,"title":"A crate fn taking &DeviceDescriptor<'_> (a &str borrow inside a type argument) is refused as a borrow rawr can't lend","state":"open","category":"No glue (D593)"},
+    {"issue":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4915,15 +4920,15 @@
             {"number":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open"},
             {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open"},
             {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open"},
-            {"number":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"open"},
+            {"number":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"closed"},
             {"number":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"open"},
             {"number":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open"},
             {"number":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open"},
             {"number":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"closed"},
             {"number":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"closed"},
-            {"number":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"open"},
+            {"number":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"closed"},
             {"number":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open"},
-            {"number":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"open"},
+            {"number":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"closed"},
             {"number":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"open"},
             {"number":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"closed"},
             {"number":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"closed"},
@@ -4935,7 +4940,9 @@
             {"number":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"open"},
             {"number":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open"},
             {"number":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open"},
-            {"number":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open"}
+            {"number":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open"},
+            {"number":1953,"title":"A crate fn taking &DeviceDescriptor<'_> (a &str borrow inside a type argument) is refused as a borrow rawr can't lend","state":"open"},
+            {"number":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open"}
           ],
           "milestone": "0.3"
         },

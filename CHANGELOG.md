@@ -24,6 +24,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate trait that a `use` inside a function brings into scope, as game_of_life's `use itertools::Itertools;`, gives its methods to calls in that function. (#1936)
 - `std::convert::identity` runs, a std function passed as a value (`.on_link_click(std::convert::identity)`, `.map(std::mem::take)`) is the closure that calls it, and a one-argument call accepts a trailing comma. (#1944)
 - `log::error!`, `warn!` and `info!` in marked code run as under Cargo: `std::panic::Location` crosses as std's own value, and a crate's `#[track_caller]` function sees the program's call site, so a logger prints the user's file and line. (#1560)
+- Crate structs with a PhantomData field, as palette's Rgb and Hsl, build in the runner when the program has moved another of their fields out, so iced's color_palette runs. (#1931)
+- `image(&handle)` boxed at iced's renderer takes iced's Handle, as rustc infers it, so iced's screenshot runs. (#1939)
+- A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called. (#1937)
 
 ## 0.3.213 (2026-11-13)
 
