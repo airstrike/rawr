@@ -46,6 +46,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Calling a `&self` method on a crate struct's field, as wgpu's `capabilities.formats.iter()` does, borrows the field where it is and leaves the struct usable, as in Rust. (#1969)
 - A crate struct's `Option<&str>` field can be read in a pattern and filled from `..Default::default()`. (#1970)
 - A script function that returns an async block can fill a crate's generic type, a crate function that takes a future, as `.then(Task::future)`, runs it, and an `Rc` or `Arc` of a string or number crosses as Rust's own pointer to it, so iced's editor builds and starts unchanged. (#551)
+- std's `io::Cursor` runs: a program makes one over its bytes and reads, seeks and rewinds it, and passes one to a crate, as image's `ImageReader::new(io::Cursor::new(bytes))` takes it; `io::SeekFrom` is std's own. (#1976; part of #87)
 
 ## 0.3.213 (2026-11-13)
 

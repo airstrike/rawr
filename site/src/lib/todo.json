@@ -52,7 +52,8 @@
         {"text":"A struct literal or pattern written through a crate's type alias, as wgpu's `DeviceDescriptor { label: None, .. }` and `SurfaceConfiguration { .. }`, builds the aliased struct with the alias's arguments, and a `&self` method's `impl Future` that borrows nothing, as `request_device`, can be awaited.","issues":[1961],"refs":[1953]},
         {"text":"Calling a `&self` method on a crate struct's field, as wgpu's `capabilities.formats.iter()` does, borrows the field where it is and leaves the struct usable, as in Rust.","issues":[1969]},
         {"text":"A crate struct's `Option<&str>` field can be read in a pattern and filled from `..Default::default()`.","issues":[1970]},
-        {"text":"A script function that returns an async block can fill a crate's generic type, a crate function that takes a future, as `.then(Task::future)`, runs it, and an `Rc` or `Arc` of a string or number crosses as Rust's own pointer to it, so iced's editor builds and starts unchanged.","issues":[551]}
+        {"text":"A script function that returns an async block can fill a crate's generic type, a crate function that takes a future, as `.then(Task::future)`, runs it, and an `Rc` or `Arc` of a string or number crosses as Rust's own pointer to it, so iced's editor builds and starts unchanged.","issues":[551]},
+        {"text":"std's `io::Cursor` runs: a program makes one over its bytes and reads, seeks and rewinds it, and passes one to a crate, as image's `ImageReader::new(io::Cursor::new(bytes))` takes it; `io::SeekFrom` is std's own.","issues":[1976],"refs":[87]}
       ]
     },
     "releases": [
@@ -4337,7 +4338,12 @@
     {"issue":1972,"title":"A match on a crate struct pattern with refutable fields is E0004 though its arms cover every value","state":"open","category":"Divergences from rustc"},
     {"issue":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"open","category":"No glue (D593)"},
     {"issue":1974,"title":"A crate struct's non-Clone field borrowed by a &self method is not read in place","state":"open","category":"Divergences from rustc"},
-    {"issue":1975,"title":"A program's Rc or Arc of a by-value type passed as a crate call's argument doesn't cross as Rust's pointer","state":"open","category":"No glue (D593)"}
+    {"issue":1975,"title":"A program's Rc or Arc of a by-value type passed as a crate call's argument doesn't cross as Rust's pointer","state":"open","category":"No glue (D593)"},
+    {"issue":1976,"title":"std's `io::Cursor` runs: a program makes one over its bytes and reads, seeks and rewinds it, and…","state":"closed","category":"Divergences from rustc"},
+    {"issue":1977,"title":"A closure's `?` fixes its error type from the first `?` instead of its tail","state":"open","category":"Divergences from rustc"},
+    {"issue":1978,"title":"std's enum variants with fields (`io::SeekFrom::Start(u64)`) can't be constructed","state":"open","category":"Divergences from rustc"},
+    {"issue":1979,"title":"`Write` for `io::Cursor<Vec<u8>>` is missing from the std table","state":"open","category":"Divergences from rustc"},
+    {"issue":1980,"title":"A full-path std call with a turbofish (`std::sync::mpsc::channel::<u8>()`) is a syntax error on main","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5257,7 +5263,9 @@
             {"number":1921,"title":"E0382 suggestions for moves by method call and for loop, and labels on the derive-Clone note","state":"open"},
             {"number":1924,"title":"A lock or cell guard inside a Result: `if let Ok(g) = m.lock()`, `try_lock`, `RefCell::try_borrow_mut`","state":"open"},
             {"number":1925,"title":"A std enum the std facade holds has no variants for match coverage","state":"open"},
-            {"number":1926,"title":"SyncSender::try_send and TrySendError<T> don't run yet","state":"open"}
+            {"number":1926,"title":"SyncSender::try_send and TrySendError<T> don't run yet","state":"open"},
+            {"number":1977,"title":"A closure's `?` fixes its error type from the first `?` instead of its tail","state":"open"},
+            {"number":1980,"title":"A full-path std call with a turbofish (`std::sync::mpsc::channel::<u8>()`) is a syntax error on main","state":"open"}
           ]
         },
         {
