@@ -669,7 +669,15 @@ impl Evidence {
                             source,
                         })?;
                     for path in output_values {
-                        let path = canonical_path("Cargo built output", Path::new(path.as_ref()))?;
+                        let path = Path::new(path.as_ref());
+                        if split_debuginfo(path) && !path.exists() {
+                            // Cargo names a build script's packed debug info
+                            // (`.dSYM`) in the target layout even when the
+                            // build directory keeps it apart; Rawr never reads
+                            // debug info, so an absent one is no output.
+                            continue;
+                        }
+                        let path = canonical_path("Cargo built output", path)?;
                         allocation.path(&path)?;
                         outputs.push(path);
                     }
@@ -1956,6 +1964,15 @@ fn rmeta_digest(
     allocation.bytes(length)?;
     let digest = freshness_digest(RESOURCE, path, length)?;
     Ok((metadata.len(), digest))
+}
+
+/// Whether `path` is the separate debug info `split-debuginfo = "packed"`
+/// writes beside an output: a macOS `.dSYM` bundle, a `.dwp` or a `.pdb`.
+fn split_debuginfo(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("dSYM" | "dwp" | "pdb")
+    )
 }
 
 fn canonical_path(field: &'static str, path: &Path) -> Result<PathBuf> {
