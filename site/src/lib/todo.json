@@ -4235,7 +4235,7 @@
     {"issue":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"open","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired","category":"Hot reload of a marked `main` (D555)"}
   ],
   "groups": [
     {
@@ -5606,7 +5606,7 @@
             {"number":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open"},
             {"number":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open"},
             {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"},
-            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"open"}
+            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"}
           ]
         }
       ]
