@@ -2,10 +2,15 @@
 
 use std::process::ExitCode;
 
+use rawr_cli::color;
+
 fn main() -> ExitCode {
     // A stopped command retires the runner and the builds it owns.
     if let Err(error) = retire_on_termination() {
-        eprintln!("warning: child processes may outlive an interrupted rawr: {error}");
+        eprintln!(
+            "{}: child processes may outlive an interrupted rawr: {error}",
+            color::label(color::Level::Warning)
+        );
     }
     rawr_import_cli::command::main(std::env::args_os().skip(1).collect())
 }
