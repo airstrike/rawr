@@ -26,12 +26,13 @@ use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
 /// The types the module holds.
 pub(super) const HELD: [Held; 1] = [Held::Value(held::Value {
     std: "std::panic::Location",
+    parameters: &[],
     lent: &[],
     also: &[],
-    register: |builder, path, capabilities| {
+    register: |builder, path, parameters, capabilities| {
         crate::host::value::register_ordering::<Location<'static>>();
         builder
-            .value_type::<Location<'static>>(path, &[], capabilities)
+            .value_type::<Location<'static>>(path, parameters, capabilities)
             .map(drop)
     },
     crosses: true,

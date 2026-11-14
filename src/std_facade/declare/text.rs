@@ -126,6 +126,11 @@ fn ty(ty: &Type) -> String {
         Shape::Registered { path, arguments } if arguments.is_empty() => {
             format!("Ty::Registered({:?})", path.to_string())
         }
+        Shape::Registered { path, arguments } => format!(
+            "Ty::Applied {{ path: {:?}, arguments: {} }}",
+            path.to_string(),
+            types(arguments)
+        ),
         Shape::Parameter(name) => format!("Ty::Parameter({:?})", name.to_string()),
         Shape::Reference { mutable, target } => format!(
             "Ty::Reference {{ mutable: {mutable}, target: &{} }}",

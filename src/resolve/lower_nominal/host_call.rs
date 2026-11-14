@@ -1894,7 +1894,7 @@ impl<'a> Parser<'a> {
                 source.push(origin::Fragment::join(operands, ", "));
                 source.push_text(")");
                 prelude.push(source);
-                return Ok(ParsedExpr {
+                let value = ParsedExpr {
                     prelude: origin::Fragment::default(),
                     source: prelude.surrounded("{ ", " }"),
                     ty,
@@ -1903,7 +1903,8 @@ impl<'a> Parser<'a> {
                     outcome,
                     evaluation,
                 }
-                .retain_origin());
+                .retain_origin();
+                return self.copied_places_back(value, &places);
             }
             let place = self.temporary("receiver");
             let result = self.temporary("result");
@@ -1925,7 +1926,7 @@ impl<'a> Parser<'a> {
             let store = self.store_lvalue(&lvalue, origin::Fragment::plain(place))?;
             source.push(store);
             source.push_text(format!(" {result} }}"));
-            return Ok(ParsedExpr {
+            let value = ParsedExpr {
                 prelude: origin::Fragment::default(),
                 source,
                 ty,
@@ -1934,7 +1935,8 @@ impl<'a> Parser<'a> {
                 outcome,
                 evaluation,
             }
-            .retain_origin());
+            .retain_origin();
+            return self.copied_places_back(value, &places);
         }
         // A `&self` receiver that is a local is lent where it is. It is
         // read after the arguments, which Rust's borrow of it keeps from
@@ -2464,6 +2466,22 @@ impl<'a> Parser<'a> {
                 .flow()
                 .origins(argument.span)
                 .is_some_and(<[_]>::is_empty)
+    }
+
+    /// `value`, a call of a `&mut self` method changing its receiver where
+    /// it is, with each of its `&mut` array or string arguments (`places`)
+    /// stored back from what it gives, as std's `Cursor::read_line(&mut
+    /// self, buf: &mut String)` changes both.
+    fn copied_places_back(
+        &mut self,
+        mut value: ParsedExpr,
+        places: &[ParsedExpr],
+    ) -> Result<ParsedExpr, Error> {
+        if !places.is_empty() {
+            value.source = self.copied_call(value.rendered_source(), places)?;
+            value.prelude = origin::Fragment::default();
+        }
+        Ok(value)
     }
 
     /// A host call whose value borrows what it takes (`opens`, D558 tier

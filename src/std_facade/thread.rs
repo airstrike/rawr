@@ -10,10 +10,13 @@ use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
 /// The types the module holds.
 pub(super) const HELD: [Held; 1] = [Held::Value(held::Value {
     std: "std::thread::Builder",
+    parameters: &[],
     lent: &[],
     also: &[],
-    register: |builder, path, capabilities| {
-        builder.type_::<Builder>(path, &[], capabilities).map(drop)
+    register: |builder, path, parameters, capabilities| {
+        builder
+            .type_::<Builder>(path, parameters, capabilities)
+            .map(drop)
     },
     crosses: false,
     runs: &[

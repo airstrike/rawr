@@ -467,7 +467,34 @@ macro_rules! std_held {
     )*};
 }
 
-std_held!(std::path::PathBuf, std::ffi::OsString, std::io::ErrorKind);
+std_held!(
+    std::path::PathBuf,
+    std::ffi::OsString,
+    std::io::ErrorKind,
+    std::io::SeekFrom
+);
+
+/// One of std's generic types Rawr's own std holds as its Rust value at
+/// Rawr's values (`std_facade::held`), as `io::Cursor<T>` is a
+/// `Cursor<Dynamic>`: native code takes and gives it at its own `T`, as
+/// image's `ImageReader::new` takes a `Cursor<Bytes>`, each value it holds
+/// made where it crosses.
+pub trait StdOf<T>: Sized {
+    /// The Rust value a script value holds, moved out of it, its value made
+    /// a `T` by `inner`. `None` when the script value holds none.
+    fn take<E>(
+        value: Dynamic,
+        inner: impl FnOnce(Dynamic) -> Result<T, E>,
+    ) -> Option<Result<Self, E>>;
+
+    /// The script value holding `self`, its `T` made a script value by
+    /// `inner`.
+    ///
+    /// # Errors
+    ///
+    /// When `inner` fails.
+    fn give<E>(self, inner: impl FnOnce(T) -> Result<Dynamic, E>) -> Result<Dynamic, E>;
+}
 
 /// The `Default` of the script type at `path`, in the generation current
 /// on this thread.

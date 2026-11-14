@@ -5,7 +5,7 @@
 
 use crate::capability;
 use crate::host::item;
-use crate::host::type_ref::{Builtin, Type};
+use crate::host::type_ref::{Builtin, Shape, Type};
 use crate::host::{self, facade, signature};
 use crate::receiver;
 use crate::std_facade::held::{self, Held};
@@ -18,6 +18,11 @@ pub(super) enum Ty {
     Builtin(Builtin),
     /// A held type, at its facade path: `path::PathBuf`.
     Registered(&'static str),
+    /// A held generic type at its arguments: `io::Cursor<T>`.
+    Applied {
+        path: &'static str,
+        arguments: &'static [Ty],
+    },
     /// A type alias's parameter: `T` of `io::Result<T>`.
     Parameter(&'static str),
     Reference {
@@ -86,6 +91,13 @@ impl Ty {
             Self::Unit => Type::unit(),
             Self::Builtin(builtin) => Type::builtin(*builtin),
             Self::Registered(path) => Type::registered(*path)?,
+            Self::Applied { path, arguments } => Type::applied(
+                *path,
+                arguments
+                    .iter()
+                    .map(Ty::host)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?,
             Self::Parameter(name) => Type::parameter(*name)?,
             Self::Reference { mutable, target } => Type::reference(*mutable, target.host()?),
             Self::Option(element) => Type::option(element.host()?),
@@ -117,7 +129,12 @@ pub(super) fn install(
                         _ => None,
                     })
                     .unwrap_or_else(|| panic!("the std facade holds `{std}`"));
-                (value.register)(builder, held::Value::facade(value.std), capabilities)?;
+                (value.register)(
+                    builder,
+                    held::Value::facade(value.std),
+                    value.parameters,
+                    capabilities,
+                )?;
             }
             Step::Alias { path, target } => {
                 builder.alias(*path, *target)?;
@@ -164,22 +181,58 @@ pub(super) fn item(
     output: Type,
 ) -> Result<(), host::Error> {
     builder.item(match kind {
-        Kind::Function => item::Definition::function(path, signature(inputs, output))?,
+        Kind::Function => item::Definition::function(path, signature(inputs, output)?)?,
         Kind::AssociatedFunction => {
-            item::Definition::associated_function(path, signature(inputs, output))?
+            item::Definition::associated_function(path, signature(inputs, output)?)?
         }
-        Kind::Method(mode) => item::Definition::method(path, mode, signature(inputs, output))?,
+        Kind::Method(mode) => item::Definition::method(path, mode, signature(inputs, output)?)?,
         Kind::Value => item::Definition::value(path, output)?,
         Kind::AssociatedValue => item::Definition::associated_value(path, output)?,
     })?;
     Ok(())
 }
 
-fn signature(inputs: Vec<Type>, output: Type) -> signature::Definition {
+/// The signature that takes `inputs` and gives `output`, generic over each
+/// type parameter they name: `T` of `Cursor::new(inner: T) -> Cursor<T>`.
+pub(super) fn signature(
+    inputs: Vec<Type>,
+    output: Type,
+) -> Result<signature::Definition, host::Error> {
+    let mut parameters = Vec::new();
+    for ty in inputs.iter().chain(std::iter::once(&output)) {
+        named(ty, &mut parameters);
+    }
+    parameters.sort_unstable();
+    parameters.dedup();
     let mut signature = signature::Builder::new();
+    for parameter in parameters {
+        signature.type_parameter(parameter, &[])?;
+    }
     for input in inputs {
         signature.parameter(input);
     }
     signature.output(output);
-    signature.finish()
+    Ok(signature.finish())
+}
+
+/// Push to `names` each type parameter `ty` names.
+fn named(ty: &Type, names: &mut Vec<ImmutableString>) {
+    match ty.shape() {
+        Shape::Parameter(name) => names.push(name.to_string().into()),
+        Shape::Registered { arguments, .. } | Shape::Tuple(arguments) => {
+            for argument in arguments {
+                named(argument, names);
+            }
+        }
+        Shape::Reference { target: inner, .. }
+        | Shape::Option(inner)
+        | Shape::Array { element: inner, .. }
+        | Shape::Iter(inner)
+        | Shape::Boxed(inner) => named(inner, names),
+        Shape::Result(ok, err) => {
+            named(ok, names);
+            named(err, names);
+        }
+        _ => {}
+    }
 }

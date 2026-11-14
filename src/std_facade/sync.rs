@@ -22,11 +22,12 @@ const RUNS: &[capability::Kind] = &[
 pub(super) const HELD: [Held; 3] = [
     Held::Value(held::Value {
         std: "std::sync::mpsc::RecvError",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .value_type::<RecvError>(path, &[], capabilities)
+                .value_type::<RecvError>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
@@ -34,11 +35,12 @@ pub(super) const HELD: [Held; 3] = [
     }),
     Held::Value(held::Value {
         std: "std::sync::mpsc::TryRecvError",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .value_type::<TryRecvError>(path, &[], capabilities)
+                .value_type::<TryRecvError>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
@@ -46,11 +48,12 @@ pub(super) const HELD: [Held; 3] = [
     }),
     Held::Value(held::Value {
         std: "std::sync::mpsc::RecvTimeoutError",
+        parameters: &[],
         lent: &[],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .value_type::<RecvTimeoutError>(path, &[], capabilities)
+                .value_type::<RecvTimeoutError>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,

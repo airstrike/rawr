@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 205;
+const CLASSIFIER_VERSION: u32 = 208;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10373,10 +10373,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         definition: crate::surface::identity::Definition::instant(),
                         arguments: Box::default(),
                     },
-                    Some(Std::Held { path, .. } | Std::Lent { owned: path }) => Type::Nominal {
-                        definition: crate::surface::identity::Definition::std(path),
-                        arguments: Box::default(),
-                    },
+                    // A generic one at each type argument, as `Cursor<Bytes>`.
+                    Some(Std::Held { path, .. } | Std::Lent { owned: path }) => {
+                        let mut converted = Vec::new();
+                        for index in 0.. {
+                            let Some(argument) = std_binding::type_argument(arguments, index)
+                            else {
+                                break;
+                            };
+                            converted.push(self.convert(argument)?);
+                        }
+                        Type::Nominal {
+                            definition: crate::surface::identity::Definition::std(path),
+                            arguments: converted.into_boxed_slice(),
+                        }
+                    }
                     Some(Std::RangeInclusive) => {
                         let element = std_binding::type_argument(arguments, 0)
                             .ok_or(representability::reject::Kind::UnsupportedGenericArgument)?;

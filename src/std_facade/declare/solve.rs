@@ -65,7 +65,7 @@ pub(super) fn solve(trait_: &str, self_ty: &Slot, arguments: &[Slot], depth: u8)
         if !fits {
             continue;
         }
-        for binding in where_clauses(&implementation, &variables, binding, depth) {
+        for binding in where_clauses(&implementation, &variables, binding, &[], depth) {
             found.push(match &unknown {
                 Some(pattern) => substitute(pattern, &binding),
                 None => Written::Tuple(Vec::new()),
@@ -120,8 +120,14 @@ pub(super) fn holds(trait_: &str, self_ty: &Written, arguments: &[Written]) -> b
 }
 
 /// Each way `implementation` applies to `self_ty`: what its parameters
-/// stand for, with those its where-clauses solve.
-pub(super) fn instances(implementation: &Impl, self_ty: &Written) -> Vec<Binding> {
+/// stand for, with those its where-clauses solve. A clause on one of the
+/// `held` parameters `self_ty` names holds: a held generic type's `T` is
+/// whatever value rawr holds, which the call's own argument fixes.
+pub(super) fn instances(
+    implementation: &Impl,
+    self_ty: &Written,
+    held: &[&'static str],
+) -> Vec<Binding> {
     let variables = variables(implementation);
     let mut binding = Binding::new();
     if !matches(
@@ -132,7 +138,7 @@ pub(super) fn instances(implementation: &Impl, self_ty: &Written) -> Vec<Binding
     ) {
         return Vec::new();
     }
-    where_clauses(implementation, &variables, binding, DEPTH - 1)
+    where_clauses(implementation, &variables, binding, held, DEPTH - 1)
 }
 
 /// The associated type `name` of the first impl of `trait_` that applies
@@ -141,7 +147,9 @@ pub(super) fn associated(trait_: &str, self_ty: &Written, name: &str) -> Option<
     impls(trait_, Some(self_ty))
         .into_iter()
         .find_map(|implementation| {
-            let binding = instances(&implementation, self_ty).into_iter().next()?;
+            let binding = instances(&implementation, self_ty, &[])
+                .into_iter()
+                .next()?;
             Some(substitute(
                 &read(implementation.associated(name)?),
                 &binding,
@@ -339,6 +347,7 @@ fn where_clauses(
     implementation: &Impl,
     variables: &[&'static str],
     binding: Binding,
+    held: &[&'static str],
     depth: u8,
 ) -> Vec<Binding> {
     let mut bindings = vec![binding];
@@ -360,6 +369,11 @@ fn where_clauses(
                 .into_iter()
                 .flat_map(|binding| {
                     let subject = substitute(&read(subject), &binding);
+                    if matches!(&subject, Written::Path { path, arguments, .. }
+                        if arguments.is_empty() && held.contains(path))
+                    {
+                        return vec![binding];
+                    }
                     let arguments = arguments
                         .iter()
                         .map(|argument| substitute(argument, &binding))

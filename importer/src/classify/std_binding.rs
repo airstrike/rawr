@@ -48,7 +48,9 @@ pub(crate) enum Std {
     /// #1274, #1275). Elsewhere it is [`Unrun::JoinHandle`].
     JoinHandle,
     /// A std type rawr's std holds as its Rust value (`crossing::Std`), by
-    /// its path under `std`, and whether it is `Clone`.
+    /// its path under `std`, and whether it is `Clone`. A generic one, as
+    /// `io::Cursor<T>`, is held at rawr's values and crosses at the crate's
+    /// own arguments (`crossing::StdOf`).
     Held { path: &'static str, clone: bool },
     /// An unsized borrowed form of a [`Std::Held`] type, by the held type's
     /// path: rawr's std names `Path` as `PathBuf`, which a borrow lends.
@@ -117,7 +119,7 @@ impl Unrun {
 }
 
 /// Each std definition rawr represents, by its definition path.
-pub(crate) const BINDING: [(&[&str], Std); 26] = [
+pub(crate) const BINDING: [(&[&str], Std); 28] = [
     (&["alloc", "borrow", "Cow"], Std::Cow),
     (&["alloc", "boxed", "Box"], Std::Box),
     (
@@ -134,6 +136,13 @@ pub(crate) const BINDING: [(&[&str], Std); 26] = [
     (&["alloc", "vec", "Vec"], Std::Vec),
     (&["core", "fmt", "Arguments"], Std::Arguments),
     (
+        &["core", "io", "cursor", "Cursor"],
+        Std::Held {
+            path: "io::Cursor",
+            clone: true,
+        },
+    ),
+    (
         &["core", "io", "error", "Error"],
         Std::Held {
             path: "io::Error",
@@ -144,6 +153,13 @@ pub(crate) const BINDING: [(&[&str], Std); 26] = [
         &["core", "io", "error", "ErrorKind"],
         Std::Held {
             path: "io::ErrorKind",
+            clone: true,
+        },
+    ),
+    (
+        &["core", "io", "seek", "SeekFrom"],
+        Std::Held {
+            path: "io::SeekFrom",
             clone: true,
         },
     ),

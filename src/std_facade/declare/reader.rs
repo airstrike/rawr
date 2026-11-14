@@ -161,7 +161,16 @@ impl<'a> Reader<'a> {
                         .forms()
                         .any(|form| solve::definition(form) == definition) =>
                 {
-                    return Type::registered(super::held::Value::facade(value.std)).ok();
+                    let facade = super::held::Value::facade(value.std);
+                    if value.parameters.is_empty() {
+                        return Type::registered(facade).ok();
+                    }
+                    // A generic held type at the arguments written, each
+                    // of which rawr holds as its own value.
+                    let arguments = (0..value.parameters.len())
+                        .map(argument)
+                        .collect::<Option<Vec<_>>>()?;
+                    return Type::applied(facade, arguments).ok();
                 }
                 Held::Text(text) if solve::definition(text) == definition => {
                     return Some(Type::builtin(Builtin::String));
@@ -248,12 +257,9 @@ impl<'a> Reader<'a> {
                 },
                 None => Type::unit(),
             };
-            let mut builder = signature::Builder::new();
-            for input in inputs {
-                builder.parameter(input);
-            }
-            builder.output(output);
-            let signature = builder.finish();
+            let Ok(signature) = crate::std_facade::step::signature(inputs, output) else {
+                continue;
+            };
             let repeated = forms.iter().any(|form| {
                 form.receiver == receiver && form.signature.same_inputs(&signature).unwrap_or(true)
             });

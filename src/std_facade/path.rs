@@ -23,11 +23,12 @@ const RUNS: &[capability::Kind] = &[
 pub(super) const HELD: [Held; 3] = [
     Held::Value(held::Value {
         std: "std::path::PathBuf",
+        parameters: &[],
         lent: &["std::path::Path"],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .default_value_type::<PathBuf>(path, &[], capabilities)
+                .default_value_type::<PathBuf>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
@@ -35,11 +36,12 @@ pub(super) const HELD: [Held; 3] = [
     }),
     Held::Value(held::Value {
         std: "std::ffi::OsString",
+        parameters: &[],
         lent: &["std::ffi::OsStr"],
         also: &[],
-        register: |builder, path, capabilities| {
+        register: |builder, path, parameters, capabilities| {
             builder
-                .default_value_type::<OsString>(path, &[], capabilities)
+                .default_value_type::<OsString>(path, parameters, capabilities)
                 .map(drop)
         },
         crosses: true,
