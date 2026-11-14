@@ -21402,6 +21402,21 @@ fn render_to_dynamic(
                 "{{ #[allow(unused_mut)] let mut entries = {value}.into_iter().collect::<Vec<_>>(); {sort}entries.into_iter().map({entry}).collect::<Result<Vec<Dynamic>, Error>>().map(Dynamic::from_array) }}"
             )
         }
+        // Rust's `Rc` or `Arc` of a value that crosses by value, as the
+        // `Arc<String>` editor's `Task::perform` gives its message: rawr's
+        // pointer to that value, which moves out when the pointer is the
+        // only one.
+        ty if let Some((pointer, element)) = counted_element(ty)
+            && element.crosses_by_value() =>
+        {
+            let pointee = format!("pointee_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(element, &pointee, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "{{ let {pointee} = {pointer}::unwrap_or_clone({value}); {converted} }}.map(__rawr_internal::crossing::shared)"
+            )
+        }
         // The crate's own `Rc` or `Arc`, as rawr's pointer whose value is in
         // it: nothing is copied (#775).
         ty if counted_element(ty).is_some() => {
@@ -28017,6 +28032,7 @@ mod tests {
     /// An `Arc<String>` an async block gives native code, as editor's
     /// `load_file` does, is Rust's `Arc` of the string rawr's `Arc` points
     /// to, never a crate value's pointer it would look for in the arena.
+    /// The one native code gives back is rawr's `Arc` of the string.
     #[test]
     fn a_counted_string_crosses_as_rusts_pointer_to_it() {
         let counted = Type::Nominal {
@@ -28031,6 +28047,15 @@ mod tests {
                 && rendered.ends_with(".map(std::sync::Arc::new)")
                 && !rendered.contains("take_pointer"),
             "{rendered}"
+        );
+        let mut given = String::new();
+        super::render_to_dynamic(&counted, "value", 0, &mut given)
+            .expect("an `Arc<String>` renders");
+        assert!(
+            given.starts_with("{ let pointee_0 = std::sync::Arc::unwrap_or_clone(value);")
+                && given.ends_with(".map(__rawr_internal::crossing::shared)")
+                && !given.contains("give_pointer"),
+            "{given}"
         );
     }
 }
