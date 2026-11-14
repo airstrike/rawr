@@ -171,6 +171,13 @@ impl Parser<'_> {
         }
     }
 
+    /// The chain of a `for` over `value`, a crate's value Rawr has read no
+    /// `Iterator` impl of, by its `next()` as `user_pipeline` reads it: a
+    /// `next` not brought yet is the miss the importer answers.
+    pub(super) fn next_pipeline(&mut self, value: &ParsedExpr) -> Result<(Pipeline, Ty), Error> {
+        self.user_pipeline(value, None)
+    }
+
     /// A chain over a crate iterator: its `next()` until `None`. `id` is
     /// the script type's, or `None` for an imported type the crate
     /// implements `Iterator` for, whose `next` is a native call (D558

@@ -627,12 +627,17 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
         // `for x in bag` of a program's type that implements `IntoIterator`
         // loops over `bag.into_iter()`, as Rust's `for` desugars it, as
-        // does one of a std type std implements it for that the loop
-        // doesn't walk itself: `Option`, `Result` and references to them.
+        // does one of a crate's type that is no iterator, as iced's
+        // `shell::Bus`, whose `into_iter` the importer brings as it brings
+        // any member a program names, and one of a std type std implements
+        // it for that the loop doesn't walk itself: `Option`, `Result` and
+        // references to them.
         let iterated = self.inference.resolve(&lhs.ty);
-        if iterated.script().is_some()
-            && !self.type_implements(&iterated, "Iterator")
-            && self.type_implements(&iterated, "IntoIterator")
+        let into_iter = match iterated {
+            Ty::Host { .. } => true,
+            _ => iterated.script().is_some() && self.type_implements(&iterated, "IntoIterator"),
+        };
+        if into_iter && !self.type_implements(&iterated, "Iterator")
             || self.std_into_iterator(&iterated)
         {
             let at = lhs.span.end();
@@ -681,11 +686,22 @@ impl<'a> Parser<'a> {
             _ => {
                 // An iterator chain of one loop runs the body in it.
                 let iterated = self.inference.resolve(&lhs.ty);
-                if (matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange(_))
+                let pipelined = if matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange(_))
                     || (iterated.script().is_some() || matches!(iterated, Ty::Host { .. }))
-                        && self.type_implements(&iterated, "Iterator"))
-                    && let Some((pipeline, item)) = self.for_pipeline(&lhs)
+                        && self.type_implements(&iterated, "Iterator")
                 {
+                    self.for_pipeline(&lhs)
+                } else if matches!(iterated, Ty::Host { .. }) {
+                    // A crate's value no impl Rawr has read makes an
+                    // iterator, as the `IntoIter` a crate's `into_iter`
+                    // gives: rustc's `for` calls its `Iterator::next`,
+                    // which the importer brings as any member a program
+                    // calls.
+                    Some(self.next_pipeline(&lhs)?)
+                } else {
+                    None
+                };
+                if let Some((pipeline, item)) = pipelined {
                     if self.needs_drop(&item, lhs.span)? {
                         return Err(Error::UnsupportedNominalSyntax {
                             construct: "a `for` over an iterator of values whose type implements \
@@ -731,6 +747,12 @@ impl<'a> Parser<'a> {
                             return Err(self.unsupported("`for` over a value that is not iterable"))
                         }
                     },
+                    // A miss the pass kept, as a crate's `into_iter` or
+                    // `next` not brought yet: the pass asks for it.
+                    #[cfg(feature = "rust-import")]
+                    _ if !self.recovered.is_empty() => {
+                        return Err(self.recovered.remove(0));
+                    }
                     _ => {
                         let fallback = self.unsupported("`for` over a value that is not iterable");
                         return Err(self.pipeline_error(&lhs, fallback));

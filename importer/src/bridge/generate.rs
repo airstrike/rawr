@@ -8674,6 +8674,7 @@ fn render_source(
             .map_or(0, |at| at + RUNTIME_GLOB.len());
         root.splice(at..at, PROGRAM_ROOT.iter().copied());
     }
+    root.extend_from_slice(root_main().as_bytes());
     sources.push((SOURCE_PATH.into(), root));
     let base = member::Member::Base {
         library: match (&program, script) {
@@ -9442,8 +9443,20 @@ use ::rawr_generated_runner_base::*;\n\
 #[allow(dead_code)]\n\
 #[path = \"rawr_runner.rs\"]\n\
 mod __rawr_main;\n\
-\n\
-fn main() {\n    __rawr_main::main()\n}\n";
+\n";
+
+/// The runner's `main`, after [`ROOT_SOURCE`]: it names the build of rawr
+/// that generated it, whose check kept what the runner reads, since the
+/// shared runtime it links carries no build of its own (#1606, #1983).
+fn root_main() -> String {
+    format!(
+        "fn main() {{\n    \
+         #[cfg(not(target_arch = \"wasm32\"))]\n    \
+         __rawr_internal::package::instances::identify({:?});\n    \
+         __rawr_main::main()\n}}\n",
+        crate::host::DIGEST
+    )
+}
 /// What the runner's module and each crate of adapters' module import from
 /// the base: the runtime.
 const RUNTIME_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
@@ -11869,7 +11882,12 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
             lent.push((index, false, format!("reach_lent::<{rust}>")));
             continue;
         }
-        if !matches!(ty, convert::Type::Nominal { .. }) || carries_lifetime(&ty) || is_value(&ty) {
+        // A `&Arc<T>` is lent from rawr's pointer's slot (#775).
+        if !matches!(ty, convert::Type::Nominal { .. })
+            || carries_lifetime(&ty)
+            || is_value(&ty)
+            || counted_element(&ty).is_some()
+        {
             continue;
         }
         // A `&'static T` is a static's own place, never a lend (D862).
@@ -12767,11 +12785,13 @@ fn render_adapter_body(
                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
                 .map_err(request::unwritable)?;
         }
-        Operation::StructField { field, .. } => {
+        Operation::StructField { field, drops, .. } => {
             let path = structural_type(plan);
             // Where the struct's fields are apart once the program moved
             // one out (`field_part`).
-            let part = field_part(plan, field.name(), facade);
+            // A struct the crate implements `Drop` for is never split
+            // into its fields (E0509).
+            let part = field_part(plan, field.name(), facade).filter(|_| !drops);
             // A field of a value in a scope frame's region (D558 tier 1), as
             // quick-xml's `Attribute::value`: a copy, which stays in the
             // region when it carries the region's lifetime. A generic
@@ -12976,14 +12996,30 @@ fn render_adapter_body(
                     ),
                     None => (String::new(), String::new()),
                 };
+                // Out of a struct the crate implements `Drop` for, as
+                // wgpu's `SurfaceTexture`, a field is only copied where it
+                // is, as rustc refuses to move it out (E0509).
+                let moved = if *drops {
+                    format!(
+                        "return Err(Error::Value({:?}.to_owned()))",
+                        format!(
+                            "cannot move out of type `{path}`, which implements the `Drop` trait (E0509)"
+                        )
+                    )
+                } else {
+                    format!(
+                        "let input: {path} = arguments.arena.take(handle)?;
+            input.{}",
+                        field.name()
+                    )
+                };
                 writeln!(
                     output,
                     "    let handle = native_handle(arguments, 0, true)?;
     let output = {parted}{{ match arguments.arena.read_kept::<{path}, _>(&handle, |input| field_copy!(&input.{name}))? {{
         Some(Some(output)) => output,{split}
         _ => {{
-            let input: {path} = arguments.arena.take(handle)?;
-            input.{name}
+            {moved}
         }}
     }} }};",
                     name = field.name()
@@ -13269,6 +13305,25 @@ fn render_adapter_body(
             ..
         } if lent_slice(signature, substitutions).is_some() => {
             render_lent_slice(
+                plan,
+                &path,
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                output,
+            )?;
+        }
+        Operation::Method {
+            receiver: Receiver::Shared,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            call: None,
+            ..
+        } if !signature.keep_receiver().is_empty() => {
+            render_receiver_kept(
                 plan,
                 &path,
                 signature,
@@ -15430,6 +15485,105 @@ fn render_scoped_input(
     }}"
     )
     .map_err(request::unwritable)
+}
+
+/// The call of a `&self` method whose `&mut` input keeps the receiver
+/// borrowed for as long as the value it refers to lives, as integration's
+/// `scene.draw(&mut render_pass)` lends `scene` to the `RenderPass<'a>`
+/// that `Scene::clear` put in its scope frame's region (`Signature::
+/// keep_receiver`). The call runs in that region, which lends the value
+/// `&mut`, and the receiver, a value of the arena, is shared with the
+/// region's pins, which hold it until the frame ends: rustc keeps it
+/// borrowed for the value's life, and rawr's checker refuses a `&mut` of
+/// it meanwhile (E0502). A value out of any region lives as long as the
+/// runner, which no borrow of the arena's values does, so it is refused.
+fn render_receiver_kept(
+    plan: &Plan,
+    path: &str,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = request::unwritable;
+    let [kept] = signature.keep_receiver() else {
+        return Err(request::drift("a receiver kept by several inputs"));
+    };
+    let position = usize::try_from(*kept).map_err(|_| request::drift("a kept input's position"))?;
+    let declared = signature
+        .inputs()
+        .get(position)
+        .ok_or_else(|| request::drift("a kept input"))?;
+    let convert::Type::Borrowed { mutable: true, ty } =
+        substituted(declared, signature, substitutions)?
+    else {
+        return Err(request::drift("a kept input that is no `&mut`"));
+    };
+    let name = concrete_type(&ty).unwrap_or_else(|| plan.name().to_owned());
+    let reached = family_of(&ty)
+        .ok_or_else(|| request::drift("a kept input's family"))?
+        .call(family::Reach::GetMut, "scoped");
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let mut body = Vec::new();
+    {
+        let _arguments = RegionArguments::enter();
+        for (local, input) in signature.inputs().iter().enumerate() {
+            if local != position {
+                render_take_input(
+                    local,
+                    local + 1,
+                    input,
+                    signature,
+                    substitutions,
+                    None,
+                    &mut body,
+                )?;
+            }
+        }
+    }
+    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    let call = scoped_receiver_call(
+        plan,
+        Receiver::Shared,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+    )?;
+    let converted = {
+        let _region = InRegion::enter();
+        let mut converted = String::new();
+        let returned = substituted(signature.output(), signature, substitutions)?;
+        render_to_dynamic(&returned, "output", 0, &mut converted)?;
+        converted
+    };
+    let index = position + 1;
+    writeln!(
+        output,
+        "    let handle = native_handle(arguments, 0, false)?;
+    let scoped = scoped_value(arguments, {index}).ok_or(Error::Lent({name:?}, __rawr_internal::scope::Error::Mismatch))?;
+    __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
+{body}        let pins = region.pins().ok_or(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))?;
+        let receiver: &{container} = pins.hold(arguments.arena.share::<{container}>(handle)?);
+        #[allow(unused_mut)]
+        let mut argument_{position} = region.{reached}.map_err(|error| Error::Lent(scoped.name(), error))?;
+        let output = {call};
+        {converted}
+    }})
+    .map_err(|error| Error::Lent(scoped.name(), error))?"
+    )
+    .map_err(encoding)
 }
 
 /// The call `render_scoped_receiver` makes, of `receiver` and the
@@ -19370,15 +19524,17 @@ fn render_take_input(
         .map_err(request::unwritable);
     }
     // `&Rc<T>` or `&Arc<T>` of a crate value: the crate's own pointer
-    // rawr's stands for, lent from its slot for the call (#775).
+    // rawr's stands for, lent from its slot for the call (#775). So is one
+    // that fills a `&dyn Trait` or `&T` input, as `&window` of an
+    // `Arc<Window>` fills iced's `update(window: &dyn Window, ..)`.
     if let convert::Type::Borrowed {
         mutable: false,
         ty: lent,
-    } = ty
-        && counted_element(lent).is_some()
+    } = substituted(ty, signature, substitutions)?
+        && counted_element(&lent).is_some()
     {
         let rust =
-            concrete_type(lent).ok_or_else(|| request::drift("a lent counted pointer's type"))?;
+            concrete_type(&lent).ok_or_else(|| request::drift("a lent counted pointer's type"))?;
         return writeln!(
             output,
             "    let argument_{local}_lent = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); lend_pointer::<{rust}>(arguments.arena, &value)? }};\n    let argument_{local}: &{rust} = argument_{local}_lent.get().ok_or(Error::TypeMismatch)?;"

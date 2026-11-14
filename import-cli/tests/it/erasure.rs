@@ -19,7 +19,7 @@ static ERASURE: Fixture = Fixture::new("erasure");
 /// program: the lane, whether it succeeded, its stdout and its stderr.
 fn run(main: &str) -> (Lease, bool, String, String) {
     let root = ERASURE.lease(&[("src/main.rs", &format!("// rawr\n{main}"))]);
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", crate::support::scratch().join("rawr-home"))

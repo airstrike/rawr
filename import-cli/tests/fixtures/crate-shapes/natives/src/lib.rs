@@ -2066,6 +2066,34 @@ pub mod passes {
     pub struct Pass<'a> {
         target: &'a Target,
         encoder: &'a mut Encoder,
+        layers: Vec<&'a Layer>,
+    }
+
+    /// What a pass keeps a shared borrow of for its own life once it is
+    /// drawn into it, as integration's `Scene::draw<'a>(&'a self, &mut
+    /// RenderPass<'a>)` gives the pass its pipeline.
+    pub struct Layer {
+        name: String,
+    }
+
+    impl Layer {
+        pub fn new(name: &str) -> Self {
+            Self {
+                name: name.to_owned(),
+            }
+        }
+
+        pub fn draw<'a>(&'a self, pass: &mut Pass<'a>) {
+            pass.layers.push(self);
+        }
+
+        pub fn rename(&mut self, name: &str) {
+            name.clone_into(&mut self.name);
+        }
+
+        pub fn name(&self) -> &str {
+            &self.name
+        }
     }
 
     impl Target {
@@ -2083,7 +2111,11 @@ pub mod passes {
             encoder
                 .log
                 .push(format!("clear {} to {color}", target.name));
-            Pass { target, encoder }
+            Pass {
+                target,
+                encoder,
+                layers: Vec::new(),
+            }
         }
     }
 
@@ -2112,7 +2144,139 @@ pub mod passes {
 
     impl Drop for Pass<'_> {
         fn drop(&mut self) {
+            for layer in &self.layers {
+                let line = format!("layer {}", layer.name);
+                self.encoder.log.push(line);
+            }
             self.encoder.log.push("end".to_owned());
+        }
+    }
+}
+
+/// A trait object a crate takes of any value whose type implements its
+/// supertraits, as iced's `update(window: &dyn Window, ..)` takes winit's
+/// `Arc<Window>` through a blanket impl.
+pub mod windows {
+    use std::sync::Arc;
+
+    pub trait HasHandle {
+        fn handle(&self) -> u32;
+    }
+
+    pub trait Window: HasHandle + std::fmt::Debug {}
+
+    impl<T> Window for T where T: HasHandle + std::fmt::Debug {}
+
+    #[derive(Debug)]
+    pub struct Surface {
+        id: u32,
+    }
+
+    impl Surface {
+        pub fn new(id: u32) -> Self {
+            Self { id }
+        }
+    }
+
+    impl HasHandle for Surface {
+        fn handle(&self) -> u32 {
+            self.id
+        }
+    }
+
+    impl<T: HasHandle + ?Sized> HasHandle for Arc<T> {
+        fn handle(&self) -> u32 {
+            (**self).handle()
+        }
+    }
+
+    pub fn handle_of(window: &dyn Window) -> u32 {
+        window.handle()
+    }
+}
+
+/// A crate's type a `for` loops over by its `IntoIterator` impl alone, as
+/// integration's `for message in messages` loops over iced's `shell::Bus`.
+pub mod bags {
+    pub struct Bag<T> {
+        items: Vec<(T, u32)>,
+    }
+
+    impl<T> Bag<T> {
+        pub fn new() -> Self {
+            Self { items: Vec::new() }
+        }
+
+        pub fn push(&mut self, item: T) {
+            let receipt = u32::try_from(self.items.len()).unwrap_or(u32::MAX);
+            self.items.push((item, receipt));
+        }
+    }
+
+    impl<T> Default for Bag<T> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    /// Pushes one item into `bag` and gives how many it holds, as iced's
+    /// `update(.., messages: &mut Bus<_>)` fills a bus a program may make
+    /// for the call alone (`&mut Bus::new()`).
+    pub fn counted(bag: &mut Bag<u32>, item: u32) -> usize {
+        bag.push(item);
+        bag.items.len()
+    }
+
+    pub struct IntoIter<T> {
+        iter: std::vec::IntoIter<(T, u32)>,
+    }
+
+    impl<T> Iterator for IntoIter<T> {
+        type Item = T;
+
+        fn next(&mut self) -> Option<T> {
+            self.iter.next().map(|(item, _)| item)
+        }
+    }
+
+    impl<T> IntoIterator for Bag<T> {
+        type Item = T;
+        type IntoIter = IntoIter<T>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            IntoIter {
+                iter: self.items.into_iter(),
+            }
+        }
+    }
+}
+
+/// A struct the crate implements `Drop` for, whose public field a program
+/// reads, as integration's `frame.texture.create_view(..)` reads wgpu's
+/// `SurfaceTexture::texture`: rustc never moves the field out (E0509).
+pub mod frames {
+    #[derive(Clone, Debug)]
+    pub struct Texture {
+        id: u32,
+    }
+
+    impl Texture {
+        pub fn id(&self) -> u32 {
+            self.id
+        }
+    }
+
+    pub struct SurfaceTexture {
+        pub texture: Texture,
+    }
+
+    impl Drop for SurfaceTexture {
+        fn drop(&mut self) {}
+    }
+
+    pub fn acquire(id: u32) -> SurfaceTexture {
+        SurfaceTexture {
+            texture: Texture { id },
         }
     }
 }

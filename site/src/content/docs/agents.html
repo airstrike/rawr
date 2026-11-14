@@ -111,6 +111,7 @@ screenshot  {"path": "todos"}</code></pre></div>
 <ul>
   <li>The input goes to the program alone, in its own process. Your pointer, your keyboard and the app you are using are left alone, and the program&rsquo;s window isn&rsquo;t brought forward. You can keep working while an agent uses the window.</li>
   <li>The window shows an orange agent cursor where the pointer last went, so you can see where the agent is pointing. Screenshots show it too. It is drawn above the program&rsquo;s own drawing, and the program&rsquo;s layout and events don&rsquo;t change for it.</li>
+  <li>The program draws each screenshot itself, in its own process, and nothing asks the window server for the window. So a screenshot shows the window as it is while another app&rsquo;s window covers it, while it is off screen and while the session is locked. The window draws a new frame for it first.</li>
   <li>Each tool answers once the program has taken the input and drawn again. A <code>screenshot</code> right after it shows what the input did. An input that makes the program pause at a breakpoint answers with where it paused.</li>
   <li><code>key</code> and <code>type</code> go to whatever the program has focused. Click a text input first.</li>
   <li><code>title</code> picks a window by its title when the program has several. Otherwise the input goes to its front window.</li>
@@ -145,7 +146,7 @@ stop        {"path": "counter"}</code></pre></div>
 <ul>
   <li>rawr puts no time limit on a call. Each one waits for what it needs: a build, an event, a pause or the program&rsquo;s end. A client that bounds its calls cancels one that runs past its bound. A cancelled <code>start</code> or <code>check</code> leaves its build going, and the next call waits for it again.</li>
   <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/apps#ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
-  <li>A screenshot uses macOS&rsquo;s window capture. macOS asks for Screen Recording permission for the app the agent runs in. Other systems have no such capture yet.</li>
+  <li>A screenshot needs macOS. The program draws it itself, through its own renderer, so it needs no Screen Recording permission. Other systems have no such capture yet.</li>
   <li>The input tools need macOS too. They need no permission, since nothing goes through the system&rsquo;s input.</li>
   <li>One project has one started program at a time.</li></ul>
 </article>

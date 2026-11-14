@@ -28,10 +28,29 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 // `DIGEST`, the identity of the Rawr sources this build carries: the
-// embedded sources' digest, or for a build of a written host the digest its
-// `.digest` stamp names, which is the writer's own; zero for a development
-// build that uses its own checkout.
+// embedded sources' digest, or zero for a build that carries none (a
+// development checkout, or a build of a written host such as the shared
+// runtime, which a runner names with `identify`).
 include!(concat!(env!("OUT_DIR"), "/host.rs"));
+
+/// The identity of the Rawr sources this process runs against: the one a
+/// runner named at its start ([`identify`]), or this build's own
+/// [`DIGEST`]. A check keeps what it records under its own digest, and the
+/// runner it generates names that digest, so the runner reads what its
+/// check kept whichever host's build of the runtime it links (#1606).
+#[must_use]
+pub fn digest() -> [u8; 32] {
+    IDENTIFIED.get().copied().unwrap_or(DIGEST)
+}
+
+/// Name the Rawr sources a runner was generated against, before it reads
+/// anything a check of them kept. Only the first call counts.
+pub fn identify(digest: [u8; 32]) {
+    let _ = IDENTIFIED.set(digest);
+}
+
+/// The digest [`identify`] named.
+static IDENTIFIED: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
 
 /// The Rawr repository root holding `rawr` and `rawr-import`.
 #[cfg(not(feature = "embedded-host"))]

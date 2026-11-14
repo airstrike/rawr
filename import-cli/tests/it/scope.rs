@@ -25,7 +25,7 @@ const MODULES: [&str; 5] = [
 
 fn rawr_import(root: &Path) -> Output {
     let directory = crate::support::scratch();
-    Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    crate::support::rawr_import()
         .arg("run")
         .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))

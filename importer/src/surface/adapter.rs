@@ -58,6 +58,10 @@ pub(crate) enum Operation {
         field: Field,
         #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
         instance: Box<[convert::Type]>,
+        /// The crate implements `Drop` for the struct: the field never
+        /// moves out of it (E0509).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        drops: bool,
     },
     EnumVariant {
         parameters: Box<[signature::Parameter]>,
@@ -776,6 +780,7 @@ fn clone_operation(
                 parameters: clone_parameters(plan.parameters())?,
                 field,
                 instance,
+                drops: plan.drops(),
             })
         }
         (representability::Representability::Enum(plan), identity::Selector::Declaration) => {
@@ -1211,6 +1216,7 @@ fn clone_signature_at(
     .with_lends(source.lends().into())
     .with_statics(source.statics().into())
     .with_regional(source.regional().into())
+    .with_keep_receiver(source.keep_receiver().into())
     .with_lasting_receiver(source.lasting_receiver())
     .with_detached_future(source.detached_future())
     .with_assigns(source.assigns()))

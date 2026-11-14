@@ -47,6 +47,11 @@
 //! "paused": ..}` while it is paused, with `"taken": true` when the input
 //! made it pause.
 //!
+//! It captures the program's window too (#1989), with `{"op":
+//! "screenshot", "title": .., "file": ..}`: the window draws a frame
+//! through its own renderer, written as a PNG to `file` (see
+//! [`screenshot`]); `{"error": "paused", ..}` while it is paused.
+//!
 //! And it reads the program's menu bar, or chooses one of rawr's own
 //! items in it, with `{"op": "menu"}` (#1990, see [`menu`]).
 //!
@@ -62,9 +67,9 @@
 //! called pauses at the program's next call from it.
 #![cfg(feature = "debugging")]
 
-pub mod capture;
 mod input;
 pub mod menu;
+mod screenshot;
 mod stops;
 
 use std::collections::HashSet;
@@ -712,6 +717,7 @@ impl Shared {
         let gone = || gone(&stream);
         let answer = match request.get("op").and_then(Value::as_str) {
             Some("input") => self.input(&request, &gone),
+            Some("screenshot") => self.screenshot(&request, &gone),
             Some("menu") => menu::answer(&request, &gone)
                 .unwrap_or_else(|| json!({ "error": "the tool went away" })),
             Some("break") => self.set(&request),
@@ -741,6 +747,16 @@ impl Shared {
         input::answer(request, &|| self.state().paused.is_some() || gone()).unwrap_or_else(
             || json!({ "error": "paused", "paused": self.state().paused.clone(), "taken": true }),
         )
+    }
+
+    /// Capture the program's window. A paused program holds its event
+    /// loop, so its window draws nothing until it goes on.
+    fn screenshot(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
+        if let Some(paused) = self.state().paused.clone() {
+            return json!({ "error": "paused", "paused": paused });
+        }
+        screenshot::answer(request, &|| self.state().paused.is_some() || gone())
+            .unwrap_or_else(|| json!({ "error": "paused", "paused": self.state().paused.clone() }))
     }
 
     /// Read values: answered at the program's next matching step, or where

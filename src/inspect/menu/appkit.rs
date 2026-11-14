@@ -276,7 +276,7 @@ fn perform(action: Action) {
         Action::Exit => super::exit(),
         Action::About => about(runtime),
         Action::Screenshot => match shown(runtime) {
-            Some(window) => super::screenshot(msg!(runtime, isize; window, "windowNumber") as i64),
+            Some(window) => super::screenshot(runtime.text(msg!(runtime, Id; window, "title"))),
             None => eprintln!("rawr: the program shows no window to take a screenshot of"),
         },
     }

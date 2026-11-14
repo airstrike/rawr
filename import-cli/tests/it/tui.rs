@@ -163,7 +163,7 @@ fn a_lent_list_state_goes_to_render_stateful_widget_as_cargo_run_does() {
     assert!(expected.contains("selected Some(4) offset 2"), "{expected}");
 
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", directory.join("rawr-home"))

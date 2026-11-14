@@ -16,7 +16,7 @@ static SHAPES: Fixture = Fixture::new("native-shapes");
 
 fn rawr_import(command: &str, root: &Path) -> Output {
     let directory = crate::support::scratch();
-    Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    crate::support::rawr_import()
         .arg(command)
         .arg(root)
         .env("RAWR_HOME", directory.join("rawr-home"))

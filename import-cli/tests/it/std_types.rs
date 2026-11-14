@@ -63,7 +63,7 @@ fn std_path_and_io_error_are_the_crates_own_types() {
     );
 
     let directory = crate::support::scratch();
-    let rawr = run(Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let rawr = run(crate::support::rawr_import()
         .arg("run")
         .arg(&root)
         .env("RAWR_HOME", directory.join("rawr-home"))

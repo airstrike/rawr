@@ -209,29 +209,17 @@ fn compiler_cfgs(version: &str) {
 /// files and binary sources, with the root's lockfile) and their digest, which is also this Rawr's source
 /// identity. Tests, benches, examples and binaries are never built for a
 /// dependency, so editing them keeps the host.
-/// The digest of the sources this build carries when it builds a host
-/// (`src/host.rs`), which the host's `.digest` stamp names: the digest of
-/// the rawr that wrote it, so a runner built from the host knows the build
-/// it came from. A development checkout has no stamp, and no digest.
+/// The digest of a build that carries no sources (`src/host.rs`): none. A
+/// development checkout has no digest. A build of a written host, such as
+/// the shared runtime, never reads the host's `.digest` stamp: one runtime
+/// build serves every host whose libraries agree, and a stamp would make
+/// each host recompile `rawr-import` and everything above it (#1983). The
+/// runner names the host it was generated against instead (`identify`).
 fn hosted_digest() -> Result<(), Box<dyn Error>> {
-    let stamp = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("no manifest dir")?)
-        .join("../.digest");
-    println!("cargo:rerun-if-changed={}", stamp.display());
-    let digest = fs::read_to_string(&stamp)
-        .ok()
-        .filter(|hex| hex.len() == 64)
-        .and_then(|hex| {
-            (0..32)
-                .map(|index| u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok())
-                .collect::<Option<Vec<u8>>>()
-        })
-        .unwrap_or_else(|| vec![0; 32]);
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("no OUT_DIR")?);
     fs::write(
         output.join("host.rs"),
-        format!(
-            "/// Identity of the Rawr sources this build carries.\npub const DIGEST: [u8; 32] = {digest:?};\n"
-        ),
+        "/// Identity of the Rawr sources this build carries.\npub const DIGEST: [u8; 32] = [0; 32];\n",
     )?;
     Ok(())
 }

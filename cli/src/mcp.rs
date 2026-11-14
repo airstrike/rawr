@@ -19,7 +19,6 @@ mod extension;
 mod process;
 mod session;
 mod tools;
-mod window;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

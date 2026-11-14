@@ -142,11 +142,13 @@ fn screenshot_path(directory: &Path, name: &str, millis: u128) -> PathBuf {
         .join(format!("{name}-{millis}.png"))
 }
 
+/// Capture the window titled `title` into `screenshots` in the project's
+/// `target/rawr`, as `rawr mcp`'s screenshot captures it: the window draws
+/// the capture itself (#1989). The capture waits on the main thread, which
+/// runs this, so it runs on a thread of its own. One line says where it
+/// went.
 #[cfg(target_os = "macos")]
-/// Capture window `number` into the project's `target/rawr/screenshots`
-/// on a thread of its own, so the window draws on meanwhile, and say
-/// where it went.
-fn screenshot(number: i64) {
+fn screenshot(title: String) {
     let directory = std::env::var_os("RAWR_DIRECTORY")
         .filter(|directory| !directory.is_empty())
         .map_or_else(|| PathBuf::from("target/rawr"), PathBuf::from);
@@ -156,12 +158,22 @@ fn screenshot(number: i64) {
     let path = screenshot_path(&directory, &name().unwrap_or_default(), millis);
     let spawned = std::thread::Builder::new()
         .name("rawr-screenshot".into())
-        .spawn(move || match super::capture::window(number, &path) {
-            Ok(_) => eprintln!(
-                "rawr: saved a screenshot of the window to {}",
-                path.display()
-            ),
-            Err(error) => eprintln!("rawr: the screenshot failed: {error}"),
+        .spawn(move || {
+            let captured = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .map_err(|error| error.to_string())
+                .and_then(|()| {
+                    super::screenshot::capture(Some(&title), &path, &|| false)
+                        .map_err(|error| error.to_string())
+                });
+            match captured {
+                Ok(_) => eprintln!(
+                    "rawr: saved a screenshot of the window to {}",
+                    path.display()
+                ),
+                Err(error) => eprintln!("rawr: the screenshot failed: {error}"),
+            }
         });
     if let Err(error) = spawned {
         eprintln!("rawr: the screenshot failed: {error}");

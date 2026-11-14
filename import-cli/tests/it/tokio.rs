@@ -27,7 +27,7 @@ fn job(line: &str) -> Option<(u64, u64)> {
 fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocking() {
     let root = ASYNC.lease(&[]);
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -76,7 +76,7 @@ fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocki
 fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
     let root = BORROWED.lease(&[]);
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -113,7 +113,7 @@ fn a_module_function_names_another_crates_type() {
     )
     .unwrap();
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -152,7 +152,7 @@ fn an_async_fn_leases_every_borrow_its_inputs_hold() {
         stdout
     };
     let rawr = output(
-        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        crate::support::rawr_import()
             .arg("run")
             .arg(&*root)
             .env("RAWR_HOME", directory.join("rawr-home")),
@@ -205,7 +205,7 @@ fn spawned(attribute: &str) -> String {
         .replace("#[tokio::main]", attribute);
     let root = SPAWN.lease(&[("src/main.rs", &main)]);
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -250,7 +250,7 @@ fn a_spawned_script_future_runs_unawaited_and_its_handle_gives_its_value() {
 fn a_crate_decodes_program_structs_on_a_worker_thread() {
     let root = DERIVES.lease(&[]);
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -298,7 +298,7 @@ fn futures_try_join_takes_script_futures_through_its_blanket_trait() {
          Err(\"invalid type: integer `1`, expected a string at line 1 column 1\")\n"
     );
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -348,7 +348,7 @@ fn pokedex_searches_on_a_worker_thread_as_cargo_runs_it() {
          Whoops! - Pokédex\n"
     );
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
@@ -373,7 +373,7 @@ fn an_unnamed_crate_type_from_a_future_has_its_debug() {
     let program = DERIVES.read("unnamed.rs");
     let root = DERIVES.lease(&[("src/main.rs", &program)]);
     let directory = crate::support::scratch();
-    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))

@@ -35,7 +35,7 @@ fn rawr_import(root: &Path, arguments: &[&str]) -> Output {
 }
 
 fn rawr_import_with_home(root: &Path, arguments: &[&str], home: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    crate::support::rawr_import()
         .args(arguments)
         .arg(root)
         .env("RAWR_HOME", home)
@@ -345,7 +345,7 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
         "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn right() -> bool {\n    use facts_c::Right;\n    facts_a::both().choose()\n}\nfn bumped() -> i64 {\n    use facts_c::BumpLeft;\n    let mut both = facts_a::both();\n    both.bump()\n}\nfn taken() -> i64 {\n    use facts_c::TakeLeft;\n    facts_a::both().spend()\n}\nfn main() {\n    println!(\"{} {} {} {}\", left(), right(), bumped(), taken());\n}\n",
     );
     // Four calls to prove, which the check proves (#446).
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let check = crate::support::rawr_import()
         .arg("check")
         .arg(&first)
         .env("RAWR_HOME", &home)
@@ -1164,7 +1164,7 @@ fn main() {
         fs::write(project.join("src/main.rs"), "// rawr\nuse binding_input_fixture::only_when_narrow;\nfn main() { println!(\"{}\", only_when_narrow()); }\n").unwrap();
     }
     let run = |project: &Path, action: &str, mode: &str| {
-        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        crate::support::rawr_import()
             .args([action])
             .arg(project)
             .env("RAWR_HOME", crate::support::runtime_home())
@@ -1347,7 +1347,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     )
     .unwrap();
     let home = crate::support::scratch().join("rawr-home");
-    let output = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+    let output = crate::support::rawr_import()
         .arg("run")
         .arg(&project)
         .env("RAWR_HOME", &home)
@@ -1468,7 +1468,7 @@ fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_diffe
     }
     let home = root.join("rawr-home");
     let run = |project: &Path, action: &str, value: &str| {
-        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        crate::support::rawr_import()
             .arg(action)
             .arg(project)
             .env("RAWR_HOME", &home)
@@ -1576,7 +1576,7 @@ fn a_declared_variable_set_by_cargo_env_config_runs_as_under_cargo() {
             .unwrap()
     };
     let rawr = || {
-        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        crate::support::rawr_import()
             .arg("run")
             .arg(&root)
             .env("RAWR_HOME", base.join("rawr-home"))
@@ -1669,7 +1669,7 @@ fn inputs_read_through_symlinks_build_and_a_repointed_link_rebuilds() {
             .unwrap()
     };
     let rawr = || {
-        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        crate::support::rawr_import()
             .arg("run")
             .arg(&root)
             .env("RAWR_HOME", base.join("rawr-home"))
