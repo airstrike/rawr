@@ -94,3 +94,75 @@ pub fn placed(tag: &(&str, &'static std::panic::Location<'static>)) -> String {
         location.column()
     )
 }
+
+/// A descriptor generic over its label, as wgpu-types'
+/// `DeviceDescriptor<L>` is.
+pub struct Described<L> {
+    pub label: L,
+    pub count: u32,
+}
+
+/// A descriptor whose label borrows, as wgpu's `type DeviceDescriptor<'a>
+/// = wgt::DeviceDescriptor<Option<&'a str>>` is.
+pub type Descriptor<'a> = Described<Option<&'a str>>;
+
+/// A descriptor labeled `label`.
+pub fn described(label: Option<&'static str>, count: u32) -> Descriptor<'static> {
+    Described { label, count }
+}
+
+/// The count and label length of a descriptor whose label borrows inside
+/// a type argument, as wgpu's `request_device(&self, desc:
+/// &DeviceDescriptor<'_>)` takes (#1953).
+pub fn requested(descriptor: &Descriptor<'_>) -> u32 {
+    descriptor.count + descriptor.label.map_or(0, |label| label.len() as u32)
+}
+
+/// A builder whose key is held by a borrow, as iced's `Sensor<'a, Key,
+/// ..>` is.
+pub struct Keyed<'a, K> {
+    key: K,
+    width: u32,
+    marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> Keyed<'a, ()> {
+    /// An unkeyed builder `width` wide.
+    pub fn new(width: u32) -> Self {
+        Keyed {
+            key: (),
+            width,
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, K> Keyed<'a, K> {
+    /// The builder keyed by a borrow of a `?Sized` key, as iced's
+    /// `Sensor::key_ref<K>(self, key: &'a K) -> Sensor<'a, &'a K, ..>`
+    /// takes a `&str` (#801).
+    pub fn key_ref<T>(self, key: &'a T) -> Keyed<'a, &'a T>
+    where
+        T: ToOwned + PartialEq<T::Owned> + ?Sized,
+        T::Owned: 'static,
+    {
+        Keyed {
+            key,
+            width: self.width,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    /// The builder `width` wide.
+    pub fn width(mut self, width: u32) -> Self {
+        self.width = width;
+        self
+    }
+}
+
+impl<K: std::fmt::Debug> Keyed<'_, K> {
+    /// Its key and width.
+    pub fn shown(&self) -> String {
+        format!("{:?} {}", self.key, self.width)
+    }
+}

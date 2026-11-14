@@ -389,6 +389,16 @@ pub(super) fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::infallible(),
             arguments: Box::default(),
         },
+        // A `&dyn Trait` of a crate's trait the program holds, as iced's
+        // `window::run` lends editor's `open_file(window: &dyn Window)`: the
+        // object's shared pointer, which `Pointer::Shared` is, as rfd's
+        // `set_parent(&window)` takes it for its `W: ?Sized` (D872).
+        Ty::Reference {
+            mutable: false,
+            target,
+        } if lends_object(inference, target) => {
+            imported_surface_type(inference, models, target, operation, imported)?
+        }
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference { mutable: false, .. }
@@ -499,6 +509,14 @@ pub(super) fn imported_surface_type(
         }
         other => return Err(unsupported_type_argument(other.name(models), operation)),
     })
+}
+
+/// Whether `target`, what a shared reference borrows, is a crate trait's
+/// object, so the reference is the object's shared pointer (D872).
+#[cfg(feature = "rust-import")]
+fn lends_object(inference: &Inference, target: &Ty) -> bool {
+    matches!(inference.resolved_ref(target),
+        Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name))
 }
 
 /// The pointer a crate's trait object owned by `ty`, a `Box`, `Rc` or
@@ -1042,6 +1060,11 @@ pub(super) fn instance_surface_type(
         } if matches!(inference.resolved_ref(target), Ty::Script(..)) => {
             instance_surface_type(inference, models, target)?
         }
+        // A `&dyn Trait`, as `imported_surface_type` has it.
+        Ty::Reference {
+            mutable: false,
+            target,
+        } if lends_object(inference, target) => instance_surface_type(inference, models, target)?,
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference {
@@ -1055,7 +1078,9 @@ pub(super) fn instance_surface_type(
                     owned: false,
                     length: None,
                 },
-                Ty::Str | Ty::String => Type::Builtin(Builtin::Str),
+                // So is a `&K` whose `K` a `&str` filled with `str`, as
+                // iced's `Sensor<'a, &'a K, ..>` from `key_ref(url.as_str())`.
+                Ty::Str | Ty::String | Ty::UnsizedStr => Type::Builtin(Builtin::Str),
                 // A crate value the program holds, as `Some(&self.backend)`
                 // fills iced's `pick_list`'s `V: Borrow<T>`.
                 target @ Ty::Host { .. } => instance_surface_type(inference, models, &target)?,

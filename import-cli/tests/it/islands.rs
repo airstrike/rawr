@@ -966,6 +966,43 @@ fn a_marked_module_names_the_items_of_a_native_module() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// A native module's path is the crate's own, whatever a `use` binds the
+/// crate's name to: `icon::copy()` beside `use std::cmp as pages;` in the
+/// crate `pages` calls the native module's function, as iced's markdown
+/// example calls `icon::copy()` beside `use iced::widget::markdown;`.
+/// `rawr run` prints what `cargo run` prints.
+#[test]
+fn a_native_modules_path_ignores_a_use_of_the_crates_name() {
+    const SHADOW: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-crate-shadow"
+    );
+    const PRINTED: &str = "61637 61637";
+    let root = crate::support::fresh("islands-crate-shadow");
+    copy(Path::new(SHADOW), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        format!("{PRINTED}\n")
+    );
+    let mut run = start(&root, &[]);
+    let seen = run.until(|_| true);
+    assert_eq!(seen, PRINTED, "{}", run.seen.join("\n"));
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
+
 /// A marked module names a workspace crate's aliases through a module its
 /// `use` binds (`use model::extension;`), as inboard's `home` does: an
 /// alias of another crate's type in a re-exported module (`pub type

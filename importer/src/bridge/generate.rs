@@ -21887,12 +21887,30 @@ fn instantiated(
     let one = |ty: &convert::Type| instantiated(ty, signature, substitutions).map(Box::new);
     Some(match ty {
         convert::Type::Parameter(_) => substitution(ty, signature, substitutions)?.clone(),
+        // A type argument `&K` the call fills with `str` stays the borrow a
+        // type holds, as iced's `Sensor<'a, &'a K, ..>` from `key_ref`
+        // holds a `&str`, which a family names at its lifetime.
         convert::Type::Nominal {
             definition,
             arguments,
         } => convert::Type::Nominal {
             definition: *definition,
-            arguments: all(arguments)?,
+            arguments: arguments
+                .iter()
+                .map(
+                    |argument| match instantiated(argument, signature, substitutions)? {
+                        text @ convert::Type::Builtin(convert::Builtin::Str)
+                            if matches!(argument, convert::Type::Borrowed { .. }) =>
+                        {
+                            Some(convert::Type::Borrowed {
+                                mutable: false,
+                                ty: Box::new(text),
+                            })
+                        }
+                        argument => Some(argument),
+                    },
+                )
+                .collect::<Option<Box<[_]>>>()?,
         },
         convert::Type::Option(element) => convert::Type::Option(one(element)?),
         // `&F` where the call fills `F` with `str` is the `&str` input it
