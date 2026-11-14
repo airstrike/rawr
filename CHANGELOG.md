@@ -17,6 +17,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A save whose first `.into()` needs a crate's From impl, as `text(..).into()` into an Element, prepares again with it instead of failing with an unknown member. (#1896)
 - An app that keeps its view, as iced does, can show a save of view-only code at once: the new `rawr-hot` crate tells the app each save it takes, and `Subscription::run(rawr_hot::generations).map(|_| Message::Reloaded)` turns that into a message. Under cargo it never fires. (#1903)
 - A path dependency whose manifest names a file above its own folder, as a workspace member's `readme = "../README.md"`, no longer stops `rawr run` with an internal error. (#1904)
+- rawr's runner build reuses the units `cargo build -p <member>` made in a workspace whose root is a package, as icedxdy's: it resolves features with the workspace's resolver when the root inherits its edition, keeps every version the project's Cargo.lock pins, places the root package and its path dependencies in the runner's workspace, and never prunes a path package's unit that cargo built. (#1911, #1912, #1913)
+- A respawned runner reads each source's interface outline, the walks over the program's declarations and each item's and instance's digest from what the exiting runner kept on disk, so a restart after a save it already compiled lexes, walks and digests only what changed. (#1898, #1899; part of #1755)
 
 ## 0.3.212 (2026-11-13)
 

@@ -23,7 +23,9 @@
         {"text":"A native struct literal with `..base` runs its fields in source order before the base's borrow, as `Colors { accent: theme.colors.error.clone(), ..theme.colors.clone() }`.","issues":[1895]},
         {"text":"A save whose first `.into()` needs a crate's From impl, as `text(..).into()` into an Element, prepares again with it instead of failing with an unknown member.","issues":[1896]},
         {"text":"An app that keeps its view, as iced does, can show a save of view-only code at once: the new `rawr-hot` crate tells the app each save it takes, and `Subscription::run(rawr_hot::generations).map(|_| Message::Reloaded)` turns that into a message. Under cargo it never fires.","issues":[1903]},
-        {"text":"A path dependency whose manifest names a file above its own folder, as a workspace member's `readme = \"../README.md\"`, no longer stops `rawr run` with an internal error.","issues":[1904]}
+        {"text":"A path dependency whose manifest names a file above its own folder, as a workspace member's `readme = \"../README.md\"`, no longer stops `rawr run` with an internal error.","issues":[1904]},
+        {"text":"rawr's runner build reuses the units `cargo build -p <member>` made in a workspace whose root is a package, as icedxdy's: it resolves features with the workspace's resolver when the root inherits its edition, keeps every version the project's Cargo.lock pins, places the root package and its path dependencies in the runner's workspace, and never prunes a path package's unit that cargo built.","issues":[1911,1912,1913]},
+        {"text":"A respawned runner reads each source's interface outline, the walks over the program's declarations and each item's and instance's digest from what the exiting runner kept on disk, so a restart after a save it already compiled lexes, walks and digests only what changed.","issues":[1898,1899],"refs":[1755]}
       ]
     },
     "releases": [
@@ -4211,8 +4213,8 @@
     {"issue":1895,"title":"Struct-update syntax over a native type forces a native build, then hits an unsupported call ordering","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1896,"title":"`.into()` from a widget to Element fails as an unknown member Element::from","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1897,"title":"A respawned runner reads its image's facade outline from disk","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":1898,"title":"A respawned runner keeps each source's interface outline on disk","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1898,"title":"A respawned runner keeps each source's interface outline on disk","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1901,"title":"A private field added to a tuple struct lowers again every module that names it","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1902,"title":"A program with any impl Drop keys every struct whole for other modules' lowerings","state":"open","category":"Shared dependency cache (D607)"},
@@ -4224,9 +4226,13 @@
     {"issue":1908,"title":"A plain-value field read through a native field path moves the path","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1909,"title":"A nested store through a field of a generic native struct is unsupported","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5495,9 +5501,13 @@
             {"number":1908,"title":"A plain-value field read through a native field path moves the path","state":"open"},
             {"number":1909,"title":"A nested store through a field of a generic native struct is unsupported","state":"open"},
             {"number":1910,"title":"rawr-hot's signal comes at once only on macOS","state":"open"},
-            {"number":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"open"},
-            {"number":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"open"},
-            {"number":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"open"}
+            {"number":1911,"title":"The runner resolves features with resolver 1 when the project inherits its edition from the workspace","state":"closed"},
+            {"number":1912,"title":"rawr's own version floors raise the project's lock in the runner, so every unit under libc or memchr rebuilds","state":"closed"},
+            {"number":1913,"title":"A workspace-root package (path \".\") is never placed in the runner, so it and its path dependencies build apart","state":"closed"},
+            {"number":1914,"title":"Resolve rawr's own crates apart from the project's in the harness, so no dependency floor can raise a pinned package","state":"open"},
+            {"number":1915,"title":"The runner still builds a second copy of a workspace-root package and of the crates that depend on it","state":"open"},
+            {"number":1916,"title":"Each interface rewrites the program-wide digests (own, Calls, every) with Debug writes","state":"open"},
+            {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"}
           ]
         },
         {
@@ -5538,8 +5548,8 @@
             {"number":1876,"title":"Reuse each unit's resolution at a start, keyed by its text and what it reads","state":"closed"},
             {"number":1877,"title":"Splice kept lowerings in as parsed pieces instead of reprinting and reparsing the whole script","state":"closed"},
             {"number":1878,"title":"Each compile builds the lowering interface up to 34 times, copying and hashing every item each time","state":"closed"},
-            {"number":1898,"title":"A respawned runner keeps each source's interface outline on disk","state":"open"},
-            {"number":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"open"}
+            {"number":1898,"title":"A respawned runner keeps each source's interface outline on disk","state":"closed"},
+            {"number":1899,"title":"A respawned runner's interface reach walk costs what changed","state":"closed"}
           ]
         },
         {
