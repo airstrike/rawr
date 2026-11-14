@@ -199,6 +199,19 @@ impl Reason {
     }
 }
 
+/// What `project`'s native build watches of its proof's `watch`: nothing
+/// under the directories builds write, which hold Rawr's store, generated
+/// runner sources and kept files (#1890), and Cargo's checkouts left
+/// unwatched. A change there is a build's own write, never a save.
+pub(crate) fn native_inputs(
+    project: &std::path::Path,
+    watch: impl IntoIterator<Item = rawr_import::input::proof::Watch>,
+) -> source::Inputs {
+    source::Inputs::imported(watch)
+        .outside(&rawr_import::location::outputs_here(project))
+        .with_checkouts(&rawr_import::location::checkouts_here())
+}
+
 /// What a resident save watches: the running native build's inputs,
 /// derived once for its proof, joined with the marked sources of the last
 /// save. A save that changes only a marked source's text joins, encodes and
@@ -236,13 +249,9 @@ impl Watched {
         I: Iterator<Item = rawr_import::input::proof::Watch>,
     {
         if !current || self.0.as_ref().is_none_or(|native| native.proof != proof) {
-            let outputs = rawr_import::location::outputs_here(project);
-            let inputs = source::Inputs::imported(watch()?)
-                .outside(&outputs)
-                .with_checkouts(&rawr_import::location::checkouts_here());
             self.0 = Some(Native {
                 proof,
-                inputs,
+                inputs: native_inputs(project, watch()?),
                 joined: None,
             });
         }

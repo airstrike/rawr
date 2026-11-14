@@ -971,7 +971,10 @@ fn session(
                         } else if announced.as_ref() != Some(&next_manifests)
                             || manifests.restarts_on_save()
                         {
-                            manifests.restart_reason(&next_manifests, || lane.native_change(&miss))
+                            manifests.restart_reason(&next_manifests, || {
+                                let outputs = rawr_import::location::outputs_here(&project);
+                                lane.native_change(&miss, &outputs)
+                            })
                         } else {
                             None
                         };
