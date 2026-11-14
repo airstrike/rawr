@@ -1283,7 +1283,7 @@ impl Parser<'_> {
 
     /// The receiver `member` takes on `ty`, through its references: a
     /// program type's method's, a crate type's, or std's inherent method's.
-    fn member_receiver(&self, ty: &Ty, member: &str) -> Option<receiver::Mode> {
+    pub(super) fn member_receiver(&self, ty: &Ty, member: &str) -> Option<receiver::Mode> {
         let mut ty = self.inference.resolve(ty);
         while let Ty::Reference { target, .. } = ty {
             ty = self.inference.resolve(&target);
