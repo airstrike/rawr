@@ -45,7 +45,9 @@
         {"text":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to.","issues":[1963],"refs":[610]},
         {"text":"rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window.","issues":[1947]},
         {"text":"Projects that share one target directory keep separate rawr caches, so one project no longer builds from another's generated crate or fails with 'Cargo.toml changed during the build'.","issues":[1934]},
-        {"text":"A start whose cached entries were removed since they were read starts again instead of failing with an internal store error, and a failure while starting a program says rawr could not start it.","issues":[1933]}
+        {"text":"A start whose cached entries were removed since they were read starts again instead of failing with an internal store error, and a failure while starting a program says rawr could not start it.","issues":[1933]},
+        {"text":"A crate builder method that keeps a borrow in Self, as loading_spinners' `Linear::easing(&'a Easing)` does, takes a static or the program's value for as long as the value it is kept in.","issues":[610]},
+        {"text":"A script closure can take a crate trait's object that native code lends for the call, as iced's `window::run` lends `&dyn Window`, and pass it on to another crate call.","issues":[1967],"refs":[28]}
       ]
     },
     "releases": [
@@ -2966,7 +2968,7 @@
     {"issue":607,"title":"color_palette: an associated constant through a generic parameter","state":"closed","category":"No glue (D593)","release":"0.3.70"},
     {"issue":608,"title":"The struct-literal error blames private fields when a public field's type isn't supported","state":"closed","category":"Divergences from rustc","release":"0.3.72"},
     {"issue":609,"title":"invalid stored baseline reaches the user instead of a rebuild","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.68"},
-    {"issue":610,"title":"loading_spinners: a crate static of a crate type, LazyLock deref, and a method that keeps a borrow","state":"open","category":"No glue (D593)"},
+    {"issue":610,"title":"loading_spinners: a crate static of a crate type, LazyLock deref, and a method that keeps a borrow","state":"closed","category":"No glue (D593)"},
     {"issue":611,"title":"rawr accepts Rgb { .., ..Rgb::default() } where rustc gives E0283","state":"open","category":"Divergences from rustc"},
     {"issue":612,"title":"A store missing a single execution still fails","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":613,"title":"Stale entries after rawr check's prepare loop and in rawr run's runner build still fail","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
@@ -4321,7 +4323,8 @@
     {"issue":1963,"title":"A crate's `static X: LazyLock<T>` of a crate value is read as the T it derefs to","state":"closed","category":"No glue (D593)"},
     {"issue":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"open","category":"No glue (D593)"},
     {"issue":1965,"title":"expand/ and the resolution cache ignore a configured target directory","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"open","category":"No glue (D593)"}
+    {"issue":1966,"title":"changelog: the generated iced adapters fail with E0521/E0597 on an Option<&[markdown::Item]> argument","state":"open","category":"No glue (D593)"},
+    {"issue":1967,"title":"A script closure can take a crate trait's object that native code lends for the call, as iced's…","state":"closed","category":"No glue (D593)"}
   ],
   "groups": [
     {

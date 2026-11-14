@@ -39,6 +39,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - rawr mcp: a click, key or other input sent right after `start` waits for the program's first window instead of saying the program shows no window. (#1947)
 - Projects that share one target directory keep separate rawr caches, so one project no longer builds from another's generated crate or fails with 'Cargo.toml changed during the build'. (#1934)
 - A start whose cached entries were removed since they were read starts again instead of failing with an internal store error, and a failure while starting a program says rawr could not start it. (#1933)
+- A crate builder method that keeps a borrow in Self, as loading_spinners' `Linear::easing(&'a Easing)` does, takes a static or the program's value for as long as the value it is kept in. (#610)
+- A script closure can take a crate trait's object that native code lends for the call, as iced's `window::run` lends `&dyn Window`, and pass it on to another crate call. (#1967; part of #28)
 
 ## 0.3.213 (2026-11-13)
 
