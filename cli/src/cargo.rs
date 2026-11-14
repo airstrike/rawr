@@ -10,6 +10,10 @@
 //!
 //! The command is `$CARGO` when set (Cargo sets it for `cargo rawr`), else
 //! `cargo` on `PATH`. Without it Rawr says so once and goes on.
+//!
+//! When rawr's stderr takes colour ([`crate::color::stderr`]), cargo is
+//! asked for rustc's coloured rendering (`json-diagnostic-rendered-ansi`),
+//! so its errors print as `cargo check` prints them in a terminal.
 
 use std::ffi::OsString;
 use std::fs;
@@ -18,6 +22,10 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use rawr::diagnostic::Color;
+
+use crate::color;
 
 /// How long `rawr run` waits after a save before it starts `cargo check`.
 /// Another save in that time restarts the wait.
@@ -50,7 +58,8 @@ pub fn program() -> OsString {
 /// What one `cargo check` said.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Outcome {
-    /// Each error rustc reported, rendered as rustc renders it.
+    /// Each error rustc reported, rendered as rustc renders it: in its
+    /// colours when cargo was asked for them.
     pub errors: Vec<String>,
     /// How many warnings rustc reported.
     pub warnings: usize,
@@ -82,28 +91,50 @@ impl Outcome {
         }
     }
 
-    /// The errors as rustc rendered them, or cargo's own failure.
+    /// The errors as rustc rendered them, or cargo's own failure, in
+    /// rustc's colours when `color` colours and plain otherwise.
     #[must_use]
-    pub fn details(&self) -> String {
+    pub fn details(&self, color: Color) -> String {
+        let painted = |text: &str| match color {
+            Color::Always => text.trim_end().to_owned(),
+            Color::Never => anstream::adapter::strip_str(text)
+                .to_string()
+                .trim_end()
+                .to_owned(),
+        };
         if self.errors.is_empty() {
-            return self.failure.clone().unwrap_or_default();
+            return self.failure.as_deref().map(painted).unwrap_or_default();
         }
-        self.errors
-            .iter()
-            .map(|error| error.trim_end())
-            .collect::<Vec<_>>()
-            .join("\n\n")
+        let errors = self.errors.iter().map(|error| painted(error));
+        errors.collect::<Vec<_>>().join("\n\n")
     }
 
-    /// The heading and the details, for a terminal.
+    /// The heading and the details: plain for a log or an agent, and in
+    /// cargo's colours for a terminal that takes them.
     #[must_use]
-    pub fn render(&self) -> String {
-        let details = self.details();
+    pub fn render(&self, color: Color) -> String {
+        let heading = self.painted(color);
+        let details = self.details(color);
         if details.is_empty() {
-            format!("{}\n", self.heading())
+            format!("{heading}\n")
         } else {
-            format!("{}:\n\n{details}\n", self.heading())
+            format!("{heading}:\n\n{details}\n")
         }
+    }
+
+    /// The heading with `cargo check` as cargo colours a status: green
+    /// when it passed, and red as cargo's `error` when it did not.
+    fn painted(&self, color: Color) -> String {
+        let heading = self.heading();
+        let Some(rest) = heading.strip_prefix("cargo check") else {
+            return heading;
+        };
+        let style = if self.is_clean() {
+            color::Style::Status
+        } else {
+            color::Style::Error
+        };
+        format!("{}{rest}", color::paint("cargo check", style, color))
     }
 
     /// Read cargo's `--message-format=json` output and its stderr.
@@ -156,7 +187,11 @@ fn cargo_failure(stderr: &str) -> String {
     let lines: Vec<&str> = stderr.lines().collect();
     let first = lines
         .iter()
-        .position(|line| line.starts_with("error"))
+        .position(|line| {
+            anstream::adapter::strip_str(line)
+                .to_string()
+                .starts_with("error")
+        })
         .unwrap_or(0);
     let text = lines[first..].join("\n");
     let text = text.trim();
@@ -209,6 +244,19 @@ fn settle_lock(program: &OsString, manifest: &Path) {
     }
 }
 
+/// How cargo is asked to write: JSON whose rendered errors are in rustc's
+/// colours, and its own errors in its colours, when rawr's stderr takes
+/// colour, and plain otherwise.
+fn format() -> &'static [&'static str] {
+    match color::stderr() {
+        Color::Always => &[
+            "--message-format=json-diagnostic-rendered-ansi",
+            "--color=always",
+        ],
+        Color::Never => &["--message-format=json", "--color=never"],
+    }
+}
+
 /// One `cargo check` running.
 struct Running {
     child: Child,
@@ -242,12 +290,8 @@ impl Running {
                 })
             })?;
             command
-                .args([
-                    "rustc",
-                    "--profile",
-                    profile.script(),
-                    "--message-format=json",
-                ])
+                .args(["rustc", "--profile", profile.script()])
+                .args(format())
                 .arg("--bin")
                 .arg(&check.bin)
                 .arg("--manifest-path")
@@ -263,7 +307,8 @@ impl Running {
         } else {
             settle_lock(program, manifest);
             command
-                .args(["check", "--message-format=json"])
+                .arg("check")
+                .args(format())
                 .args(profile.package())
                 .args(target)
                 .args(selection.flags())
@@ -363,7 +408,7 @@ impl Pending {
 pub fn print(status: &Status) -> bool {
     match status {
         Status::Unavailable(reason) => {
-            eprintln!("{reason}");
+            eprintln!("{}: {reason}", color::label(color::Level::Warning));
             false
         }
         Status::Finished(outcome) if outcome.is_clean() => {
@@ -371,7 +416,7 @@ pub fn print(status: &Status) -> bool {
             false
         }
         Status::Finished(outcome) => {
-            eprint!("\n{}", outcome.render());
+            eprint!("\n{}", outcome.render(color::stderr()));
             true
         }
     }
@@ -579,7 +624,7 @@ impl Drop for Background {
 
 #[cfg(test)]
 mod tests {
-    use super::Outcome;
+    use super::{Color, Outcome};
 
     #[test]
     fn rustc_errors_are_read_from_cargo_json_and_the_summary_is_dropped() {
@@ -596,7 +641,9 @@ mod tests {
         assert_eq!(outcome.warnings, 1);
         assert_eq!(outcome.failure, None);
         assert_eq!(outcome.heading(), "cargo check found 1 error");
-        assert!(outcome.render().contains("error[E0308]: mismatched types"));
+        assert!(outcome
+            .render(Color::Never)
+            .contains("error[E0308]: mismatched types"));
     }
 
     #[test]
@@ -606,8 +653,29 @@ mod tests {
         assert!(!outcome.is_clean());
         assert_eq!(outcome.heading(), "cargo check failed");
         assert!(outcome
-            .details()
+            .details(Color::Never)
             .starts_with("error: failed to parse manifest"));
         assert!(Outcome::read("", "", true).is_clean());
+    }
+
+    /// rustc's coloured rendering prints as cargo prints it in a terminal,
+    /// under a heading in cargo's colours, and plain anywhere else.
+    #[test]
+    fn coloured_errors_keep_their_colours_for_a_terminal_only() {
+        let stdout = r#"{"reason":"compiler-message","message":{"level":"error","message":"mismatched types","rendered":"\u001b[0m\u001b[1m\u001b[38;5;9merror[E0308]\u001b[0m\u001b[0m\u001b[1m: mismatched types\u001b[0m\n"}}"#;
+        let outcome = Outcome::read(stdout, "", false);
+        assert_eq!(
+            outcome.render(Color::Never),
+            "cargo check found 1 error:\n\nerror[E0308]: mismatched types\n"
+        );
+        let coloured = outcome.render(Color::Always);
+        assert!(
+            coloured.starts_with("\u{1b}[1m\u{1b}[91mcargo check\u{1b}[0m found 1 error:\n\n"),
+            "{coloured:?}"
+        );
+        assert!(
+            coloured.contains("\u{1b}[38;5;9merror[E0308]"),
+            "{coloured:?}"
+        );
     }
 }
