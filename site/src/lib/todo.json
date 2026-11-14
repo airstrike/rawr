@@ -5681,7 +5681,8 @@
             {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"},
             {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"},
             {"number":1965,"title":"expand/ and the resolution cache ignore a configured target directory","state":"open"},
-            {"number":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"open"}
+            {"number":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"open"},
+            {"number":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"open"}
           ]
         },
         {
@@ -5823,8 +5824,7 @@
             {"number":891,"title":"rawr-import's integration suite shares its builds and runs in parallel","state":"closed"},
             {"number":892,"title":"rawr-import-cli's crossing suite shares prepared fixtures and runs in parallel","state":"closed"},
             {"number":893,"title":"rawr's state from one program breaks the next program in the same project","state":"closed"},
-            {"number":930,"title":"Five rawr-cli integration tests fail on main","state":"closed"},
-            {"number":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"open"}
+            {"number":930,"title":"Five rawr-cli integration tests fail on main","state":"closed"}
           ],
           "milestone": "0.3"
         },
