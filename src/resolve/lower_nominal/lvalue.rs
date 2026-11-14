@@ -227,6 +227,37 @@ impl<'a> Parser<'a> {
         rendered
     }
 
+    /// `place = value` of a nested place as an assignment statement writes
+    /// it: `value` first, then the place, as rustc evaluates an
+    /// assignment's operands. So `*rotation.radians_mut() =
+    /// rotation.radians() + 1.0` reads `rotation` before the method lends
+    /// its place, and the borrow it lends is used while it lives (#1945).
+    pub(super) fn assign_nested(
+        &mut self,
+        nested: &Nested,
+        replacement: origin::Fragment,
+    ) -> origin::Fragment {
+        let (read, place, store) = self.nested_parts_with(nested, true, None);
+        let mut rendered = origin::Fragment::plain("{ ");
+        let value = if read.is_empty() {
+            replacement
+        } else {
+            let rhs = self.temporary("rhs");
+            rendered.push_text(format!("let {rhs} = "));
+            rendered.push(replacement);
+            rendered.push_text("; ");
+            origin::Fragment::plain(rhs)
+        };
+        rendered.push(read);
+        rendered.push(place);
+        rendered.push_text(" = ");
+        rendered.push(value);
+        rendered.push_text("; ");
+        rendered.push(store);
+        rendered.push_text("}");
+        rendered
+    }
+
     /// The left operand of `place op= value` through a `RefCell` borrow
     /// or a borrow guard, and the statement's parts. The place's own read
     /// gives the value the operator changes, so `*cell.borrow_mut() += 1`

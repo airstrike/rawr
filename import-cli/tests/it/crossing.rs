@@ -990,6 +990,17 @@ fn a_mutable_reference_a_crate_method_returns_is_a_place() {
     assert!(stderr.contains("main.rs:7:"), "{stderr}");
 }
 
+/// ferris's `*self.rotation.radians_mut() = self.rotation.radians() + ..`
+/// (#1945): an assignment's value reads the crate value before the method
+/// lends the place it writes, as rustc evaluates it. The output is `cargo
+/// run`'s.
+#[test]
+fn an_assignment_reads_its_value_before_a_crate_method_lends_its_place() {
+    let (rawr, cargo) = both_printed("wheeled.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "[Pixel([5, 0, 0, 0]), Pixel([10, 0, 0, 0])]");
+}
+
 #[test]
 fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
     let (rawr, cargo) = both_printed("fields.rs", "");
