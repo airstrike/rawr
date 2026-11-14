@@ -593,6 +593,37 @@ fn an_idle_event_loop_redraws_with_a_save_without_input() {
     assert!(!seen.contains("restarting"), "{seen}");
 }
 
+/// An idle event loop takes a save with no call into marked code on the
+/// thread that owns the program (#1889): an iced app's frames call none
+/// until its next message, so the main thread admits the generation
+/// between two events, then the window redraws. This program's frames ask
+/// another thread for the marked output, which runs the generation the
+/// main thread admitted: the new output shows without input.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_idle_event_loop_takes_a_save_its_frames_do_not_call_into() {
+    const IDLE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-idle-frame"
+    );
+    let root = crate::support::fresh("islands-idle-frame");
+    let events = root.join("events.jsonl");
+    let _ = fs::remove_file(&events);
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(IDLE), &root);
+    let mut run = start(&root, &[("RAWR_MCP_EVENTS", events.clone())]);
+    run.until(|line| line == "shade 1");
+    edit(
+        &root.join("src/scene.rs"),
+        "const SHADE: i64 = 1;",
+        "const SHADE: i64 = 2;",
+    );
+    run.told(&events, |text| text.contains("\"swapped\""));
+    run.until(|line| line == "shade 2");
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("restarting"), "{seen}");
+}
+
 /// winit's event loop must run on the process's main thread, so a native
 /// `main` runs there, and so does the marked code it calls (#1119). A
 /// marked function gives back a `Result` of types that cross, and an alias
