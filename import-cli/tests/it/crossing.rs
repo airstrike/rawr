@@ -2707,6 +2707,24 @@ fn a_crate_call_takes_a_borrowing_result_by_value() {
     );
 }
 
+/// #1997: a crate call takes by value a borrowing result whose trait has a
+/// type argument and a supertrait, `tally(rack: impl Rack<u32>)` of
+/// `rack(&items)`, whose `Rack<u32>: Labeled` has `notes<'a>(&'a mut self,
+/// marks: &'a mut Vec<T>) -> Vec<Note<'a, T>>`, as iced's
+/// `UserInterface::build` takes integration's `controls.view()`. The
+/// program calls a method of the result before the call takes it. The
+/// output is `cargo run`'s.
+#[test]
+fn a_crate_call_takes_a_borrowing_result_of_a_trait_with_arguments_and_a_supertrait() {
+    let (rawr, cargo) = both_printed("rack.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("tally shelf of 2 marked 2 [shelf:1 shelf:11]")
+            && rawr.ends_with("names first:3,second:3,third:0"),
+        "{rawr}"
+    );
+}
+
 /// #856: pushing to the items while a wrapped result that borrows them
 /// lives is rustc's E0502, which stops the program before anything runs,
 /// with cargo's report alone.

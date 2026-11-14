@@ -8,6 +8,7 @@ use toml_edit::{value, DocumentMut, Item};
 use super::request;
 use crate::classify::representability::convert;
 use crate::classify::representability::ownership::Receiver;
+use crate::classify::representability::signature::{Lifetime, Written};
 use crate::surface::adapter::{EntryIdentity, Operation, Plan};
 
 pub(crate) mod cached;
@@ -1004,7 +1005,13 @@ impl<T: 'static> Drop for SliceLent<T> {
         if std::rc::Rc::strong_count(&self.items) != self.handles.len() + 1 {
             return;
         }
-        let unlend = SliceUnlend { items: self.items.clone(), handles: self.handles.clone() };
+        // The unlend holds the slice's own share, so the values go back
+        // even where the arena is at hand now, as in native code that drops
+        // a value it took by value (#1997).
+        let unlend = SliceUnlend {
+            items: std::mem::replace(&mut self.items, std::rc::Rc::new(Vec::new())),
+            handles: std::mem::replace(&mut self.handles, std::rc::Rc::from([])),
+        };
         UNLENDS.with_borrow_mut(|unlends| unlends.push(Box::new(unlend)));
         queued_here();
         let _ = with_arena(|_| Ok(()));
@@ -12457,12 +12464,16 @@ fn opaque_table_source(
         } else {
             None
         };
-        // Such a value's method is its proxy's (`proxy_entry`).
+        // Such a value's method is its proxy's (`proxy_entry`). One that
+        // implements its traits lives alone in its cell (`render_lent_cell`):
+        // no method gives another beside it.
         let reach = if cell {
-            proxy_entry(index, consumer, &key)?.map(|entry| ProxyReach {
-                index,
-                derives: entry.output.is_none(),
-            })
+            proxy_entry(index, consumer, &key)?
+                .filter(|entry| !forwarded || entry.output.is_some())
+                .map(|entry| ProxyReach {
+                    index,
+                    derives: entry.output.is_none(),
+                })
         } else {
             None
         };
@@ -23359,12 +23370,10 @@ fn owned_cell(
         .chain(["'a".to_owned()])
         .collect::<Vec<_>>()
         .join(" + ");
-    // The one trait, without arguments, the value implements through the
-    // proxy (#856).
+    // The one trait, and its supertraits, the value implements through the
+    // proxy (#856), at the trait's arguments.
     let forwards = match (&traits[..], opaque.forwards()) {
-        ([(_, path, written)], Some(forwards)) if written.is_empty() => {
-            render_forwards(path, forwards)
-        }
+        ([(_, _, written)], Some(forwarding)) => render_forwards(written, forwarding),
         _ => None,
     };
     Ok(Some(Owned {
@@ -23375,62 +23384,195 @@ fn owned_cell(
 }
 
 /// How a value that lives beside what it borrows implements its opaque
-/// type's one trait (#856): a method of the proxy for each of the trait's,
-/// which calls the method of the value inside, and the impl of the trait
-/// for `LentValue`, whose methods call the proxy's.
+/// type's one trait and each of its supertraits (#856, #1997): a method of
+/// the proxy for each of theirs, which calls the method of the value
+/// inside, and an impl of each trait for `LentValue`, whose methods call
+/// the proxy's.
 struct Forwards {
     /// The proxy trait's methods.
     methods: String,
     /// Their bodies in the proxy's impl for each type of the traits.
     bodies: String,
-    /// `impl {path} for LentValue`.
+    /// `impl {trait} for LentValue`, one for each trait.
     implementation: String,
 }
 
-/// The parts of `Forwards` for the trait at `path`, or `None` when a type
-/// of one of `forwards` has no Rust spelling.
+/// The parts of `Forwards` for `forwarding`, whose trait is at the Rust
+/// types `arguments`, or `None` when a trait or a type of one of its
+/// methods has no Rust spelling.
 fn render_forwards(
-    path: &str,
-    forwards: &[crate::classify::representability::signature::Forward],
+    arguments: &[String],
+    forwarding: &crate::classify::representability::signature::Forwarding,
 ) -> Option<Forwards> {
+    let mut traits = Vec::new();
+    for implemented in forwarding.traits() {
+        let path = bound_trait_path(implemented.definition())?;
+        let written = implemented
+            .arguments()
+            .iter()
+            .map(|argument| written_type(argument, arguments))
+            .collect::<Option<Vec<_>>>()?;
+        let path = if written.is_empty() {
+            path
+        } else {
+            format!("{path}<{}>", written.join(", "))
+        };
+        traits.push((path, implemented.blanket()));
+    }
     let mut methods = String::new();
     let mut bodies = String::new();
-    let mut implementation = String::new();
-    for forward in forwards {
+    let mut implementations = vec![String::new(); traits.len()];
+    for forward in forwarding.methods() {
+        let owner = usize::try_from(forward.owner()).ok()?;
+        let (path, _) = traits.get(owner)?;
         let name = forward.name();
+        let lifetimes = (0..forward.lifetimes())
+            .map(|index| written_lifetime(Lifetime::Named(index)))
+            .collect::<Vec<_>>();
+        let generics = if lifetimes.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", lifetimes.join(", "))
+        };
+        let receiver = forward.receiver();
+        let receiver = format!(
+            "{}{}self",
+            written_reference(receiver.lifetime()),
+            if receiver.mutable() { "mut " } else { "" }
+        );
         let mut parameters = String::new();
         let mut names = Vec::new();
         for (position, input) in forward.inputs().iter().enumerate() {
-            parameters.push_str(&format!(", input_{position}: {}", impl_type(input, &[])?));
+            let input = written_type(input, arguments)?;
+            parameters.push_str(&format!(", input_{position}: {input}"));
             names.push(format!("input_{position}"));
         }
         let names = names.join(", ");
-        let output = match forward.output() {
-            convert::Type::Unit => "()".to_owned(),
-            ty => impl_type(ty, &[])?,
-        };
-        let (receiver, reach) = if forward.mutable() {
-            ("&mut self", "mutable")
-        } else {
-            ("&self", "shared")
-        };
-        let head = format!("fn __rawr_forward_{name}({receiver}{parameters}) -> {output}");
+        let output = written_type(forward.output(), arguments)?;
+        let head = |name: &str| format!("fn {name}{generics}({receiver}{parameters}) -> {output}");
+        let proxy = format!("__rawr_forward_{owner}_{name}");
         let separator = if names.is_empty() { "" } else { ", " };
-        methods.push_str(&format!("        {head};\n"));
+        let reach = if forward.receiver().mutable() {
+            "mutable"
+        } else {
+            "shared"
+        };
+        methods.push_str(&format!("        {};\n", head(&proxy)));
         bodies.push_str(&format!(
-            "        {head} {{\n            {path}::{name}(self{separator}{names})\n        }}\n"
+            "        {} {{\n            <Self as {path}>::{name}(self{separator}{names})\n        }}\n",
+            head(&proxy)
         ));
-        implementation.push_str(&format!(
-            "        fn {name}({receiver}{parameters}) -> {output} {{\n            self.{reach}(|value| value.__rawr_forward_{name}({names}))\n        }}\n"
+        implementations[owner].push_str(&format!(
+            "        {} {{\n            self.{reach}(move |value| value.{proxy}({names}))\n        }}\n",
+            head(name)
         ));
     }
+    // A trait the crate implements for every type, the value has by that
+    // impl, as iced_widget's `Widget` is of every `core::Widget`.
+    let implementation = traits
+        .iter()
+        .zip(implementations)
+        .filter(|((_, blanket), _)| !blanket)
+        .map(|((path, _), body)| {
+            format!("    #[allow(clippy::all)]\n    impl {path} for LentValue {{\n{body}    }}\n")
+        })
+        .collect();
     Some(Forwards {
         methods,
         bodies,
-        implementation: format!(
-            "    #[allow(clippy::all)]\n    impl {path} for LentValue {{\n{implementation}    }}\n"
-        ),
+        implementation,
     })
+}
+
+/// `ty`, a type of a forwarded method's signature, as Rust writes it, with
+/// each argument of the opaque type's trait one of `arguments`. `None`
+/// when a type has no Rust spelling.
+fn written_type(ty: &Written, arguments: &[String]) -> Option<String> {
+    let all = |types: &[Written]| {
+        types
+            .iter()
+            .map(|ty| written_type(ty, arguments))
+            .collect::<Option<Vec<_>>>()
+    };
+    let generic = |path: String, parts: Vec<String>| {
+        if parts.is_empty() {
+            path
+        } else {
+            format!("{path}<{}>", parts.join(", "))
+        }
+    };
+    Some(match ty {
+        Written::Converted(ty) => concrete_type(ty)?,
+        Written::Primitive(name) => name.to_string(),
+        Written::Parameter(index) => arguments.get(usize::try_from(*index).ok()?)?.clone(),
+        Written::Reference {
+            lifetime,
+            mutable,
+            ty,
+        } => {
+            // `&mut (dyn Operation + 'a)`: a bounded object is a sum.
+            let target = written_type(ty, arguments)?;
+            let target = match &**ty {
+                Written::Object { lifetime, .. } if *lifetime != Lifetime::Elided => {
+                    format!("({target})")
+                }
+                _ => target,
+            };
+            format!(
+                "{}{}{target}",
+                written_reference(*lifetime),
+                if *mutable { "mut " } else { "" },
+            )
+        }
+        Written::Nominal {
+            definition,
+            lifetimes,
+            arguments: types,
+        } => {
+            let parts = lifetimes
+                .iter()
+                .map(|lifetime| written_lifetime(*lifetime))
+                .chain(all(types)?)
+                .collect();
+            generic(bound_trait_path(definition)?, parts)
+        }
+        Written::Std {
+            path,
+            arguments: types,
+        } => generic(path.to_string(), all(types)?),
+        Written::Object {
+            definition,
+            arguments: types,
+            lifetime,
+        } => {
+            let object = generic(bound_trait_path(definition)?, all(types)?);
+            match lifetime {
+                Lifetime::Elided => format!("dyn {object}"),
+                lifetime => format!("dyn {object} + {}", written_lifetime(*lifetime)),
+            }
+        }
+        Written::Tuple(members) if members.is_empty() => "()".to_owned(),
+        Written::Tuple(members) => format!("({},)", all(members)?.join(", ")),
+        Written::Slice(element) => format!("[{}]", written_type(element, arguments)?),
+    })
+}
+
+/// `lifetime` of a forwarded method's signature, by its name there.
+fn written_lifetime(lifetime: Lifetime) -> String {
+    match lifetime {
+        Lifetime::Static => "'static".to_owned(),
+        Lifetime::Elided => "'_".to_owned(),
+        Lifetime::Named(index) => format!("'__rawr_{index}"),
+    }
+}
+
+/// A reference at `lifetime`, up to its mutability and target: `&` or
+/// `&'__rawr_0 `.
+fn written_reference(lifetime: Lifetime) -> String {
+    match lifetime {
+        Lifetime::Elided => "&".to_owned(),
+        lifetime => format!("&{} ", written_lifetime(lifetime)),
+    }
 }
 
 /// One method of a proxy (`render_lent_cell`): a call of the program's on
@@ -23595,7 +23737,13 @@ fn render_lent_cell(
         .collect::<String>();
     let mut methods = String::new();
     let mut bodies = String::new();
-    for entry in entries {
+    // A value that implements its traits lives alone in its cell
+    // (`render_forwarded_cell`), so no method gives another beside it.
+    let derives = owned.forwards.is_none();
+    for entry in entries
+        .iter()
+        .filter(|entry| derives || entry.output.is_some())
+    {
         let index = entry.index;
         let receiver = if entry.mutable { "&mut self" } else { "&self" };
         let inputs = entry
@@ -23616,14 +23764,38 @@ fn render_lent_cell(
     }
     let bounds = &owned.bounds;
     // The value's impl of its trait, through the proxy (#856).
-    let forwards = match &owned.forwards {
-        Some(forwards) => {
-            methods.push_str(&forwards.methods);
-            bodies.push_str(&forwards.bodies);
-            forwards.implementation.as_str()
-        }
-        None => "",
-    };
+    if let Some(forwards) = &owned.forwards {
+        methods.push_str(&forwards.methods);
+        bodies.push_str(&forwards.bodies);
+        return writeln!(
+            output,
+            "    trait Proxy<'a> {{
+{methods}    }}
+    impl<'a, T: {bounds}> Proxy<'a> for T {{
+{bodies}    }}
+    type LentOutput<'a> = Box<dyn Proxy<'a> + 'a>;
+    __rawr_internal::self_cell::self_cell!(
+        struct Lent {{
+            owner: ({types}),
+            #[not_covariant]
+            dependent: LentOutput,
+        }}
+    );
+    struct LentValue {{ cell: Lent }}
+    impl LentValue {{
+        #[allow(dead_code)]
+        fn shared<'s, R>(&'s self, call: impl for<'a> FnOnce(&'s (dyn Proxy<'a> + 'a)) -> R) -> R {{
+            self.cell.with_dependent(|_, value| call(&**value))
+        }}
+        #[allow(dead_code)]
+        fn mutable<'s, R>(&'s mut self, call: impl for<'a> FnOnce(&'s mut (dyn Proxy<'a> + 'a)) -> R) -> R {{
+            self.cell.with_dependent_mut(|_, value| call(&mut **value))
+        }}
+    }}
+{implementation}    let output = lend(arguments.arena, || LentValue {{ cell: Lent::new(({names}), |({names})| Box::new({call})) }});",
+            implementation = forwards.implementation,
+        );
+    }
     writeln!(
         output,
         "    trait Proxy<'a> {{
@@ -23684,7 +23856,7 @@ fn render_lent_cell(
     fn slots<'a>(value: LentOutput<'a>) -> Slots<'a> {{
         Slots(std::cell::RefCell::new(vec![Some(std::rc::Rc::new(std::cell::RefCell::new(value)))]))
     }}
-{forwards}    let output = lend(arguments.arena, || LentValue {{ cell: std::rc::Rc::new(Lent::new(({names}), |({names})| slots(Box::new({call})))), slot: 0 }});"
+    let output = lend(arguments.arena, || LentValue {{ cell: std::rc::Rc::new(Lent::new(({names}), |({names})| slots(Box::new({call})))), slot: 0 }});"
     )
 }
 

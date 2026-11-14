@@ -2327,7 +2327,13 @@ pub(super) fn native_impl(
                         .iter()
                         .map(|parameter| convert(&parameter.ty))
                         .collect::<Result<Box<[_]>, _>>()?,
+                    // An opaque output, as markdown's `fn image(..) -> impl
+                    // Widget<Message> + 'a`, is the type its body revealed
+                    // (`lower_nominal::reveal`), which no `impl Trait`
+                    // names: the impl gives that type, as rustc lets an impl
+                    // refine its trait's `impl Trait` (#83).
                     match &function.output {
+                        Some(output) if output.has_opaque() => convert(definition.output())?,
                         Some(output) => convert(output)?,
                         None => rawr_import::classify::representability::convert::Type::Unit,
                     },

@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 225;
+const CLASSIFIER_VERSION: u32 = 226;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8631,19 +8631,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Some(traits.into_boxed_slice())
     }
 
-    /// Each method of the one trait of an opaque type's `bounds`
-    /// (`opaque_traits`), when a value held through its proxy can
-    /// implement the trait by calling the method of the value inside
-    /// (#856), as `wrap(s: impl Show)` takes a `view(&items)` that lives
-    /// beside its items:
-    /// each takes `&self` or `&mut self`, has no generics of its own, and
-    /// takes and gives types Rawr writes as they are, giving none that
-    /// borrows. The trait has no arguments, supertraits, associated types
-    /// or methods only a `Sized` type has. `None` when it isn't so.
+    /// How a value held through the proxy of an opaque type's one trait
+    /// (`opaque_traits`) implements the trait and each of its supertraits
+    /// by calling the methods of the value inside (#856), as `wrap(s: impl
+    /// Show)` takes a `view(&items)` that lives beside its items, and as
+    /// iced's `UserInterface::build(root: impl Widget<Message, Theme,
+    /// Renderer>)` takes integration's `controls.view()`, whose `Widget`
+    /// has `Meta` (#1997). Each method takes `&self` or `&mut self`, has no
+    /// type parameters of its own, and each type of its signature has a
+    /// Rust spelling, lifetimes and all (`spelled`). A method only a
+    /// `Sized` type has is no proxy's, and keeps its default. No trait has
+    /// lifetime or const parameters, associated types or consts. `None`
+    /// when it isn't so.
     fn opaque_forwards(
         &self,
         bounds: &[model::Predicate],
-    ) -> Option<Box<[representability::signature::Forward]>> {
+    ) -> Option<representability::signature::Forwarding> {
+        use representability::signature::{Forward, Forwarding, Implemented, Receiver, Written};
         let definition = |id: &api::identity::Definition| {
             self.graph
                 .definition_index(id)
@@ -8671,116 +8675,289 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 continue;
             }
-            // Its arguments after `Self`.
-            if arguments.len() > 1 || principal.replace(trait_id).is_some() {
+            if principal.replace((trait_id, arguments)).is_some() {
                 return None;
             }
         }
-        let id = principal?;
-        let Some(model::Kind::Trait {
-            supertraits,
-            associated,
-            ..
-        }) = definition(id).map(model::Definition::kind)
-        else {
-            return None;
-        };
-        let supertrait = supertraits.iter().any(|predicate| {
-            !matches!(predicate, model::Predicate::Bound {
-                bound: model::Bound::Trait { trait_id, .. },
-                ..
-            } if self.sizedness(trait_id) || self.auto_trait(trait_id))
-        });
-        if supertrait {
-            return None;
-        }
-        let mut forwards = Vec::new();
-        for item in associated.iter() {
-            let member = definition(item)?;
-            let model::Kind::Function {
-                signature,
+        let (id, arguments) = principal?;
+        // The trait at the opaque type's own arguments, each by its index.
+        let count = arguments
+            .iter()
+            .filter(|argument| matches!(argument, model::Argument::Type(_)))
+            .count();
+        let own = (0..u32::try_from(count).ok()?)
+            .map(Written::Parameter)
+            .collect::<Box<[_]>>();
+        let mut traits: Vec<(api::identity::Definition, Box<[Written]>)> = vec![(id.clone(), own)];
+        let mut blankets = Vec::new();
+        let mut methods = Vec::new();
+        let mut at = 0;
+        while let Some((trait_id, written)) = traits.get(at).cloned() {
+            let owner = u32::try_from(at).ok()?;
+            at += 1;
+            let Some(model::Kind::Trait {
+                supertraits,
+                associated,
                 generics,
-            } = member.kind()
+                ..
+            }) = definition(&trait_id).map(model::Definition::kind)
             else {
                 return None;
             };
-            let mutable = match signature.receiver() {
-                model::Receiver::Reference { mutability, .. } => {
-                    matches!(mutability, model::Mutability::Mutable)
-                }
-                _ => return None,
-            };
-            let own = generics
-                .parameters()
-                .any(|parameter| parameter.owner() == item);
-            let sized = generics.predicates().any(|predicate| {
-                matches!(predicate, model::Predicate::Bound {
-                    bound: model::Bound::Trait { trait_id, .. },
-                    ..
-                } if self.is_core_trait(trait_id, "Sized"))
+            let unwritten = generics.parameters().any(|parameter| {
+                matches!(
+                    parameter.kind(),
+                    model::ParameterKind::Lifetime { .. } | model::ParameterKind::Const { .. }
+                )
             });
-            if own || sized || signature.async_function() {
+            if unwritten {
                 return None;
             }
-            let mut inputs = Vec::new();
-            for input in signature.inputs() {
-                if !self.forwardable(input, true) {
+            for predicate in supertraits.iter() {
+                let (supertrait, arguments) = match predicate {
+                    model::Predicate::Bound {
+                        bound:
+                            model::Bound::Trait {
+                                trait_id,
+                                arguments,
+                                polarity: model::Polarity::Positive,
+                                binders,
+                            },
+                        ..
+                    } if binders.is_empty() => (trait_id, arguments),
+                    // The value is `'static`, so it outlives any lifetime.
+                    model::Predicate::TypeOutlives { .. } => continue,
+                    _ => return None,
+                };
+                if self.is_core_trait(supertrait, "Sized")
+                    || self.sizedness(supertrait)
+                    || self.auto_trait(supertrait)
+                {
+                    continue;
+                }
+                let mut spelling = Spelling::new(&trait_id, generics, &written, None);
+                let arguments = arguments
+                    .iter()
+                    .filter(|argument| {
+                        !matches!(argument, model::Argument::Type(model::Type::SelfType(_)))
+                    })
+                    .map(|argument| match argument {
+                        model::Argument::Type(ty) => self.spelled(ty, &mut spelling),
+                        _ => None,
+                    })
+                    .collect::<Option<Box<[_]>>>()?;
+                if spelling.count() != 0 {
                     return None;
                 }
-                inputs.push(self.convert(input).ok()?);
-            }
-            if !self.forwardable(signature.output(), false) {
-                return None;
-            }
-            let output = self.convert(signature.output()).ok()?;
-            let name = self.definition_name(item)?;
-            self.retain_str(name).ok()?;
-            forwards.push(representability::signature::Forward::new(
-                name.into(),
-                mutable,
-                inputs.into_boxed_slice(),
-                output,
-            ));
-        }
-        Some(forwards.into_boxed_slice())
-    }
-
-    /// Whether `ty`, in a method a value held as a trait object forwards
-    /// (`opaque_forwards`), is one Rawr writes as it is: a primitive, the
-    /// unit type, a `String`, an `Option` of such a type, or a crate's own
-    /// type without type arguments, and, as an `input`, a reference to one
-    /// at any lifetime. An output borrows nothing.
-    fn forwardable(&self, ty: &model::Type, input: bool) -> bool {
-        match ty {
-            model::Type::Primitive(name) => name.as_ref() != "str",
-            model::Type::Tuple(members) => members.is_empty(),
-            model::Type::Reference { ty, .. } if input => {
-                matches!(&**ty, model::Type::Primitive(name) if name.as_ref() == "str")
-                    || self.forwardable(ty, false)
-            }
-            model::Type::Definition { id, arguments } => {
-                let Some(definition) = self
-                    .graph
-                    .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
-                else {
-                    return false;
-                };
-                match std_binding::of(definition) {
-                    Some(Std::String) => true,
-                    Some(Std::Option) => matches!(
-                        &arguments[..],
-                        [model::Argument::Type(inner)] if self.forwardable(inner, false)
-                    ),
-                    Some(_) => false,
-                    None => arguments.iter().all(|argument| match argument {
-                        model::Argument::Lifetime(_) => input,
-                        _ => false,
-                    }),
+                if !traits.iter().any(|(known, _)| known == supertrait) {
+                    traits.push((supertrait.clone(), arguments));
                 }
             }
-            _ => false,
+            // A trait the graph shows implemented for every type of some
+            // bounds, as `impl<T: Display> ToString for T` is, the value
+            // has by that impl.
+            let blanket = self.graph.implementations().any(|implementation| {
+                matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if *id == trait_id)
+                    && matches!(implementation.self_type(), model::Type::Parameter { .. })
+            });
+            blankets.push(blanket);
+            if blanket {
+                continue;
+            }
+            // The methods only a `Sized` type has, by name, whose opaque
+            // outputs are anonymous associated types of the trait, as
+            // `{anonymous-associated-type:explain#0}` of `explain(self, ..)`.
+            let mut sized_only = Vec::new();
+            let mut anonymous = Vec::new();
+            let mut forwarded = Vec::new();
+            for item in associated.iter() {
+                let member = definition(item)?;
+                let model::Kind::Function {
+                    signature,
+                    generics: own,
+                } = member.kind()
+                else {
+                    anonymous.push(member.display_path().last()?);
+                    continue;
+                };
+                let name = self.definition_name(item)?;
+                // The trait's `Self` is its type parameter 0, as rustc
+                // numbers it.
+                let sized = own.predicates().any(|predicate| {
+                    matches!(predicate, model::Predicate::Bound {
+                        ty: model::Type::SelfType(_)
+                            | model::Type::Parameter { index: 0, .. },
+                        bound: model::Bound::Trait { trait_id: sized, .. },
+                    } if self.is_core_trait(sized, "Sized"))
+                });
+                if sized {
+                    sized_only.push(name);
+                    continue;
+                }
+                let model::Receiver::Reference {
+                    lifetime,
+                    mutability,
+                    ..
+                } = signature.receiver()
+                else {
+                    return None;
+                };
+                let typed = own.parameters().any(|parameter| {
+                    parameter.owner() == item
+                        && !matches!(parameter.kind(), model::ParameterKind::Lifetime { .. })
+                });
+                if typed || signature.async_function() {
+                    return None;
+                }
+                let mut spelling = Spelling::new(&trait_id, generics, &written, Some(item));
+                let receiver = Receiver {
+                    mutable: matches!(mutability, model::Mutability::Mutable),
+                    lifetime: spelling.lifetime(lifetime)?,
+                };
+                let inputs = signature
+                    .inputs()
+                    .map(|input| self.spelled(input, &mut spelling))
+                    .collect::<Option<Box<[_]>>>()?;
+                let output = self.spelled(signature.output(), &mut spelling)?;
+                self.retain_str(name).ok()?;
+                forwarded.push(Forward::new(
+                    owner,
+                    name.into(),
+                    receiver,
+                    spelling.count(),
+                    inputs,
+                    output,
+                ));
+            }
+            // Any other associated item, a type or a const, has no forward.
+            let unforwarded = anonymous.iter().any(|name| {
+                name.strip_prefix("{anonymous-associated-type:")
+                    .and_then(|rest| rest.split_once('#'))
+                    .is_none_or(|(method, _)| !sized_only.contains(&method))
+            });
+            if unforwarded {
+                return None;
+            }
+            // A trait whose every method only a `Sized` type has extends its
+            // supertraits, as iced_widget's `Widget` extends `core::Widget`,
+            // and its crate implements it for every type of them, which a
+            // graph that uses it may leave out: the value has it by that
+            // impl.
+            let extension = forwarded.is_empty() && !sized_only.is_empty();
+            *blankets.last_mut()? = extension;
+            if !extension {
+                methods.append(&mut forwarded);
+            }
         }
+        let traits = traits
+            .into_iter()
+            .zip(blankets)
+            .map(|((id, arguments), blanket)| {
+                Implemented::new(
+                    *self.graph.surface_definition(&id).as_bytes(),
+                    arguments,
+                    blanket,
+                )
+            })
+            .collect();
+        Some(Forwarding::new(traits, methods.into_boxed_slice()))
+    }
+
+    /// `ty`, in the signature of a method a value held through its proxy
+    /// forwards (`opaque_forwards`), as Rust writes it there: each lifetime
+    /// by the name the method gives it, each parameter of the trait by the
+    /// argument it has (`Spelling`). `None` when Rust can't write it so.
+    fn spelled(
+        &self,
+        ty: &model::Type,
+        spelling: &mut Spelling<'_>,
+    ) -> Option<representability::signature::Written> {
+        use representability::signature::Written;
+        let all = |types: &mut dyn Iterator<Item = &model::Type>, spelling: &mut Spelling<'_>| {
+            types
+                .map(|ty| self.spelled(ty, spelling))
+                .collect::<Option<Box<[_]>>>()
+        };
+        Some(match ty {
+            model::Type::Primitive(name) => Written::Primitive(name.clone()),
+            model::Type::Tuple(members) => Written::Tuple(all(&mut members.iter(), spelling)?),
+            model::Type::Slice(element) => {
+                Written::Slice(Box::new(self.spelled(element, spelling)?))
+            }
+            model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            } => Written::Reference {
+                lifetime: spelling.lifetime(lifetime)?,
+                mutable: matches!(mutability, model::Mutability::Mutable),
+                ty: Box::new(self.spelled(ty, spelling)?),
+            },
+            model::Type::Parameter { owner, index } => spelling.parameter(owner, *index)?,
+            model::Type::TraitObject { bounds, lifetime } => {
+                let [model::ObjectBound::Trait(model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity: model::Polarity::Positive,
+                    binders,
+                })] = &bounds[..]
+                else {
+                    return None;
+                };
+                if !binders.is_empty() {
+                    return None;
+                }
+                Written::Object {
+                    definition: *self.graph.surface_definition(trait_id).as_bytes(),
+                    arguments: all(&mut types_of(arguments)?, spelling)?,
+                    lifetime: spelling.lifetime(lifetime)?,
+                }
+            }
+            model::Type::Definition { id, arguments } => {
+                let definition = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))?;
+                let path = match std_binding::of(definition) {
+                    Some(Std::Option) => Some(("::core::option::Option", 1)),
+                    Some(Std::Result) => Some(("::core::result::Result", 2)),
+                    Some(Std::Vec) => Some(("::std::vec::Vec", 1)),
+                    Some(Std::Box) => Some(("::std::boxed::Box", 1)),
+                    Some(Std::String) => None,
+                    Some(_) => return None,
+                    None => None,
+                };
+                if let Some((path, count)) = path {
+                    let arguments = (0..count)
+                        .map(|index| std_binding::type_argument(arguments, index))
+                        .collect::<Option<Vec<_>>>()?;
+                    return Some(Written::Std {
+                        path: path.into(),
+                        arguments: all(&mut arguments.into_iter(), spelling)?,
+                    });
+                }
+                if bare(ty) {
+                    return self.convert(ty).ok().map(Written::Converted);
+                }
+                let mut lifetimes = Vec::new();
+                let mut types = Vec::new();
+                for argument in arguments.iter() {
+                    match argument {
+                        model::Argument::Lifetime(lifetime) => {
+                            lifetimes.push(spelling.lifetime(lifetime)?);
+                        }
+                        model::Argument::Type(ty) => types.push(self.spelled(ty, spelling)?),
+                        model::Argument::Const(_) => return None,
+                    }
+                }
+                Written::Nominal {
+                    definition: *self.graph.surface_definition(id).as_bytes(),
+                    lifetimes: lifetimes.into_boxed_slice(),
+                    arguments: types.into_boxed_slice(),
+                }
+            }
+            _ => return None,
+        })
     }
 
     /// Whether `id` is one of core's traits below `Sized` that every type
@@ -13921,6 +14098,122 @@ fn names_lifetime(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
         | model::Type::SelfType(_)
         | model::Type::Never => false,
     }
+}
+
+/// What the types of a forwarded method's signature are written in
+/// (`Context::spelled`): the trait, each of whose type parameters has an
+/// argument written in the opaque type's trait's, and the method, whose
+/// lifetimes each have a name, in the order the signature first names them.
+struct Spelling<'a> {
+    trait_id: &'a api::identity::Definition,
+    generics: &'a model::Generics,
+    arguments: &'a [representability::signature::Written],
+    method: Option<&'a api::identity::Definition>,
+    named: Vec<model::Lifetime>,
+}
+
+impl<'a> Spelling<'a> {
+    /// The spelling of a signature of `method`, or of a supertrait bound
+    /// without one, in the trait `trait_id` with `generics` at `arguments`.
+    const fn new(
+        trait_id: &'a api::identity::Definition,
+        generics: &'a model::Generics,
+        arguments: &'a [representability::signature::Written],
+        method: Option<&'a api::identity::Definition>,
+    ) -> Self {
+        Self {
+            trait_id,
+            generics,
+            arguments,
+            method,
+            named: Vec::new(),
+        }
+    }
+
+    /// How many lifetimes it named.
+    fn count(&self) -> u32 {
+        u32::try_from(self.named.len()).unwrap_or(u32::MAX)
+    }
+
+    /// `lifetime`, by its name: one of the method's own, late-bound in its
+    /// signature or early-bound on it. `None` for a lifetime of the trait
+    /// or of an inner binder.
+    fn lifetime(
+        &mut self,
+        lifetime: &model::Lifetime,
+    ) -> Option<representability::signature::Lifetime> {
+        use representability::signature::Lifetime;
+        let own = match lifetime {
+            model::Lifetime::Static => return Some(Lifetime::Static),
+            model::Lifetime::Erased => return Some(Lifetime::Elided),
+            model::Lifetime::Late { binder, .. } => binder.depth() == 0,
+            model::Lifetime::Early { owner, .. } => self.method == Some(owner),
+        };
+        if !own || self.method.is_none() {
+            return None;
+        }
+        let index = match self.named.iter().position(|known| known == lifetime) {
+            Some(index) => index,
+            None => {
+                self.named.push(lifetime.clone());
+                self.named.len() - 1
+            }
+        };
+        u32::try_from(index).ok().map(Lifetime::Named)
+    }
+
+    /// The argument of the trait's type parameter `index`, when `owner` is
+    /// the trait.
+    fn parameter(
+        &self,
+        owner: &api::identity::Definition,
+        index: u32,
+    ) -> Option<representability::signature::Written> {
+        if owner != self.trait_id {
+            return None;
+        }
+        let position = self
+            .generics
+            .parameters()
+            .filter(|parameter| {
+                parameter.owner() == self.trait_id
+                    && matches!(parameter.kind(), model::ParameterKind::Type { .. })
+                    && parameter.name() != "Self"
+            })
+            .position(|parameter| parameter.index() == index)?;
+        self.arguments.get(position).cloned()
+    }
+}
+
+/// Whether `ty` names no lifetime, reference or generic parameter at any
+/// depth, so Rawr's reading of it is how Rust writes it
+/// (`Written::Converted`).
+fn bare(ty: &model::Type) -> bool {
+    match ty {
+        model::Type::Primitive(_) => true,
+        model::Type::Tuple(members) => members.iter().all(bare),
+        model::Type::Slice(element) | model::Type::Array { element, .. } => bare(element),
+        model::Type::Definition { arguments, .. } => {
+            arguments.iter().all(|argument| match argument {
+                model::Argument::Type(ty) => bare(ty),
+                model::Argument::Const(_) => true,
+                model::Argument::Lifetime(_) => false,
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Each of `arguments`, when every one is a type.
+fn types_of(arguments: &[model::Argument]) -> Option<std::vec::IntoIter<&model::Type>> {
+    arguments
+        .iter()
+        .map(|argument| match argument {
+            model::Argument::Type(ty) => Some(ty),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(Vec::into_iter)
 }
 
 /// Whether `ty` borrows at a late-bound lifetime anywhere in it.
