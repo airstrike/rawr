@@ -800,6 +800,17 @@ impl Parser<'_> {
             Some(crate::host::item::Frame::Receiver) => return Summary::unknown(),
             None => {}
         }
+        // `draw<'a>(&'a self, pass: &mut RenderPass<'a>)` keeps its
+        // receiver borrowed in what `pass` refers to.
+        let receiver_into: Vec<usize> = (0..arguments)
+            .filter(|index| item.keeps_receiver(*index))
+            .collect();
+        if mode == Some(signature::Receiver::Shared) && !receiver_into.is_empty() {
+            return Summary {
+                receiver_into,
+                ..Summary::nothing(mode)
+            };
+        }
         // `view<'a>(items: &'a [Item]) -> impl Show + 'a`'s value keeps
         // the borrows of the inputs at the lifetime its type names.
         let kept: Vec<Tap> = (0..arguments)
@@ -1310,6 +1321,18 @@ impl Parser<'_> {
             }
             None if any_holds => known = false,
             None => {}
+        }
+        // The receiver's own borrow, kept in what a `&mut` argument
+        // refers to (`scene.draw(&mut pass)`).
+        for &index in &summary.receiver_into {
+            let kept = self.read_input(&mut inputs, Source::Input(Input::Receiver, Path::OWN));
+            match (kept, arguments.get(index)) {
+                (Some(kept), _) if kept.is_empty() => {}
+                (Some(kept), Some(argument)) => {
+                    known &= self.flow().store_through(argument.span, &kept);
+                }
+                _ => known = false,
+            }
         }
         match &summary.statics {
             Some(statics) => {

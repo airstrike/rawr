@@ -62,6 +62,10 @@ pub(crate) struct Summary {
     /// A `&mut` parameter other than the receiver may take another input's
     /// borrows, which these facts do not follow yet.
     pub(crate) unknown_stores: bool,
+    /// The `&mut` arguments, by index, whose referents keep the receiver's
+    /// borrow, as `scene.draw(&mut pass)` of `draw<'a>(&'a self, &mut
+    /// RenderPass<'a>)` keeps `scene` borrowed in `pass`.
+    pub(crate) receiver_into: Vec<usize>,
 }
 
 impl Summary {
@@ -78,6 +82,7 @@ impl Summary {
             stores: Some(Vec::new()),
             statics: Some(Vec::new()),
             unknown_stores: true,
+            receiver_into: Vec::new(),
         }
     }
 
@@ -90,6 +95,7 @@ impl Summary {
             stores: Some(stores),
             statics: Some(Vec::new()),
             unknown_stores: false,
+            receiver_into: Vec::new(),
         }
     }
 }
@@ -703,6 +709,7 @@ pub(crate) fn summary(
         stores,
         statics: Some(statics),
         unknown_stores,
+        receiver_into: Vec::new(),
     }
 }
 

@@ -123,6 +123,10 @@ pub struct Definition {
     /// as it lives, as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
     /// keeps `items`.
     lends: u32,
+    /// The arguments, by bit, each a `&mut` of a value that keeps the
+    /// receiver borrowed for as long as it lives, as `draw<'a>(&'a self,
+    /// pass: &mut RenderPass<'a>)` keeps `self` in `pass`.
+    keeps_receiver: u32,
     /// A `macro_rules!` macro's source.
     rules: Option<crate::Shared<MacroRules>>,
     /// The proof-backed application this imported method stands for: its
@@ -181,6 +185,7 @@ pub struct Fingerprint {
     opens: Option<Frame>,
     lent_static: u32,
     lends: u32,
+    keeps_receiver: u32,
     rules: Option<Box<[u8; 32]>>,
     application: Option<Box<[u8; 32]>>,
 }
@@ -235,6 +240,7 @@ impl Definition {
             opens: self.opens,
             lent_static: self.lent_static,
             lends: self.lends,
+            keeps_receiver: self.keeps_receiver,
             application: self.application,
             member: self.member,
             rules: self.rules.clone(),
@@ -260,6 +266,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: Some(crate::Shared::new(MacroRules {
@@ -295,6 +302,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -320,6 +328,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -343,6 +352,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -366,6 +376,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -392,6 +403,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -415,6 +427,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -439,6 +452,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -463,6 +477,7 @@ impl Definition {
             opens: None,
             lent_static: 0,
             lends: 0,
+            keeps_receiver: 0,
             application: None,
             member: None,
             rules: None,
@@ -609,6 +624,20 @@ impl Definition {
         self
     }
 
+    /// The arguments, by bit, whose `&mut` value keeps the receiver
+    /// borrowed for as long as it lives.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn keeping_receiver(mut self, arguments: u32) -> Self {
+        self.keeps_receiver = arguments;
+        self
+    }
+
+    /// Whether the `&mut` argument at `index` keeps the receiver borrowed
+    /// for as long as the value it refers to lives.
+    pub(crate) const fn keeps_receiver(&self, index: usize) -> bool {
+        index < 32 && self.keeps_receiver & (1 << index) != 0
+    }
+
     /// Whether the output keeps the borrows of the argument at `index`.
     pub(crate) const fn lends(&self, index: usize) -> bool {
         index < 32 && self.lends & (1 << index) != 0
@@ -647,6 +676,7 @@ impl Definition {
             opens: self.opens,
             lent_static: self.lent_static,
             lends: self.lends,
+            keeps_receiver: self.keeps_receiver,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         }
@@ -666,6 +696,7 @@ impl Definition {
             opens: self.opens,
             lent_static: self.lent_static,
             lends: self.lends,
+            keeps_receiver: self.keeps_receiver,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         })
@@ -747,6 +778,7 @@ impl Definition {
             opens: self.opens,
             lent_static: self.lent_static,
             lends: self.lends,
+            keeps_receiver: self.keeps_receiver,
             application: self.application,
             member: self.member,
             rules: self.rules.clone(),

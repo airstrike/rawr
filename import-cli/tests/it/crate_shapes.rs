@@ -426,6 +426,72 @@ fn a_formats_borrow_lasts_as_long_as_its_output() {
     assert!(stderr.contains("E0502"), "{stderr}");
 }
 
+/// A `&self` method whose receiver's lifetime is the one its `&mut`
+/// input's type carries, as integration's `Scene::draw<'a>(&'a self, &mut
+/// RenderPass<'a>)`, lends its receiver to the value in the scope frame's
+/// region for that value's life: the value keeps it, and the receiver is
+/// changed again once the value has dropped (#1982).
+#[test]
+fn a_method_lends_its_receiver_into_what_its_mut_input_refers_to() {
+    runs_as_cargo_does(
+        "layers",
+        "sea\nclear frame to 7, draw 1 on frame, layer sky, end\n",
+    );
+}
+
+/// A `&mut` a pattern binds fills a crate's `&dyn Trait` input, reborrowed
+/// shared as rustc coerces it, as integration's `interface.update(window,
+/// ..)` passes its `&mut Arc<Window>`.
+#[test]
+fn a_mut_binding_fills_a_crates_trait_object_input() {
+    runs_as_cargo_does("windows", "4\n4\n");
+}
+
+/// A `for` loops over a crate's value by its `IntoIterator` impl, as
+/// integration's `for message in messages` loops over iced's `shell::Bus`,
+/// and a `&mut` of a crate's value made for the call fills a `&mut`
+/// input, as its `&mut shell::Bus::new()` does.
+#[test]
+fn a_for_loops_over_a_crates_into_iterator() {
+    runs_as_cargo_does("bags", "2\n3\n1\n");
+}
+
+/// A public field of a struct the crate implements `Drop` for is read
+/// where it is, as integration reads wgpu's `SurfaceTexture::texture`: the
+/// runner never moves it out, which rustc refuses (E0509).
+#[test]
+fn a_field_of_a_dropped_struct_is_read_in_place() {
+    runs_as_cargo_does("frames", "5\n");
+}
+
+/// The receiver `layer.draw(&mut pass)` lends `pass` stays borrowed while
+/// `pass` lives, as rustc reads `draw<'a>(&'a self, &mut Pass<'a>)`:
+/// rawr's own check refuses a `&mut` of it meanwhile with rustc's E0502
+/// before anything runs (#1982).
+#[test]
+fn a_receiver_lent_into_a_mut_input_stays_borrowed() {
+    let program = "// rawr\nuse natives::passes::{Encoder, Layer, Target};\n\nfn main() {\n    let target = Target::new(\"frame\");\n    let mut layer = Layer::new(\"sky\");\n    let mut encoder = Encoder::new();\n    println!(\"start\");\n    let mut pass = Target::clear(&target, &mut encoder, 7);\n    layer.draw(&mut pass);\n    layer.rename(\"sea\");\n    pass.draw(1);\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("start"), "{stdout}");
+    assert!(stderr.contains("E0502"), "{stderr}");
+}
+
 /// A crate's function of open's `that_in_background` shape, which takes an
 /// `impl AsRef<OsStr>` and gives a thread's `JoinHandle<io::Result<()>>`:
 /// a `&str` and a `String` fill the argument, and the program ignores the

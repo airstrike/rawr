@@ -95,6 +95,10 @@ pub struct Plan {
     /// or with them all (`classify::dropped_parameters`).
     #[serde(default, skip_serializing_if = "is_zero")]
     dropped: u32,
+    /// The crate implements `Drop` for the type: no field moves out of a
+    /// value of it (E0509).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    drops: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -186,7 +190,20 @@ impl Plan {
             unsupported: None,
             layout: None,
             dropped: 0,
+            drops: false,
         }
+    }
+
+    /// The plan, with whether the crate implements `Drop` for the type.
+    pub(crate) const fn with_drops(mut self, drops: bool) -> Self {
+        self.drops = drops;
+        self
+    }
+
+    /// Whether the crate implements `Drop` for the type.
+    #[must_use]
+    pub const fn drops(&self) -> bool {
+        self.drops
     }
 
     /// The plan, with the alias's `dropped` parameters.
