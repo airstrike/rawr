@@ -30,6 +30,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged. (#1940)
 - An assignment evaluates its value before its place, as rustc does, so `*value.part_mut() = value.part() + 1` writes through the borrow the method lends, as iced's ferris does when it spins. (#1945)
 - A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it. (#1949)
+- A crate function that borrows a value whose type holds a borrow inside a type argument, as wgpu's `request_device(&DeviceDescriptor<'_>)` does, can be called. (#1958; part of #1953)
+- A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does, can be called, and a native module's path works beside a `use` that binds the crate's own name, as iced's markdown calls `icon::copy()` beside `use iced::widget::markdown`. (#1959; part of #801)
+- A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object. (#1960; part of #28)
 
 ## 0.3.213 (2026-11-13)
 

@@ -36,7 +36,10 @@
         {"text":"A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called.","issues":[1937]},
         {"text":"A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged.","issues":[1940]},
         {"text":"An assignment evaluates its value before its place, as rustc does, so `*value.part_mut() = value.part() + 1` writes through the borrow the method lends, as iced's ferris does when it spins.","issues":[1945]},
-        {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]}
+        {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]},
+        {"text":"A crate function that borrows a value whose type holds a borrow inside a type argument, as wgpu's `request_device(&DeviceDescriptor<'_>)` does, can be called.","issues":[1958],"refs":[1953]},
+        {"text":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does, can be called, and a native module's path works beside a `use` that binds the crate's own name, as iced's markdown calls `icon::copy()` beside `use iced::widget::markdown`.","issues":[1959],"refs":[801]},
+        {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]}
       ]
     },
     "releases": [
@@ -4303,7 +4306,12 @@
     {"issue":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open","category":"No glue (D593)"},
     {"issue":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open","category":"No glue (D593)"},
     {"issue":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open","category":"No glue (D593)"},
-    {"issue":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open","category":"No glue (D593)"}
+    {"issue":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open","category":"No glue (D593)"},
+    {"issue":1958,"title":"A crate function that borrows a value whose type holds a borrow inside a type argument, as…","state":"closed","category":"No glue (D593)"},
+    {"issue":1959,"title":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does…","state":"closed","category":"No glue (D593)"},
+    {"issue":1960,"title":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the…","state":"closed","category":"No glue (D593)"},
+    {"issue":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"open","category":"No glue (D593)"},
+    {"issue":1962,"title":"A native module's path spelled through the crate's name ignores `use` bindings inside the call's arguments too","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -4951,7 +4959,8 @@
             {"number":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open"},
             {"number":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open"},
             {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
-            {"number":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open"}
+            {"number":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open"},
+            {"number":1961,"title":"A struct literal through a crate type alias, as `wgpu::DeviceDescriptor { .. }`, is E0425","state":"open"}
           ],
           "milestone": "0.3"
         },

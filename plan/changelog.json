@@ -29,7 +29,10 @@
       {"text":"A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called.","issues":[1937]},
       {"text":"A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged.","issues":[1940]},
       {"text":"An assignment evaluates its value before its place, as rustc does, so `*value.part_mut() = value.part() + 1` writes through the borrow the method lends, as iced's ferris does when it spins.","issues":[1945]},
-      {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]}
+      {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]},
+      {"text":"A crate function that borrows a value whose type holds a borrow inside a type argument, as wgpu's `request_device(&DeviceDescriptor<'_>)` does, can be called.","issues":[1958],"refs":[1953]},
+      {"text":"A builder that keeps a borrow of a `?Sized` key, as iced's `Sensor::key_ref(url.as_str())` does, can be called, and a native module's path works beside a `use` that binds the crate's own name, as iced's markdown calls `icon::copy()` beside `use iced::widget::markdown`.","issues":[1959],"refs":[801]},
+      {"text":"A `&dyn Trait` type argument, as rfd's `set_parent(&window)` takes, reaches the crate as the trait object.","issues":[1960],"refs":[28]}
     ]
   },
   "releases": [
