@@ -322,11 +322,10 @@ impl<'a> Parser<'a> {
         // A reborrow: `&mut T` where `&T` is expected, as a `&mut Game`
         // parameter passed on to a function that only reads it. The
         // reference is the same value at runtime, so only the type changes.
-        if let Ty::Reference {
-            mutable: false,
-            target: to,
-        } = &target
-            && !matches!(self.inference.resolve(to), Ty::Infer(_))
+        // So is one where a `&_` is, as a crate's `&dyn Window` input
+        // takes a `&mut Arc<Window>` the program bound by a pattern: the
+        // type it refers to is the one the `&_` infers.
+        if let Ty::Reference { mutable: false, .. } = &target
             && let Ty::Reference {
                 mutable: true,
                 target: from,

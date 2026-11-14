@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 210;
+const CLASSIFIER_VERSION: u32 = 216;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8301,7 +8301,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         )
         .with_given(given_parameters(generics))
         .with_unsupported(unsupported)
-        .with_layout(fields.layout().cloned()))
+        .with_layout(fields.layout().cloned())
+        .with_drops(self.implements_for_any(definition, "Drop")))
     }
 
     /// An input native code gives a script closure: a value, a copy of
@@ -9564,6 +9565,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let rebound;
         let signature = if receiver_binder_is_exact(signature)
             || receiver_binder_lends_inputs(signature)
+            || receiver_lent_into_inputs(signature)
             || (late_binders_lend_strings(signature) && !self.opaque_borrows_strings(signature))
             || late_binders_lend_inputs(signature)
             || self.async_lends_inputs(signature)
@@ -10020,6 +10022,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         .with_lends(lends.into_boxed_slice())
         .with_statics(static_inputs(signature))
         .with_regional(self.regional.borrow().clone())
+        .with_keep_receiver(kept_receiver(signature))
         .with_lasting_receiver(matches!(
             signature.receiver(),
             model::Receiver::Reference {
@@ -12901,6 +12904,83 @@ fn receiver_binder_lends_inputs(signature: &model::Signature) -> bool {
         && output_names_only(signature, binder)
         && signature.inputs().all(lends_late_borrows)
         && !names_late_lifetime(ty)
+}
+
+/// A `&self` method that lends its receiver into a `&mut` input for as
+/// long as the value that input refers to lives, as integration's
+/// `Scene::draw<'a>(&'a self, render_pass: &mut RenderPass<'a>)`, which
+/// rustc reads as `for<'a, 'b> fn(&'a Scene, &'b mut RenderPass<'a>)`:
+/// the receiver's lifetime is named elsewhere only as a lifetime argument
+/// of the value one `&mut` input refers to ([`keeps_receiver`]), each other
+/// input borrows as [`late_binders_lend_inputs`] reads them, and the
+/// output names none of the method's own lifetimes.
+fn receiver_lent_into_inputs(signature: &model::Signature) -> bool {
+    let model::Receiver::Reference {
+        lifetime: receiver @ model::Lifetime::Late { binder, index },
+        mutability: model::Mutability::Shared,
+        ty,
+    } = signature.receiver()
+    else {
+        return false;
+    };
+    *index == binder.index()
+        && !names_late_lifetime(ty)
+        && !names_late_lifetime(signature.output())
+        && signature
+            .inputs()
+            .filter(|input| keeps_receiver(input, receiver))
+            .count()
+            == 1
+        && signature.inputs().all(|input| {
+            keeps_receiver(input, receiver)
+                || (!names_lifetime(input, receiver) && lends_late_borrows(input))
+        })
+}
+
+/// The inputs of `signature`, by position, that keep its receiver
+/// borrowed ([`keeps_receiver`]), when its receiver is lent into them
+/// ([`receiver_lent_into_inputs`]).
+fn kept_receiver(signature: &model::Signature) -> Box<[u32]> {
+    let model::Receiver::Reference { lifetime, .. } = signature.receiver() else {
+        return Box::default();
+    };
+    if !receiver_lent_into_inputs(signature) {
+        return Box::default();
+    }
+    signature
+        .inputs()
+        .enumerate()
+        .filter(|(_, input)| keeps_receiver(input, lifetime))
+        .filter_map(|(index, _)| u32::try_from(index).ok())
+        .collect()
+}
+
+/// Whether `ty` is a `&mut`, at a lifetime of the call's own other than
+/// `receiver`, of a crate value whose lifetime arguments are the call's
+/// own, `receiver` among them, as `&mut RenderPass<'a>` of `draw<'a>(&'a
+/// self, ..)`: the value keeps the receiver borrowed for as long as it
+/// lives.
+fn keeps_receiver(ty: &model::Type, receiver: &model::Lifetime) -> bool {
+    let model::Type::Reference {
+        lifetime: lifetime @ model::Lifetime::Late { .. },
+        mutability: model::Mutability::Mutable,
+        ty,
+    } = ty
+    else {
+        return false;
+    };
+    let model::Type::Definition { arguments, .. } = &**ty else {
+        return false;
+    };
+    lifetime != receiver
+        && arguments.iter().any(
+            |argument| matches!(argument, model::Argument::Lifetime(named) if named == receiver),
+        )
+        && arguments.iter().all(|argument| match argument {
+            model::Argument::Lifetime(named) => matches!(named, model::Lifetime::Late { .. }),
+            model::Argument::Type(ty) => !names_late_lifetime(ty),
+            model::Argument::Const(_) => true,
+        })
 }
 
 /// Whether `signature`'s output names none of its own lifetimes but

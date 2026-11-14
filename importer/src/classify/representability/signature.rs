@@ -160,6 +160,12 @@ pub struct Signature {
     /// `&Metadata<'static>`, takes only the arena's.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     regional: Box<[u32]>,
+    /// The inputs, by position, each a `&mut` of a value that keeps the
+    /// receiver borrowed for as long as it lives, as `draw<'a>(&'a self,
+    /// pass: &mut RenderPass<'a>)` takes `pass`: the receiver stays shared
+    /// while that value lives.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    keep_receiver: Box<[u32]>,
     /// A method's receiver is `&'static self`: only a static fills it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lasting_receiver: bool,
@@ -702,6 +708,7 @@ impl Signature {
             lends: Box::new([]),
             statics: Box::new([]),
             regional: Box::new([]),
+            keep_receiver: Box::new([]),
             lasting_receiver: false,
             detached_future: false,
             assigns: false,
@@ -810,6 +817,18 @@ impl Signature {
     #[must_use]
     pub fn regional(&self) -> &[u32] {
         &self.regional
+    }
+
+    pub(crate) fn with_keep_receiver(mut self, keep: Box<[u32]>) -> Self {
+        self.keep_receiver = keep;
+        self
+    }
+
+    /// The inputs, by position, whose `&mut` value keeps the receiver
+    /// borrowed for as long as it lives.
+    #[must_use]
+    pub fn keep_receiver(&self) -> &[u32] {
+        &self.keep_receiver
     }
 
     pub(crate) fn with_lasting_receiver(mut self, lasting: bool) -> Self {

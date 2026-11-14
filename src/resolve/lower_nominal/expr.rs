@@ -333,10 +333,18 @@ impl<'a> Parser<'a> {
                     // `twice(&mut |x| v.push(x))`: the closure is the
                     // borrowed temporary, and the callee calls it where it
                     // is, as its captures are where the closure reaches them.
-                    if !matches!(self.inference.resolve(&operand.ty), Ty::FnItem { .. }) {
+                    // So is a crate's value, as `&mut shell::Bus::new()`
+                    // fills iced's `update(.., shell: &mut Bus<_>)`: native
+                    // code changes it where it is, and it drops at the
+                    // statement's end, as Rust drops the temporary.
+                    let host = matches!(self.inference.resolve(&operand.ty), Ty::Host { .. });
+                    if !host && !matches!(self.inference.resolve(&operand.ty), Ty::FnItem { .. }) {
                         return Err(self.unsupported("`&mut` of a value that is not a place"));
                     }
                     self.borrow_temporary_mut(&operand, whole);
+                    if host {
+                        self.hold_temporary(&mut operand)?;
+                    }
                     operand.source = operand.rendered_source().surrounded("(", ")");
                     operand.prelude = origin::Fragment::default();
                     operand.ty = Ty::Reference {

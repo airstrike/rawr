@@ -475,6 +475,33 @@ impl Recorder {
         true
     }
 
+    /// What the `&mut` value spanning `span` refers to takes `held` here,
+    /// as `pass` takes the receiver's borrow in `scene.draw(&mut pass)`:
+    /// a local the value borrows whole, at all of its positions. `false`
+    /// when the value borrows nothing these facts name so.
+    pub(crate) fn store_through(&mut self, span: Span, held: &[(Path, Origin)]) -> bool {
+        let Some(origins) = self.origins.get(&span) else {
+            return false;
+        };
+        let locals: Vec<Local> = origins
+            .iter()
+            .filter_map(|(_, origin)| match origin {
+                Origin::Loan(loan) => Some(&self.body.loans[loan.0 as usize]),
+                Origin::Local(..) => None,
+            })
+            .filter(|loan| loan.mutable && loan.place.projection.is_empty())
+            .map(|loan| loan.place.local)
+            .collect();
+        if locals.is_empty() {
+            return false;
+        }
+        let held = region::collapse(held);
+        for local in locals {
+            self.flow_into(local, &held);
+        }
+        true
+    }
+
     /// A field of the local the use starting at `start` reads takes `held`
     /// here, already placed at the local's positions (`p.y = &c`); another
     /// place takes it as [`Recorder::store`] does.
