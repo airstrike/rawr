@@ -9,7 +9,11 @@
       {"text":"`let x;` follows rustc: a second assignment on any path is E0384, a match arm can assign it, `let (a, b);` works, and a Drop type drops only where it was assigned.","issues":[946]},
       {"text":"Arithmetic on literals that overflows or divides by zero, and an array index past its length, are refused with rustc's arithmetic_overflow and unconditional_panic errors.","issues":[947]},
       {"text":"A type mismatch underlines the whole expression, as rustc does.","issues":[1729]},
-      {"text":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo names or links beside a build script is no longer read as a build output, a crate rustc can find, or part of the runner's build.","issues":[1923]}
+      {"text":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo names or links beside a build script is no longer read as a build output, a crate rustc can find, or part of the runner's build.","issues":[1923]},
+      {"text":"The std table records each constant's type, and the std facade declares `UNIX_EPOCH` and the numeric constants from it.","issues":[925]},
+      {"text":"`Option::insert`, `get_or_insert`, `get_or_insert_with` and `get_or_insert_default` give the payload's place, so `*o.get_or_insert_with(f) += 1` works.","issues":[1001]},
+      {"text":"`Receiver::try_recv`, `recv_timeout`, `sync_channel`, `thread::scope` and `thread::Builder` run as std's, and a receive's errors are std's own.","issues":[950]},
+      {"text":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work.","issues":[1927],"refs":[949]}
     ]
   },
   "releases": [

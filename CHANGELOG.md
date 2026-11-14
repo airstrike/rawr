@@ -10,6 +10,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Arithmetic on literals that overflows or divides by zero, and an array index past its length, are refused with rustc's arithmetic_overflow and unconditional_panic errors. (#947)
 - A type mismatch underlines the whole expression, as rustc does. (#1729)
 - A project built with `split-debuginfo = "packed"` runs under rawr: the `.dSYM` debug info Cargo names or links beside a build script is no longer read as a build output, a crate rustc can find, or part of the runner's build. (#1923)
+- The std table records each constant's type, and the std facade declares `UNIX_EPOCH` and the numeric constants from it. (#925)
+- `Option::insert`, `get_or_insert`, `get_or_insert_with` and `get_or_insert_default` give the payload's place, so `*o.get_or_insert_with(f) += 1` works. (#1001)
+- `Receiver::try_recv`, `recv_timeout`, `sync_channel`, `thread::scope` and `thread::Builder` run as std's, and a receive's errors are std's own. (#950)
+- A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and `into_inner()`'s `LockResult` work. (#1927; part of #949)
 
 ## 0.3.213 (2026-11-13)
 
