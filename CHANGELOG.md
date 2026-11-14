@@ -53,6 +53,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function. (#1981)
 - A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502. (#1982)
 - `&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work. (#1982)
+- rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it. (#1989)
 
 ## 0.3.213 (2026-11-13)
 

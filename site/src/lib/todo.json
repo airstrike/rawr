@@ -59,7 +59,8 @@
         {"text":"A value that keeps a `&'a mut` and a `&'a` of the crate values it was made from, as integration's `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`, lives in its block and holds both places for its life, as rustc's borrow does.","issues":[1973]},
         {"text":"A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function.","issues":[1981]},
         {"text":"A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502.","issues":[1982]},
-        {"text":"`&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work.","issues":[1982]}
+        {"text":"`&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work.","issues":[1982]},
+        {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]}
       ]
     },
     "releases": [
@@ -4358,10 +4359,11 @@
     {"issue":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"open","category":"No glue (D593)"},
     {"issue":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"open","category":"No glue (D593)"},
     {"issue":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open","category":"No glue (D593)"},
-    {"issue":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"open","category":"Health"},
+    {"issue":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"closed","category":"Health"},
     {"issue":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"open","category":"Platforms"},
     {"issue":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"open","category":"No glue (D593)"},
-    {"issue":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"open","category":"No glue (D593)"}
+    {"issue":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"open","category":"No glue (D593)"},
+    {"issue":1993,"title":"rawr mcp screenshot: check a locked session, an off-screen window and a 2x display","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -6055,8 +6057,9 @@
             {"number":512,"title":"inspect prints bindings by their declared type","state":"open"},
             {"number":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"closed"},
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"open"},
-            {"number":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"open"},
-            {"number":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"open"}
+            {"number":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"closed"},
+            {"number":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"open"},
+            {"number":1993,"title":"rawr mcp screenshot: check a locked session, an off-screen window and a 2x display","state":"open"}
           ],
           "milestone": "0.5"
         },
