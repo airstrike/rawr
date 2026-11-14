@@ -3,9 +3,9 @@
   "updated": "2026-11-14",
   "version": "0.3.213",
   "examples": {
-    "running": 48,
+    "running": 50,
     "total": 56,
-    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 48 of 56 behave as cargo does (table, toast and game_of_life since 657b990d3). Left: editor (#2005), delineate (#2007, unconfirmed), gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), integration (#2000), markdown (#2001). system_information runs as cargo; its hot-reload save fails (#2004)."
+    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 50 of 56 behave as cargo does (integration and editor since 0a84d2e71). Left: markdown (#2001), gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), delineate (#2007, unconfirmed). system_information runs as cargo; its hot-reload save fails (#2004)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -68,7 +68,9 @@
         {"text":"A crate call takes by value a result that borrows its call's values even when its trait has type arguments and supertraits and its methods borrow, as iced's `UserInterface::build(controls.view(), ..)` does, and the values it borrowed come back when native code drops it.","issues":[1998],"refs":[1997]},
         {"text":"A program's impl of a crate trait whose function returns `impl Trait` returns the type its body gives, as markdown's `Viewer::image` and `code_block` do.","issues":[1999],"refs":[83]},
         {"text":"An if, else if or match that picks one of a crate's functions, such as text::warning or container::danger, passes the function it picked, and two calls given different crate functions each run their own, so table colours its cells and toast its headers as cargo does.","issues":[2003]},
-        {"text":"An associated function's arguments take its parameter types as their expected types, so `State::with_life(cells.collect())` collects into the type it takes and game_of_life starts.","issues":[2006]}
+        {"text":"An associated function's arguments take its parameter types as their expected types, so `State::with_life(cells.collect())` collects into the type it takes and game_of_life starts.","issues":[2006]},
+        {"text":"iced's integration example draws frames and takes input: a field borrow in a let whose value borrows nothing ends with the statement, and a value bound out of a crate enum's variant moves rather than cloning, so a SurfaceTexture is presented once.","issues":[2000]},
+        {"text":"iced's editor example takes key presses: a match arm that binds nothing of a borrowing subject runs after the borrow ends, so key_binding's `_ => Binding::from_key_press(press)` moves the press.","issues":[2005]}
       ]
     },
     "releases": [
@@ -4378,16 +4380,19 @@
     {"issue":1997,"title":"A lent cell implements an opaque type's trait with arguments, supertraits or borrowing methods (Widget<M, T, R>)","state":"open","category":"No glue (D593)"},
     {"issue":1998,"title":"A crate call takes by value a result that borrows its call's values even when its trait has type…","state":"closed","category":"No glue (D593)"},
     {"issue":1999,"title":"A program's impl of a crate trait whose function returns `impl Trait` returns the type its body…","state":"closed","category":"No glue (D593)"},
-    {"issue":2000,"title":"integration panics with E0499 inside interface.draw(..) on its first frame, after UserInterface::build works","state":"open","category":"No glue (D593)"},
+    {"issue":2000,"title":"integration panics with E0499 inside interface.draw(..) on its first frame, after UserInterface::build works","state":"closed","category":"No glue (D593)"},
     {"issue":2001,"title":"A script impl of a crate trait returning a borrow of a crate value (markdown's fn theme -> &Theme) panics the generator","state":"open","category":"No glue (D593)"},
     {"issue":2002,"title":"A borrowing result in the one-value forwarding cell can't run a program method returning another value of its type","state":"open","category":"No glue (D593)"},
     {"issue":2003,"title":"An if or match that picks one of several crate fn items always yields the first arm (table, toast)","state":"closed","category":"No glue (D593)"},
     {"issue":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"open","category":"Divergences from rustc"},
-    {"issue":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"open","category":"No glue (D593)"},
+    {"issue":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"closed","category":"No glue (D593)"},
     {"issue":2006,"title":"A struct-update literal over a derived-Default struct with FxHashSet fields has no constructor (game_of_life)","state":"closed","category":"No glue (D593)"},
     {"issue":2007,"title":"A widget operation run from on_scroll sees the layout from before that scroll (delineate)","state":"open","category":"No glue (D593)"},
     {"issue":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":2009,"title":"rawr mcp screenshot takes a region in points and renders at a chosen scale, 2x by default whatever the display","state":"open","category":"Health"}
+    {"issue":2009,"title":"rawr mcp screenshot takes a region in points and renders at a chosen scale, 2x by default whatever the display","state":"open","category":"Health"},
+    {"issue":2010,"title":"A let bound to a borrowing value keeps its scope frame to the end of the block, past the value's last use","state":"open","category":"Divergences from rustc"},
+    {"issue":2011,"title":"Arms that bind nothing run after the subject's frames end only in host matches, not literal or script-enum matches","state":"open","category":"Divergences from rustc"},
+    {"issue":2012,"title":"rawr's checker reports a false E0382 for a match arm binding moved inside a for loop","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5050,10 +5055,10 @@
             {"number":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"open"},
             {"number":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open"},
             {"number":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"closed"},
-            {"number":2000,"title":"integration panics with E0499 inside interface.draw(..) on its first frame, after UserInterface::build works","state":"open"},
+            {"number":2000,"title":"integration panics with E0499 inside interface.draw(..) on its first frame, after UserInterface::build works","state":"closed"},
             {"number":2001,"title":"A script impl of a crate trait returning a borrow of a crate value (markdown's fn theme -> &Theme) panics the generator","state":"open"},
             {"number":2003,"title":"An if or match that picks one of several crate fn items always yields the first arm (table, toast)","state":"closed"},
-            {"number":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"open"},
+            {"number":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"closed"},
             {"number":2006,"title":"A struct-update literal over a derived-Default struct with FxHashSet fields has no constructor (game_of_life)","state":"closed"},
             {"number":2007,"title":"A widget operation run from on_scroll sees the layout from before that scroll (delineate)","state":"open"}
           ],
@@ -5325,7 +5330,10 @@
             {"number":1925,"title":"A std enum the std facade holds has no variants for match coverage","state":"open"},
             {"number":1926,"title":"SyncSender::try_send and TrySendError<T> don't run yet","state":"open"},
             {"number":1977,"title":"A closure's `?` fixes its error type from the first `?` instead of its tail","state":"closed"},
-            {"number":1980,"title":"A full-path std call with a turbofish (`std::sync::mpsc::channel::<u8>()`) is a syntax error on main","state":"closed"}
+            {"number":1980,"title":"A full-path std call with a turbofish (`std::sync::mpsc::channel::<u8>()`) is a syntax error on main","state":"closed"},
+            {"number":2010,"title":"A let bound to a borrowing value keeps its scope frame to the end of the block, past the value's last use","state":"open"},
+            {"number":2011,"title":"Arms that bind nothing run after the subject's frames end only in host matches, not literal or script-enum matches","state":"open"},
+            {"number":2012,"title":"rawr's checker reports a false E0382 for a match arm binding moved inside a for loop","state":"open"}
           ]
         },
         {
