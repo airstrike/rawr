@@ -18950,8 +18950,10 @@ fn render_take_input(
     // it, lent to the call, as a `&str` input is. So is one a borrowed type
     // parameter takes, as serde's `serialize_field(key, &T)` at `bool`. A
     // by-value `T` a borrow fills, as `pick(options: L)` at `&Vec<Language>`,
-    // takes its value as a by-value parameter does.
+    // takes its value as a by-value parameter does. A tuple that holds
+    // borrows is leased whole (`Lease`).
     if matches!(ty, convert::Type::Borrowed { mutable: false, .. })
+        && !leases_whole(&lent)
         && let convert::Type::Borrowed {
             mutable: false,
             ty: lent,
@@ -19078,7 +19080,10 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
-    if let convert::Type::Borrowed { .. } = ty {
+    // A tuple that holds borrows is leased whole (`Lease`).
+    if let convert::Type::Borrowed { .. } = ty
+        && !leases_whole(&substituted(ty, signature, substitutions)?)
+    {
         let future = is_future(&substituted(signature.output(), signature, substitutions)?);
         return render_lease(
             local,
@@ -19154,9 +19159,8 @@ fn render_take_input(
             output,
         );
     }
-    if let lending
-    @ (convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)) =
-        substituted(ty, signature, substitutions)?
+    let lending = substituted(ty, signature, substitutions)?;
+    if leases_whole(&lending)
         && let Some(lease) = Lease::of(
             &lending,
             future,
@@ -19292,6 +19296,8 @@ enum LeaseKind {
     Option(Box<Lease>),
     /// A tuple of leases, each lent apart.
     Tuple(Box<[Lease]>),
+    /// A shared borrow of a lease's tuple, made of what it lends.
+    Shared(Box<Lease>),
 }
 
 impl Lease {
@@ -19303,6 +19309,20 @@ impl Lease {
             return None;
         }
         match ty {
+            // A shared borrow of a tuple that holds borrows, as log's
+            // `&(&str, &'static str, &'static Location<'_>)`: the tuple of
+            // what its members lend, made where the call's `let` keeps it.
+            convert::Type::Borrowed {
+                mutable: false,
+                ty: lent,
+            } if depth == 1 && matches!(**lent, convert::Type::Tuple(_)) && holds_borrow(lent) => {
+                let mut inner = Self::of(lent, future, kept, depth)?;
+                Some(Self {
+                    held: std::mem::take(&mut inner.held),
+                    take: std::mem::take(&mut inner.take),
+                    kind: LeaseKind::Shared(Box::new(inner)),
+                })
+            }
             convert::Type::Borrowed { mutable, ty: lent }
                 if matches!(
                     **lent,
@@ -19489,6 +19509,7 @@ impl Lease {
                     .collect::<String>();
                 format!("({borrows})")
             }
+            LeaseKind::Shared(inner) => format!("&{}", inner.borrow(place, depth)),
             LeaseKind::Option(inner) => {
                 let next = depth + 1;
                 format!(
@@ -19497,6 +19518,18 @@ impl Lease {
                 )
             }
         }
+    }
+}
+
+/// Whether an input of `ty` is leased whole (`Lease`): an `Option`, a
+/// `Result` or a tuple, or a shared borrow of a tuple.
+fn leases_whole(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_) => true,
+        convert::Type::Borrowed { mutable: false, ty } => {
+            matches!(**ty, convert::Type::Tuple(_)) && holds_borrow(ty)
+        }
+        _ => false,
     }
 }
 
@@ -19523,10 +19556,8 @@ fn future_borrows(
     let mut rebound = String::new();
     for (local, ty) in signature.inputs().iter().enumerate() {
         let substituted = substituted(ty, signature, substitutions)?;
-        if matches!(
-            substituted,
-            convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)
-        ) && let Some(lease) = Lease::of(&substituted, true, false, 1)
+        if leases_whole(&substituted)
+            && let Some(lease) = Lease::of(&substituted, true, false, 1)
         {
             let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
             rebound.push_str(&format!(

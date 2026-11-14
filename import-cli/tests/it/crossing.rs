@@ -2983,15 +2983,18 @@ fn a_crate_generics_parameter_is_inferred_through_an_arguments_bound() {
 /// image's `ImageBuffer::from_fn(w, h, |x, y| ..)`: an `FnMut` with no
 /// `'static` bound is borrowed for the call, so the closure changes what
 /// it captures and the program reads the change after, and function
-/// pointers of none, two and three inputs take script functions (#715).
-/// The output is `cargo run`'s.
+/// pointers of none, two and three inputs take script functions (#715),
+/// and so does one that borrows its input, `fn(&Grid) -> String` (#966).
+/// A borrowed tuple that holds borrows, as log's `&(&str, &'static str,
+/// &'static Location)`, is lent as rustc lends it (#1559). The output is
+/// `cargo run`'s.
 #[test]
 fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
     let (rawr, cargo) = both_printed("grid.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7"
+        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7\ngrid 4x3\nevents grid:7"
     );
 }
 

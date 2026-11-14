@@ -63,3 +63,16 @@ pub fn combine(a: i64, b: i64, c: i64, f: fn(i64, i64, i64) -> i64) -> i64 {
 pub fn produce(f: fn() -> i64) -> i64 {
     f()
 }
+
+/// `label` of `grid`, a function pointer that borrows its input, which
+/// rustc reads as `for<'a> fn(&'a Grid) -> String` (#966).
+pub fn labeled(grid: &Grid, label: fn(&Grid) -> String) -> String {
+    label(grid)
+}
+
+/// The text of a borrowed tuple that holds borrows, as log's `&(&str,
+/// &'static str, &'static Location)` takes (#1559).
+pub fn tagged(tag: &(&str, &'static str, u32)) -> String {
+    let &(target, module, line) = tag;
+    format!("{target} {module}:{line}")
+}

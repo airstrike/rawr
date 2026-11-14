@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 178;
+const CLASSIFIER_VERSION: u32 = 179;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -644,6 +644,16 @@ fn type_late_input(
         | model::Type::TraitObject { .. }
         | model::Type::ImplTrait { .. } => Err(representability::reject::Kind::CallableProtocol),
     }
+}
+
+/// Whether each late-bound lifetime `pointer`'s inputs and output name is
+/// one of its own binders', none the function's that takes it.
+fn borrows_at_own_binders(pointer: &model::Signature) -> bool {
+    let binders = pointer.binders().cloned().collect::<Vec<_>>();
+    pointer
+        .inputs()
+        .chain([pointer.output()])
+        .all(|ty| type_late_input(ty, &binders).is_ok())
 }
 
 /// Whether `argument` is `'static` or a type that names it, as
@@ -9193,7 +9203,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// its own. A script function or a closure that captures nothing
     /// fills it as a slot, a function item that coerces to the pointer
     /// (D594), and so does a crate function. A pointer of one input stays
-    /// the function item it is (`convert_input`). `None` when there is none.
+    /// the function item it is (`convert_input`), unless it borrows at
+    /// lifetimes of its own, as `fn(&Look) -> String` does: rustc reads it
+    /// as `for<'a> fn(&'a Look) -> String`, and the bound is `for<'a>
+    /// Fn(&'a Look) -> String` (#966). `None` when there is none.
     fn pointer_callables(
         &self,
         signature: &model::Signature,
@@ -9206,9 +9219,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         && !pointer.async_function()
                         && !pointer.variadic()
                         && pointer.abi() == "\"Rust\""
-                        && pointer.binders().len() == 0
                         && matches!(pointer.receiver(), model::Receiver::None)
-                        && pointer.inputs().len() != 1 =>
+                        && if pointer.binders().len() == 0 {
+                            pointer.inputs().len() != 1
+                        } else {
+                            borrows_at_own_binders(pointer)
+                        } =>
                 {
                     Some(pointer)
                 }
@@ -9263,7 +9279,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     trait_id: callable.clone(),
                     arguments: Box::from([model::Argument::Type(arguments.clone())]),
                     polarity: model::Polarity::Positive,
-                    binders: Box::default(),
+                    binders: pointer.binders().cloned().collect(),
                 },
             });
             // A function pointer holds no borrow of its own.
@@ -11825,6 +11841,25 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         }),
                     });
                 }
+                // A tuple that holds borrows, as log's `&(&str, &'static
+                // str, &'static Location<'_>)`: each member lent as it is
+                // alone, in the tuple the bridge makes and lends.
+                model::Type::Tuple(members)
+                    if members.iter().any(|member| {
+                        names_late_lifetime(member)
+                            || matches!(member, model::Type::Reference { .. })
+                    }) =>
+                {
+                    return leased(representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(representability::convert::Type::Tuple(
+                            members
+                                .iter()
+                                .map(|member| self.convert_input(member))
+                                .collect::<Result<_, _>>()?,
+                        )),
+                    });
+                }
                 model::Type::Tuple(members) if members.len() >= 2 => {
                     return Ok(representability::convert::Type::Borrowed {
                         mutable: false,
@@ -12745,14 +12780,21 @@ fn late_binders_lend_inputs(signature: &model::Signature) -> bool {
 /// Whether each late-bound lifetime `ty` names is the lifetime of a borrow
 /// the call lends: a reference to a value that names none, alone or in a
 /// type's arguments, as iced's `combo_box(.., selection: Option<&T>, ..)`
-/// takes.
+/// takes. A shared reference lends what its value holds too, as log's
+/// `&(&str, &'static str, &'static Location<'_>)` does, and so does a
+/// type's own lifetime, as `fmt::Arguments<'_>`'s: nothing the call is
+/// given can keep them past it. A `&mut` can, so its value names none.
 fn lends_late_borrows(ty: &model::Type) -> bool {
     let argument = |argument: &model::Argument| match argument {
         model::Argument::Type(ty) => lends_late_borrows(ty),
-        model::Argument::Lifetime(lifetime) => !matches!(lifetime, model::Lifetime::Late { .. }),
-        model::Argument::Const(_) => true,
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => true,
     };
     match ty {
+        model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty,
+            ..
+        } => lends_late_borrows(ty) || lends_late_objects(ty),
         model::Type::Reference { ty, .. } => !names_late_lifetime(ty) || lends_late_objects(ty),
         model::Type::Definition { arguments, .. } => arguments.iter().all(argument),
         model::Type::Tuple(types) => types.iter().all(lends_late_borrows),
@@ -15471,6 +15513,37 @@ mod tests {
             unit.clone(),
         );
         assert!(super::late_binders_lend_inputs(&selection));
+
+        // log's `__private_api::log(.., &(&str, &'static str, &'static
+        // Location<'_>), ..)`: a shared borrow of a tuple of borrows lends
+        // them all for the call, and so does a type's own late lifetime.
+        let text = reference(late.clone(), model::Type::Primitive("str".into()));
+        let located = reference(
+            model::Lifetime::Static,
+            model::Type::Definition {
+                id: id.clone(),
+                arguments: Box::from([model::Argument::Lifetime(late.clone())]),
+            },
+        );
+        let tagged = free(
+            Box::from([reference(
+                late.clone(),
+                model::Type::Tuple(Box::from([text.clone(), located])),
+            )]),
+            unit.clone(),
+        );
+        assert!(super::late_binders_lend_inputs(&tagged));
+        // A `&mut` whose value borrows at the call's lifetime could keep a
+        // borrow past it.
+        let kept = free(
+            Box::from([model::Type::Reference {
+                lifetime: late.clone(),
+                mutability: model::Mutability::Mutable,
+                ty: Box::new(model::Type::Tuple(Box::from([text]))),
+            }]),
+            unit.clone(),
+        );
+        assert!(!super::late_binders_lend_inputs(&kept));
         let generics = model::Generics::new(Box::default(), Box::default());
         assert!(super::output_binders_early(&selection, &generics).is_none());
 

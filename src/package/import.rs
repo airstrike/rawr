@@ -4121,6 +4121,12 @@ impl Types {
                     .map(|member| Self::input_charged(member, parameters))
                     .collect::<Result<Vec<_>, _>>()?,
             )?,
+            // A shared borrow of a tuple that holds borrows, as log's
+            // `&(&str, &'static str, ..)`: a borrow of the tuple of what
+            // each lends.
+            Type::Borrowed { mutable: false, ty } if matches!(**ty, Type::Tuple(_)) => {
+                host::type_ref::Type::reference(false, Self::input_charged(ty, parameters)?)
+            }
             _ => Self::convert_charged(ty, parameters)?,
         })
     }
