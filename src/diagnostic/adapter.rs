@@ -718,6 +718,7 @@ fn primary_label(
             Some(format!("expected {}, found `()`", resolve::Described(expected)).into())
         }
         resolve::Error::ReturnWithoutValue { .. } => Some("return type is not `()`".into()),
+        resolve::Error::KnownPanic { label, .. } => Some(label.clone()),
         resolve::Error::SelfOutsideImpl { parameter, .. } => {
             Some(resolve::SelfOutside(*parameter).label().into())
         }
@@ -864,6 +865,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             _ => code::RESOLVE_ARGUMENT_COUNT,
         },
         resolve::Category::OverflowingLiteral => code::RESOLVE_OVERFLOWING_LITERAL,
+        resolve::Category::KnownPanic => code::RESOLVE_KNOWN_PANIC,
         resolve::Category::Uninitialized => code::RESOLVE_UNINITIALIZED,
         resolve::Category::LocalTypeNeeded => match error {
             resolve::Error::LocalTypeNeeded { code, .. } => code::type_needed(code),
@@ -1069,6 +1071,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 Some(note) => builder.note(note.clone()),
                 None => builder,
             }
+        }
+        resolve::Error::KnownPanic { lint, .. } => {
+            builder.note(format!("`#[deny({})]` on by default", lint.name()))
         }
         resolve::Error::OverflowingLiteral { note, help, .. } => {
             let builder = match help {
@@ -1359,6 +1364,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::OverflowingLiteral { ty, .. } => {
             format!("literal out of range for `{ty}`")
         }
+        resolve::Error::KnownPanic { lint, .. } => lint.message().to_string(),
         resolve::Error::Uninitialized { name, possibly, .. } => resolve::Uninitialized {
             name,
             possibly: *possibly,

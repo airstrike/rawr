@@ -597,6 +597,7 @@ impl<'a> Parser<'a> {
             .surrounded(&format!("{operator}("), ")");
         let value = self.operator_expr(source, ty, span(start, operand.span.end()));
         Ok(if operator == "-" {
+            self.note_known_negation(operand.span, &value);
             self.checked_arithmetic(value, "neg")
         } else {
             value
@@ -629,7 +630,11 @@ impl<'a> Parser<'a> {
                 } else {
                     value.to_string()
                 };
-                Ok(self.literal(text, ty, token_span))
+                let literal = self.literal(text, ty, token_span);
+                if !float {
+                    self.note_known_literal(&literal, value);
+                }
+                Ok(literal)
             }
             Token::CharConstant(value) => {
                 Ok(self.literal(format!("{value:?}"), Ty::Char, token_span))
@@ -931,6 +936,7 @@ impl<'a> Parser<'a> {
             if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
                 self.unmovable.insert(span(open, end), unmovable);
             }
+            self.note_known_parenthesized(value.span, span(open, end));
             value.span = span(open, end);
             value.lvalue = None;
             value.source.cover(value.span);

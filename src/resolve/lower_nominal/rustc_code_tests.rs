@@ -1673,3 +1673,83 @@ fn a_mismatched_argument_is_underlined_whole() {
         "{report}"
     );
 }
+
+#[test]
+fn an_operation_known_to_overflow_or_panic_is_rustcs_deny_lint() {
+    // #947: each message, label and note as rustc 1.96 gives them.
+    let cases = [
+        (
+            "let x: u8 = 255 + 1;",
+            "this arithmetic operation will overflow",
+            "attempt to compute `u8::MAX + 1_u8`, which would overflow",
+            "arithmetic_overflow",
+        ),
+        (
+            "let y = 0u32 - 1;",
+            "this arithmetic operation will overflow",
+            "attempt to compute `0_u32 - 1_u32`, which would overflow",
+            "arithmetic_overflow",
+        ),
+        (
+            "let z = 1i32 << 40;",
+            "this arithmetic operation will overflow",
+            "attempt to shift left by `40_i32`, which would overflow",
+            "arithmetic_overflow",
+        ),
+        (
+            "let q = 1 / 0;",
+            "this operation will panic at runtime",
+            "attempt to divide `1_i32` by zero",
+            "unconditional_panic",
+        ),
+        (
+            "let r = 7 % (2 - 2);",
+            "this operation will panic at runtime",
+            "attempt to calculate the remainder of `7_i32` with a divisor of zero",
+            "unconditional_panic",
+        ),
+        (
+            "let s = -128i8 / -1;",
+            "this operation will panic at runtime",
+            "attempt to compute `i8::MIN / -1_i8`, which would overflow",
+            "unconditional_panic",
+        ),
+        (
+            "let a = [1, 2, 3];\n    let w = a[5];",
+            "this operation will panic at runtime",
+            "index out of bounds: the length is 3 but the index is 5",
+            "unconditional_panic",
+        ),
+    ];
+    for (body, message, label, lint) in cases {
+        let source = format!("fn main() {{\n    {body}\n}}\n");
+        let error = Engine::new()
+            .compile(&source)
+            .map(|_| ())
+            .expect_err("rawr refuses this program");
+        let evidence = Source::new("main.rs", &source).expect("a test source has an identity");
+        let report = Report::from_parse(evidence, &error).expect("the error is in the source");
+        assert_eq!(report.code().as_str(), "", "{body}");
+        assert_eq!(report.message(), message, "{body}");
+        assert_eq!(
+            report.labels().first().and_then(|label| label.message()),
+            Some(label),
+            "{body}"
+        );
+        assert_eq!(
+            report.notes().collect::<Vec<_>>(),
+            [format!("`#[deny({lint})]` on by default")],
+            "{body}"
+        );
+    }
+    // The operation is underlined whole.
+    assert!(rendered("fn main() {\n    let x: u8 = 255 + 1;\n}\n")
+        .contains(" 2 |     let x: u8 = 255 + 1;\n   |                 ^^^^^^^ attempt"),);
+    // What doesn't overflow or panic runs.
+    let program = "fn main() {\n    let a = -128i8;\n    let b = 0xFFu8 & 0x0F;\n    let c = \
+                   255u8 << 1;\n    let d = (3 + 4) * 2;\n    let f: u64 = 1 << 40;\n    let g = \
+                   [1, 2, 3][2];\n    let h = -(5 - 2);\n    let _ = (a, b, c, d, f, g, h);\n}\n";
+    Engine::new()
+        .compile(program)
+        .unwrap_or_else(|error| panic!("{error}"));
+}

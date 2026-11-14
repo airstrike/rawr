@@ -119,6 +119,7 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_MOVED_VALUE, "E0382", "A use of a value after it was moved, as rustc reports it."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
     (RESOLVE_OVERFLOWING_LITERAL, "", "An integer literal its type can't hold, rustc's deny-by-default `overflowing_literals` lint, which has no code."),
+    (RESOLVE_KNOWN_PANIC, "", "An operation known when compiled to overflow or panic, rustc's deny-by-default `arithmetic_overflow` and `unconditional_panic` lints, which have no code."),
     (RESOLVE_TYPE_MISMATCH, "E0308", "An expression whose type differs from the one expected, as rustc reports it."),
     (RESOLVE_IF_WITHOUT_ELSE, "E0317", "An `if` with no `else` where a value other than `()` is expected, as rustc reports it."),
     (RESOLVE_RETURN_UNIT, "E0069", "A `return;` in a function whose output isn't `()`, as rustc reports it."),

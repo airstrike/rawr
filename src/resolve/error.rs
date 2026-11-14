@@ -125,6 +125,10 @@ pub enum Category {
     /// An integer literal its type can't hold, rustc's deny-by-default
     /// `overflowing_literals` lint.
     OverflowingLiteral,
+    /// An operation on values known when the body is compiled that would
+    /// overflow or panic, rustc's deny-by-default `arithmetic_overflow` and
+    /// `unconditional_panic` lints.
+    KnownPanic,
     /// A local used before it is given a value, as rustc's E0381.
     Uninitialized,
     /// A local whose type nothing settles where rustc needs it, as rustc's
@@ -187,8 +191,39 @@ impl fmt::Display for Category {
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
             Self::PrivateItem => formatter.write_str("private item"),
             Self::OverflowingLiteral => formatter.write_str("literal out of range"),
+            Self::KnownPanic => formatter.write_str("operation will panic"),
             Self::Uninitialized => formatter.write_str("used binding isn't initialized"),
             Self::LocalTypeNeeded => formatter.write_str("type annotations needed"),
+        }
+    }
+}
+
+/// The deny-by-default lint that refuses an operation known to panic.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Lint {
+    /// `arithmetic_overflow`: an operation that would overflow.
+    ArithmeticOverflow,
+    /// `unconditional_panic`: a division by zero, a division that would
+    /// overflow, or an index past an array's end.
+    UnconditionalPanic,
+}
+
+impl Lint {
+    /// The lint's name, as `#[deny(..)]` names it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ArithmeticOverflow => "arithmetic_overflow",
+            Self::UnconditionalPanic => "unconditional_panic",
+        }
+    }
+
+    /// rustc's message for the lint.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::ArithmeticOverflow => "this arithmetic operation will overflow",
+            Self::UnconditionalPanic => "this operation will panic at runtime",
         }
     }
 }
@@ -994,6 +1029,19 @@ pub enum Error {
         /// The literal.
         literal: Span,
     },
+    /// An operation on values known when the body is compiled that would
+    /// overflow, divide by zero or index past an array's end, which rustc's
+    /// deny-by-default `arithmetic_overflow` and `unconditional_panic` lints
+    /// refuse.
+    KnownPanic {
+        /// The lint that refuses it.
+        lint: Lint,
+        /// rustc's label: what the operation attempts, as "attempt to
+        /// compute `u8::MAX + 1_u8`, which would overflow".
+        label: ImmutableString,
+        /// The operation.
+        at: Span,
+    },
     /// A call of a generic function that gives one of its type parameters
     /// no type, which rustc refuses (E0282).
     TypeAnnotationsNeeded {
@@ -1217,6 +1265,7 @@ impl Error {
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
             Self::PrivateItem { .. } => Category::PrivateItem,
             Self::OverflowingLiteral { .. } => Category::OverflowingLiteral,
+            Self::KnownPanic { .. } => Category::KnownPanic,
             Self::Uninitialized { .. } => Category::Uninitialized,
             Self::LocalTypeNeeded { .. } => Category::LocalTypeNeeded,
         }
@@ -1244,6 +1293,7 @@ impl Error {
             Self::NotInModule { module, .. } => module.as_str(),
             Self::PrivateItem { name, .. } => name.as_str(),
             Self::OverflowingLiteral { ty, .. } => ty.as_str(),
+            Self::KnownPanic { label, .. } => label.as_str(),
             Self::Uninitialized { name, .. }
             | Self::LocalTypeNeeded { name, .. }
             | Self::UnboundAlternative { name, .. } => name.as_str(),
@@ -1303,6 +1353,7 @@ impl Error {
             | Self::NotInModule { reference, .. }
             | Self::PrivateItem { reference, .. } => *reference,
             Self::OverflowingLiteral { literal, .. } => *literal,
+            Self::KnownPanic { at, .. } => *at,
             Self::Uninitialized { reference, .. } => *reference,
             Self::LocalTypeNeeded { declaration, .. } => *declaration,
             Self::UnknownFunction { reference, .. } => *reference,
@@ -1417,7 +1468,8 @@ impl Error {
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
             | Self::ArgumentSignature { .. }
-            | Self::OverflowingLiteral { .. } => None,
+            | Self::OverflowingLiteral { .. }
+            | Self::KnownPanic { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -2249,6 +2301,9 @@ impl fmt::Display for Written<'_> {
             }
             Error::OverflowingLiteral { ty, literal, .. } => {
                 write!(formatter, "literal out of range for `{ty}` at {literal}")
+            }
+            Error::KnownPanic { lint, label, at } => {
+                write!(formatter, "{} at {at}: {label}", lint.message())
             }
             Error::TypeAnnotationsNeeded {
                 parameter,

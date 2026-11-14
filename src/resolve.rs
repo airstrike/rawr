@@ -28,7 +28,7 @@ pub(crate) use error::{
     RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, MacroScope, MoveCause,
+    BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Lint, MacroScope, MoveCause,
     MovedPlace, OwningParameter, Private, Unresolved,
 };
 use std::collections::BTreeMap;

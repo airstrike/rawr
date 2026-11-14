@@ -43,6 +43,7 @@ mod iterator;
 #[cfg(feature = "rust-import")]
 pub(crate) mod kept;
 mod keyed;
+mod known_panic;
 mod lending;
 mod literal;
 mod local_type;
@@ -204,6 +205,7 @@ use iterator::{collect_try, COLLECT_OPTION, COLLECT_RESULT};
 #[cfg(feature = "rust-import")]
 pub(crate) use kept::Lowerings;
 use keyed::keyed_query;
+use known_panic::{Known, KnownIndex};
 use location::retain_locations;
 pub(crate) use location::Location;
 use lvalue::{
@@ -368,6 +370,11 @@ struct Parser<'a> {
     /// Each move of a local or a part of one, by where it starts: what
     /// E0382 says of the move.
     move_sites: BTreeMap<Position, MoveSite>,
+    /// The integer expressions whose values are known when compiled, by
+    /// span, and the known indices into arrays: what rustc's
+    /// `arithmetic_overflow` and `unconditional_panic` lints check.
+    known_values: BTreeMap<Span, Known>,
+    known_indices: Vec<KnownIndex>,
     /// The type of a capture rawr knows isn't `Send`, of each closure
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
@@ -913,6 +920,8 @@ impl<'a> Parser<'a> {
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
             move_sites: BTreeMap::new(),
+            known_values: BTreeMap::new(),
+            known_indices: Vec::new(),
             unsent_captures: BTreeMap::new(),
             borrowed_captures: BTreeMap::new(),
             deferred: BTreeMap::new(),
