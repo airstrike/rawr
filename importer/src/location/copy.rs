@@ -2,8 +2,9 @@
 //!
 //! A program with marked files builds from a copy rawr lays out in its
 //! directory: `<target>/rawr/crate/`, `<target>/rawr/members/<path>/crate/`
-//! for a workspace member, and `bin/` beside either for a package's native
-//! binary that runs from its library. In the copy, a marked type native
+//! for a workspace member (each under `<target>/rawr/projects/<name>-<key>/`
+//! when the target directory is shared), and `bin/` beside either for a
+//! package's native binary that runs from its library. In the copy, a marked type native
 //! code holds as a trait object has a stand-in named `__Rawr<Name>`. What
 //! rustc or Cargo says of the copy names the program's own files and
 //! types once [`program`] maps it.
@@ -50,6 +51,12 @@ fn program_path(path: &str) -> Option<String> {
 /// The program's path of `rest`, a path below rawr's directory, when it is
 /// in the copy.
 fn copied(rest: &str) -> Option<String> {
+    // A shared target directory keeps each workspace's under
+    // `projects/<name>-<key>/`.
+    let rest = match rest.strip_prefix(rawr_location::PROJECTS) {
+        Some(keyed) => keyed.strip_prefix('/')?.split_once('/')?.1,
+        None => rest,
+    };
     let (member, rest) = match rest.strip_prefix("members/") {
         Some(member) => {
             let split = member.find("/crate/").or_else(|| member.find("/bin/"))?;
@@ -485,6 +492,19 @@ error: could not compile `app` (lib) due to 2 previous errors; 1 warning emitted
         assert_eq!(
             super::program("::: /p/ws/target/rawr/members/examples/app/crate/src/a.rs:1:2"),
             "::: examples/app/src/a.rs:1:2"
+        );
+        // A target directory several workspaces share.
+        assert_eq!(
+            super::program("--> /p/_target/rawr/projects/app-00ab/crate/src/a.rs:1:2"),
+            "--> src/a.rs:1:2"
+        );
+        assert_eq!(
+            super::program("/p/_target/rawr/projects/ws-00ab/members/tools/one/bin/src/main.rs"),
+            "tools/one/src/main.rs"
+        );
+        assert_eq!(
+            super::program("/p/_target/rawr/projects/app-00ab/store/x.rs"),
+            "/p/_target/rawr/projects/app-00ab/store/x.rs"
         );
         assert_eq!(
             super::program("(/p/app/target/rawr/bin/src/main.rs)"),

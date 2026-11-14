@@ -233,8 +233,9 @@ fn acquire(
     // other crate is keyed by its native input witness, the project's view
     // of it, so its entry stays with the project, as its build does, in
     // this rawr's protocol's format there.
+    let rawr = copies.rawr_directory_here(graph.entry_package().root());
     let local = rawr_import::bindings::format::project(
-        &graph.entry_package().root().join("target/rawr"),
+        &rawr,
         rawr_import::bindings::format::Kept::Inventories,
     );
     // The entries a union of these exact API inputs was made of: read back
@@ -270,7 +271,6 @@ fn acquire(
     let closure = probe.closure(&native, limits).map_err(Error::other)?;
     // What the project's last build gave its build scripts, against which
     // an entry whose closure runs one is shared (#403).
-    let rawr = graph.entry_package().root().join("target/rawr");
     let project = store::Scripts::project(&rawr);
     // Each unit: its entry's key and store, and the witness its capture must
     // agree with before it is published. A unit whose shared closure runs a
@@ -577,7 +577,7 @@ fn prepare_resolving(
     // the identity of every input its API was read from: its dependencies'
     // facts change only with them, so no facts are read for a warm run.
     let applied = rawr_import::bindings::format::project(
-        &project.join("target/rawr"),
+        &rawr,
         rawr_import::bindings::format::Kept::Inventories,
     )
     .join("applied");
