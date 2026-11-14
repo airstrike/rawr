@@ -36,7 +36,7 @@ pub const CORE: [&str; 19] = [
 ];
 
 /// What every input tool's description ends with.
-const INPUT: &str = "Positions are logical points from the window's top-left corner, title bar included, as `screenshot` shows it. The input goes to the program alone: your own pointer, keyboard and focus stay as they are, and the window isn't brought forward. The window shows an agent cursor where the pointer last went, also in screenshots. Returns once the program has taken the input and drawn again, so a `screenshot` next shows what it did, or once the input made it pause at a breakpoint.";
+const INPUT: &str = "Positions are logical points from the window's top-left corner, title bar included, as `screenshot` shows it. The input goes to the program alone: your own pointer, keyboard and focus stay as they are, and the window isn't brought forward. The window shows an agent cursor where the pointer last went, also in screenshots. Input sent before the program opens its first window waits for that window. Returns once the program has taken the input and drawn again, so a `screenshot` next shows what it did, or once the input made it pause at a breakpoint.";
 
 /// Crates whose programs draw a terminal UI, which `start` can't host yet.
 const TERMINAL_UI: [&str; 6] = [

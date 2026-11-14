@@ -14,6 +14,10 @@
 //! above the program's own drawing: the program's layout and events don't
 //! change for it.
 //!
+//! Input sent before the program's first window opens waits for it, as a
+//! program just started or restarted opens it a few turns of its event
+//! loop later (#1947).
+//!
 //! An answer comes once the program has taken each event and drawn again:
 //! `{"window": {"title": .., "width": .., "height": ..}, "cursor": {"x": ..,
 //! "y": ..} or null}`, or `{"error": ..}`.
@@ -115,7 +119,8 @@ pub(super) enum Error {
     Modifier(String),
     /// A click count of zero.
     Count,
-    /// The program shows no window, or none with that title.
+    /// The program shows no window, or none with that title, after it
+    /// showed its first.
     Window { title: Option<String> },
     /// This system can't hand a window input.
     #[cfg(not(target_os = "macos"))]
