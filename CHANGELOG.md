@@ -54,6 +54,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502. (#1982)
 - `&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work. (#1982)
 - rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it. (#1989)
+- A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing. (#1983)
 
 ## 0.3.213 (2026-11-13)
 

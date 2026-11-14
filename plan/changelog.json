@@ -53,7 +53,8 @@
       {"text":"A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function.","issues":[1981]},
       {"text":"A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502.","issues":[1982]},
       {"text":"`&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work.","issues":[1982]},
-      {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]}
+      {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]},
+      {"text":"A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing.","issues":[1983]}
     ]
   },
   "releases": [
