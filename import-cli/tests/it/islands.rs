@@ -2939,7 +2939,9 @@ fn a_generic_marked_types_method_native_code_calls_swaps() {
 /// string and slice constants and `&'static str` static through the crate's
 /// module, as inboard's `theme.rs` names `fonts::UI_FAMILY`, and gives the
 /// text to the crate's `Font::new(name: &'static str)`, and the constant of
-/// a crate that has no other public item (#1146). `rawr
+/// a crate that has no other public item (#1146). A `static` of a
+/// `LazyLock<Font>` is the `Font` it derefs to, read where it is: its
+/// method, and a `&'static Font` it lends for good (#610). `rawr
 /// check` passes as `cargo check` does, and `rawr run` prints what `cargo
 /// run` prints.
 #[test]
@@ -2961,7 +2963,9 @@ fn a_marked_module_reads_a_native_crate_s_static_text_and_slice_constants() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert!(
-        printed.contains("family Inter Tight has 11 letters\nversion 1.2.3\n"),
+        printed.contains(
+            "family Inter Tight has 11 letters\nversion 1.2.3\nheading Inter Display Inter Display\n"
+        ),
         "{printed}"
     );
     let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))

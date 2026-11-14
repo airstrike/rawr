@@ -32,3 +32,12 @@ pub fn family() -> String {
 pub fn version() -> String {
     format!("version {}", version::VALUE)
 }
+
+pub fn heading() -> String {
+    let heading: &'static fonts::Font = &fonts::HEADING;
+    format!(
+        "heading {} {}",
+        fonts::HEADING.family(),
+        fonts::family_of(heading)
+    )
+}

@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 187;
+const CLASSIFIER_VERSION: u32 = 190;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8872,15 +8872,24 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         if let Some(scalars) = self.static_scalars(ty) {
             return Ok(representability::constant::Plan::new(scalars, None));
         }
-        if !names_early_lifetime(ty)
-            && !names_late_lifetime(ty)
-            && let Ok(value) = self.convert(ty)
-            // One of std's types Rawr holds as its own value is read as
-            // that value.
-            && matches!(&value, Type::Nominal { definition, .. }
-                if crate::surface::identity::Definition::std_path(definition.as_bytes()).is_none())
+        // A `LazyLock<T>` of a crate value, as loading_spinners' `pub static
+        // EMPHASIZED: LazyLock<Easing>`: the place of the `T` it derefs to,
+        // which every use of the static reaches through `Deref` (#610). The
+        // bridge reads it as `&STATIC`, which the read's `&'static T`
+        // coerces.
+        if let model::Type::Definition { id, arguments } = ty
+            && let Some(definition) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            && let Some(target) = std_binding::lazy_lock_target(definition, arguments)
         {
-            return Ok(representability::constant::Plan::lasting(value));
+            return self.lasting_value(target).ok_or_else(|| {
+                representability::reject::Kind::StdNotRun(std_binding::Unrun::Other).into()
+            });
+        }
+        if let Some(plan) = self.lasting_value(ty) {
+            return Ok(plan);
         }
         if let model::Type::Reference {
             mutability: model::Mutability::Shared,
@@ -8916,6 +8925,20 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return Err(representability::reject::Kind::Static.into());
         }
         Ok(representability::constant::Plan::new(ty, None))
+    }
+
+    /// A `static` of a crate value that borrows nothing, read where it is
+    /// (#1442). One of std's types Rawr holds as its own value is not: it
+    /// is read as that value.
+    fn lasting_value(&self, ty: &model::Type) -> Option<representability::constant::Plan> {
+        use representability::convert::Type;
+        if names_early_lifetime(ty) || names_late_lifetime(ty) {
+            return None;
+        }
+        let value = self.convert(ty).ok()?;
+        matches!(&value, Type::Nominal { definition, .. }
+            if crate::surface::identity::Definition::std_path(definition.as_bytes()).is_none())
+        .then(|| representability::constant::Plan::lasting(value))
     }
 
     /// The type of a `const` or `static` of a slice of numbers, `bool`s or

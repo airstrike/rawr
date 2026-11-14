@@ -27,3 +27,12 @@ impl Font {
         self.family
     }
 }
+
+/// The heading font, made on first use, as loading_spinners' easings are.
+pub static HEADING: std::sync::LazyLock<Font> =
+    std::sync::LazyLock::new(|| Font::new("Inter Display"));
+
+/// The family of a font lent for good.
+pub fn family_of(font: &'static Font) -> &'static str {
+    font.family
+}

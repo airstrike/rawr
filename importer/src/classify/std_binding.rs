@@ -224,6 +224,24 @@ pub(crate) fn of(definition: &model::Definition) -> Option<Std> {
     )
 }
 
+/// The `T` of std's `sync::LazyLock<T, F>`, the value a `static` of one
+/// derefs to (#610). rustc's own path to it goes through a private module
+/// (`std::sync::lazy_lock::LazyLock`), so only its crate, its `sync`
+/// module and its name are read.
+pub(crate) fn lazy_lock_target<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
+    let unit = definition.id().unit();
+    unit.authority().sysroot()?;
+    let mut path = definition.display_path();
+    let lazy = unit.crate_name() == "std"
+        && path.next() == Some("std")
+        && path.next() == Some("sync")
+        && definition.display_path().last() == Some("LazyLock");
+    lazy.then(|| type_argument(arguments, 0)).flatten()
+}
+
 /// The `index`th type argument of a std type, its lifetimes skipped:
 /// `T` of `Vec<T, A>`, `B` of `Cow<'a, B>`.
 pub(crate) fn type_argument(arguments: &[model::Argument], index: usize) -> Option<&model::Type> {
