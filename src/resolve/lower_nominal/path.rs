@@ -14,7 +14,20 @@ impl<'a> Parser<'a> {
         first_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let (path, reference, next) = self.peek_path(&first, first_span);
-        match self.parse_qualified_path(first, first_span) {
+        // A path into a native module is spelled through the app's crate,
+        // as markdown's `icon::copy` is `markdown::icon::copy`: its head is
+        // that crate, which no `use` shadows, as `use iced::widget::markdown`
+        // would.
+        let head = self
+            .models
+            .qualified_rust(reference)
+            .and_then(|spelled| spelled.first().cloned());
+        let outer = head.map(|head| self.models.global_head.replace(head));
+        let parsed = self.parse_qualified_path(first, first_span);
+        if let Some(outer) = outer {
+            self.models.global_head = outer;
+        }
+        match parsed {
             Err(
                 error @ (Error::UnknownType { .. }
                 | Error::UnknownVariable { .. }
