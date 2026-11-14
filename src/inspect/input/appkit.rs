@@ -10,6 +10,7 @@
 //! hasn't shows no window.
 
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, OnceLock};
 use std::time::Duration;
 
@@ -262,8 +263,8 @@ impl Runtime {
 }
 
 /// Send `gesture` to the window titled `title`, or the program's front
-/// window, waiting for each event and the frame drawn after them, until
-/// `interrupted` says to give up.
+/// window, waiting for the program's first window, each event and the
+/// frame drawn after them, until `interrupted` says to give up.
 pub(super) fn send(
     gesture: &Gesture,
     title: Option<&str>,
@@ -272,7 +273,10 @@ pub(super) fn send(
     let missing = || Error::Window {
         title: title.map(str::to_owned),
     };
-    let runtime = Runtime::get().ok_or_else(missing)?;
+    let Some(runtime) = arrived(interrupted) else {
+        return Err(missing());
+    };
+    let runtime = runtime?;
     let mut sent = None;
     for event in events(gesture) {
         let title = title.map(str::to_owned);
@@ -290,6 +294,29 @@ pub(super) fn send(
     main(interrupted, || ())?;
     std::thread::sleep(FRAME);
     sent.ok_or_else(missing)
+}
+
+/// Whether the program has shown a window since it started.
+static SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// AppKit's functions once the program's first window has come, `None` in a
+/// program without AppKit, which shows no window, or why the wait was given
+/// up (#1947). A program that shows a window opens it some turns of its
+/// event loop after it starts, its executor's threads taking part, so input
+/// sent in between waits for that window, looking each [`POLL`]. Once one
+/// was shown, a program with none takes no input, and the input says so at
+/// once.
+fn arrived(interrupted: &dyn Fn() -> bool) -> Option<Result<&'static Runtime, Error>> {
+    let runtime = Runtime::get()?;
+    while !SHOWN.load(Ordering::Acquire) {
+        match main(interrupted, move || window(runtime, None).is_some()) {
+            Ok(true) => SHOWN.store(true, Ordering::Release),
+            Ok(false) if interrupted() => return Some(Err(Error::Interrupted)),
+            Ok(false) => std::thread::sleep(POLL),
+            Err(error) => return Some(Err(error)),
+        }
+    }
+    Some(Ok(runtime))
 }
 
 /// The events `gesture` is, in order.
@@ -879,6 +906,17 @@ mod tests {
                 ("flags 56".to_owned(), 0),
             ]
         );
+    }
+
+    /// Input sent before the program's first window waits for it instead
+    /// of saying there is none (#1947): a test's main thread runs no event
+    /// loop, so the wait goes on until the caller gives it up.
+    #[test]
+    fn input_before_the_first_window_waits_for_it() {
+        let _ = loaded();
+        let move_to = Gesture::Move(Point { x: 10.0, y: 10.0 });
+        assert_eq!(send(&move_to, None, &|| true), Err(Error::Interrupted));
+        assert!(!SHOWN.load(Ordering::Acquire));
     }
 
     #[test]
