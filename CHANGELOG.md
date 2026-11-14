@@ -28,6 +28,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `image(&handle)` boxed at iced's renderer takes iced's Handle, as rustc infers it, so iced's screenshot runs. (#1939)
 - A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called. (#1937)
 - A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged. (#1940)
+- An assignment evaluates its value before its place, as rustc does, so `*value.part_mut() = value.part() + 1` writes through the borrow the method lends, as iced's ferris does when it spins. (#1945)
+- A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it. (#1949)
 
 ## 0.3.213 (2026-11-13)
 

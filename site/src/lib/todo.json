@@ -34,7 +34,9 @@
         {"text":"Crate structs with a PhantomData field, as palette's Rgb and Hsl, build in the runner when the program has moved another of their fields out, so iced's color_palette runs.","issues":[1931]},
         {"text":"`image(&handle)` boxed at iced's renderer takes iced's Handle, as rustc infers it, so iced's screenshot runs.","issues":[1939]},
         {"text":"A crate's async fn whose elided lifetime only fills a type's lifetime argument, as wgpu's `initialize_adapter_from_env_or_default(.., Option<&Surface<'_>>)`, can be called.","issues":[1937]},
-        {"text":"A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged.","issues":[1940]}
+        {"text":"A marked enum whose variants carry nothing and which derives Copy reaches native generic code as a Copy value that compares, orders and hashes as the enum derives, so iced's `radio` takes it and iced's scrollable builds unchanged.","issues":[1940]},
+        {"text":"An assignment evaluates its value before its place, as rustc does, so `*value.part_mut() = value.part() + 1` writes through the borrow the method lends, as iced's ferris does when it spins.","issues":[1945]},
+        {"text":"A future of yours that a crate's executor polls on its own threads, as iced's `Task::perform` does on tokio's workers, runs there as under cargo, and the native values it holds across an `.await` go with it.","issues":[1949]}
       ]
     },
     "releases": [
@@ -4289,18 +4291,19 @@
     {"issue":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"closed","category":"No glue (D593)"},
     {"issue":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"closed","category":"No glue (D593)"},
     {"issue":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"closed","category":"No glue (D593)"},
-    {"issue":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"open","category":"No glue (D593)"},
+    {"issue":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"closed","category":"No glue (D593)"},
     {"issue":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open","category":"No glue (D593)"},
     {"issue":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open","category":"No glue (D593)"},
     {"issue":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"open","category":"No glue (D593)"},
+    {"issue":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"closed","category":"No glue (D593)"},
     {"issue":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open","category":"No glue (D593)"},
     {"issue":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open","category":"No glue (D593)"},
     {"issue":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open","category":"No glue (D593)"},
     {"issue":1953,"title":"A crate fn taking &DeviceDescriptor<'_> (a &str borrow inside a type argument) is refused as a borrow rawr can't lend","state":"open","category":"No glue (D593)"},
     {"issue":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open","category":"No glue (D593)"},
     {"issue":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open","category":"No glue (D593)"},
-    {"issue":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open","category":"No glue (D593)"}
+    {"issue":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open","category":"No glue (D593)"},
+    {"issue":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4937,17 +4940,18 @@
             {"number":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"closed"},
             {"number":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"closed"},
             {"number":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"closed"},
-            {"number":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"open"},
+            {"number":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"closed"},
             {"number":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open"},
             {"number":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open"},
-            {"number":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"open"},
+            {"number":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"closed"},
             {"number":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open"},
             {"number":1951,"title":"A log::Log written in marked code: set_logger of a program static, Record::file/module_path and Record::args","state":"open"},
             {"number":1952,"title":"A crate's panic inside a #[track_caller] function called through an adapter names the adapter, not the program's call","state":"open"},
             {"number":1953,"title":"A crate fn taking &DeviceDescriptor<'_> (a &str borrow inside a type argument) is refused as a borrow rawr can't lend","state":"open"},
             {"number":1954,"title":"A crate type named only in an opaque output's trait arguments is missing from relation cases","state":"open"},
             {"number":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open"},
-            {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"}
+            {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
+            {"number":1957,"title":"A script future's output loses its native values off the owner thread when the future's arena drops","state":"open"}
           ],
           "milestone": "0.3"
         },
