@@ -16,6 +16,7 @@ pub mod diverging;
 pub mod elevated;
 pub mod fonts;
 pub mod grid;
+pub mod handed;
 pub mod image;
 pub mod keyed;
 pub mod keys;

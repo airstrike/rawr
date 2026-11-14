@@ -665,6 +665,24 @@ impl Slot {
     }
 }
 
+/// `scan` over each value the script closure `value` captured, which it
+/// may change: `value` holds the changed captures after. A value that is
+/// no closure, or captured nothing, is left as it is.
+pub fn rebind_captures(value: &mut Dynamic, scan: impl FnMut(&mut Dynamic)) {
+    let Some(function) = value
+        .read_lock::<crate::item::Value>()
+        .map(|function| function.clone())
+    else {
+        return;
+    };
+    if function.captures().is_empty() {
+        return;
+    }
+    let mut captures = function.captures().to_vec();
+    captures.iter_mut().for_each(scan);
+    *value = Dynamic::from(function.bind(captures));
+}
+
 /// Make this process a universe runner's (`rawr_import::universe`): a
 /// generated universe runner calls it before it compiles a program, so it
 /// names script types as the build that generated it did.
