@@ -166,3 +166,77 @@ impl<K: std::fmt::Debug> Keyed<'_, K> {
         format!("{:?} {}", self.key, self.width)
     }
 }
+
+/// A surface a window lends, as iced's `Window` is.
+pub trait Surface {
+    /// The surface's name.
+    fn name(&self) -> String;
+}
+
+/// The surface `with_surface` lends.
+pub struct Screen {
+    width: u32,
+}
+
+impl Surface for Screen {
+    fn name(&self) -> String {
+        format!("screen {}", self.width)
+    }
+}
+
+/// `f` of a surface lent for the call, as iced's `window::run(id, f: impl
+/// FnOnce(&dyn Window) -> T)` lends the window (#28).
+pub fn with_surface<T>(f: impl FnOnce(&dyn Surface) -> T) -> T {
+    let screen = Screen { width: 640 };
+    f(&screen)
+}
+
+/// The name of a surface, as rfd's `set_parent(&W)` reads a window.
+pub fn surface_name<S: Surface + ?Sized>(surface: &S) -> String {
+    surface.name()
+}
+
+/// A scale a builder borrows.
+pub struct Scale {
+    factor: u32,
+}
+
+impl Scale {
+    /// A scale of `factor`.
+    pub fn new(factor: u32) -> Self {
+        Scale { factor }
+    }
+}
+
+/// A scale in a static, as loading_spinners' `easing::STANDARD` is.
+pub static DOUBLE: Scale = Scale { factor: 2 };
+
+/// A builder that keeps a borrowed scale in `Self`, as loading_spinners'
+/// `Linear<'a>` keeps its `&'a Easing`.
+pub struct Scaled<'a> {
+    scale: &'a Scale,
+    value: u32,
+}
+
+impl<'a> Scaled<'a> {
+    /// `value` at the unit scale.
+    pub fn new(value: u32) -> Self {
+        static UNIT: Scale = Scale { factor: 1 };
+        Scaled {
+            scale: &UNIT,
+            value,
+        }
+    }
+
+    /// The builder at `scale`, kept in `Self`, as `Linear::easing(mut
+    /// self, easing: &'a Easing) -> Self` keeps its easing (#610).
+    pub fn scale(mut self, scale: &'a Scale) -> Self {
+        self.scale = scale;
+        self
+    }
+
+    /// The scaled value.
+    pub fn shown(&self) -> u32 {
+        self.value * self.scale.factor
+    }
+}
