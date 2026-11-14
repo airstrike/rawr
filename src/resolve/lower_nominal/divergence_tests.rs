@@ -1040,3 +1040,52 @@ fn language_division_by_zero_panics_as_rustc_words_and_places_it() {
         );
     }
 }
+
+/// A closure's `?` converts its error into the error the closure's tail
+/// gives, through `From`, whichever `?` comes first; one whose body never
+/// names another returns the operand's own (#1977).
+#[test]
+fn a_closure_s_question_mark_converts_into_its_tail_s_error() {
+    let source = r#"
+#[derive(Debug)]
+struct Parse;
+#[derive(Debug)]
+struct Range;
+#[derive(Debug)]
+enum Error {
+    Parse(Parse),
+    Range(Range),
+}
+impl From<Parse> for Error {
+    fn from(error: Parse) -> Self {
+        Error::Parse(error)
+    }
+}
+impl From<Range> for Error {
+    fn from(error: Range) -> Self {
+        Error::Range(error)
+    }
+}
+fn a(ok: bool) -> Result<i32, Parse> {
+    if ok { Ok(1) } else { Err(Parse) }
+}
+fn b(ok: bool) -> Result<i32, Range> {
+    if ok { Ok(2) } else { Err(Range) }
+}
+fn main() {
+    let both = |x: bool, y: bool| Ok::<_, Error>(a(x)? + b(y)?);
+    println!("{:?} {:?} {:?}", both(true, true), both(false, true), both(true, false));
+    let first = |x: bool| {
+        let n = a(x)?;
+        Ok(n + 1)
+    };
+    let n: Result<i32, Parse> = first(true);
+    println!("{n:?} {:?}", first(false));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Ok(3) Err(Parse(Parse)) Err(Range(Range))\nOk(2) Err(Parse)\n"
+    );
+}

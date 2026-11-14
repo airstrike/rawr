@@ -3726,6 +3726,47 @@ impl<'a> Parser<'a> {
             source.push_text("; } }");
             return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
         }
+        // In a closure whose error nothing has fixed yet, the error's `From`
+        // waits for it, as rustc infers a closure's return type from its
+        // tail and converts each `?` to it (#1977): `Ok::<_, E>(a()? +
+        // b()?)` converts both errors into `E`.
+        if let Ty::Result(_, error) = self.inference.resolve(&early)
+            && !matches!(*error, Ty::Infer(_))
+            && let Some(returned) = self.unfixed_error(&output)
+        {
+            let mut value = value;
+            self.move_out_value(&mut value)?;
+            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let operand = self.temporary("try");
+            let placeholder =
+                call_placeholder(&conversion_placeholder(self.pending_conversions.len()));
+            self.pending_conversions.push(PendingConversion {
+                placeholder: placeholder.clone(),
+                source: *error,
+                target: returned,
+                span: value.span,
+                host: None,
+                try_from: None,
+                lending: None,
+                try_error: true,
+            });
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(format!(" }} else {{ {drops}return "));
+            let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let mut converted = origin::Fragment::call(&placeholder, [error]);
+            converted.push_text(")");
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
         if !self.unify_type(&output, &early) {
             return Err(self.try_operator(&output, &early, expression));
         }
@@ -3767,6 +3808,22 @@ impl<'a> Parser<'a> {
         let mut value = self.operator_expr(source, element, expression);
         value.lvalue = place;
         Ok(value)
+    }
+
+    /// The error type of `output`, a closure's return type, while nothing
+    /// has fixed it: `output` is then a `Result` of it. `None` once it is
+    /// known, or where `output` is not a `Result`.
+    fn unfixed_error(&mut self, output: &Ty) -> Option<Ty> {
+        match self.inference.resolve(output) {
+            Ty::Infer(_) => {
+                let error = self.inference.fresh();
+                let ok = self.inference.fresh();
+                self.unify_type(output, &Ty::Result(Box::new(ok), Box::new(error.clone())));
+                Some(error)
+            }
+            Ty::Result(_, error) if matches!(*error, Ty::Infer(_)) => Some(*error),
+            _ => None,
+        }
     }
 
     /// rustc's E0277 for `expression`, a `?` whose operand returns `early`
