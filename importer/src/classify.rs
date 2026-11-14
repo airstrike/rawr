@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 198;
+const CLASSIFIER_VERSION: u32 = 202;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8446,7 +8446,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// output lives. The output may also be opaque and capture an early
     /// lifetime, and an input may be a shared slice of such crate values, as
     /// in iced's `markdown::view<'a>(items: &'a [Item], ..) -> impl
-    /// Widget<..> + 'a`.
+    /// Widget<..> + 'a`, or, for an opaque output, a `&str`, as in its
+    /// `markdown::parse(&str) -> impl Iterator<Item = Item> + '_`: the
+    /// value owns the string it borrows.
     fn lends_values(&self, signature: &model::Signature) -> bool {
         let lifetimes = |id: &api::identity::Definition| {
             self.graph
@@ -8459,6 +8461,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     _ => None,
                 })
         };
+        let opaque = matches!(signature.output(), model::Type::ImplTrait { bounds, .. }
+            if self.future_bound_output(bounds).is_none());
         let output = match signature.output() {
             model::Type::Definition { id, .. } => {
                 matches!(lifetimes(id), Some(count) if count != 0)
@@ -8489,6 +8493,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         ty,
                     } if match &**ty {
                         model::Type::Slice(element) => crate_value(element),
+                        model::Type::Primitive(name) => opaque && &**name == "str",
                         ty => crate_value(ty),
                     })
                 })
@@ -9497,7 +9502,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let rebound;
         let signature = if receiver_binder_is_exact(signature)
             || receiver_binder_lends_inputs(signature)
-            || late_binders_lend_strings(signature)
+            || (late_binders_lend_strings(signature) && !self.opaque_borrows_strings(signature))
             || late_binders_lend_inputs(signature)
             || self.async_lends_inputs(signature)
             || opens_copies
@@ -9553,8 +9558,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // So does a method that borrows its receiver for the call alone
             // and whose output borrows a `&F` the call fills with a `&str`
             // or a value made for it, as jiff's `strftime<'f, F: 'f +
-            // ?Sized>(&self, format: &'f F) -> Display<'f>`.
-            if receiver_lent_for_call(signature)
+            // ?Sized>(&self, format: &'f F) -> Display<'f>`. An opaque one
+            // lives beside its strings instead (`lends_values`).
+            let lends_values = self.lends_values(signature);
+            if !lends_values
+                && receiver_lent_for_call(signature)
                 && signature
                     .inputs()
                     .filter(|input| borrows_at_early_lifetime(input))
@@ -9562,7 +9570,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 && names_early_lifetime(signature.output())
             {
                 Some(representability::signature::Scope::Opens)
-            } else if self.lends_values(signature) {
+            } else if lends_values {
                 // A value whose type borrows a crate value its function
                 // takes, as iced's `qr_code(&'a Data) -> QRCode<'a, Theme>`
                 // and `markdown::view(&'a [Item], ..) -> impl Widget + 'a`:
@@ -11479,7 +11487,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// The receiver is borrowed for the call alone.
     fn late_binders_open_copies(&self, signature: &model::Signature) -> bool {
         let output = signature.output();
-        if !names_late_lifetime(output) {
+        if !names_late_lifetime(output) || self.opaque_borrows_strings(signature) {
             return false;
         }
         if let model::Receiver::Reference {
@@ -11513,6 +11521,25 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     }
                 )
             })
+    }
+
+    /// A function that borrows no receiver and gives an opaque value, not
+    /// a future, that borrows its `&str` inputs at its own late-bound
+    /// lifetime, as iced's `markdown::parse(markdown: &str) -> impl
+    /// Iterator<Item = Item> + '_`. No region can name the value's type to
+    /// hold it at a frame's lifetime, so it lives beside the strings it
+    /// borrows (`lends_values`), as `markdown::view(&'a [Item], ..)` gives
+    /// a value that lives beside its items.
+    fn opaque_borrows_strings(&self, signature: &model::Signature) -> bool {
+        matches!(signature.receiver(), model::Receiver::None)
+            && matches!(signature.output(), model::Type::ImplTrait { bounds, .. }
+                if self.future_bound_output(bounds).is_none())
+            && names_late_lifetime(signature.output())
+            && signature.inputs().any(is_str_reference)
+            && signature
+                .inputs()
+                .filter(|input| names_late_lifetime(input))
+                .all(is_str_reference)
     }
 
     /// Whether `implementation` is one of several `AsRef` impls for one
