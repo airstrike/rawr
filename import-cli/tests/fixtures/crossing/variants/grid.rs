@@ -5,10 +5,13 @@
 // Function pointers take any number of inputs. A `#[track_caller]`
 // function's location is the program's call (#1560). A borrow inside a
 // type argument is lent for the call (#1953), and a builder holds a
-// borrowed `?Sized` key (#801).
+// borrowed `?Sized` key (#801). A closure takes a trait object lent for the
+// call (#28), and a builder keeps a borrow of a static or of the program's
+// value in `Self` (#610).
 
 use events::grid::{
-    combine, described, here, labeled, placed, produce, requested, tagged, Grid, Keyed,
+    combine, described, here, labeled, placed, produce, requested, surface_name, tagged,
+    with_surface, Grid, Keyed, Scale, Scaled, DOUBLE,
 };
 
 fn add(sum: u32, cell: u8) -> u32 {
@@ -53,5 +56,13 @@ fn main() {
     println!(
         "keyed {}",
         Keyed::new(2).key_ref(name.as_str()).width(5).shown()
+    );
+    println!("{}", with_surface(|surface| surface_name(surface)));
+    let triple = Scale::new(3);
+    println!(
+        "scaled {} {} {}",
+        Scaled::new(5).shown(),
+        Scaled::new(5).scale(&DOUBLE).shown(),
+        Scaled::new(5).scale(&triple).shown()
     );
 }

@@ -163,6 +163,18 @@ pub(super) fn rust_type(object: &Object) -> Option<String> {
     })
 }
 
+/// The Rust type of a `&dyn Trait` native code lends a script closure for
+/// the call (#28), and the scope family of it at each lifetime `'x`, which
+/// the object's own lifetime is too. `None` for an object behind another
+/// pointer.
+pub(super) fn lent_family(object: &Object) -> Option<(String, String)> {
+    if object.pointer() != Pointer::Shared {
+        return None;
+    }
+    let dynamic = object_type(object)?;
+    Some((format!("&({dynamic})"), format!("&'x ({dynamic} + 'x)")))
+}
+
 /// A generated `Result<T, Error>` expression making the object `object`, a
 /// `&'static dyn` or a `Box<dyn>`, from the owned `Dynamic` named `value`:
 /// an object native code gave, moved out of its slot, or a program's value
@@ -258,8 +270,9 @@ fn arm(
 /// The statements that make `argument_{local}`, the `&dyn Trait` input
 /// `object` of the call's argument `index`: an object native code gave (a
 /// `&'static dyn`, or a `Box<dyn>` lent from its slot for the call), a
-/// static's place, a crate value lent from its slot, or a program's number
-/// made into its Rust value for the call.
+/// static's place, a crate value lent from its slot, a program's number
+/// made into its Rust value for the call, or an object native code lent a
+/// script closure, which the adapter reached around its body (#28).
 pub(super) fn render_lent_input(
     local: usize,
     index: usize,
@@ -318,6 +331,13 @@ pub(super) fn render_lent_input(
         }
         Ok(())
     })?;
+    // An object native code lent the script closure that makes the call,
+    // which the adapter reached around its body (#28).
+    let lent = if super::lent_object_at(index) {
+        format!("object_{index}")
+    } else {
+        "None".to_owned()
+    };
     writeln!(
         output,
         "    let argument_{local}_value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take();
@@ -326,9 +346,10 @@ pub(super) fn render_lent_input(
 {kept}    let argument_{local}_lasting: {lasting};
     #[allow(unused_variables, unused_mut)]
     let mut argument_{local}_held: PlaceHeld<{boxed}>;
-    let argument_{local}: {rust} = match __rawr_internal::object::Coerced::of(&argument_{local}_value) {{
-        Some((inner, tag)) => match tag.as_str() {{ {arms}_ => return Err(Error::TypeMismatch) }},
-        None => {{
+    let argument_{local}: {rust} = match (__rawr_internal::object::Coerced::of(&argument_{local}_value), {lent}) {{
+        (Some((inner, tag)), _) => match tag.as_str() {{ {arms}_ => return Err(Error::TypeMismatch) }},
+        (None, Some(object)) => object,
+        (None, None) => {{
             let handle = argument_{local}_value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
             if arguments.arena.index::<{boxed}>(&handle).is_ok() {{
                 argument_{local}_held = arguments.arena.lease_place::<{boxed}>(handle)?;

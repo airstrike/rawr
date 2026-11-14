@@ -3290,12 +3290,14 @@ pub fn kept_lent(arguments: &Arguments<'_, '_, '_>, indices: &[usize]) -> bool {
 }
 
 /// A crate value a call's output keeps borrowed (D568): shared from its
-/// slot, or lent by native code to a marked function, which keeps it as
-/// long as the anchored call's result (#1413).
+/// slot, lent by native code to a marked function, which keeps it as long
+/// as the anchored call's result (#1413), or a static's place, which lives
+/// as long as any output (#610).
 #[allow(dead_code)]
 pub enum ViewedArgument<T: 'static> {
     Shared(std::rc::Rc<T>),
     Lent(__rawr_internal::scope::Lent),
+    Lasting(&'static T),
 }
 
 /// Whether `value` is a lend native code keeps as long as an anchored
@@ -3316,6 +3318,11 @@ impl<T: 'static> ViewedArgument<T> {
     /// The value `value` names: one native code lent, or one its slot
     /// shares.
     pub fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
+        // A static's place, of a body or of native code (D862), as
+        // loading_spinners' `&easing::EMPHASIZED` is (#610).
+        if let Some(lasting) = __rawr_internal::place::statics::lasting::<T>(&value) {
+            return Ok(Self::Lasting(lasting));
+        }
         if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
             return Ok(Self::Lent(lent));
         }
@@ -3330,7 +3337,8 @@ impl<T: 'static> ViewedArgument<T> {
 
     /// The value borrowed as long as `pins`, which hold a shared one. A
     /// lent one is reached in `lender`, the anchored region of the call
-    /// native code lent it to, and only one native code keeps so long.
+    /// native code lent it to, and only one native code keeps so long. A
+    /// static's place is itself.
     pub fn reach<'p>(
         self,
         pins: &'p __rawr_internal::scope::Pins,
@@ -3342,6 +3350,7 @@ impl<T: 'static> ViewedArgument<T> {
                 .ok_or(__rawr_internal::scope::Error::Mismatch)
                 .and_then(|region| region.lent::<T>(lent))
                 .map_err(|error| Error::Lent(lent.name(), error)),
+            Self::Lasting(value) => Ok(value),
         }
     }
 }
@@ -11681,12 +11690,37 @@ fn render_adapter(
         }
         call = Some(sliced);
     }
-    match (lent.is_empty(), call) {
-        (true, None) => writeln!(
+    // A trait object native code lent a script closure, reached around the
+    // body, which takes it as `object_{index}` (#28).
+    let object = if lent.is_empty() && call.is_none() {
+        lent_object_input(plan)?
+    } else {
+        None
+    };
+    let _object = LentObject::enter(object.as_ref().map(|(index, _)| *index));
+    match (lent.is_empty(), call, &object) {
+        (true, None, Some((index, rust))) => writeln!(
+            output,
+            "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    let Some(lent) = lent_value(arguments, {index}) else {{
+        return {name}_object(arguments, None);
+    }};
+    let failed = |error| Error::Lent(lent.name(), error);
+    let access: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
+    let mut result = None;
+    access(lent.nonce().bits(), &mut |object| result = Some({name}_object(arguments, Some(*object))))
+        .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+    result.unwrap_or(Err(Error::TypeMismatch))
+}}
+
+#[allow(unused_variables)]
+fn {name}_object(arguments: &mut Arguments<'_, '_, '_>, object_{index}: Option<{rust}>) -> Result<Dynamic, Error> {{"
+        ),
+        (true, None, None) => writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{"
         ),
-        (false, None) => writeln!(
+        (false, None, _) => writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
     with_lent_arguments(arguments, &[{reach}], &mut {name}_lent)
@@ -11695,7 +11729,7 @@ fn render_adapter(
 fn {name}_lent(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}) -> Result<Dynamic, Error> {{
     let _ = &mut *lent;"
         ),
-        (lent_free, Some(call)) => {
+        (lent_free, Some(call), _) => {
             let parameters = slices
                 .iter()
                 .map(|slice| format!(", slice_{}: {}", slice.index, slice.parameter()))
@@ -11760,6 +11794,25 @@ fn {name}_sliced(arguments: &mut Arguments<'_, '_, '_>{lent_parameter}{parameter
     }
     render_adapter_body(plan, cohort, profile, facade, output)?;
     output.write_all(b"}\n\n").map_err(encoding)
+}
+
+/// The first input of a call that is a `&dyn Trait` of a crate's trait,
+/// as rfd's `set_parent(&window)` takes iced's `&dyn Window` (#28): its
+/// argument index and Rust type. Native code may have lent the object to
+/// the script closure that makes the call, which reaches it around the
+/// adapter's body, as the lend's accessor visits it.
+fn lent_object_input(plan: &Plan) -> Result<Option<(usize, String)>, request::Error> {
+    let Some((signature, substitutions, offset)) = call_signature(plan) else {
+        return Ok(None);
+    };
+    for (index, input) in runtime_inputs(signature, offset) {
+        if let convert::Type::Object(object) = substituted(input, signature, substitutions)?
+            && let Some((rust, _)) = object::lent_family(&object)
+        {
+            return Ok(Some((index, rust)));
+        }
+    }
+    Ok(None)
 }
 
 /// The inputs of a call that are `&T` or `&mut T` of a `'static` type
@@ -13266,6 +13319,22 @@ fn render_adapter_body(
             slots,
             crossings,
         } => {
+            // A crate value a builder keeps in `Self`, as loading_spinners'
+            // `Linear::easing(mut self, easing: &'a Easing) -> Self` keeps
+            // its easing (#610): borrowed as long as the value it is kept
+            // in, as a function's output borrows one (D568). A static's
+            // place lives as long as any; a value of the arena is shared
+            // with the pins of the receiver's region, or of the runner out
+            // of any region (`render_scoped_receiver`, `kept_pins`).
+            let kept = matches!(receiver, Receiver::Owned)
+                && replay.is_none()
+                && call.is_none()
+                && slots.is_empty()
+                && !str_member(signature)
+                && !is_future(&substituted(signature.output(), signature, substitutions)?)
+                && views_natives(signature, substitutions)?;
+            let _viewed = ViewedArguments::enter(kept);
+            let _kept = KeptLends::enter(kept);
             if matches!(receiver, Receiver::Owned) && replay.is_some() {
                 render_arguments_with_profile(signature, substitutions, 1, profile, output)?;
             } else if call.is_some() || !slots.is_empty() {
@@ -13537,6 +13606,16 @@ fn render_adapter_body(
                         // `&str` of it is set aside, as the region's branch
                         // pins the string too.
                         let returned = substituted(signature.output(), signature, substitutions)?;
+                        // And a crate value it keeps, at `'static` (#610).
+                        writeln!(
+                            output,
+                            "{}",
+                            kept_pins(
+                                "static_pins()",
+                                "None::<&__rawr_internal::scope::Region<'static>>"
+                            )
+                        )
+                        .map_err(request::unwritable)?;
                         if carries_lifetime(&returned) {
                             for (position, input) in signature.inputs().iter().enumerate() {
                                 if lends_str(input, signature, substitutions) {
@@ -15126,7 +15205,12 @@ fn render_scoped_receiver(
     // lifetime, as a slot's region pins its strings. It is pinned before
     // the receiver is reached: a `&mut self` reach borrows the region for
     // the call, as iced_test's `typewrite(&mut self, &str)` takes it.
-    let mut pinned = String::new();
+    // A crate value the receiver keeps is reached at the region's
+    // lifetime too (#610).
+    let mut pinned = kept_pins(
+        "region.pins().ok_or(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))?",
+        "Some(&*region)",
+    );
     for (position, input) in signature.inputs().iter().enumerate().skip(skip) {
         let position = position - skip;
         if lends_str(input, signature, substitutions) {
@@ -20087,6 +20171,22 @@ fn render_callable_closure(
             lends.push(lend);
             continue;
         }
+        // A crate trait's object lent for the call, as iced's `window::run`
+        // lends `&dyn Window` (#28): lent as a borrow of a native value is,
+        // for the call alone, at the object's own lifetime, and reached
+        // where a call takes the object (`object::render_lent_input`).
+        if let convert::Type::Object(object) = input
+            && let Some((rust, family)) = object::lent_family(object)
+        {
+            parameters.push(format!("input_{position}: {rust}"));
+            borrowed.push_str(&format!(
+                "let input_{position} = &input_{position};\n            "
+            ));
+            let lend = LentInput::scoped(position, false, rust, family);
+            values.push(lend.value());
+            lends.push(lend);
+            continue;
+        }
         // A native value at the bound's own lifetime, as iced_test's
         // selector takes `Candidate<'a>` of `for<'a> FnMut(Candidate<'a>)`:
         // lent for the call alone, at every lifetime its family takes, as a
@@ -22428,6 +22528,10 @@ thread_local! {
     /// Whether an adapter's body has the arguments native code lent it as
     /// `lent` (`with_lent_arguments`).
     static LENT_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The argument whose trait object native code lent a script closure
+    /// an adapter's body has as `object_{index}`, reached around the body
+    /// (`lent_object_input`, #28).
+    static LENT_OBJECT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// Whether the call whose inputs are being taken opens a scope frame,
     /// which lends a slice of objects inside itself (`frame_copies`).
     static OPENS_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -22473,6 +22577,17 @@ impl Drop for KeptLends {
     fn drop(&mut self) {
         KEPT_LENDS.set(self.0);
     }
+}
+
+/// The statements that reach the crate values a builder keeps in `Self`
+/// (#610), when the adapter takes them viewed with kept lends: `pins` as
+/// `pins`, and each one reached at their lifetime, with `lender` the
+/// region a kept lend is reached in (`kept_reaches`). Nothing otherwise.
+fn kept_pins(pins: &str, lender: &str) -> String {
+    if !VIEWED_ARGUMENTS.get() || !KEPT_LENDS.get() || KEPT_REACHES.with_borrow(Vec::is_empty) {
+        return String::new();
+    }
+    format!("\n            let pins = {pins};{}", kept_reaches(lender))
 }
 
 /// The statements that reach an adapter's `Viewed` arguments, at the
@@ -23257,6 +23372,27 @@ impl Drop for LentArguments {
     fn drop(&mut self) {
         LENT_ARGUMENTS.set(self.0);
     }
+}
+
+/// Sets `LENT_OBJECT` for as long as it lives.
+struct LentObject(Option<usize>);
+
+impl LentObject {
+    fn enter(index: Option<usize>) -> Self {
+        Self(LENT_OBJECT.replace(index))
+    }
+}
+
+impl Drop for LentObject {
+    fn drop(&mut self) {
+        LENT_OBJECT.set(self.0);
+    }
+}
+
+/// Whether an adapter's body has the trait object native code lent a
+/// script closure at argument `index` as `object_{index}` (`LENT_OBJECT`).
+fn lent_object_at(index: usize) -> bool {
+    LENT_OBJECT.get() == Some(index)
 }
 
 /// Sets `OPENS_FRAME` for as long as it lives.

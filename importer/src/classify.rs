@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 195;
+const CLASSIFIER_VERSION: u32 = 198;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -644,9 +644,26 @@ fn type_late_input(
         | model::Type::Parameter { .. }
         | model::Type::SelfType(_)
         | model::Type::Never => Ok(false),
-        model::Type::FunctionPointer(_)
-        | model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. } => Err(representability::reject::Kind::CallableProtocol),
+        // A trait object at the bound's own lifetime, as iced's
+        // `window::run(id, impl FnOnce(&dyn Window) -> T)` lends one for
+        // the call (#28): its lifetime and its traits' arguments are the
+        // bound's, as a reference's are.
+        model::Type::TraitObject { bounds, lifetime } => {
+            bounds
+                .iter()
+                .try_fold(lifetime_late_input(lifetime, binders)?, |late, bound| {
+                    let model::ObjectBound::Trait(model::Bound::Trait { arguments, .. }) = bound
+                    else {
+                        return Err(representability::reject::Kind::CallableProtocol);
+                    };
+                    arguments.iter().try_fold(late, |late, argument| {
+                        argument_late_input(argument, binders).map(|actual| late || actual)
+                    })
+                })
+        }
+        model::Type::FunctionPointer(_) | model::Type::ImplTrait { .. } => {
+            Err(representability::reject::Kind::CallableProtocol)
+        }
     }
 }
 
@@ -8299,6 +8316,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return None;
         };
         let mutable = matches!(mutability, model::Mutability::Mutable);
+        // A crate trait's object native code lends for the call, as iced's
+        // `window::run(id, impl FnOnce(&dyn Window) -> T)` lends the window
+        // (#28): the closure reaches it while the call runs.
+        if !mutable && let model::Type::TraitObject { bounds, .. } = ty.as_ref() {
+            return self
+                .convert_object(representability::object::Pointer::Shared, bounds)
+                .ok();
+        }
         let target = self.convert_value(ty).ok()?;
         let admitted = match &target {
             representability::convert::Type::Parameter(_) => !mutable,
