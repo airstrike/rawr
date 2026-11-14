@@ -2817,7 +2817,8 @@ fn build(
                 .imported(member.identity().selector().try_clone()?)
                 .lending_static(lent_static(plan.signature()))
                 .lending(lends(plan.signature()))
-                .keeping_receiver(kept_receiver(plan.signature())),
+                .keeping_receiver(kept_receiver(plan.signature()))
+                .lending_receiver(plan.signature().lends_receiver()),
             )?;
             continue;
         }
@@ -2833,7 +2834,8 @@ fn build(
             .imported(member.identity().selector().try_clone()?)
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature()))
-            .keeping_receiver(kept_receiver(plan.signature())),
+            .keeping_receiver(kept_receiver(plan.signature()))
+            .lending_receiver(plan.signature().lends_receiver()),
         )?;
     }
     // A trait's method its impl for `&str` gives Rawr's string: a function
@@ -3161,7 +3163,8 @@ fn imported_item(
             .imported(outcome.identity().selector().try_clone()?)
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature()))
-            .keeping_receiver(kept_receiver(plan.signature())),
+            .keeping_receiver(kept_receiver(plan.signature()))
+            .lending_receiver(plan.signature().lends_receiver()),
         ),
         Representability::Method(plan) => Some(
             host::item::Definition::method(
@@ -3174,7 +3177,8 @@ fn imported_item(
             .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature()))
-            .keeping_receiver(kept_receiver(plan.signature())),
+            .keeping_receiver(kept_receiver(plan.signature()))
+            .lending_receiver(plan.signature().lends_receiver()),
         ),
         Representability::Constant(plan) => Some(
             match outcome.identity().selector() {
@@ -3221,7 +3225,8 @@ fn imported_item(
             .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature()))
-            .keeping_receiver(kept_receiver(plan.signature())),
+            .keeping_receiver(kept_receiver(plan.signature()))
+            .lending_receiver(plan.signature().lends_receiver()),
         ),
         // A generic function Rawr calls at the types it infers or a
         // turbofish names. The bridge calls it at those types, where rustc
@@ -3266,7 +3271,8 @@ fn imported_item(
             .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
             .lending(lends(plan.signature()))
-            .keeping_receiver(kept_receiver(plan.signature())),
+            .keeping_receiver(kept_receiver(plan.signature()))
+            .lending_receiver(plan.signature().lends_receiver()),
         ),
         Representability::Value(_)
         | Representability::Struct(_)
@@ -3421,7 +3427,8 @@ fn imported_values(
             .opening(values.signature().scope())
             .lending_static(lent_static(values.signature()))
             .lending(lends(values.signature()))
-            .keeping_receiver(kept_receiver(values.signature())),
+            .keeping_receiver(kept_receiver(values.signature()))
+            .lending_receiver(values.signature().lends_receiver()),
     ))
 }
 

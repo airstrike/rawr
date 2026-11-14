@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 220;
+const CLASSIFIER_VERSION: u32 = 225;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10025,6 +10025,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         .with_statics(static_inputs(signature))
         .with_regional(self.regional.borrow().clone())
         .with_keep_receiver(kept_receiver(signature))
+        .with_lends_receiver(
+            scope.is_none() && guard.is_none() && self.opaque_keeps_receiver(signature),
+        )
         .with_lasting_receiver(matches!(
             signature.receiver(),
             model::Receiver::Reference {
@@ -11674,6 +11677,45 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .inputs()
                 .filter(|input| names_late_lifetime(input))
                 .all(is_str_reference)
+    }
+
+    /// A `&self` method whose opaque output, not a future, captures the
+    /// receiver's lifetime and no other of the call's own, as integration's
+    /// `Controls::view(&self) -> impl Widget<..>` does under edition 2024's
+    /// capture rules, and as `+ '_` or `use<'_>` writes it: the value keeps
+    /// the receiver borrowed for as long as it lives, and moves in each
+    /// input, none of which borrows (`Signature::lends_receiver`).
+    fn opaque_keeps_receiver(&self, signature: &model::Signature) -> bool {
+        let model::Receiver::Reference {
+            lifetime: receiver @ model::Lifetime::Late { .. },
+            mutability: model::Mutability::Shared,
+            ty,
+        } = signature.receiver()
+        else {
+            return false;
+        };
+        let model::Type::ImplTrait {
+            bounds, captures, ..
+        } = signature.output()
+        else {
+            return false;
+        };
+        let captured = |lifetime: &model::Lifetime| {
+            captures.iter().any(
+                |capture| matches!(capture, model::Argument::Lifetime(named) if named == lifetime),
+            )
+        };
+        self.future_bound_output(bounds).is_none()
+            && !signature.async_function()
+            && !names_late_lifetime(ty)
+            && captured(receiver)
+            && captures.iter().all(|capture| match capture {
+                model::Argument::Lifetime(lifetime @ model::Lifetime::Late { .. }) => {
+                    lifetime == receiver
+                }
+                _ => true,
+            })
+            && signature.inputs().all(|input| !names_late_lifetime(input))
     }
 
     /// Whether `implementation` is one of several `AsRef` impls for one
