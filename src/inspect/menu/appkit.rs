@@ -1,10 +1,12 @@
 //! AppKit's side of rawr's menus. The program's name is set as the runner
 //! starts, before its app finishes launching, as its process name, which
 //! winit's app menu reads for "Quit counter". rawr's menus are added to
-//! the app's main menu on the main queue, which runs once the app's event
-//! loop runs, after the app finished launching and made its own menus.
-//! The display name LaunchServices gives the menu bar, the Dock and app
-//! switching is set then too. Each item's target is an object of a class of
+//! the app's main menu once the app finished launching, which is when
+//! winit makes its menus: a turn of the main queue after the launch's
+//! notification, which the app's own delegate hears too. They are added
+//! again each time the app becomes active, if a menu the program made
+//! since took their place. The display name LaunchServices gives the menu
+//! bar, the Dock and app switching is set at launch too. Each item's target is an object of a class of
 //! rawr's own, whose action runs the item on the main thread.
 
 use std::ffi::{c_char, c_void, CStr};
@@ -22,6 +24,12 @@ const ROOT: &CStr = c"rawr.menu";
 
 /// The selector of the action each of rawr's items sends.
 const CHOSEN: &str = "rawrChosen:\0";
+
+/// The selector the app's launch notification calls.
+const LAUNCHED: &str = "rawrLaunched:\0";
+
+/// The selector the app's activation notification calls.
+const ACTIVATED: &str = "rawrActivated:\0";
 
 unsafe extern "C" {
     fn dispatch_async_f(
@@ -52,6 +60,31 @@ pub(super) fn install() {
     if let Some(name) = super::name() {
         rename(runtime, &name);
     }
+    let Some(target) = target(runtime) else {
+        return;
+    };
+    // SAFETY: the pool is pushed and popped on this thread around the
+    // objects this call makes.
+    let pool = unsafe { (runtime.push)() };
+    let center = msg!(runtime, Id; runtime.class(c"NSNotificationCenter"), "defaultCenter");
+    for (selector, name) in [
+        (LAUNCHED, "NSApplicationDidFinishLaunchingNotification"),
+        (ACTIVATED, "NSApplicationDidBecomeActiveNotification"),
+    ] {
+        msg!(runtime, (); center, "addObserver:selector:name:object:",
+            target => Id,
+            runtime.selector(selector) => Sel,
+            runtime.string(name) => Id,
+            std::ptr::null_mut() => Id,
+        );
+    }
+    // SAFETY: `pool` was pushed above on this thread.
+    unsafe { (runtime.pop)(pool) };
+}
+
+/// The app finished launching: its delegate makes its menus as it hears
+/// so, and rawr's follow them a turn of the main queue later.
+unsafe extern "C" fn launched(_this: Id, _selector: Sel, _notification: Id) {
     unsafe extern "C" fn attach(_: *mut c_void) {
         if let Some(runtime) = Runtime::get() {
             add(runtime);
@@ -66,6 +99,19 @@ pub(super) fn install() {
         );
     }
 }
+
+/// The app became active: rawr's menus come back if a main menu the
+/// program made since launching has none.
+unsafe extern "C" fn activated(_this: Id, _selector: Sel, _notification: Id) {
+    if let Some(runtime) = Runtime::get()
+        && ADDED.get().is_some()
+    {
+        add(runtime);
+    }
+}
+
+/// Set once rawr's menus were first added, after the app's launch.
+static ADDED: OnceLock<()> = OnceLock::new();
 
 /// Give the process `name`: the process name AppKit's menus read, and the
 /// display name LaunchServices shows.
@@ -116,7 +162,9 @@ fn add(runtime: &Runtime) {
     // LaunchServices takes the display name once the app checked in with
     // it, which it does as it finishes launching: a name set before then
     // is lost.
-    if let Some(name) = super::name() {
+    if ADDED.set(()).is_ok()
+        && let Some(name) = super::name()
+    {
         rename(runtime, &name);
     }
     let application = runtime.application();
@@ -244,21 +292,28 @@ fn target(runtime: &Runtime) -> Option<Id> {
     let name = c"RawrMenuTarget";
     let mut class = runtime.class(name);
     if class.is_null() {
-        // SAFETY: a new subclass of `NSObject` with one method, of the
-        // signature `v@:@` says (it returns nothing and takes the item),
-        // registered before any object of it is made.
+        // SAFETY: a new subclass of `NSObject` whose methods have the
+        // signature `v@:@` says (each returns nothing and takes the item
+        // or the notification), registered before any object of it is
+        // made.
         unsafe {
             class = (classes.allocate)(runtime.class(c"NSObject"), name.as_ptr(), 0);
             if class.is_null() {
                 return None;
             }
-            let method: unsafe extern "C" fn(Id, Sel, Id) = chosen;
-            (classes.method)(
-                class,
-                runtime.selector(CHOSEN),
-                method as *const c_void,
-                c"v@:@".as_ptr(),
-            );
+            let methods: [(&'static str, unsafe extern "C" fn(Id, Sel, Id)); 3] = [
+                (CHOSEN, chosen),
+                (LAUNCHED, launched),
+                (ACTIVATED, activated),
+            ];
+            for (selector, method) in methods {
+                (classes.method)(
+                    class,
+                    runtime.selector(selector),
+                    method as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+            }
             (classes.register)(class);
         }
     }
