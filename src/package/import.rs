@@ -2952,6 +2952,21 @@ fn build(
         let Ok(defaults) = defaults else {
             continue;
         };
+        // The callable the trait's impl for every callable takes, its
+        // inputs as one: unit, the one input, or their tuple.
+        let call = header.call.as_ref().and_then(|(inputs, output)| {
+            let mut converted = inputs
+                .iter()
+                .map(|input| types.convert(input, &header.parameters, allocation).ok())
+                .collect::<Option<Vec<_>>>()?;
+            let input = match converted.len() {
+                0 => host::type_ref::Type::unit(),
+                1 => converted.pop()?,
+                _ => host::type_ref::Type::tuple(converted).ok()?,
+            };
+            let output = types.convert(output, &header.parameters, allocation).ok()?;
+            Some(host::type_ref::Type::callable(input, output))
+        });
         builder.trait_header(
             &header.path,
             header.identity,
@@ -2961,6 +2976,7 @@ fn build(
                 .map(|parameter| ImmutableString::from(parameter.name()))
                 .collect(),
             defaults,
+            call,
         )?;
     }
     for header in impl_headers {

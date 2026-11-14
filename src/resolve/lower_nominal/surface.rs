@@ -47,6 +47,15 @@ pub(super) fn impl_surface_type(
             u32::try_from(generics.iter().position(|generic| generic == name)?).ok()?,
         ),
         Ty::Unit => Type::Unit,
+        // `&dyn Trait` of a crate's trait is the object's shared pointer,
+        // as a script impl's `fn highlighter(&self) -> &dyn Highlighter<
+        // Code>` gives one (D872, #1981).
+        Ty::Reference {
+            mutable: false,
+            target,
+        } if lends_object(&Inference::default(), target) => {
+            instance_surface_type(&Inference::default(), models, target)?
+        }
         Ty::Reference { mutable, target } => Type::Borrowed {
             mutable: *mutable,
             ty: Box::new(impl_surface_type(models, target, generics)?),
@@ -566,7 +575,12 @@ fn native_object(
             inference, models, argument, operation, imported,
         )?);
     }
-    Ok(shared_object(identity, arguments.into_boxed_slice()))
+    Ok(shared_object(
+        models,
+        name,
+        identity,
+        arguments.into_boxed_slice(),
+    ))
 }
 
 /// The identity of the crate trait `name` that an object of it with
@@ -587,20 +601,122 @@ fn native_object_identity(
     Some(models.host.trait_header(&path)?.identity)
 }
 
-/// `dyn Trait<arguments>` of the crate trait `identity`, where a `&T`
-/// takes it (D872).
+/// `dyn Trait<arguments>` of the crate trait `identity` at `name`, where a
+/// `&T` takes it (D872), with the call a program's function fills it by
+/// (`object_call`).
 #[cfg(feature = "rust-import")]
 fn shared_object(
+    models: &Models,
+    name: &str,
     identity: [u8; 32],
     arguments: Box<[rawr_import::classify::representability::convert::Type]>,
 ) -> rawr_import::classify::representability::convert::Type {
     use rawr_import::classify::representability::{convert, object};
-    convert::Type::Object(Box::new(object::Object::new(
-        object::Pointer::Shared,
-        rawr_import::surface::identity::Definition::authenticated(identity),
-        arguments,
-        Vec::new(),
-    )))
+    let call = object_call(models, name, &arguments);
+    convert::Type::Object(Box::new(
+        object::Object::new(
+            object::Pointer::Shared,
+            rawr_import::surface::identity::Definition::authenticated(identity),
+            arguments,
+            Vec::new(),
+        )
+        .with_call(call),
+    ))
+}
+
+/// The inputs and output a program's function or closure fills the object
+/// of the crate trait `name` at `arguments` with, when the crate implements
+/// the trait for every callable of one signature (`TraitHeader::call`,
+/// #1981): each of the trait's parameters is its argument or its default.
+/// `None` for another trait, or a call naming a type no instance writes.
+#[cfg(feature = "rust-import")]
+fn object_call(
+    models: &Models,
+    name: &str,
+    arguments: &[rawr_import::classify::representability::convert::Type],
+) -> Option<rawr_import::classify::representability::object::Call> {
+    use crate::host::type_ref::Shape;
+    let path = crate::host::path::Path::parse(name).ok()?;
+    let header = models.host.trait_header(&path)?;
+    let Shape::Callable { input, output } = header.call.as_ref()?.shape() else {
+        return None;
+    };
+    let mut parameters = Vec::with_capacity(header.parameters.len());
+    for (index, parameter) in header.parameters.iter().enumerate() {
+        let ty = match arguments.get(index) {
+            Some(argument) => argument.clone(),
+            None => call_type(header.defaults.get(index)?.as_ref()?, &parameters)?,
+        };
+        parameters.push((parameter.clone(), ty));
+    }
+    let inputs = match input.shape() {
+        Shape::Unit => Box::default(),
+        Shape::Tuple(members) => members
+            .iter()
+            .map(|member| call_type(member, &parameters))
+            .collect::<Option<_>>()?,
+        _ => Box::new([call_type(input, &parameters)?]),
+    };
+    Some(rawr_import::classify::representability::object::Call::new(
+        inputs,
+        call_type(output, &parameters)?,
+    ))
+}
+
+/// The instance type of `ty`, a type of a trait header's call, with each of
+/// the trait's `parameters` its type. `None` for one an object's call
+/// doesn't name.
+#[cfg(feature = "rust-import")]
+fn call_type(
+    ty: &crate::host::type_ref::Type,
+    parameters: &[(
+        ImmutableString,
+        rawr_import::classify::representability::convert::Type,
+    )],
+) -> Option<rawr_import::classify::representability::convert::Type> {
+    use crate::host::type_ref::{Builtin, Shape};
+    use rawr_import::classify::representability::convert;
+    let all = |types: &[crate::host::type_ref::Type]| {
+        types
+            .iter()
+            .map(|ty| call_type(ty, parameters))
+            .collect::<Option<Box<[_]>>>()
+    };
+    Some(match ty.shape() {
+        Shape::Unit => convert::Type::Unit,
+        Shape::Builtin(Builtin::String) => convert::Type::Builtin(convert::Builtin::String),
+        Shape::Builtin(builtin) => {
+            convert::Type::Builtin(convert::Builtin::primitive(builtin.name()?)?)
+        }
+        Shape::Tuple(members) => convert::Type::Tuple(all(members)?),
+        Shape::Option(element) => convert::Type::Option(Box::new(call_type(element, parameters)?)),
+        Shape::Result(ok, err) => convert::Type::Result(
+            Box::new(call_type(ok, parameters)?),
+            Box::new(call_type(err, parameters)?),
+        ),
+        Shape::Reference { mutable, target } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: Box::new(call_type(target, parameters)?),
+        },
+        Shape::Imported {
+            identity,
+            arguments,
+        } => convert::Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::authenticated(
+                *identity.as_bytes(),
+            ),
+            arguments: all(arguments)?,
+        },
+        Shape::Parameter(name) => {
+            let name = name.to_string();
+            parameters
+                .iter()
+                .find(|(parameter, _)| parameter.as_str() == name)?
+                .1
+                .clone()
+        }
+        _ => return None,
+    })
 }
 
 /// A host type's identity in the runner: an imported crate's own, or one
@@ -1002,6 +1118,8 @@ pub(super) fn instance_surface_type(
         // A crate's trait object, as `imported_surface_type` has it (D872).
         Ty::Dyn(name, bindings) if crate::resolve::type_ref::is_native_trait(name) => {
             shared_object(
+                models,
+                name,
                 native_object_identity(models, name, bindings)?,
                 super::dyn_arguments(bindings)
                     .iter()

@@ -484,6 +484,69 @@ impl<'a> Parser<'a> {
                 value.lvalue = None;
                 return Ok(None);
             }
+            // A function or closure, borrowed or boxed, where the crate
+            // implements the trait for every callable, as rustc coerces
+            // `&Code::highlight` to `&dyn Highlighter<Code>` (#1981): the
+            // callable the impl's `Fn` bound takes, tagged as one with the
+            // witness of its type (`callable_object`), which the runner's
+            // adapter makes into the closure the impl calls.
+            // A borrow or a box of a callable is the callable at runtime.
+            #[cfg(feature = "rust-import")]
+            if type_ref::is_native_trait(&trait_name)
+                && matches!(target, Ty::Boxed(_) | Ty::Reference { .. })
+                && matches!(
+                    concrete,
+                    Ty::Fn { .. }
+                        | Ty::FnItem { .. }
+                        | Ty::Callable { .. }
+                        | Ty::ImportedFunctionItem { .. }
+                )
+                && let Some(call) = self.native_trait_call(&trait_name, &dyn_arguments(&bindings))
+            {
+                value.ty = concrete;
+                self.coerce_expr(&call, value)?;
+                // The witness of each input is its value's: native code
+                // passes a borrow of a crate value as a copy of it, as a
+                // closure's call does (`host_callable`).
+                let call = match self.inference.resolve(&call) {
+                    Ty::Callable {
+                        inputs,
+                        output,
+                        item,
+                    } => Ty::Callable {
+                        inputs: inputs
+                            .iter()
+                            .map(|input| match self.inference.resolve(input) {
+                                Ty::Reference {
+                                    mutable: false,
+                                    target,
+                                } if !matches!(self.inference.resolve(&target), Ty::Script(..)) => {
+                                    *target
+                                }
+                                input => input,
+                            })
+                            .collect(),
+                        output,
+                        item,
+                    },
+                    call => call,
+                };
+                let helper = self.push_op(Op::CallableObject {
+                    call,
+                    span: value.span,
+                });
+                if self.normalize_private_calls {
+                    let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
+                    value.source = self.op_call(&helper, [operand]);
+                } else {
+                    let source = std::mem::take(&mut value.source);
+                    value.source = self.op_call(&helper, [source]);
+                }
+                value.source.cover(value.span);
+                value.ty = target;
+                value.lvalue = None;
+                return Ok(None);
+            }
             // Making a native trait's object of anything else, a borrow or
             // a counted pointer of the program's type, is not done yet.
             if type_ref::is_native_trait(&trait_name) {

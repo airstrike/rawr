@@ -240,3 +240,81 @@ impl<'a> Scaled<'a> {
         self.value * self.scale.factor
     }
 }
+
+/// A palette a styler reads, as iced's `Theme` is.
+#[derive(Clone)]
+pub struct Palette {
+    base: u32,
+}
+
+impl Palette {
+    /// The palette's base style.
+    pub fn base(&self) -> u32 {
+        self.base
+    }
+}
+
+/// A tone a styler styles, as iced's `Code` is.
+#[derive(Clone, Copy, Debug)]
+pub enum Tone {
+    Light,
+    Dark,
+}
+
+impl Tone {
+    /// The tone's style in `palette`, as iced's `Code::highlight(self,
+    /// &Theme)` is.
+    pub fn shade(self, palette: &Palette) -> u32 {
+        match self {
+            Tone::Light => palette.base + 1,
+            Tone::Dark => palette.base + 9,
+        }
+    }
+}
+
+/// What styles an input in a palette, as iced's `text::Highlighter<Input,
+/// Theme = Theme>` does.
+pub trait Styler<Input, P = Palette> {
+    /// The style of `input` in `palette`.
+    fn style(&self, input: Input, palette: &P) -> u32;
+}
+
+/// Every function of an input and a palette is a styler, as iced's
+/// `Highlighter` is implemented for `Fn(Input, &Theme) -> Style`.
+impl<T, Input, P> Styler<Input, P> for T
+where
+    T: Fn(Input, &P) -> u32,
+{
+    fn style(&self, input: Input, palette: &P) -> u32 {
+        (self)(input, palette)
+    }
+}
+
+/// The style `styler` gives `input` in the standard palette, as iced's
+/// markdown takes a `&dyn Highlighter<Code>`.
+pub fn styled(styler: &dyn Styler<u8>, input: u8) -> u32 {
+    styler.style(input, &Palette { base: 100 })
+}
+
+/// The style a boxed `styler` gives `input` in the standard palette.
+pub fn boxed_style(styler: Box<dyn Styler<u8>>, input: u8) -> u32 {
+    styler.style(input, &Palette { base: 100 })
+}
+
+/// A view that names its styler, as iced's markdown `Viewer::highlighter`
+/// does.
+pub trait Styled {
+    /// The styler of each tone.
+    fn styler(&self) -> &dyn Styler<Tone>;
+}
+
+/// Each tone's style by the styler `styled` names.
+pub fn styles<S: Styled>(styled: &S) -> String {
+    let palette = Palette { base: 10 };
+    let styler = styled.styler();
+    format!(
+        "{} {}",
+        styler.style(Tone::Light, &palette),
+        styler.style(Tone::Dark, &palette)
+    )
+}

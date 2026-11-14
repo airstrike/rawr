@@ -1,6 +1,8 @@
 //! Lowered operations: what the parser emits (`Op`), the prelude's own
 //! operations, and the proven `ExecutableOp`s registered with the runtime.
 
+#[cfg(feature = "rust-import")]
+use super::callable_object;
 use super::compare::{Comparison, Shape};
 use super::format::{debug_value, debug_value_spec, pretty_debug, DebugLeaf, DebugSpec};
 use super::inference::Inference;
@@ -30,6 +32,13 @@ pub(super) enum Op {
     #[cfg(feature = "rust-import")]
     Sequence {
         target: Ty,
+        span: Span,
+    },
+    /// A program's callable as a crate trait's object, the callable of
+    /// type `call` the trait's impl for every callable takes (#1981).
+    #[cfg(feature = "rust-import")]
+    CallableObject {
+        call: Ty,
         span: Span,
     },
     #[cfg(feature = "rust-import")]
@@ -1895,6 +1904,8 @@ pub(super) enum ExecutableOp {
     #[cfg(feature = "rust-import")]
     Sequence(sequence::Constructor),
     #[cfg(feature = "rust-import")]
+    CallableObject(callable_object::Coercion),
+    #[cfg(feature = "rust-import")]
     Imported {
         proof: crate::host::structural::Proof,
     },
@@ -2176,6 +2187,8 @@ impl ExecutableOp {
         match self {
             #[cfg(feature = "rust-import")]
             Self::Sequence(constructor) => constructor.dependencies(),
+            #[cfg(feature = "rust-import")]
+            Self::CallableObject(coercion) => coercion.dependencies(),
             Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
@@ -2201,7 +2214,7 @@ impl ExecutableOp {
             Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
-            Self::Imported { .. } | Self::Sequence(_) => None,
+            Self::Imported { .. } | Self::Sequence(_) | Self::CallableObject(_) => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Struct { .. }
@@ -2224,7 +2237,7 @@ impl ExecutableOp {
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
-            Self::Sequence(_) => None,
+            Self::Sequence(_) | Self::CallableObject(_) => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
             Self::Symbolic { .. }
             | Self::Projection { .. }
@@ -2254,6 +2267,8 @@ impl ExecutableOp {
             Self::Prelude(op) => return format!("\0rawr.{}", op.name()),
             #[cfg(feature = "rust-import")]
             Self::Sequence(constructor) => return constructor.name(),
+            #[cfg(feature = "rust-import")]
+            Self::CallableObject(coercion) => return coercion.name(),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
             }
@@ -2322,6 +2337,8 @@ impl ExecutableOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<INT>(),
             ],
+            #[cfg(feature = "rust-import")]
+            Self::CallableObject(_) => vec![TypeId::of::<Dynamic>()],
             // A bare generic operand takes any value; the proof checks it.
             Self::Witnessed(op) => {
                 let parameter = intrinsic::Type::witness_parameter(0).runtime();
@@ -2405,6 +2422,8 @@ impl ExecutableOp {
         match self {
             #[cfg(feature = "rust-import")]
             Self::Sequence(constructor) => constructor.invoke(context.as_ref(), args),
+            #[cfg(feature = "rust-import")]
+            Self::CallableObject(coercion) => coercion.invoke(context.as_ref(), args),
             Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {

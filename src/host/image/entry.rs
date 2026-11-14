@@ -183,6 +183,7 @@ impl Held {
                     identity: *header.identity(),
                     parameters: header.parameters().map(ImmutableString::from).collect(),
                     defaults,
+                    call: header.call().and_then(|call| runner::ty(call).ok()),
                 }
                 .resolve(self.root(), self)
             })

@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 208;
+const CLASSIFIER_VERSION: u32 = 211;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9216,7 +9216,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .map_or((signature, generics), |(signature, generics)| {
                 (signature, generics)
             });
-        let objects = object_inputs(signature, generics);
+        let objects = object_inputs(signature, generics, |trait_id, arguments| {
+            blanket_call(self.graph, trait_id, arguments).is_some()
+        });
         let (signature, generics) = objects
             .as_ref()
             .map_or((signature, generics), |(signature, generics)| {
@@ -10143,7 +10145,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         pointer: representability::object::Pointer,
         bounds: &[model::ObjectBound],
     ) -> Result<representability::convert::Type, Failure> {
-        use representability::object::{Auto, Object};
+        use representability::object::{self, Auto, Object};
         let rejected = || Failure::from(representability::reject::Kind::TraitObject);
         let mut principal = None;
         let mut auto = Vec::new();
@@ -10185,13 +10187,27 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 model::Argument::Const(_) => return Err(rejected()),
             }
         }
+        // A program's callable fills the object through the trait's impl
+        // for every callable, its inputs as a closure's (#1981).
+        let call = blanket_call(self.graph, trait_id, arguments).and_then(|(inputs, output)| {
+            let inputs = inputs
+                .iter()
+                .map(|input| {
+                    self.convert(input)
+                        .ok()
+                        .or_else(|| self.convert_closure_input(input))
+                })
+                .collect::<Option<Box<[_]>>>()?;
+            Some(object::Call::new(inputs, self.convert(&output).ok()?))
+        });
         Ok(representability::convert::Type::Object(Box::new(
             Object::new(
                 pointer,
                 self.graph.surface_definition(trait_id),
                 converted.into_boxed_slice(),
                 auto,
-            ),
+            )
+            .with_call(call),
         )))
     }
 
@@ -12072,6 +12088,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         } = ty
         {
             match target.as_ref() {
+                // `&dyn Styler<u8>` of a trait a program's function fills
+                // (`object_inputs` keeps it an object): native code makes
+                // the object for the call, from the program's callable
+                // (#1981).
+                model::Type::TraitObject { bounds, .. }
+                    if !matches!(
+                        ty,
+                        model::Type::Reference {
+                            lifetime: model::Lifetime::Static,
+                            ..
+                        }
+                    ) =>
+                {
+                    return self.convert_object(representability::object::Pointer::Shared, bounds);
+                }
                 // `&[&'static str]`, as serde's `deserialize_struct(name,
                 // fields: &'static [&'static str], ..)` takes: Rawr's array
                 // of strings, each pinned, as one slice the runner pins for
@@ -12605,6 +12636,132 @@ fn type_parameter_indices(ty: &model::Type, found: &mut BTreeSet<u32>) {
     }
 }
 
+/// The inputs and output of the `Fn(A..) -> R` bound of the crate trait
+/// `trait_id`'s one impl for every callable, as iced's `impl<T, Input,
+/// Theme> Highlighter<Input, Theme> for T where T: Fn(Input, &Theme) ->
+/// Style`, with each of the impl's parameters the trait's type argument
+/// `arguments` gives it (`Self` left out): what a callable fills the trait
+/// with, as rustc coerces `&Code::highlight` to `&dyn Highlighter<Code>`
+/// through the impl (#1981). `None` when the trait has no such impl, or
+/// its call names a parameter of the impl's that no argument gives.
+pub(crate) fn blanket_call(
+    graph: &api::Graph<impl api::Phase>,
+    trait_id: &api::identity::Definition,
+    arguments: &[model::Argument],
+) -> Option<(Vec<model::Type>, model::Type)> {
+    let core_trait = |id: &api::identity::Definition, name: &str| {
+        id.unit().authority().sysroot().is_some()
+            && id.unit().crate_name() == "core"
+            && graph
+                .definition_index(id)
+                .and_then(|index| graph.definitions().nth(index))
+                .is_some_and(|definition| definition.display_path().last() == Some(name))
+    };
+    // The inputs of the bound `T: Fn(A..)` of the impl's self type `T`.
+    let call_inputs = |implementation: &model::Implementation| {
+        let model::Type::Parameter { owner, index } = implementation.self_type() else {
+            return None;
+        };
+        if owner != implementation.id() {
+            return None;
+        }
+        implementation
+            .generics()
+            .predicates()
+            .find_map(|predicate| match predicate {
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            ..
+                        },
+                } if bounded == index && core_trait(trait_id, "Fn") => match arguments.first() {
+                    Some(model::Argument::Type(model::Type::Tuple(inputs))) => Some(inputs.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+    };
+    let mut found = graph.implementations_of(trait_id).filter(|implementation| {
+        matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == trait_id)
+            && implementation.polarity() == model::Polarity::Positive
+            && call_inputs(implementation).is_some()
+    });
+    let (Some(implementation), None) = (found.next(), found.next()) else {
+        return None;
+    };
+    let inputs = call_inputs(implementation)?;
+    let output = implementation
+        .generics()
+        .predicates()
+        .find_map(|predicate| match predicate {
+            model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection { trait_id, .. },
+                ty,
+            } if core_trait(trait_id, "FnOnce") => Some(ty),
+            _ => None,
+        })?;
+    let model::Trait::Trait {
+        arguments: implemented,
+        ..
+    } = implementation.trait_ref()
+    else {
+        return None;
+    };
+    let types = |arguments: &[model::Argument]| {
+        arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                model::Argument::Type(ty) => Some(ty.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Each of the trait's parameters after `Self` defaulted, as `Theme =
+    // crate::Theme` is where `dyn Highlighter<Code>` leaves it out.
+    let defaults = match graph
+        .definition_index(trait_id)
+        .and_then(|index| graph.definitions().nth(index))
+        .map(model::Definition::kind)
+    {
+        Some(model::Kind::Trait { generics, .. }) => generics
+            .parameters()
+            .filter(|parameter| parameter.name() != "Self")
+            .filter_map(|parameter| match parameter.kind() {
+                model::ParameterKind::Type { default, .. } => Some(match default {
+                    model::Default::Present(ty) => Some(ty.clone()),
+                    model::Default::Absent => None,
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let written = types(arguments);
+    let filled = defaults.iter().skip(written.len()).map_while(Clone::clone);
+    // Each of the impl's parameters is the trait's argument at its place
+    // among the trait's arguments after `Self`.
+    let given = types(implemented)
+        .into_iter()
+        .skip(1)
+        .zip(written.iter().cloned().chain(filled))
+        .filter_map(|(implemented, argument)| match implemented {
+            model::Type::Parameter { index, .. } => Some((index, argument)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let renamed = |index: u32| given.get(&index).cloned();
+    let inputs = inputs
+        .iter()
+        .map(|input| relabel_type(input, implementation.id(), &renamed))
+        .collect::<Option<Vec<_>>>()?;
+    let output = relabel_type(output, implementation.id(), &renamed)?;
+    Some((inputs, output))
+}
+
 /// The crate type aliases that are the only name of the type they name, by
 /// definition index (`Context::instance_aliases`).
 pub(crate) fn instance_aliases(graph: &api::Graph<impl api::Phase>) -> Box<[usize]> {
@@ -12701,12 +12858,23 @@ fn reaches_only_exported(
 /// or a program type through its proxy, and the bridge's borrow of it
 /// coerces to the object where it is passed, as rustc coerces it. An
 /// object that binds an associated type, as `dyn Fn(A) -> B` does, stays
-/// what it is. `None` when there is none.
+/// what it is, and so does one of a trait `callable` says the crate
+/// implements for every callable, which a program's function fills as the
+/// object (`blanket_call`, #1981). `None` when there is none.
 fn object_inputs(
     signature: &model::Signature,
     generics: &model::Generics,
+    callable: impl Fn(&api::identity::Definition, &[model::Argument]) -> bool,
 ) -> Option<(model::Signature, model::Generics)> {
-    fn object(
+    let object = |ty| {
+        let (lifetime, mutability, traits) = borrowed_object(ty)?;
+        let called = traits.iter().any(|bound| {
+            matches!(bound, model::Bound::Trait { trait_id, arguments, .. }
+                if callable(trait_id, arguments))
+        });
+        (!called).then_some((lifetime, mutability, traits))
+    };
+    fn borrowed_object(
         ty: &model::Type,
     ) -> Option<(&model::Lifetime, model::Mutability, Vec<&model::Bound>)> {
         let model::Type::Reference {
@@ -13082,6 +13250,14 @@ fn lends_late_borrows(ty: &model::Type) -> bool {
         model::Type::Array { element, .. } | model::Type::RawPointer { ty: element, .. } => {
             lends_late_borrows(element)
         }
+        // A trait object behind a borrow, as `&'a (dyn Styler<u8> + 'a)`,
+        // is lent for the call, its own lifetime too (#1981).
+        model::Type::TraitObject { bounds, .. } => bounds.iter().all(|bound| match bound {
+            model::ObjectBound::Trait(model::Bound::Trait { arguments, .. }) => {
+                arguments.iter().all(argument)
+            }
+            _ => true,
+        }),
         ty => !names_late_lifetime(ty),
     }
 }
