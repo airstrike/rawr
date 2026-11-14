@@ -806,30 +806,126 @@ impl<'a> Parser<'a> {
                     Ty::Str => "&str".into(),
                     input => input.name(&self.models),
                 };
-                takes.push(format!("          From<{input}>"));
+                takes.push(input.to_string());
             }
             self.inference.rollback(checkpoint);
         }
         if takes.is_empty() {
             return None;
         }
-        takes.sort();
-        takes.dedup();
-        let target = target.name(&self.models);
-        let bound = format!("From<{}>", source.name(&self.models));
-        Some(Error::StdPath {
-            code: "E0277",
-            message: format!("the trait bound `{target}: {bound}` is not satisfied").into(),
-            label: Some(format!("the trait `{bound}` is not implemented for `{target}`").into()),
-            note: Some(
-                format!(
-                    "the following other types implement trait `From<T>`:\n{}",
-                    takes.join("\n")
-                )
-                .into(),
-            ),
-            reference: at,
-        })
+        Some(missing_from(
+            &target.name(&self.models),
+            &source.name(&self.models),
+            takes,
+            at,
+        ))
+    }
+
+    /// rustc's E0277 for text, a `bool` or a `char` given to a parameter of
+    /// the crate item `item` that a bound `Into<T>` holds, `T` a crate type
+    /// none of whose `From` impls takes it: `.spacing("zero")` of
+    /// `spacing(impl Into<Pixels>)` (#1891). Only `T`'s own crate can
+    /// implement `From` of a std type for `T`, so the bound's cases, each
+    /// such impl, are every impl there is, and the call is rejected at the
+    /// argument before any native build.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn check_into_arguments(
+        &mut self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+        arguments: &[ParsedExpr],
+    ) -> Result<(), Error> {
+        let signature = item.signature();
+        let item_path = item.path();
+        let owner = item_path
+            .rsplit_once("::")
+            .and_then(|(path, _)| self.models.host.type_owner(path))
+            .or_else(|| self.models.host.item_owner(&item_path))
+            .cloned();
+        let parameters = requirements
+            .iter()
+            .map(|(name, ty, _)| (name.clone(), ty.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for relation in signature.relations() {
+            let (Some("core::convert::Into"), [target]) =
+                (relation.std_trait(), relation.arguments())
+            else {
+                continue;
+            };
+            let Some(argument) =
+                signature
+                    .parameters()
+                    .iter()
+                    .zip(arguments)
+                    .find_map(|(declared, argument)| match declared.shape() {
+                        crate::host::type_ref::Shape::Parameter(name)
+                            if name.to_string() == relation.parameter() =>
+                        {
+                            Some(argument)
+                        }
+                        _ => None,
+                    })
+            else {
+                continue;
+            };
+            let source = self.inference.resolve(&argument.ty);
+            if !matches!(source, Ty::Str | Ty::String | Ty::Bool | Ty::Char) {
+                continue;
+            }
+            let checkpoint = self.inference.checkpoint();
+            let types = |parser: &mut Self, pattern| {
+                parser
+                    .pattern_type(
+                        pattern,
+                        &mut BTreeMap::new(),
+                        &mut parameters.clone(),
+                        (&item_path, argument.span),
+                        owner.as_ref(),
+                    )
+                    .ok()
+                    .map(|ty| parser.inference.resolve(&ty))
+            };
+            let target = types(self, target);
+            let takes = relation
+                .cases()
+                .iter()
+                .map(|case| types(self, case.this()))
+                .collect::<Option<Vec<_>>>();
+            let fits = |parser: &mut Self, taken: &Ty| {
+                let checkpoint = parser.inference.checkpoint();
+                // A literal is the `&'static str` an impl of `&str` takes.
+                let fits = parser.unify_type(taken, &source)
+                    || (source == Ty::Str
+                        && matches!(taken, Ty::Reference { target, .. } if **target == Ty::UnsizedStr));
+                parser.inference.rollback(checkpoint);
+                fits
+            };
+            let unsatisfied = match (&target, &takes) {
+                (Some(target @ Ty::Host { .. }), Some(takes)) => {
+                    let mut fitting = false;
+                    for taken in takes {
+                        fitting |= fits(self, taken);
+                    }
+                    (!fitting).then(|| (target.clone(), takes.clone()))
+                }
+                _ => None,
+            };
+            self.inference.rollback(checkpoint);
+            let Some((target, takes)) = unsatisfied else {
+                continue;
+            };
+            let takes = takes
+                .iter()
+                .map(|taken| taken.name(&self.models).to_string())
+                .collect();
+            return Err(missing_from(
+                &target.name(&self.models),
+                &source.name(&self.models),
+                takes,
+                argument.span,
+            ));
+        }
+        Ok(())
     }
 
     /// The `from` functions of the library type `target` for a conversion
@@ -1468,6 +1564,32 @@ impl<'a> Parser<'a> {
             value.ty = target;
         }
         Ok(value.retain_origin())
+    }
+}
+
+/// rustc's E0277 for `source` converted into `target`, none of whose
+/// `From` impls takes it, at `at`: the bound, and the type each impl
+/// takes, as rustc lists the trait's other impls.
+fn missing_from(target: &str, source: &str, mut takes: Vec<String>, at: Span) -> Error {
+    takes.sort();
+    takes.dedup();
+    let bound = format!("From<{source}>");
+    let takes = takes
+        .iter()
+        .map(|taken| format!("          From<{taken}>"))
+        .collect::<Vec<_>>();
+    Error::StdPath {
+        code: "E0277",
+        message: format!("the trait bound `{target}: {bound}` is not satisfied").into(),
+        label: Some(format!("the trait `{bound}` is not implemented for `{target}`").into()),
+        note: Some(
+            format!(
+                "the following other types implement trait `From<T>`:\n{}",
+                takes.join("\n")
+            )
+            .into(),
+        ),
+        reference: at,
     }
 }
 

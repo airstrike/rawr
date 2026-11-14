@@ -1026,6 +1026,10 @@ fn session(
                         } else {
                             crate::native::Handover::Overlap
                         };
+                        // A build that failed leaves the running runner
+                        // owing nothing: a save back to what it was built
+                        // from swaps in place (#1892).
+                        let built = built.inspect_err(|_| lane.forget_miss(revision));
                         built
                             .and_then(|built| {
                                 // Its start walks its read set once, as the
