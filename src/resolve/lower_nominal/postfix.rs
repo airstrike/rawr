@@ -3690,11 +3690,7 @@ impl<'a> Parser<'a> {
                             .map(|owner| (owner, "into"))
                     })
                 {
-                    return Err(Error::UnknownMember {
-                        owner,
-                        member: member.into(),
-                        reference: value.span,
-                    });
+                    return Err(self.demanded_member(owner, member, value.span));
                 }
                 return Err(self.try_operator(&output, &early, expression));
             };

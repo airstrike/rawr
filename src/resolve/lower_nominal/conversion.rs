@@ -1029,16 +1029,31 @@ impl<'a> Parser<'a> {
     /// demanded at `at` (`UnknownMember`), which the importer brings for
     /// the next pass. `Ok` when one of its paths has one.
     #[cfg_attr(not(feature = "rust-import"), allow(unused_variables))]
-    pub(super) fn demand_from(&self, target: &Ty, at: Span) -> Result<(), Error> {
+    pub(super) fn demand_from(&mut self, target: &Ty, at: Span) -> Result<(), Error> {
         #[cfg(feature = "rust-import")]
         if let Some(owner) = self.imported_public_path(target, "from") {
-            return Err(Error::UnknownMember {
-                owner,
-                member: "from".into(),
-                reference: at,
-            });
+            return Err(self.demanded_member(owner, "from", at));
         }
         Ok(())
+    }
+
+    /// The imported `owner`'s `member` the program never named, demanded
+    /// at `at`: the importer brings it for the next pass, and a running
+    /// program's compile of a save prepares again with a native build that
+    /// covers it, as for any other native miss (#1896).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn demanded_member(
+        &mut self,
+        owner: ImmutableString,
+        member: &str,
+        at: Span,
+    ) -> Error {
+        let error = Error::UnknownMember {
+            owner,
+            member: member.into(),
+            reference: at,
+        };
+        self.native_miss(true, error)
     }
 
     /// The generic parameters `T` in scope with a bound `T: From<S>` that
@@ -1213,11 +1228,7 @@ impl<'a> Parser<'a> {
                     // the importer brings once it is demanded.
                     #[cfg(feature = "rust-import")]
                     None if let Some(owner) = self.imported_public_path(&target, "from") => {
-                        return Err(Error::UnknownMember {
-                            owner,
-                            member: "from".into(),
-                            reference: conversion.span,
-                        });
+                        return Err(self.demanded_member(owner, "from", conversion.span));
                     }
                     None => {
                         // A crate's `impl From<Degrees> for f32` gives the
