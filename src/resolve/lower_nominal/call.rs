@@ -1403,6 +1403,15 @@ impl<'a> Parser<'a> {
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.move_local(argument)?;
+                if function.source == self.models.context {
+                    let owning = OwningParameter {
+                        function: function.definition.name.text.clone(),
+                        kind: "function",
+                        name: function.definition.name.span,
+                        ty: parameter.ty.span(),
+                    };
+                    self.note_owning_parameter(argument, &parameter.ty, owning);
+                }
                 self.lend_argument(&parameter.ty, &expected, argument);
             }
             // A generic function compiled per instantiation is its
@@ -1688,6 +1697,19 @@ impl<'a> Parser<'a> {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
             self.move_local(argument)?;
+            if definition.source() == self.models.context {
+                let owning = OwningParameter {
+                    function: definition.name().into(),
+                    kind: if definition.receiver().is_some() {
+                        "method"
+                    } else {
+                        "function"
+                    },
+                    name: definition.name_span(),
+                    ty: parameter.ty.span(),
+                };
+                self.note_owning_parameter(argument, &parameter.ty, owning);
+            }
         }
         Ok(())
     }

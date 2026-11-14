@@ -1713,18 +1713,49 @@ impl Parser<'_> {
         borrowck::note_body(&body);
         // rustc reports each error; this reports the first in the source.
         let conflict = borrowck::check(&body, &borrowck::nll::Nll);
-        if let Some(moved) = borrowck::moves::check(&body)
+        let moved = borrowck::moves::check(&body);
+        if let Some(twice) = borrowck::assigns::check(&body)
+            && conflict
+                .as_ref()
+                .is_none_or(|conflict| twice.assignment.start() <= conflict.access.start())
+            && moved
+                .as_ref()
+                .is_none_or(|moved| twice.assignment.start() <= moved.access.start())
+        {
+            return Err(Error::ImmutableBinding {
+                binding: twice.name.into(),
+                mutation: self.expression_span(twice.assignment),
+                declaration: twice
+                    .first
+                    .map_or(Span::NONE, |first| self.expression_span(first)),
+            });
+        }
+        if let Some(moved) = moved
             && conflict
                 .as_ref()
                 .is_none_or(|conflict| moved.access.start() <= conflict.access.start())
         {
+            // The facts' spans are where each token starts: a use or a
+            // move of one token is that token whole.
+            let whole = |at: Span| {
+                if at.start() == at.end() {
+                    self.expression_span(at)
+                } else {
+                    at
+                }
+            };
             return Err(Error::MovedValue {
+                cause: self.checked_move_cause(
+                    moved.moved,
+                    &moved.moved_place,
+                    moved.declaration,
+                    moved.partial,
+                ),
                 name: moved.name.into(),
-                moved: moved.moved,
-                reference: moved.access,
+                moved: whole(self.move_span(moved.moved)),
+                reference: whole(moved.access),
                 borrowed: moved.borrowed,
                 partial: moved.partial,
-                cause: None,
                 // A move in a loop's body, made again on its next iteration.
                 previous_iteration: moved.moved == moved.access,
             });

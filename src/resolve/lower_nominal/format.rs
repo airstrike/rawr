@@ -1503,6 +1503,15 @@ impl<'a> Parser<'a> {
             });
         }
         let rest: Vec<_> = parts.collect();
+        // A moved local compared alone is borrowed by the expansion's
+        // `&$left`, which rustc labels as the whole call.
+        let lone: Vec<ImmutableString> = [&left, &right]
+            .into_iter()
+            .filter_map(|operand| match operand.as_slice() {
+                [(Token::Identifier(name), _)] => Some(name.as_str().into()),
+                _ => None,
+            })
+            .collect();
         let at = name_span.start();
         let left_name = self.temporary("left");
         let right_name = self.temporary("right");
@@ -1571,7 +1580,11 @@ impl<'a> Parser<'a> {
         spliced.extend([ident(&right_name, at), (Token::RightParen, at)]);
         spliced.extend([(Token::RightBrace, end), (Token::RightBrace, end)]);
         self.splice_tokens(spliced);
-        let mut value = self.parse_block_expr()?;
+        let call = span(name_span.start(), text_end(end, ")"));
+        let mut value = self.parse_block_expr().map_err(|error| match error {
+            Error::MovedValue { ref name, .. } if lone.contains(name) => error.borrowed_by(call),
+            error => error,
+        })?;
         value.span = span(name_span.start(), end);
         Ok(value)
     }

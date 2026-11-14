@@ -800,6 +800,7 @@ impl<'a> Parser<'a> {
         let mut tested = self.flow().split();
         let mut arm_ends = Vec::new();
         let original_bindings = self.bindings.clone();
+        let mut arm_bindings = Vec::new();
         let mut arms = Vec::new();
         let mut exhaustive = false;
         let (mut saw_true, mut saw_false) = (false, false);
@@ -885,7 +886,10 @@ impl<'a> Parser<'a> {
             let block_arm = matches!(self.peek(), Token::LeftBrace);
             let action = self.parse_match_action()?;
             arm_ends.push(self.flow().arm_end());
-            self.bindings = original_bindings.clone();
+            arm_bindings.push(std::mem::replace(
+                &mut self.bindings,
+                original_bindings.clone(),
+            ));
             arms.push((condition, bind, action));
             if matches!(self.peek(), Token::Comma) {
                 self.next();
@@ -934,6 +938,14 @@ impl<'a> Parser<'a> {
                 });
             }
         }
+        // A local is available after the match when each arm that goes on
+        // left it available, as a `let x;` each arm assigns.
+        let merged = arm_bindings
+            .iter()
+            .zip(&arms)
+            .map(|(bindings, (_, _, action))| (bindings, &action.value.ty))
+            .collect::<Vec<_>>();
+        self.merge_branches(&merged);
         let output = self.coerce_branches(
             &mut arms
                 .iter_mut()
@@ -1970,7 +1982,16 @@ impl<'a> Parser<'a> {
         let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
-        if !binding.mutable {
+        // A `let x;` not declared `mut` takes its one assignment here, as
+        // in a statement; the borrow check follows the paths that assign it.
+        let deferred = matches!(lvalue, Lvalue::Binding { .. })
+            .then(|| self.deferred.get(&binding.declaration).copied())
+            .flatten();
+        let immutable = (!binding.mutable && matches!(binding.kind, BindingKind::Local))
+            .then_some(binding.declaration)
+            .filter(|_| binding.available || deferred.is_none())
+            .map(|declaration| deferred.flatten().unwrap_or(declaration));
+        if !binding.mutable && !matches!(binding.kind, BindingKind::Local) {
             return Err(match &binding.kind {
                 BindingKind::Receiver { .. } if !matches!(lvalue, Lvalue::Binding { .. }) => {
                     self.receiver_assignment(&binding.ty, value.span)
@@ -1984,6 +2005,9 @@ impl<'a> Parser<'a> {
                     self.immutable_assignment(&lvalue, binding.declaration, value.span)
                 }
             });
+        }
+        if let Some(declaration) = immutable.filter(|_| deferred.is_none()) {
+            return Err(self.immutable_assignment(&lvalue, declaration, value.span));
         }
         // `Some(n) => r = &mut b,` of a `&mut` local given new borrows.
         if compound_operator(&assignment).is_none()
@@ -2031,6 +2055,14 @@ impl<'a> Parser<'a> {
             replacement = self.compound_assignment(operator, target, replacement)?;
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
+        let whole = span(value.span.start(), replacement.span.end());
+        if let Some(first) = immutable {
+            return Err(self.immutable_assignment(
+                &lvalue,
+                self.expression_span(first),
+                self.expression_span(whole),
+            ));
+        }
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
         if compound_operator(&assignment).is_none()
@@ -2047,6 +2079,9 @@ impl<'a> Parser<'a> {
                 source.push_text("; }");
                 if let Some(binding) = self.bindings.get_mut(&binding_name) {
                     binding.available = true;
+                    if let Some(first @ None) = self.deferred.get_mut(&binding.declaration) {
+                        *first = Some(whole);
+                    }
                 }
             }
             Lvalue::Field(field) => {

@@ -200,6 +200,9 @@ impl<'a> Parser<'a> {
                         | Token::UnaryMinus
                 )
         {
+            if let_keyword && self.split_deferred_tuple() {
+                return self.parse_binding_statement(true);
+            }
             return self.parse_pattern_binding(start);
         }
         let mutable = let_keyword && matches!(self.peek(), Token::Mut);
@@ -633,6 +636,58 @@ impl<'a> Parser<'a> {
     /// `let x;`, `let x: i32;`: a local an assignment gives its value
     /// later. Its type is the annotation's, else the one its assignments
     /// give it, and it has no value until one does (`deferred`).
+    /// `let (a, (mut b, _));` and `let (a, b): (i32, String);` after the
+    /// `let`: a tuple pattern with no value, read as a `let x;` for each of
+    /// its names, with its part of the type, as Rust declares them. The
+    /// tokens up to the `;` are taken and those `let`s put in their place;
+    /// `false`, taking nothing, for any other pattern or one with a value.
+    pub(super) fn split_deferred_tuple(&mut self) -> bool {
+        if !matches!(self.peek(), Token::LeftParen) {
+            return false;
+        }
+        let mut ahead = self.input.clone();
+        let mut written = Vec::new();
+        let mut depth = 0_i32;
+        let mut colon = None;
+        loop {
+            let Some(token) = ahead.next() else {
+                return false;
+            };
+            match token.0 {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::LessThan => {
+                    depth += 1;
+                }
+                Token::RightParen
+                | Token::RightBracket
+                | Token::RightBrace
+                | Token::GreaterThan => {
+                    depth -= 1;
+                }
+                Token::RightShift => depth -= 2,
+                Token::SemiColon if depth == 0 => break,
+                Token::Colon if depth == 0 && colon.is_none() => colon = Some(written.len()),
+                Token::Equals | Token::EOF if depth == 0 => return false,
+                _ => {}
+            }
+            written.push(token);
+        }
+        let (pattern, ty) = match colon {
+            Some(at) => (&written[..at], Some(&written[at + 1..])),
+            None => (&written[..], None),
+        };
+        let mut lets = Vec::new();
+        if deferred_lets(pattern, ty, &mut lets).is_none() || lets.is_empty() {
+            return false;
+        }
+        // The last `let`'s `;` is the statement's own.
+        lets.pop();
+        for _ in 0..written.len() {
+            self.next();
+        }
+        self.splice_tokens(lets);
+        true
+    }
+
     pub(super) fn parse_deferred_binding(
         &mut self,
         start: Position,
@@ -643,8 +698,15 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Error> {
         let ty = annotation.unwrap_or_else(|| self.inference.fresh());
         self.entry_aliases.remove(&name);
-        self.flow().local(&name, name_span);
+        if mutable {
+            self.flow().local(&name, name_span);
+        } else {
+            self.flow().single_assignment(&name, name_span);
+        }
         self.deferred.insert(name_span, None);
+        // It drops where its scope ends on the paths that gave it a value:
+        // on the others its slot holds `()`, which the glue passes over.
+        let hold = self.note_drop(&name, name_span, &ty)?.unwrap_or_default();
         self.local_types.push(LocalType {
             name: name.clone(),
             declaration: name_span,
@@ -662,7 +724,7 @@ impl<'a> Parser<'a> {
             },
         );
         self.write_output(
-            origin::Fragment::plain(format!("let {name};")),
+            origin::Fragment::plain(format!("{hold}let {name};")),
             span(start, name_span.end()),
         );
         self.last_type = Ty::Unit;
@@ -1327,4 +1389,81 @@ impl<'a> Parser<'a> {
             mutable,
         }))
     }
+}
+
+/// The `let x: T;` of each name `pattern` binds, a tuple pattern of names
+/// (`mut` or not) and `_` with no value, each with its part of `ty`, the
+/// written type, pushed onto `lets`. `None` for any other pattern, or a
+/// type that is not a tuple of as many parts.
+fn deferred_lets(
+    pattern: &[(Token, Position)],
+    ty: Option<&[(Token, Position)]>,
+    lets: &mut Vec<(Token, Position)>,
+) -> Option<()> {
+    let name = match pattern {
+        [(Token::Underscore, _)] => return Some(()),
+        [(Token::Identifier(name), at)] => Some((false, name, *at)),
+        [(Token::Mut, _), (Token::Identifier(name), at)] => Some((true, name, *at)),
+        _ => None,
+    };
+    if let Some((mutable, name, at)) = name {
+        lets.push((Token::Let, at));
+        if mutable {
+            lets.push((Token::Mut, at));
+        }
+        lets.push((Token::Identifier(name.clone()), at));
+        if let Some(ty) = ty {
+            lets.push((Token::Colon, at));
+            lets.extend(ty.iter().cloned());
+        }
+        lets.push((Token::SemiColon, at));
+        return Some(());
+    }
+    let [(Token::LeftParen, _), inside @ .., (Token::RightParen, _)] = pattern else {
+        return None;
+    };
+    let parts = top_level_parts(inside);
+    let types = match ty {
+        Some([(Token::LeftParen, _), inside @ .., (Token::RightParen, _)]) => {
+            let types = top_level_parts(inside);
+            if types.len() != parts.len() {
+                return None;
+            }
+            types.into_iter().map(Some).collect()
+        }
+        Some(_) => return None,
+        None => vec![None; parts.len()],
+    };
+    for (part, ty) in parts.into_iter().zip(types) {
+        deferred_lets(part, ty, lets)?;
+    }
+    Some(())
+}
+
+/// `tokens`, the inside of a `(..)`, split at its top-level commas, with
+/// no empty part after a trailing comma.
+fn top_level_parts(tokens: &[(Token, Position)]) -> Vec<&[(Token, Position)]> {
+    let mut parts = Vec::new();
+    let mut depth = 0_i32;
+    let mut from = 0;
+    for (index, (token, _)) in tokens.iter().enumerate() {
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::LessThan => {
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace | Token::GreaterThan => {
+                depth -= 1;
+            }
+            Token::RightShift => depth -= 2,
+            Token::Comma if depth == 0 => {
+                parts.push(&tokens[from..index]);
+                from = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if from < tokens.len() {
+        parts.push(&tokens[from..]);
+    }
+    parts
 }

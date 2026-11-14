@@ -352,12 +352,58 @@ impl fmt::Display for ArgumentCount {
 /// Why a use after a move is one: the moved local's type isn't `Copy`.
 /// rustc labels its declaration "move occurs because `x` has type `T`,
 /// which does not implement the `Copy` trait".
+/// A partial move's cause is rustc's note instead, "partial move occurs
+/// because `p.a` has type `String`, ...", naming the part that moved.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MoveCause {
-    /// The local's name where it is declared.
-    pub declaration: Span,
-    /// The local's type, as rustc writes it.
+    /// The local's name where it is declared, or for a partial move the
+    /// part that moved, as rustc names it (`p.a`).
+    pub moved: MovedPlace,
+    /// The type of what moved, as rustc writes it.
     pub ty: ImmutableString,
+    /// How rustc suggests keeping the value: cloning it at the move.
+    pub cloning: Cloning,
+    /// The parameter the move passes the value to, which rustc suggests
+    /// making a borrow.
+    pub parameter: Option<OwningParameter>,
+}
+
+/// What moved: a whole local, labelled where it is declared, or a part
+/// of one, named in rustc's note.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum MovedPlace {
+    /// The local's name where it is declared.
+    Local(Span),
+    /// The part, as rustc names it (`p.a`).
+    Part(ImmutableString),
+}
+
+/// rustc's suggestion for keeping a moved value.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Cloning {
+    /// The type is `Clone`: "consider cloning the value", with
+    /// `.clone()` after the moved local.
+    Clone,
+    /// The type is the crate's own and not `Clone`: "if `T` implemented
+    /// `Clone`, you could clone the value".
+    Derivable(ImmutableString),
+    /// Neither: rustc suggests nothing.
+    None,
+}
+
+/// A function's or method's parameter that takes ownership of a value
+/// passed to it: rustc's note "consider changing this parameter type in
+/// function `f` to borrow instead if owning the value isn't necessary".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct OwningParameter {
+    /// The function's name.
+    pub function: ImmutableString,
+    /// rustc's noun for it: `function` or `method`.
+    pub kind: &'static str,
+    /// The function's name where it is declared.
+    pub name: Span,
+    /// The parameter's type where it is written.
+    pub ty: Span,
 }
 
 /// One program item whose crate derives need expanding (#593).
@@ -1006,6 +1052,23 @@ impl Error {
     pub(crate) fn borrowing(mut self) -> Self {
         if let Self::MovedValue { borrowed, .. } = &mut self {
             *borrowed = true;
+        }
+        self
+    }
+
+    /// This error, a use of a moved value that the borrow at `borrow`
+    /// takes whole, as `&v` does: rustc's "borrow of moved value",
+    /// labelled over the borrow.
+    pub(crate) fn borrowed_by(mut self, borrow: Span) -> Self {
+        if let Self::MovedValue {
+            borrowed,
+            reference,
+            previous_iteration: false,
+            ..
+        } = &mut self
+        {
+            *borrowed = true;
+            *reference = borrow;
         }
         self
     }

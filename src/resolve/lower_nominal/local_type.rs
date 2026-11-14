@@ -1377,7 +1377,7 @@ impl<'a> Parser<'a> {
         Err(Error::TypeMismatch {
             expected: expected.name(&self.models),
             actual: found.into(),
-            expression: span,
+            expression: self.expression_span(span),
         })
     }
 

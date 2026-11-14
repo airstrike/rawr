@@ -132,7 +132,10 @@ use super::borrowck::{
     self,
     record::{Matched, ScopeEnd},
 };
-use super::{intrinsic, item, type_ref, BindingSite, Callee, Error, MoveCause, Unresolved};
+use super::{
+    intrinsic, item, type_ref, BindingSite, Callee, Cloning, Error, MoveCause, MovedPlace,
+    OwningParameter, Unresolved,
+};
 use crate::ast::{NominalPattern, NominalPayloadType, NOMINAL_MATCH_SENTINEL};
 use crate::func::{FnCallArgs, NativeCallContext};
 use crate::tokenizer::{is_valid_identifier, Token};
@@ -248,7 +251,7 @@ use relocate::rewrite_statements;
 use scope::RecordFields;
 use scope::{
     binds_by_value, ArrayElements, Binding, BindingKind, BoundIterator, Branch, Frame, FrameArray,
-    LocalType, LoopElement, LoopFrame, UninitializedUse,
+    LocalType, LoopElement, LoopFrame, MoveSite, UninitializedUse,
 };
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -362,6 +365,9 @@ struct Parser<'a> {
     closures: Vec<closure::Scope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// Each move of a local or a part of one, by where it starts: what
+    /// E0382 says of the move.
+    move_sites: BTreeMap<Position, MoveSite>,
     /// The type of a capture rawr knows isn't `Send`, of each closure
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
@@ -906,6 +912,7 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            move_sites: BTreeMap::new(),
             unsent_captures: BTreeMap::new(),
             borrowed_captures: BTreeMap::new(),
             deferred: BTreeMap::new(),

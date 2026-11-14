@@ -559,10 +559,11 @@ fn resolution_report_with_sources(
         cause: Some(cause),
         ..
     } = error
+        && let resolve::MovedPlace::Local(declaration) = cause.moved
     {
         builder = builder.secondary(
             source.clone(),
-            cause.declaration,
+            declaration,
             Some(
                 format!(
                     "move occurs because `{name}` has type `{}`, which does not implement the \
@@ -595,10 +596,32 @@ fn resolution_report_with_sources(
     }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
-            secondary_source.unwrap_or(source),
+            secondary_source.unwrap_or_else(|| source.clone()),
             secondary,
             secondary_message,
         )?;
+    }
+    // The labels of rustc's note on the parameter that takes the value.
+    if let resolve::Error::MovedValue {
+        cause:
+            Some(resolve::MoveCause {
+                parameter: Some(parameter),
+                ..
+            }),
+        ..
+    } = error
+    {
+        builder = builder
+            .secondary(
+                source.clone(),
+                parameter.ty,
+                Some("this parameter takes ownership of the value".into()),
+            )?
+            .secondary(
+                source,
+                parameter.name,
+                Some(format!("in this {}", parameter.kind).into()),
+            )?;
     }
     Ok(builder.finish())
 }
@@ -955,9 +978,38 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::ImmutableBinding { binding, .. } => builder.help(format!(
             "consider making this binding mutable: `mut {binding}`"
         )),
-        resolve::Error::MovedValue { name, .. } => builder.help(format!(
-            "`{name}` was moved before this use; clone it before the move to keep a copy"
-        )),
+        resolve::Error::MovedValue {
+            name,
+            cause: Some(cause),
+            ..
+        } => {
+            let builder = match &cause.moved {
+                resolve::MovedPlace::Part(part) => builder.note(format!(
+                    "partial move occurs because `{part}` has type `{}`, which does not \
+                     implement the `Copy` trait",
+                    cause.ty
+                )),
+                resolve::MovedPlace::Local(_) => builder,
+            };
+            let builder = match &cause.parameter {
+                Some(parameter) => builder.note(format!(
+                    "consider changing this parameter type in {} `{}` to borrow instead if \
+                     owning the value isn't necessary",
+                    parameter.kind, parameter.function
+                )),
+                None => builder,
+            };
+            match &cause.cloning {
+                resolve::Cloning::Clone => builder.help(format!(
+                    "consider cloning the value if the performance cost is acceptable: \
+                     `{name}.clone()`"
+                )),
+                resolve::Cloning::Derivable(ty) => builder.note(format!(
+                    "if `{ty}` implemented `Clone`, you could clone the value"
+                )),
+                resolve::Cloning::None => builder,
+            }
+        }
         resolve::Error::MissingCapability {
             owner,
             capability,

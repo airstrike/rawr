@@ -323,9 +323,11 @@ impl<'a> Parser<'a> {
                 self.next();
                 let operand_start = self.position();
                 let lent = self.lent_mut_field.replace(operand_start);
+                let lone = self.lone_name_ahead();
                 let operand = self.parse_operand();
                 self.lent_mut_field = lent;
-                let mut operand = operand?;
+                let mut operand =
+                    operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
                 let whole = span(start, operand.span.end());
                 if operand.lvalue.is_none() {
                     // `twice(&mut |x| v.push(x))`: the closure is the
@@ -364,9 +366,10 @@ impl<'a> Parser<'a> {
             }
             let operand_start = self.position();
             let lent = self.lent_field.replace(operand_start);
+            let lone = self.lone_name_ahead();
             let operand = self.parse_operand();
             self.lent_field = lent;
-            let mut operand = operand?;
+            let mut operand = operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
             let whole = span(start, operand.span.end());
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
