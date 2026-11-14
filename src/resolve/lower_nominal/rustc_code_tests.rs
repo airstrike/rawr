@@ -416,12 +416,13 @@ fn a_let_without_a_value_assigned_on_a_path_that_may_have_assigned_it_is_e0384()
         ),
         concat!(
             "error[E0384]: cannot assign twice to immutable variable `x`\n",
-            " --> main.rs:5:5-5:10\n",
-            " 5 |     x = 2;\n",
-            "   |     ^^^^^ cannot assign twice to immutable variable\n",
-            " ::: main.rs:4:12-4:17\n",
-            " 4 |     if c { x = 1; }\n",
-            "   |            ----- first assignment to `x`\n",
+            " --> main.rs:5:5\n",
+            "  |\n",
+            "4 |     if c { x = 1; }\n",
+            "  |            ----- first assignment to `x`\n",
+            "5 |     x = 2;\n",
+            "  |     ^^^^^ cannot assign twice to immutable variable\n",
+            "  |\n",
             "  = help: consider making this binding mutable: `mut x`\n",
         )
     );
@@ -434,9 +435,11 @@ fn a_let_without_a_value_assigned_on_a_path_that_may_have_assigned_it_is_e0384()
         ),
         concat!(
             "error[E0384]: cannot assign twice to immutable variable `x`\n",
-            " --> main.rs:5:9-5:14\n",
-            " 5 |         x = 1;\n",
-            "   |         ^^^^^ cannot assign twice to immutable variable\n",
+            " --> main.rs:5:9\n",
+            "  |\n",
+            "5 |         x = 1;\n",
+            "  |         ^^^^^ cannot assign twice to immutable variable\n",
+            "  |\n",
             "  = help: consider making this binding mutable: `mut x`\n",
         )
     );
@@ -447,7 +450,7 @@ fn a_let_without_a_value_assigned_on_a_path_that_may_have_assigned_it_is_e0384()
     );
     assert!(
         arm.starts_with(
-            "error[E0384]: cannot assign twice to immutable variable `x`\n --> main.rs:6:14-6:20\n"
+            "error[E0384]: cannot assign twice to immutable variable `x`\n --> main.rs:6:14\n"
         ),
         "{arm}"
     );
@@ -1564,22 +1567,21 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
         ),
         concat!(
             "error[E0382]: borrow of moved value: `vec0`\n",
-            " --> main.rs:8:5-8:35\n",
-            " 8 |     assert_eq!(vec0, [22, 44, 66]);\n",
-            "   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ value borrowed here after move\n",
-            " ::: main.rs:6:9-6:13\n",
-            " 6 |     let vec0 = vec![22, 44, 66];\n",
-            "   |         ---- move occurs because `vec0` has type `Vec<i32>`, which does not \
+            " --> main.rs:8:5\n",
+            "  |\n",
+            "1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
+            "  |    --------      -------- this parameter takes ownership of the value\n",
+            "  |    |\n",
+            "  |    in this function\n",
+            "...\n",
+            "6 |     let vec0 = vec![22, 44, 66];\n",
+            "  |         ---- move occurs because `vec0` has type `Vec<i32>`, which does not \
              implement the `Copy` trait\n",
-            " ::: main.rs:7:25-7:29\n",
-            " 7 |     let vec1 = fill_vec(vec0);\n",
-            "   |                         ---- value moved here\n",
-            " ::: main.rs:1:18-1:26\n",
-            " 1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
-            "   |                  -------- this parameter takes ownership of the value\n",
-            " ::: main.rs:1:4-1:12\n",
-            " 1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
-            "   |    -------- in this function\n",
+            "7 |     let vec1 = fill_vec(vec0);\n",
+            "  |                         ---- value moved here\n",
+            "8 |     assert_eq!(vec0, [22, 44, 66]);\n",
+            "  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ value borrowed here after move\n",
+            "  |\n",
             "  = help: consider cloning the value if the performance cost is acceptable: \
              `vec0.clone()`\n",
             "  = note: consider changing this parameter type in function `fill_vec` to borrow \
@@ -1592,11 +1594,11 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
          }\n}\nfn main() {\n    let v = vec![1];\n    S.eat(v);\n    let r = &v;\n}\n",
     );
     assert!(
-        method.starts_with("error[E0382]: borrow of moved value: `v`\n --> main.rs:10:13-10:15\n"),
+        method.starts_with("error[E0382]: borrow of moved value: `v`\n  --> main.rs:10:13\n"),
         "{method}"
     );
     assert!(
-        method.contains("   |        --- in this method\n"),
+        method.contains("   |        ---           -------- this parameter takes ownership of the value\n   |        |\n   |        in this method\n"),
         "{method}"
     );
     assert!(
@@ -1640,12 +1642,13 @@ fn a_use_after_a_partial_move_notes_the_moved_parts_type() {
         ),
         concat!(
             "error[E0382]: use of partially moved value: `p`\n",
-            " --> main.rs:8:13-8:14\n",
-            " 8 |     let q = p;\n",
-            "   |             ^ value used here after partial move\n",
-            " ::: main.rs:7:13-7:16\n",
-            " 7 |     let a = p.a;\n",
-            "   |             --- value partially moved here\n",
+            " --> main.rs:8:13\n",
+            "  |\n",
+            "7 |     let a = p.a;\n",
+            "  |             --- value partially moved here\n",
+            "8 |     let q = p;\n",
+            "  |             ^ value used here after partial move\n",
+            "  |\n",
             "  = note: partial move occurs because `p.a` has type `String`, which does not \
              implement the `Copy` trait\n",
         )
@@ -1668,14 +1671,14 @@ fn a_mismatched_argument_is_underlined_whole() {
     );
     assert!(
         report.contains(
-            " --> main.rs:3:23-3:26\n 3 |     let _ = a == Some(\"x\");\n   |                       \
+            " --> main.rs:3:23\n  |\n3 |     let _ = a == Some(\"x\");\n  |                       \
              ^^^ expected `String`, found `&str`\n"
         ),
         "{report}"
     );
     let report = rendered("fn take(s: String) {}\nfn main() {\n    take(1 + 23);\n}\n");
     assert!(
-        report.contains("   |          ^^^^^^ expected `String`, found integer"),
+        report.contains("  |          ^^^^^^ expected `String`, found integer"),
         "{report}"
     );
 }
@@ -1750,7 +1753,7 @@ fn an_operation_known_to_overflow_or_panic_is_rustcs_deny_lint() {
     }
     // The operation is underlined whole.
     assert!(rendered("fn main() {\n    let x: u8 = 255 + 1;\n}\n")
-        .contains(" 2 |     let x: u8 = 255 + 1;\n   |                 ^^^^^^^ attempt"),);
+        .contains("\n2 |     let x: u8 = 255 + 1;\n  |                 ^^^^^^^ attempt"));
     // What doesn't overflow or panic runs.
     let program = "fn main() {\n    let a = -128i8;\n    let b = 0xFFu8 & 0x0F;\n    let c = \
                    255u8 << 1;\n    let d = (3 + 4) * 2;\n    let f: u64 = 1 << 40;\n    let g = \
