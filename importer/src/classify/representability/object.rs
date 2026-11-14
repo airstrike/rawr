@@ -61,6 +61,40 @@ pub struct Object {
     principal: crate::surface::identity::Definition,
     arguments: Box<[Type]>,
     auto: Box<[Auto]>,
+    /// What a program's function or closure fills the trait with, when the
+    /// crate implements it for every callable of one signature, as iced's
+    /// `impl<T: Fn(Input, &Theme) -> Style> Highlighter<Input, Theme> for
+    /// T` (#1981).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    call: Option<Box<Call>>,
+}
+
+/// The inputs and output of the `Fn` bound of a trait's one impl for every
+/// callable, at the object's arguments: a program's callable coerced to
+/// the object runs with these, as the impl's methods call it.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Call {
+    inputs: Box<[Type]>,
+    output: Type,
+}
+
+impl Call {
+    #[must_use]
+    pub const fn new(inputs: Box<[Type]>, output: Type) -> Self {
+        Self { inputs, output }
+    }
+
+    /// The callable's inputs, in order.
+    #[must_use]
+    pub fn inputs(&self) -> &[Type] {
+        &self.inputs
+    }
+
+    /// The callable's output.
+    #[must_use]
+    pub const fn output(&self) -> &Type {
+        &self.output
+    }
 }
 
 impl Object {
@@ -79,6 +113,16 @@ impl Object {
             principal,
             arguments,
             auto: auto.into_boxed_slice(),
+            call: None,
+        }
+    }
+
+    /// This object, which a program's callable fills by `call`.
+    #[must_use]
+    pub fn with_call(self, call: Option<Call>) -> Self {
+        Self {
+            call: call.map(Box::new),
+            ..self
         }
     }
 
@@ -96,6 +140,13 @@ impl Object {
         &self,
         mut map: impl FnMut(&Type) -> Result<Type, E>,
     ) -> Result<Self, E> {
+        let call = match &self.call {
+            Some(call) => Some(Box::new(Call {
+                inputs: call.inputs.iter().map(&mut map).collect::<Result<_, _>>()?,
+                output: map(&call.output)?,
+            })),
+            None => None,
+        };
         Ok(Self {
             pointer: self.pointer,
             principal: self.principal,
@@ -105,6 +156,7 @@ impl Object {
                 .map(&mut map)
                 .collect::<Result<_, _>>()?,
             auto: self.auto.clone(),
+            call,
         })
     }
 
@@ -130,11 +182,27 @@ impl Object {
         &self.auto
     }
 
-    /// Each type the object names: its trait's arguments.
+    /// What a program's callable fills the trait with, when one does.
+    #[must_use]
+    pub fn call(&self) -> Option<&Call> {
+        self.call.as_deref()
+    }
+
+    /// Each type the object names: its trait's arguments, and the inputs
+    /// and output of its call.
     pub fn types(&self) -> impl Iterator<Item = &Type> {
-        self.arguments.iter()
+        self.arguments.iter().chain(
+            self.call
+                .iter()
+                .flat_map(|call| call.inputs.iter().chain([&call.output])),
+        )
     }
 }
+
+/// The tag of the program's function or closure coerced to an object of a
+/// trait the crate implements for every callable ([`Object::call`]): the
+/// adapter makes a Rust closure that calls it, which the impl takes.
+pub const CALLABLE: &str = "fn";
 
 /// The tag of the program's `format_args!` coerced to an object, core's
 /// `fmt::Arguments<'_>`, which the adapter formats where the call runs.

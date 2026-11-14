@@ -7,11 +7,14 @@
 // type argument is lent for the call (#1953), and a builder holds a
 // borrowed `?Sized` key (#801). A closure takes a trait object lent for the
 // call (#28), and a builder keeps a borrow of a static or of the program's
-// value in `Self` (#610).
+// value in `Self` (#610). A function or closure is a crate trait's object
+// through the crate's impl of the trait for every callable, as iced's
+// markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>` (#1981).
 
 use events::grid::{
-    combine, described, here, labeled, placed, produce, requested, surface_name, tagged,
-    with_surface, Grid, Keyed, Scale, Scaled, DOUBLE,
+    boxed_style, combine, described, here, labeled, placed, produce, requested, styled, styles,
+    surface_name, tagged, with_surface, Grid, Keyed, Palette, Scale, Scaled, Styled, Styler, Tone,
+    DOUBLE,
 };
 
 fn add(sum: u32, cell: u8) -> u32 {
@@ -65,4 +68,27 @@ fn main() {
         Scaled::new(5).scale(&DOUBLE).shown(),
         Scaled::new(5).scale(&triple).shown()
     );
+    let offset = 5;
+    println!(
+        "styled {} {} {}",
+        styled(&bold, 3),
+        styled(
+            &|input: u8, palette: &Palette| palette.base() + u32::from(input) + offset,
+            1
+        ),
+        boxed_style(Box::new(bold), 2)
+    );
+    println!("tones {}", styles(&Toned));
+}
+
+fn bold(input: u8, palette: &Palette) -> u32 {
+    palette.base() + u32::from(input) * 2
+}
+
+struct Toned;
+
+impl Styled for Toned {
+    fn styler(&self) -> &dyn Styler<Tone> {
+        &Tone::shade
+    }
 }

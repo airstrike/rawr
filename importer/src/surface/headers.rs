@@ -12,12 +12,15 @@ use crate::api::{self, model};
 use crate::classify::representability::{convert, signature};
 
 /// A trait Rawr code names: its path, relative to the root, its identity,
-/// and its type parameters other than `Self`, each with its default.
+/// its type parameters other than `Self`, each with its default, and the
+/// inputs and output a callable fills it with through its one impl for
+/// every callable (`classify::blanket_call`).
 pub struct TraitHeader {
     pub path: Box<str>,
     pub identity: [u8; 32],
     pub parameters: Box<[signature::Parameter]>,
     pub defaults: Box<[Option<convert::Type>]>,
+    pub call: Option<(Box<[convert::Type]>, convert::Type)>,
 }
 
 /// One impl of a trait, as `impl<W, M, T, R> Widget<M, T, R> for Column<W>
@@ -271,11 +274,13 @@ impl<'g, P: api::Phase> Headers<'g, P> {
     }
 
     fn trait_header(&self, path: &str, trait_identity: &[u8; 32]) -> Option<TraitHeader> {
-        let model::Kind::Trait { generics, .. } = self.models.get(trait_identity)?.kind() else {
+        let definition = self.models.get(trait_identity)?;
+        let model::Kind::Trait { generics, .. } = definition.kind() else {
             return None;
         };
         let mut parameters = Vec::new();
         let mut defaults = Vec::new();
+        let mut own = Vec::new();
         for parameter in generics.parameters() {
             let model::ParameterKind::Type { default, .. } = parameter.kind() else {
                 continue;
@@ -292,12 +297,34 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                 model::Default::Present(ty) => self.ty(ty),
                 model::Default::Absent => None,
             });
+            own.push(model::Argument::Type(model::Type::Parameter {
+                owner: definition.id().clone(),
+                index: parameter.index(),
+            }));
         }
+        // The call at the trait's own parameters. An input may be a borrow,
+        // as `Fn(Input, &Theme)`'s is.
+        let call = crate::classify::blanket_call(self.graph, definition.id(), &own).and_then(
+            |(inputs, output)| {
+                let input = |ty: &model::Type| match ty {
+                    model::Type::Reference { mutability, ty, .. } => {
+                        Some(convert::Type::Borrowed {
+                            mutable: *mutability == model::Mutability::Mutable,
+                            ty: Box::new(self.ty(ty)?),
+                        })
+                    }
+                    ty => self.ty(ty),
+                };
+                let inputs = inputs.iter().map(input).collect::<Option<Box<[_]>>>()?;
+                Some((inputs, self.ty(&output)?))
+            },
+        );
         Some(TraitHeader {
             path: path.into(),
             identity: *trait_identity,
             parameters: parameters.into_boxed_slice(),
             defaults: defaults.into_boxed_slice(),
+            call,
         })
     }
 

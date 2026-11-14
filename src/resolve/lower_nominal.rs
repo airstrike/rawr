@@ -8,6 +8,8 @@ mod borrows;
 mod branch;
 mod builtin_method;
 mod call;
+#[cfg(feature = "rust-import")]
+mod callable_object;
 mod cargo_env;
 pub(crate) mod cell;
 mod closure;

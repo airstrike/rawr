@@ -188,13 +188,16 @@ impl TypeAlias {
 }
 
 /// A crate trait Rawr code names (D604): its qualified path, identity,
-/// type parameters other than `Self`, and each one's default.
+/// type parameters other than `Self`, each one's default, and the callable
+/// a program's function or closure fills it as, through the crate's impl
+/// of it for every callable (#1981).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TraitHeader {
     pub(crate) path: host::path::Path,
     pub(crate) identity: [u8; 32],
     pub(crate) parameters: Box<[ImmutableString]>,
     pub(crate) defaults: Box<[Option<host::type_ref::Type>]>,
+    pub(crate) call: Option<host::type_ref::Type>,
 }
 
 /// One impl of a crate trait (D604): its own type parameters, the trait's
@@ -254,6 +257,11 @@ impl TraitHeader {
                         .transpose()
                 })
                 .collect::<Result<_, _>>()?,
+            call: self
+                .call
+                .as_ref()
+                .map(host::type_ref::Type::try_clone)
+                .transpose()?,
         })
     }
 }
@@ -317,11 +325,17 @@ impl TraitHeader {
                 None => Some(None),
             })
             .collect::<Option<Box<[_]>>>()?;
+        // A call naming a type the facade lacks is left out.
+        let call = self
+            .call
+            .as_ref()
+            .and_then(|call| call.resolve(root, declared, &parameters, &self.path).ok());
         Some(Self {
             path: self.path.clone(),
             identity: self.identity,
             parameters: self.parameters.clone(),
             defaults,
+            call,
         })
     }
 }
@@ -795,6 +809,7 @@ impl Builder {
         identity: [u8; 32],
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
+        call: Option<host::type_ref::Type>,
     ) -> Result<&mut Self, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
         self.trait_headers
@@ -805,6 +820,7 @@ impl Builder {
             identity,
             parameters,
             defaults,
+            call,
         });
         Ok(self)
     }

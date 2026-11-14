@@ -20065,7 +20065,7 @@ fn render_take_callable(
     {
         if REGION_ARGUMENTS.get() {
             let closure = render_callable_closure(
-                index,
+                Witnesses::Operand(index),
                 &source,
                 call,
                 signature,
@@ -20081,7 +20081,7 @@ fn render_take_callable(
             .map_err(request::unwritable)?;
         let source = format!("argument_{local}_source.clone()");
         let closure = render_callable_closure(
-            index,
+            Witnesses::Operand(index),
             &source,
             call,
             signature,
@@ -20091,12 +20091,25 @@ fn render_take_callable(
         REGIONAL_CLOSURES.with_borrow_mut(|closures| {
             closures.push(format!("\n            let argument_{local} = {closure};"));
         });
-        let closure =
-            render_callable_closure(index, &source, call, signature, substitutions, None)?;
+        let closure = render_callable_closure(
+            Witnesses::Operand(index),
+            &source,
+            call,
+            signature,
+            substitutions,
+            None,
+        )?;
         return writeln!(output, "    let argument_{local} = {closure};")
             .map_err(request::unwritable);
     }
-    let closure = render_callable_closure(index, &source, call, signature, substitutions, None)?;
+    let closure = render_callable_closure(
+        Witnesses::Operand(index),
+        &source,
+        call,
+        signature,
+        substitutions,
+        None,
+    )?;
     // An output that names the closure's type, as iced's `Widget::map`
     // gives `Map<Self, F, Message>`: the closure boxed as the `Box<dyn
     // Fn(..) -> ..>` the classifier wrote there (T417).
@@ -20154,7 +20167,14 @@ fn render_take_optional_callable(
     substitutions: &[convert::Type],
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let closure = render_callable_closure(index, "inner", call, signature, substitutions, None)?;
+    let closure = render_callable_closure(
+        Witnesses::Operand(index),
+        "inner",
+        call,
+        signature,
+        substitutions,
+        None,
+    )?;
     writeln!(
         output,
         "    let argument_{local} = match __rawr_internal::option::take(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).ok_or(Error::TypeMismatch)? {{\n        None => None,\n        Some(inner) => Some({closure}),\n    }};"
@@ -20183,13 +20203,25 @@ fn regional(
     Ok(written_family(&returned))
 }
 
+/// Where the inputs of a closure [`render_callable_closure`] makes take
+/// their witnesses from, so script code reads a native value native code
+/// gives as its type.
+enum Witnesses<'a> {
+    /// The running call's operand at this index, the callable itself.
+    Operand(usize),
+    /// The coerced callable the generated `Dynamic` named so holds, a
+    /// trait object's (`object::Call`, #1981).
+    Coerced(&'a str),
+}
+
 /// The block that makes a Rust closure calling the script callable
-/// `source` gives, for [`render_take_callable`]. With `pins`, the pins of
-/// the region its call is made in, the closure's call runs in a region of
-/// its own anchored on them, as a slot's does (`render_slot`), and its
-/// output comes out of it at their lifetime (`regional`).
+/// `source` gives, for [`render_take_callable`], its inputs attested by
+/// `witnesses`. With `pins`, the pins of the region its call is made in,
+/// the closure's call runs in a region of its own anchored on them, as a
+/// slot's does (`render_slot`), and its output comes out of it at their
+/// lifetime (`regional`).
 fn render_callable_closure(
-    index: usize,
+    witnesses: Witnesses<'_>,
     source: &str,
     call: &crate::classify::representability::callable::Call,
     signature: &crate::classify::representability::signature::Signature,
@@ -20352,22 +20384,20 @@ fn render_callable_closure(
     render_from_dynamic(&returned, "value", 0, &mut converted)?;
     // A script value native code gives the closure is checked against the
     // closure's parameter (review 2).
+    let witnessed = match witnesses {
+        Witnesses::Operand(index) => format!(
+            "\n        let witnesses = closure_inputs({index}, {});",
+            inputs.len()
+        ),
+        Witnesses::Coerced(value) => format!(
+            "\n        let witnesses = __rawr_internal::object::Coerced::witnesses(&{value}, {});",
+            inputs.len()
+        ),
+    };
     let (witnesses, call) = if inputs.iter().any(is_value) {
-        (
-            format!(
-                "\n        let witnesses = closure_inputs({index}, {});",
-                inputs.len()
-            ),
-            "callable.call_checked(&mut values, &witnesses)",
-        )
+        (witnessed, "callable.call_checked(&mut values, &witnesses)")
     } else if attested || !places.is_empty() {
-        (
-            format!(
-                "\n        let witnesses = closure_inputs({index}, {});",
-                inputs.len()
-            ),
-            "callable.call(&mut values)",
-        )
+        (witnessed, "callable.call(&mut values)")
     } else {
         (String::new(), "callable.call(&mut values)")
     };
@@ -21027,15 +21057,20 @@ fn render_from_dynamic(
             return Err(unlengthed())
         }
         // A crate's trait object (D872), which a value owns or a static's
-        // place is. A borrowed one is lent where the call takes it.
+        // place is. A borrowed one made from a value, as a script impl's
+        // `fn highlighter(&self) -> &dyn Highlighter<Code>` gives, lives as
+        // long as the runner: a static's place or a program's function
+        // (#1981). One a call takes is lent there.
         convert::Type::Object(object)
             if object.pointer()
                 != crate::classify::representability::object::Pointer::Shared =>
         {
             return object::render_owned(object, value, depth, output);
         }
-        convert::Type::Object(_) => {
-            return Err(request::drift("a borrowed trait object made from a value"))
+        convert::Type::Object(object) => {
+            let lasting =
+                object.behind(crate::classify::representability::object::Pointer::Lasting);
+            return object::render_owned(&lasting, value, depth, output);
         }
         convert::Type::Unit | convert::Type::Never => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),

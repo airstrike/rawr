@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 use super::{concrete_type, render_from_dynamic, request, TYPE_PATHS};
 use crate::classify::representability::convert;
-use crate::classify::representability::object::{Object, Pointer, ARGUMENTS};
+use crate::classify::representability::object::{Object, Pointer, ARGUMENTS, CALLABLE};
 
 /// A type the facade implements a trait for that the adapter coerces a
 /// program's value of to the trait's object.
@@ -206,6 +206,9 @@ pub(super) fn render_owned(
     for (tag, made) in implementors {
         write!(arms, "{tag:?} => {}, ", made?).map_err(request::unwritable)?;
     }
+    if let Some(made) = callable_arm(object, &rust)? {
+        write!(arms, "{CALLABLE:?} => {made}, ").map_err(request::unwritable)?;
+    }
     // An object native code gave, or a counted one made of the box a
     // program's own type is a native trait's object as (#1264, #1304).
     let given = match object.pointer() {
@@ -265,6 +268,72 @@ fn arm(
             )
         }
     })
+}
+
+/// The Rust closure that calls a program's callable, which fills an object
+/// through its trait's impl for every callable (#1981).
+struct Closure {
+    /// The block that makes it.
+    block: String,
+    /// The `Box<dyn Fn(..) -> ..>` it can be held as.
+    boxed: String,
+}
+
+/// The closure calling the program's callable `source` gives, which fills
+/// `object`, its inputs attested by the witness of the coerced value the
+/// `Dynamic` named `coerced` is. `None` for an object no callable fills.
+fn closure(
+    object: &Object,
+    source: &str,
+    coerced: &str,
+) -> Result<Option<Closure>, request::Error> {
+    use crate::classify::representability::{callable, signature};
+    let Some(call) = object.call() else {
+        return Ok(None);
+    };
+    let unwritten = || request::drift("a trait object's callable");
+    let inputs = call
+        .inputs()
+        .iter()
+        .map(concrete_type)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(unwritten)?;
+    let output = concrete_type(call.output()).ok_or_else(unwritten)?;
+    let made = callable::Call::new(0, call.inputs().into(), call.output().clone());
+    let signature =
+        signature::Signature::new(Box::default(), call.inputs().into(), call.output().clone());
+    Ok(Some(Closure {
+        block: super::render_callable_closure(
+            super::Witnesses::Coerced(coerced),
+            source,
+            &made,
+            &signature,
+            &[],
+            None,
+        )?,
+        boxed: format!("Box<dyn Fn({}) -> {output}>", inputs.join(", ")),
+    }))
+}
+
+/// The arm of [`render_owned`] that makes `object`, of the Rust type
+/// `rust`, from the program's callable `inner`: the closure that calls it,
+/// behind an owning pointer, or kept for the runner's life behind a
+/// `&'static`, one per function, as rustc promotes `&Code::highlight` to a
+/// static. A closure that captures lives in no static (E0597).
+fn callable_arm(object: &Object, rust: &str) -> Result<Option<String>, request::Error> {
+    let Some(Closure { block: closure, .. }) = closure(object, "inner.clone()", "value")? else {
+        return Ok(None);
+    };
+    let dynamic = object_type(object).ok_or_else(|| request::drift("a trait object's type"))?;
+    Ok(Some(match object.pointer() {
+        Pointer::Lasting | Pointer::Shared => format!(
+            "match __rawr_internal::object::lasting::<{dynamic}, Error>(&inner, || -> Result<Box<{dynamic}>, Error> {{ let made = {closure}; Ok(Box::new(made)) }}) {{ Some(made) => made.map(|lasting| -> {rust} {{ lasting }}), None => Err(Error::Value(\"borrowed value does not live long enough (E0597)\".to_owned())) }}"
+        ),
+        pointer => {
+            let owner = owner(pointer);
+            format!("(|| -> Result<{rust}, Error> {{ let made = {closure}; Ok({owner}(made)) }})()")
+        }
+    }))
 }
 
 /// The statements that make `argument_{local}`, the `&dyn Trait` input
@@ -331,6 +400,23 @@ pub(super) fn render_lent_input(
         }
         Ok(())
     })?;
+    // The program's callable, a closure that calls it boxed for the call.
+    if let Some(Closure {
+        block: closure,
+        boxed,
+    }) = closure(object, "inner", &format!("argument_{local}_value"))?
+    {
+        writeln!(
+            kept,
+            "    #[allow(unused_variables)]\n    let argument_{local}_callable: {boxed};"
+        )
+        .map_err(request::unwritable)?;
+        write!(
+            arms,
+            "{CALLABLE:?} => {{ argument_{local}_callable = Box::new({closure}); &argument_{local}_callable }}, "
+        )
+        .map_err(request::unwritable)?;
+    }
     // An object native code lent the script closure that makes the call,
     // which the adapter reached around its body (#28).
     let lent = if super::lent_object_at(index) {
@@ -593,6 +679,13 @@ fn held_object(object: &Object, value: &str, output: &mut String) -> Result<(), 
         }
         Ok(())
     })?;
+    if let Some(Closure { block, .. }) = closure(object, "inner", "value")? {
+        write!(
+            arms,
+            "{CALLABLE:?} => (|| -> Result<_, Error> {{ Ok({held}::Made(Box::new({block}))) }})(), "
+        )
+        .map_err(request::unwritable)?;
+    }
     write!(
         output,
         "{{ let value = {value}; match __rawr_internal::object::Coerced::of(&value) {{ Some((inner, tag)) => match tag.as_str() {{ {arms}_ => Err(Error::TypeMismatch) }}, None => value.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{lasting}>(handle)).map({held}::Lasting) }} }}"

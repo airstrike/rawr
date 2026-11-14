@@ -60,6 +60,48 @@ impl<'a> Parser<'a> {
             .then_some(tag)
     }
 
+    /// The callable a function or closure fills the crate's trait
+    /// `trait_name` at `arguments` as, when the crate implements the trait
+    /// for every callable of one signature, as iced's `impl<T: Fn(Input,
+    /// &Theme) -> Style> Highlighter<Input, Theme> for T` (#1981): the
+    /// impl's `Fn` bound, each of the trait's parameters an argument or
+    /// its default. `None` for a trait with no such impl.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn native_trait_call(&mut self, trait_name: &str, arguments: &[Ty]) -> Option<Ty> {
+        let path = crate::host::path::Path::parse(trait_name).ok()?;
+        let header = self.models.host.trait_header(&path)?.clone();
+        let call = header.call.as_ref()?;
+        let owner = self.models.host.type_owner(trait_name).cloned();
+        let mut parameters = BTreeMap::new();
+        for (index, name) in header.parameters.iter().enumerate() {
+            let ty = match arguments.get(index) {
+                Some(ty) => ty.clone(),
+                None => {
+                    let default = header.defaults.get(index)?.as_ref()?;
+                    self.instantiate_host_type(
+                        default,
+                        &mut parameters,
+                        trait_name,
+                        Span::NONE,
+                        owner.as_ref(),
+                        None,
+                    )
+                    .ok()?
+                }
+            };
+            parameters.insert(name.clone(), ty);
+        }
+        self.instantiate_host_type(
+            call,
+            &mut parameters,
+            trait_name,
+            Span::NONE,
+            owner.as_ref(),
+            None,
+        )
+        .ok()
+    }
+
     /// Fixes the open type parameters of `ty` by the one impl of the trait
     /// `identity` at `arguments` that fits it, then by that impl's
     /// where-clause bounds (D604). An impl for any type (`impl<T> Trait for

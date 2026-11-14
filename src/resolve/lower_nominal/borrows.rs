@@ -1070,6 +1070,14 @@ impl Parser<'_> {
         if self.static_reads.contains(&span) {
             return false;
         }
+        // A function, or a closure that captures nothing, is a constant,
+        // whatever its body reads, as `&Code::highlight` is (#1981).
+        if let Ty::FnItem { key, .. } = ty {
+            return self
+                .lifted
+                .iter()
+                .any(|closure| closure.key == **key && !closure.captures.is_empty());
+        }
         if self.flow().part_of_made(span) {
             return true;
         }

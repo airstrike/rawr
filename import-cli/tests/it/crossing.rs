@@ -3036,14 +3036,18 @@ fn a_crate_generics_parameter_is_inferred_through_an_arguments_bound() {
 /// trait object lent for the call, as iced's `window::run` lends `&dyn
 /// Window` (#28), and a builder keeps a borrow of a static or of the
 /// program's value in `Self`, as loading_spinners' `Linear::easing` does
-/// (#610). The output is `cargo run`'s.
+/// (#610). A function or closure, borrowed or boxed, is a crate trait's
+/// object through the crate's impl of the trait for every callable, and a
+/// script impl gives a borrowed function as one, as iced's markdown gives
+/// `&Code::highlight` as a `&dyn Highlighter<Code>` (#1981). The output is
+/// `cargo run`'s.
 #[test]
 fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
     let (rawr, cargo) = both_printed("grid.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7\ngrid 4x3\nevents grid:7\nlocated src/main.rs:53:40\nrequested 5\nkeyed \"north\" 5\nscreen 640\nscaled 5 10 15"
+        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7\ngrid 4x3\nevents grid:7\nlocated src/main.rs:56:40\nrequested 5\nkeyed \"north\" 5\nscreen 640\nscaled 5 10 15\nstyled 106 106 104\ntones 11 19"
     );
 }
 

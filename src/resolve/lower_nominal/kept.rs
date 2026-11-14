@@ -1164,6 +1164,7 @@ impl ExecutableOp {
                 proof: Box::new(proof.renewed(&schema)?),
             },
             Self::Sequence(constructor) => Self::Sequence(constructor.renewed(&schema)?),
+            Self::CallableObject(coercion) => Self::CallableObject(coercion.renewed(&schema)?),
             Self::Witnessed(op) => Self::Witnessed(Box::new(super::op::WitnessedOp::new(
                 op.template.renewed(models)?,
                 op.witnesses,

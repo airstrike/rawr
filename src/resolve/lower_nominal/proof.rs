@@ -259,6 +259,14 @@ impl<'a> Parser<'a> {
                 });
                 ExecutableOp::Sequence(sequence::Constructor::checked(concrete.as_ref(), proof))
             }
+            #[cfg(feature = "rust-import")]
+            Op::CallableObject { call, span } => {
+                let call = self.inference.resolve(&call);
+                ExecutableOp::CallableObject(callable_object::Coercion::new(
+                    self.proven_type(&call, "a callable coerced to a trait object", span)
+                        .ok(),
+                ))
+            }
             Op::Prelude(op) => ExecutableOp::Prelude(op),
             Op::Collect { target } => match self.inference.resolve(&target) {
                 Ty::String => ExecutableOp::Prelude(PreludeOp::CollectString),

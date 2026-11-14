@@ -946,6 +946,7 @@ fn build(
                 *header.identity(),
                 header.parameters().map(ImmutableString::from).collect(),
                 defaults,
+                header.call().and_then(|call| self::ty(call).ok()),
             )
             .map_err(|source| entry_error(facade.root(), header.path(), source.into()))?;
     }

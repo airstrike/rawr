@@ -210,6 +210,10 @@ pub struct TraitHeader {
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
     defaults: Box<[Option<Type>]>,
+    /// The callable that fills the trait through its one impl for every
+    /// callable, a [`Type::Callable`] (#1981).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    call: Option<Type>,
 }
 
 impl TraitHeader {
@@ -231,6 +235,14 @@ impl TraitHeader {
     #[must_use]
     pub fn defaults(&self) -> &[Option<Type>] {
         &self.defaults
+    }
+    /// The callable a program's function or closure fills the trait as,
+    /// when the crate implements the trait for every callable of one
+    /// signature, as iced's `Highlighter` for `Fn(Input, &Theme) ->
+    /// Style`.
+    #[must_use]
+    pub const fn call(&self) -> Option<&Type> {
+        self.call.as_ref()
     }
 }
 
@@ -1882,11 +1894,30 @@ impl Plan {
                 else {
                     continue;
                 };
+                // `Type::Callable` takes its inputs as one: unit, the one
+                // input, or their tuple.
+                let call = header.call.as_ref().and_then(|(inputs, output)| {
+                    let input = match &inputs[..] {
+                        [] => Type::Unit,
+                        [single] => ty(single, &header.parameters).ok()?,
+                        many => Type::Tuple(
+                            many.iter()
+                                .map(|input| ty(input, &header.parameters))
+                                .collect::<Result<Box<[_]>, _>>()
+                                .ok()?,
+                        ),
+                    };
+                    Some(Type::Callable {
+                        input: Box::new(input),
+                        output: Box::new(ty(output, &header.parameters).ok()?),
+                    })
+                });
                 converted.push(TraitHeader {
                     path: header.path,
                     identity: header.identity,
                     parameters: parameters(&header.parameters)?,
                     defaults,
+                    call,
                 });
             }
             facade.trait_headers = converted.into_boxed_slice();
