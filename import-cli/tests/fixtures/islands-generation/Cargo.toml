@@ -1,0 +1,13 @@
+[package]
+name = "islands-generation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The test names Rawr's checkout by its full path once it copies this.
+rawr-hot = { path = "../../../../hot" }
+winit = "0.30"
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

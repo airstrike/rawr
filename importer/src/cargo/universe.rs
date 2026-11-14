@@ -2560,12 +2560,16 @@ fn normalized_path_len(
             })?;
         ("$PACKAGE/".len() + 64, relative)
     };
+    // A relative path is as the manifest wrote it, so it may climb out of
+    // its package, as a workspace member's `readme = "../README.md"` does.
+    let climbs = path.is_relative();
     relative
         .components()
         .try_fold(label_bytes, |bytes, component| {
             let component = match component {
                 std::path::Component::Normal(component) => component,
                 std::path::Component::CurDir => return Ok(bytes),
+                std::path::Component::ParentDir if climbs => std::ffi::OsStr::new(".."),
                 std::path::Component::Prefix(_)
                 | std::path::Component::RootDir
                 | std::path::Component::ParentDir => {
@@ -2623,10 +2627,12 @@ fn normalized_path_bytes(
             normalized.extend_from_slice(&key_token_bytes(&package.key));
         }
     }
+    let climbs = path.is_relative();
     for component in relative.components() {
         let component = match component {
             std::path::Component::Normal(component) => component,
             std::path::Component::CurDir => continue,
+            std::path::Component::ParentDir if climbs => std::ffi::OsStr::new(".."),
             std::path::Component::Prefix(_)
             | std::path::Component::RootDir
             | std::path::Component::ParentDir => {
@@ -4187,6 +4193,32 @@ mod tests {
         assert_eq!(short.as_str(), Some(expected.as_str()));
         assert_eq!(growing.full_usage(), short_ownership.usage());
         assert_eq!(growing.full_usage().2, 64);
+    }
+
+    #[test]
+    fn a_relative_manifest_path_may_climb_out_of_its_package_and_an_absolute_one_may_not() {
+        let package = super::ProtectedPackage {
+            key: super::Key {
+                name: "fixture".into(),
+                version: "1.0.0".into(),
+                source: "".into(),
+            },
+            root: std::path::PathBuf::from("/fixture/package").into(),
+        };
+        let packages = std::collections::BTreeMap::from([(
+            std::sync::Arc::<str>::from("fixture"),
+            package.clone(),
+        )]);
+        let readme = "../README.md";
+        let length = super::normalized_path_len(readme, &package, &packages)
+            .expect("a workspace member's readme climbs to the workspace's");
+        let normalized = super::normalized_path_bytes(readme, &package, &packages, length)
+            .expect("its bytes are the length it measured");
+        assert_eq!(normalized, b"$SELF/../README.md");
+        assert!(
+            super::normalized_path_len("/fixture/package/../README.md", &package, &packages)
+                .is_err()
+        );
     }
 
     #[test]

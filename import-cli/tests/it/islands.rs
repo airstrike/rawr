@@ -673,6 +673,69 @@ fn an_idle_event_loop_takes_a_save_its_frames_do_not_call_into() {
     assert!(!seen.contains("restarting"), "{seen}");
 }
 
+/// A program that keeps its view, as an iced app does, builds it again
+/// when `rawr_hot` says it took a new generation (#1903): a save of code
+/// only the view calls shows with no input. Under cargo the program builds
+/// and draws the view it built first, and is never told.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_kept_view_is_built_again_when_rawr_hot_says_a_generation_was_taken() {
+    use std::io::BufRead as _;
+
+    const GENERATION: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-generation"
+    );
+    let hot = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("import-cli is in Rawr's checkout")
+        .join("hot");
+    let root = crate::support::fresh("islands-generation");
+    let events = root.join("events.jsonl");
+    copy(Path::new(GENERATION), &root);
+    edit(
+        &root.join("Cargo.toml"),
+        "path = \"../../../../hot\"",
+        &format!("path = {:?}", hot.display().to_string()),
+    );
+
+    let built = std::process::Command::new("cargo")
+        .args(["build", "--quiet"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let mut native = std::process::Command::new(root.join("target/debug/islands-generation"))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    std::io::BufReader::new(native.stdout.take().expect("piped stdout"))
+        .read_line(&mut first)
+        .unwrap();
+    let _ = native.kill();
+    let _ = native.wait();
+    assert_eq!(first, "shade 1\n");
+
+    let mut run = start(&root, &[("RAWR_MCP_EVENTS", events.clone())]);
+    run.until(|line| line == "shade 1");
+    edit(
+        &root.join("src/scene.rs"),
+        "const SHADE: i64 = 1;",
+        "const SHADE: i64 = 2;",
+    );
+    run.told(&events, |text| text.contains("\"swapped\""));
+    run.until(|line| line == "shade 2");
+    let seen = run.seen.join("\n");
+    assert!(!seen.contains("restarting"), "{seen}");
+}
+
 /// winit's event loop must run on the process's main thread, so a native
 /// `main` runs there, and so does the marked code it calls (#1119). A
 /// marked function gives back a `Result` of types that cross, and an alias

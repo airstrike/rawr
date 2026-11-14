@@ -105,11 +105,36 @@ impl Counter {
 <h3 id="iced-reload">What reloads</h3>
 <ul>
   <li>A save applies at the next message with the state kept.</li>
-  <li>iced builds the view again when a message arrives. Until then, the window shows the last view.</li>
+  <li>iced builds the view again when a message arrives. Until then, the window shows the last view. <a href="#iced-generations">Show a view edit at once</a> turns each save into a message.</li>
   <li>A struct or enum with new fields or variants restarts the app because iced may hold a value of the old shape.</li>
   <li>An edit to <code>main</code> restarts the app because <code>main</code> runs only once.</li>
   <li>An edit to a native file or <code>Cargo.toml</code> rebuilds it with Cargo and restarts the app.</li>
 </ul>
+
+<h3 id="iced-generations">Show a view edit at once</h3>
+<p>iced calls <code>view</code> only after a message. A save of code that only <code>view</code> calls shows at your next input. The <code>rawr-hot</code> crate tells the app each time it takes a save, and a subscription turns that into a message.</p>
+<div class="block"><pre><code data-lang="toml">rawr-hot = { git = "https://github.com/airstrike/rawr" }</code></pre></div>
+<div class="block">
+  <div class="file"><b>src/main.rs</b><span>shortened</span></div>
+  <pre><code data-lang="rust">enum Message {
+    // ...
+    Reloaded,
+}
+
+fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
+    match message {
+        // ...
+        Message::Reloaded =&gt; Task::none(),
+    }
+}
+
+fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
+    Subscription::run(rawr_hot::generations).map(|_| Message::Reloaded)
+}</code></pre>
+</div>
+<p><code>Message::Reloaded</code> changes no state. iced builds the view again after it, and the new view runs the saved code.</p>
+<p><code>rawr_hot::generations()</code> is a stream of numbers. Each number counts the saves the app has taken, from 1. Under <code>rawr run</code> it yields on the app&rsquo;s main thread right after the save is swapped in. Under <code>cargo run</code> it never yields, and the app behaves as it does without the crate. A release build carries the crate but never hears from it.</p>
+<p>A library that is not async takes a callback instead. <code>rawr_hot::on_generation(|generation| ..)</code> calls it on the main thread after each save. Under <code>cargo run</code> it is never called. A winit app can send itself an event from the callback through its <code>EventLoopProxy</code>.</p>
 
 <h3 id="iced-limits">Limits</h3>
 <p>iced&rsquo;s <code>counter</code>, <code>checkbox</code>, <code>slider</code>, <code>tooltip</code>, <code>pick_list</code> and <code>url_handler</code> examples run unchanged but for the <code>// rawr</code> line. Each shows the title, the theme and the widgets that <code>cargo run</code> gives it.</p>

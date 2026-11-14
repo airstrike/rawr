@@ -1,0 +1,18 @@
+[package]
+name = "rawr-hot"
+version = "0.3.212"
+rust-version = "1.95.0"
+edition = "2024"
+description = "Tells a program `rawr run` runs when it takes a new generation of its marked code; under cargo it never does"
+repository = "https://github.com/airstrike/rawr"
+readme = "../README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["rawr", "hot-reload", "iced"]
+categories = ["development-tools"]
+
+[lib]
+name = "rawr_hot"
+
+[dependencies]
+futures-core = { version = "0.3.31", default-features = false }
+futures-channel = { version = "0.3.31", default-features = false, features = ["std"] }

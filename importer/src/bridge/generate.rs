@@ -5241,6 +5241,7 @@ mod __rawr_profile {
         }
         ADMITTED.set(Some(program));
         super::admitted();
+        __rawr_internal::hot::taken();
         Ok(())
     }
 
@@ -6144,6 +6145,7 @@ fn admitted() {
 #[cfg(unix)]
 pub(super) fn main() {
     __rawr_internal::process::unblock_signals();
+    __rawr_internal::hot::publish();
     owner::main()
 }
 
