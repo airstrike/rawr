@@ -1589,6 +1589,15 @@ impl<'a> Parser<'a> {
         arguments
     }
 
+    /// The `)` that closes a call's arguments after the last is read, past
+    /// the trailing comma Rust allows there (`v.get(\n index + 1,\n)`).
+    pub(super) fn close_arguments(&mut self, expected: &str) -> Result<Position, Error> {
+        if matches!(self.peek(), Token::Comma) && matches!(self.peek_second(), Token::RightParen) {
+            self.next();
+        }
+        self.expect(Token::RightParen, expected)
+    }
+
     pub(super) fn parse_call_arguments(
         &mut self,
         context: &str,

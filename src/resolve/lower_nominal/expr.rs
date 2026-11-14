@@ -1323,6 +1323,11 @@ impl<'a> Parser<'a> {
             }
             return self.parse_mem_call(function, name_span);
         }
+        // `std::convert::identity(x)`, and a std function named as a value,
+        // as `.on_link_click(std::convert::identity)`.
+        if let Some(function) = self.std_function(&name, name_span) {
+            return self.parse_std_function(function);
+        }
         // `Reverse(x)`, `std::cmp::Reverse(x)`.
         if self.reverse_path(&name) {
             return self.parse_reverse(name_span);

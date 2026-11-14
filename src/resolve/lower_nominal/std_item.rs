@@ -208,6 +208,110 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// The std free function the path ahead from its first segment `name`
+    /// names, by its path, through a `use` (`identity` after `use
+    /// std::convert::identity;`) or from std's prelude, when rawr runs it
+    /// here: called, one whose body rawr has (`Body`); named as a
+    /// value, any one the facade doesn't bind, which is the closure that
+    /// calls it, as a fn item coerces to one. `None` for a name the program
+    /// binds, a turbofish, or any other path.
+    #[inline(never)]
+    pub(super) fn std_function(&self, name: &str, name_span: Span) -> Option<StdFunction> {
+        if self.bindings.contains_key(name)
+            || self.generics.contains_key(name)
+            || self.models.get(name).is_some()
+            || self.models.function(name).is_some()
+        {
+            return None;
+        }
+        let (written, reference, next) = self.peek_path(name, name_span);
+        let called = matches!(next, Some(Token::LeftParen | Token::Unit));
+        if matches!(next, Some(Token::DoubleColon)) {
+            return None;
+        }
+        let binding = self.models.import(name);
+        if binding.is_some_and(|binding| {
+            !crate::std_table::is_root(binding.qualified.split("::").next().unwrap_or_default())
+        }) {
+            return None;
+        }
+        let qualified = crate::resolve::std_path::qualified(
+            &written,
+            binding.map(|binding| binding.qualified.as_str()),
+        )?;
+        let segments = qualified.split("::").collect::<Vec<_>>();
+        let crate::std_table::Resolved::Path(path) =
+            crate::std_table::resolve(&segments, crate::std_table::Namespace::Value).ok()?
+        else {
+            return None;
+        };
+        if path.kind != "fn" || path.stability != crate::std_table::Stability::Stable {
+            return None;
+        }
+        let use_ = if called {
+            Use::Call(Body::of(path.definition)?)
+        } else {
+            let facade = crate::resolve::std_reexport(&qualified, &self.models.host);
+            self.models
+                .host
+                .entry(&facade)
+                .is_none()
+                .then_some(Use::Value)?
+        };
+        let declaration = crate::std_table::item(path.definition)?.declaration();
+        let inputs =
+            crate::std_table::split_list(crate::std_table::Declared::parse(declaration)?.inputs)
+                .into_iter()
+                .filter(|input| !input.trim().is_empty())
+                .count();
+        Some(StdFunction {
+            skip: 2 * (written.split("::").count() - 1),
+            written,
+            reference,
+            use_,
+            inputs,
+        })
+    }
+
+    /// The std function `function` names from its first segment, which is
+    /// read: its call, or the closure that calls it (`std_function`).
+    pub(super) fn parse_std_function(
+        &mut self,
+        function: StdFunction,
+    ) -> Result<ParsedExpr, Error> {
+        for _ in 0..function.skip {
+            self.next();
+        }
+        let Use::Call(body) = function.use_ else {
+            return self.function_value_closure(
+                &function.written,
+                function.inputs,
+                None,
+                function.reference,
+            );
+        };
+        let (arguments, end) =
+            self.parse_call_arguments(&format!("`{}` arguments", function.written))?;
+        let call = span(function.reference.start(), end);
+        match body {
+            // `fn identity<T>(x: T) -> T { x }`, as core writes it.
+            Body::Identity => {
+                let [mut value] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|arguments| {
+                    Error::argument_count(
+                        crate::resolve::Callee::Function,
+                        function.written.clone(),
+                        1,
+                        arguments.len(),
+                        call,
+                    )
+                })?;
+                self.move_local(&mut value)?;
+                let ty = self.inference.resolve(&value.ty);
+                Ok(self.operator_expr(value.rendered_source(), ty, call))
+            }
+        }
+    }
+
     /// A call of `std::mem`'s `swap`, `replace` or `take` at `name`, by
     /// its path (`std::mem::swap`, `mem::swap`) or imported (`swap`): the
     /// function and the tokens before its name.
@@ -650,5 +754,44 @@ impl<'a> Parser<'a> {
             return Some(format!("{name}::{variant}").into());
         }
         Some(std)
+    }
+}
+
+/// A std free function a path names, which rawr runs there
+/// (`Parser::std_function`).
+pub(super) struct StdFunction {
+    /// The path as the program writes it.
+    written: String,
+    /// The tokens after its first segment up to its last.
+    skip: usize,
+    reference: Span,
+    use_: Use,
+    /// How many inputs std declares it with.
+    inputs: usize,
+}
+
+/// How a path uses a std function rawr runs.
+enum Use {
+    /// Called, with the body rawr runs for it.
+    Call(Body),
+    /// Named as a value: the closure that calls it.
+    Value,
+}
+
+/// A std function whose call rawr runs from its own body
+/// (`Parser::parse_std_function`).
+#[derive(Clone, Copy)]
+enum Body {
+    /// `core::convert::identity`.
+    Identity,
+}
+
+impl Body {
+    /// The body of the std function `definition`, when rawr has it.
+    fn of(definition: &str) -> Option<Self> {
+        match definition {
+            "core::convert::identity" => Some(Self::Identity),
+            _ => None,
+        }
     }
 }
