@@ -2403,7 +2403,7 @@ impl<'a> Parser<'a> {
         if member.as_str() == "drain" {
             let open = self.expect(Token::LeftParen, "'(' after `drain`")?;
             let bounds = self.parse_range_or_expr()?;
-            let end = self.expect(Token::RightParen, "')' after `drain`'s range")?;
+            let end = self.close_arguments("')' after `drain`'s range")?;
             self.range_operand(open, end);
             let Err((low, high, inclusive)) = bounds else {
                 return Err(self.unsupported("`drain` of something other than a range"));
@@ -2429,7 +2429,7 @@ impl<'a> Parser<'a> {
         if kind == sequence::Kind::Deque && member.as_str() == "range" {
             let open = self.expect(Token::LeftParen, "'(' after `range`")?;
             let bounds = self.parse_range_or_expr()?;
-            let end = self.expect(Token::RightParen, "')' after `range`'s range")?;
+            let end = self.close_arguments("')' after `range`'s range")?;
             self.range_operand(open, end);
             let Err((low, high, inclusive)) = bounds else {
                 return Err(self.unsupported("`range` of something other than a range"));
@@ -2507,7 +2507,7 @@ impl<'a> Parser<'a> {
         {
             self.next();
             let bounds = self.parse_range_or_expr()?;
-            let end = self.expect(Token::RightParen, "')' after call arguments")?;
+            let end = self.close_arguments("')' after call arguments")?;
             let operands: Vec<_> = match &bounds {
                 Ok(index) => vec![self.argument_fact(index)],
                 Err((low, high, _)) => low

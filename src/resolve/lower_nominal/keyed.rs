@@ -472,7 +472,7 @@ impl Parser<'_> {
         if matches!(kind, Keyed::BTreeMap | Keyed::BTreeSet) && member.as_str() == "range" {
             self.expect(Token::LeftParen, "'(' after `range`")?;
             let bounds = self.parse_range_or_expr()?;
-            let end = self.expect(Token::RightParen, "')' after `range`'s range")?;
+            let end = self.close_arguments("')' after `range`'s range")?;
             let Err((low, high, inclusive)) = bounds else {
                 return Err(self.unsupported("`range` of something other than a range"));
             };

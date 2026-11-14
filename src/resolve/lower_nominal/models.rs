@@ -1406,6 +1406,31 @@ impl Models {
         })
     }
 
+    /// Every import in scope at the lowering's place in this source: the
+    /// module's `use`s and those of each block around it, as rustc puts a
+    /// trait a function's `use itertools::Itertools;` names in scope for
+    /// that function's method calls.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn imports_in_scope(&self) -> impl Iterator<Item = &crate::resolve::item::Binding> {
+        let context = self.context;
+        let module = self
+            .imports
+            .range((context, ImmutableString::new())..)
+            .take_while(move |((source, _), _)| *source == context)
+            .filter(|((_, name), _)| self.in_scope(name, self.at))
+            .map(|(_, binding)| binding);
+        let blocks = self
+            .block_imports
+            .range((context, ImmutableString::new())..)
+            .take_while(move |((source, _), _)| *source == context)
+            .flat_map(|(_, bound)| bound)
+            .filter(|(block, _)| {
+                !self.at.is_none() && crate::resolve::block::contains(*block, self.at)
+            })
+            .map(|(_, binding)| binding);
+        module.chain(blocks)
+    }
+
     pub(super) fn for_source(&self, source: crate::program::source::Id) -> Self {
         let mut models = self.clone();
         models.context = source;

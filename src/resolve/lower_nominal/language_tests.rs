@@ -917,6 +917,51 @@ fn language_iter_once_and_empty() {
 }
 
 #[test]
+fn language_std_function_named_as_a_value() {
+    // `std::convert::identity` called, and a std function named as a value
+    // is the closure that calls it, as iced's tour passes
+    // `std::convert::identity` to `on_link_click` (#1944).
+    let value = run(r#"
+        use std::convert::identity;
+        fn apply(f: impl Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+        pub fn run() -> i64 {
+            let text = String::from("ab");
+            let moved = std::convert::identity(text);
+            let mapped: Vec<i64> = vec![1, 2, 3].into_iter().map(identity).collect();
+            let ones: Vec<i64> = std::iter::once(4).map(std::convert::identity).collect();
+            apply(std::convert::identity, 7) * 1000
+                + mapped.iter().sum::<i64>() * 100
+                + ones[0] * 10
+                + moved.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 7000 + 600 + 40 + 2);
+    let error = rejected("pub fn run() -> i64 { std::convert::identity(1, 2) } run()");
+    assert!(error.contains("takes 1 argument"), "{error}");
+}
+
+#[test]
+fn language_trailing_comma_after_a_one_argument_call() {
+    // iced's tour: `Self::ALL.get(position + 1,)`, as rustfmt writes a long
+    // argument, and `drain`'s range.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let all = [10, 20, 30];
+            let mut v = vec![1, 2, 3];
+            let drained: Vec<i64> = v.drain(
+                0..2,
+            ).collect();
+            *all.get(
+                all.iter().position(|x| *x == 10).expect("there") + 1,
+            ).unwrap() + drained.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 22);
+}
+
+#[test]
 fn language_std_time_in_plain_programs() {
     // `std::time::Duration` and `Instant` without iced: Rust's values, with
     // their constructors, readers and operators.

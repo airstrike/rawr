@@ -1421,14 +1421,10 @@ impl<'a> Parser<'a> {
     /// rustc selects the one whose impl holds for the receiver.
     #[cfg(feature = "rust-import")]
     pub(super) fn scoped_trait_members(&self, member: &str) -> Vec<String> {
-        let context = self.models.context;
         self.models
-            .imports
-            .iter()
-            .filter(|((source, _), binding)| {
-                *source == context && matches!(binding.target, item::Import::Module)
-            })
-            .map(|(_, binding)| rawr_import::surface::member::path(&binding.qualified, member))
+            .imports_in_scope()
+            .filter(|binding| matches!(binding.target, item::Import::Module))
+            .map(|binding| rawr_import::surface::member::path(&binding.qualified, member))
             .filter(|path| self.models.host_items(path).is_some())
             .collect()
     }
@@ -1441,16 +1437,10 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "rust-import")]
     pub(super) fn scoped_scalar_member(&self, ty: &Ty, member: &str) -> Option<String> {
         let scalar = scalar_name(&self.inference.resolve(ty))?;
-        let context = self.models.context;
         self.models
-            .imports
-            .iter()
-            .filter(|((source, _), binding)| {
-                *source == context && matches!(binding.target, item::Import::Module)
-            })
-            .map(|(_, binding)| {
-                rawr_import::surface::scalar::path(&binding.qualified, scalar, member)
-            })
+            .imports_in_scope()
+            .filter(|binding| matches!(binding.target, item::Import::Module))
+            .map(|binding| rawr_import::surface::scalar::path(&binding.qualified, scalar, member))
             .find(|path| self.models.host_items(path).is_some())
     }
 
