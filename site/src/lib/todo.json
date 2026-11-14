@@ -3,9 +3,9 @@
   "updated": "2026-11-14",
   "version": "0.3.213",
   "examples": {
-    "running": 34,
+    "running": 22,
     "total": 56,
-    "note": "0.3.160 sweep plus the_matrix, lazy, progress_bar, pane_grid and loupe: 34 run. Checked headless since, not yet in a window: modal builds and runs (#955). component builds and runs its view (#1075). pokedex runs its search path as cargo does (#1018). download_progress runs its downloads as cargo does (#314). bezier_tool and counter match cargo through iced_test (#990, #1680). gallery, screenshot and todos pass check (#1706, #1709)."
+    "note": "Driven over rawr mcp against cargo, 0.3.213, 2026-11-14: 22 match cargo click for click. 15 more start but weren't compared (the session locked): sandpiles, sierpinski_triangle, slider, solar_system, stopwatch, styling, svg, system_information, table, text, the_matrix, toast, tooltip, url_handler, vectorial_text. exit and ferris differ (#1946, #1945). 17 fail (#1559, #1560, #28, #726, #610, #801, #1931-#1944)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -4261,7 +4261,24 @@
     {"issue":1927,"title":"A `Mutex`'s `lock().unwrap_or_else(PoisonError::into_inner)`, `is_poisoned`, `clear_poison` and…","state":"closed","category":"Divergences from rustc"},
     {"issue":1928,"title":"Errors print as rustc and cargo print theirs: rawr's diagnostics use rustc's layout, with the…","state":"closed","category":"Health"},
     {"issue":1929,"title":"A rawr-import panic on a broken invariant prints as a bare thread panic, not as rustc's internal compiler error","state":"open","category":"Health"},
-    {"issue":1930,"title":"Runtime errors and island refusals print through Display, uncoloured and hand-formatted","state":"open","category":"Health"}
+    {"issue":1930,"title":"Runtime errors and island refusals print through Display, uncoloured and hand-formatted","state":"open","category":"Health"},
+    {"issue":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"open","category":"No glue (D593)"},
+    {"issue":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"open","category":"No glue (D593)"},
+    {"issue":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open","category":"No glue (D593)"},
+    {"issue":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open","category":"No glue (D593)"},
+    {"issue":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"open","category":"No glue (D593)"},
+    {"issue":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"open","category":"No glue (D593)"},
+    {"issue":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"open","category":"No glue (D593)"},
+    {"issue":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open","category":"No glue (D593)"},
+    {"issue":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"open","category":"No glue (D593)"},
+    {"issue":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"open","category":"No glue (D593)"},
+    {"issue":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"open","category":"No glue (D593)"},
+    {"issue":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"open","category":"No glue (D593)"},
+    {"issue":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"open","category":"No glue (D593)"},
+    {"issue":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"open","category":"No glue (D593)"},
+    {"issue":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"open","category":"No glue (D593)"},
+    {"issue":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open","category":"No glue (D593)"},
+    {"issue":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4883,7 +4900,24 @@
             {"number":1717,"title":"#[derive(Default)] on a marked struct with &'a str and Vec<Element<'a, Message>> fields is refused","state":"open"},
             {"number":1719,"title":"A program impl Into<f32> can't take a crate type whose From<Turn> for f32 the crate implements (E0277)","state":"open"},
             {"number":1720,"title":"let p = path; p.into() inside an impl Into<PathBuf> instance gets no target (E0282)","state":"open"},
-            {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open"}
+            {"number":1765,"title":"thread_local! in a marked file is refused as a top-level executable statement","state":"open"},
+            {"number":1931,"title":"color_palette: the generated palette adapter reads Rgb/Hsl's `standard: PhantomData<S>` field as `()` (E0308)","state":"open"},
+            {"number":1932,"title":"custom_shader: a native module can't use the marked root's re-export `crate::wgpu` (RAWR-RESOLVE-MODULE-GRAPH)","state":"open"},
+            {"number":1933,"title":"delineate: start fails with 'a read-set action is absent from the installation registry', with no location","state":"open"},
+            {"number":1934,"title":"Two projects with native modules in one target dir share target/rawr/crate, so one regenerates the other's","state":"open"},
+            {"number":1935,"title":"A leading `::crate_name` path to a direct dependency (gallery's `::image::load_from_memory`) is E0433","state":"open"},
+            {"number":1936,"title":"A trait method through a fn-local `use itertools::Itertools;` (game_of_life's cartesian_product) is E0599","state":"open"},
+            {"number":1937,"title":"A crate fn with an elided lifetime in `Option<&Surface<'_>>` is refused as an unsupported generic argument (integration)","state":"open"},
+            {"number":1938,"title":"pokedex: #[derive(Deserialize)] on structs declared inside an async fn body can't see them (E0425 `Entry`)","state":"open"},
+            {"number":1939,"title":"image(&Handle) instantiates Image<&Handle> instead of converting through Into<Handle> (E0271, screenshot)","state":"open"},
+            {"number":1940,"title":"The runner's mirror of a marked enum drops its Copy and Eq derives, so radio::<_, Direction> fails (scrollable)","state":"open"},
+            {"number":1941,"title":"A float tuple literal passed as impl Into<Size> is (f64, f64), not (f32, f32) (todos' window_size)","state":"open"},
+            {"number":1942,"title":"A crate method returning &Path (ProjectDirs::data_dir) fails the generated adapter's Sized bound (todos)","state":"open"},
+            {"number":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"open"},
+            {"number":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"open"},
+            {"number":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"open"},
+            {"number":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open"},
+            {"number":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"open"}
           ],
           "milestone": "0.3"
         },
