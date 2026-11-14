@@ -16485,9 +16485,13 @@ fn render_guard(
     // `&'static` to the method, whose borrow of it lasts as long: the
     // output is a place where the method gave it, as tracing's
     // `__CALLSITE.metadata()` gives `&'static Metadata<'static>` (#1602).
+    // One of std's held types is no such place: rawr holds its value, and
+    // its borrowed form may be unsized, as `ProjectDirs::data_dir(&self)
+    // -> &Path` gives (#1942).
     let shared = matches!(guard, Guard::Shared)
         && matches!(receiver, Receiver::Shared)
-        && signature.inputs().is_empty();
+        && signature.inputs().is_empty()
+        && std_value(&target).is_none();
     if shared {
         let mut container = Vec::new();
         render_container_path(
@@ -19533,6 +19537,12 @@ fn leases_whole(ty: &convert::Type) -> bool {
     }
 }
 
+/// Whether `ty` is a slice of scalars, as `[u8]`.
+fn scalar_slice(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Sequence { element, length: None, .. }
+        if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some()))
+}
+
 /// Whether `ty` holds a borrow: a `&T`, `&mut T` or `&str`, alone or in an
 /// `Option`, a `Result` or a tuple.
 fn holds_borrow(ty: &convert::Type) -> bool {
@@ -19571,6 +19581,12 @@ fn future_borrows(
         // A `&str` a type parameter takes is pinned, as a `&'static str`
         // is (`render_take_input`): the future copies the reference.
         if *lent == convert::Type::Builtin(convert::Builtin::Str) {
+            continue;
+        }
+        // So is a slice of scalars a type parameter takes, as `&[u8]` fills
+        // tokio's `fs::write(path, contents: impl AsRef<[u8]>)` (`render_take`,
+        // #1943).
+        if matches!(ty, convert::Type::Parameter(_)) && scalar_slice(&lent) {
             continue;
         }
         if !mutable && is_made_for_call(&lent) {
@@ -20386,9 +20402,7 @@ fn render_take(
         convert::Type::Borrowed {
             mutable: false,
             ty: lent,
-        } if matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
-                if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some())) =>
-        {
+        } if scalar_slice(lent) => {
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
             return writeln!(

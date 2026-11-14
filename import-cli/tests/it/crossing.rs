@@ -1574,6 +1574,21 @@ fn a_literal_lent_for_the_program_lives_as_long_as_it() {
     );
 }
 
+/// Literals passed as `impl Into<T>` take the type rustc infers from `T`'s
+/// `From` impls. iced's `.id(SCROLLABLE)` and `operation::focus("new-task")`
+/// pass a literal or a `&'static str` const as `impl Into<Tag>`, whose
+/// `From` impl for a string is at `'static`: the string is pinned for the
+/// program, by a method and by a function, as rustc's `'static` literal is
+/// (#726). iced's `window_size((500.0, 800.0))` passes a float pair as
+/// `impl Into<Size>`, whose `impl<T> From<(T, T)> for Size<T>` makes it
+/// `(f32, f32)` (#1941). The output is `cargo run`'s.
+#[test]
+fn a_literal_passed_as_impl_into_takes_the_type_rustc_infers() {
+    let (rawr, cargo) = both_printed("tagged.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "tasks #list | owned #kept\n8 4\n10 15");
+}
+
 /// A local `String` borrowed where only a `&'static str` goes is rustc's
 /// E0597 at the borrow: by a `&'static str` input, and by a type
 /// parameter whose trait is implemented for `&'static str` (#667).

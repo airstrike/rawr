@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 179;
+const CLASSIFIER_VERSION: u32 = 181;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -3184,7 +3184,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 // Core's `Into` by its path, so the check rejects an
                 // argument none of the cases takes as rustc does (#1891).
-                let (cases, exhaustive) = self.conversion_cases(target)?;
+                let written = match arguments.first() {
+                    Some(model::Argument::Type(written)) => Some(written),
+                    _ => None,
+                };
+                let (cases, exhaustive) = self.conversion_cases(target, written)?;
                 if !cases.is_empty() {
                     self.retain_array::<Case>(cases.len())?;
                     let relation = Relation::new(*index, converted, cases)
@@ -3390,10 +3394,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// inferred. An implementation for `target` whose `S` is generic, as
     /// ratatui's `impl<T: Into<Cow<str>>> From<T> for Line`, or one Rawr
     /// can't name, or one for `target`'s type at other arguments, is no
-    /// case, and the cases are then not every one.
+    /// case, and the cases are then not every one. An implementation for
+    /// `target`'s type at its own parameters, as iced's `impl<T> From<(T,
+    /// T)> for Size<T>`, is a case at `target`'s arguments (`written`, as
+    /// rustc writes it), so `(500.0, 800.0)` passed as `impl Into<Size>` is
+    /// `(f32, f32)` (#1941).
     fn conversion_cases(
         &self,
         target: &representability::convert::Type,
+        written: Option<&model::Type>,
     ) -> Result<(Box<[representability::signature::Case]>, bool), Failure> {
         use representability::signature::Case;
         let mut cases = Vec::<Case>::new();
@@ -3414,16 +3423,34 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 continue;
             }
-            match self.convert(implementation.self_type()) {
-                Ok(this) if this == *target => {}
+            let mut fixed = Vec::new();
+            let instantiated;
+            let source = match self.convert(implementation.self_type()) {
+                Ok(this) if this == *target => source,
                 Ok(representability::convert::Type::Nominal { definition, .. })
                     if Some(&definition) == target_definition =>
                 {
-                    exhaustive = false;
-                    continue;
+                    let matched = written.is_some_and(|written| {
+                        match_self_type(
+                            implementation.self_type(),
+                            written,
+                            implementation.id(),
+                            &mut fixed,
+                        )
+                    });
+                    if !matched {
+                        exhaustive = false;
+                        continue;
+                    }
+                    let substitutions: Vec<((api::identity::Definition, u32), model::Type)> = fixed
+                        .into_iter()
+                        .map(|(index, ty)| ((implementation.id().clone(), index), ty))
+                        .collect();
+                    instantiated = substitute_parameters(source, &substitutions);
+                    &instantiated
                 }
                 _ => continue,
-            }
+            };
             // A tuple, as `(u8, u8, u8)`, is a value Rawr holds, and so is
             // an array of a known length, as `Padding`'s `From<[u16; 2]>`
             // takes.
@@ -11041,7 +11068,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// implemented for `&'static str`, as iced's `Title<State>` is, or one
     /// names `'static` in its arguments, as iced's `Preset::new(name: impl
     /// Into<Cow<'static, str>>)` does, whose `From<&'a str> for Cow<'a,
-    /// str>` asks the string for `'static` (#1050). A trait has at most one
+    /// str>` asks the string for `'static` (#1050), or it is `Into<U>` of a
+    /// `U` whose `From<&'static str>` the string selects, as iced's
+    /// `.id(impl Into<Id>)` is (#726). A trait has at most one
     /// impl for a string reference, since two would overlap, so that impl
     /// is the one a `&str` argument selects.
     fn static_str_parameter(&self, generics: &model::Generics, index: u32) -> bool {
@@ -11077,6 +11106,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 return false;
             };
             arguments.iter().any(argument_names_static)
+                || self.converts_from_static_str(trait_id, arguments)
                 || self
                     .graph
                     .implementations_of(trait_id)
@@ -11091,6 +11121,44 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                             )
                             && is_str_reference(implementation.self_type())
                     })
+        })
+    }
+
+    /// Whether the bound `Into<U>` (`trait_id` of `arguments`) holds for a
+    /// `&str` only at `'static`: `U`'s `From` impl for a string reference
+    /// is at `'static`, as iced's `impl From<&'static str> for Id` and
+    /// `for Font` are, so a literal passed to `.id(impl Into<Id>)` is
+    /// `&'static str`, as rustc reads it. The blanket `Into` impl is
+    /// `From`'s, so `From`'s impls are the ones a `&str` argument selects.
+    fn converts_from_static_str(
+        &self,
+        trait_id: &api::identity::Definition,
+        arguments: &[model::Argument],
+    ) -> bool {
+        let [model::Argument::Type(model::Type::Definition { id: target, .. })] = arguments else {
+            return false;
+        };
+        if !self.is_core_trait(trait_id, "Into") {
+            return false;
+        }
+        self.core_implementations("From").any(|implementation| {
+            let model::Trait::Trait { arguments, .. } = implementation.trait_ref() else {
+                return false;
+            };
+            let [_, model::Argument::Type(source)] = arguments.as_ref() else {
+                return false;
+            };
+            implementation.polarity() == model::Polarity::Positive
+                && matches!(implementation.self_type(),
+                    model::Type::Definition { id, .. } if id == target)
+                && is_str_reference(source)
+                && matches!(
+                    source,
+                    model::Type::Reference {
+                        lifetime: model::Lifetime::Static,
+                        ..
+                    }
+                )
         })
     }
 
