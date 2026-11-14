@@ -211,6 +211,18 @@ fn a_types_impls_that_give_opaque_iterators_by_one_name_import() {
     runs_as_cargo_does("settings", "Setting(3) 4\n");
 }
 
+/// A crate function's opaque iterator that borrows the `&str` it takes, as
+/// iced's `markdown::parse(&str) -> impl Iterator<Item = Item> + '_`
+/// gives, lives beside the string it borrows, so `collect`, `next` and a
+/// `for` loop pull from it as rustc's do (#1966).
+#[test]
+fn an_opaque_iterator_that_borrows_its_text_is_iterated() {
+    runs_as_cargo_does(
+        "parsed",
+        "[Setting(1), Setting(2), Setting(3)]\nSome(Setting(4))\nSetting(6)\nSetting(7)\n",
+    );
+}
+
 /// A type whose method gives an opaque iterator, reached through a module
 /// that re-exports the type's module, as ratatui's
 /// `macros::ratatui_core::text::Line` is, by a program that never calls the

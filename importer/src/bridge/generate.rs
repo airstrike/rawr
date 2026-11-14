@@ -18579,7 +18579,12 @@ fn function_argument_list(
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
             // In the builder of the value that owns them (`LENT_CELL`), a
-            // lent argument is the builder's borrow of it.
+            // kept `&str` is the builder's borrow of its string.
+            _ if LENT_CELL.get() && kept_str(signature, position, ty) => {
+                write!(output, "argument_{position}_owned.as_str()")
+                    .map_err(request::unwritable)?;
+            }
+            // So is a lent argument.
             _ if VIEWED_ARGUMENTS.get()
                 && lent_slice_element(ty, &substituted(ty, signature, substitutions)?)
                     .is_some() =>
@@ -22528,6 +22533,7 @@ struct Owned {
 /// The traits of `returned`, an opaque output of `signature` at
 /// `substitutions`, besides auto traits: each by its identity and path, at
 /// its arguments, with each associated type the bounds bind, as `Item = T`.
+/// With `core_iterator`, core's `Iterator` is one too (`iterator_path`).
 /// `None` when `returned` is no opaque type, or a trait or argument has no
 /// Rust spelling.
 #[allow(clippy::type_complexity)]
@@ -22536,6 +22542,7 @@ fn opaque_traits<'s>(
     substitutions: &[convert::Type],
     returned: &convert::Type,
     trait_path: fn(&[u8; 32]) -> Option<String>,
+    core_iterator: bool,
 ) -> Result<
     Option<(
         &'s crate::classify::representability::signature::Opaque,
@@ -22570,7 +22577,11 @@ fn opaque_traits<'s>(
         else {
             return Ok(None);
         };
-        let Some(path) = trait_path(id.as_bytes()) else {
+        let Some(path) = trait_path(id.as_bytes()).or_else(|| {
+            core_iterator
+                .then(|| iterator_path(opaque, id.as_bytes()))
+                .flatten()
+        }) else {
             return Ok(None);
         };
         let mut written = Vec::new();
@@ -22615,6 +22626,26 @@ fn opaque_traits<'s>(
     Ok(Some((opaque, traits)))
 }
 
+/// `::core::iter::Iterator`, when `identity` is the trait whose `Item` the
+/// opaque type's iterator mark (`Definition::iterator`) names, as iced's
+/// `markdown::parse(..) -> impl Iterator<Item = Item> + '_` binds it:
+/// core's trait, which no facade declares.
+fn iterator_path(
+    opaque: &crate::classify::representability::signature::Opaque,
+    identity: &[u8; 32],
+) -> Option<String> {
+    let mark = *crate::surface::identity::Definition::iterator().as_bytes();
+    let (_, item) = opaque
+        .associated()
+        .iter()
+        .find(|(associated, _)| associated.trait_identity() == mark)?;
+    opaque
+        .associated()
+        .iter()
+        .any(|(associated, position)| position == item && associated.trait_identity() == *identity)
+        .then(|| "::core::iter::Iterator".to_owned())
+}
+
 /// The Rust path of the trait `identity` its root names it by.
 fn root_trait_path(identity: &[u8; 32]) -> Option<String> {
     TYPE_PATHS.with_borrow(|paths| paths.get(identity).cloned())
@@ -22654,7 +22685,8 @@ fn opaque_bounds(
     substitutions: &[convert::Type],
 ) -> Result<Option<String>, request::Error> {
     let returned = substituted(signature.output(), signature, substitutions)?;
-    let Some((_, traits)) = opaque_traits(signature, substitutions, &returned, bound_trait_path)?
+    let Some((_, traits)) =
+        opaque_traits(signature, substitutions, &returned, bound_trait_path, false)?
     else {
         return Ok(None);
     };
@@ -22676,7 +22708,7 @@ fn lent_cell(
     }
     let returned = substituted(signature.output(), signature, substitutions)?;
     let Some((opaque, traits)) =
-        opaque_traits(signature, substitutions, &returned, root_trait_path)?
+        opaque_traits(signature, substitutions, &returned, root_trait_path, true)?
     else {
         return Ok(None);
     };
@@ -22687,8 +22719,13 @@ fn lent_cell(
     let mut owners = Vec::new();
     for (position, declared) in signature.inputs().iter().enumerate() {
         let input = substituted(declared, signature, substitutions)?;
-        let name = format!("argument_{position}");
-        let owner = if let Some(element) = lent_slice_element(declared, &input) {
+        let mut name = format!("argument_{position}");
+        let owner = if kept_str(signature, position, declared) {
+            // The string Rawr gave, which the value owns by its shared
+            // handle: no text is copied.
+            name.push_str("_owned");
+            "ImmutableString".to_owned()
+        } else if let Some(element) = lent_slice_element(declared, &input) {
             let Some(item) = concrete_type(element) else {
                 return Ok(None);
             };
@@ -23098,15 +23135,32 @@ fn views_natives(
     if !borrows {
         return Ok(false);
     }
+    // An opaque value, not a future, may own a `&str` it keeps (`lent_cell`).
+    let owns_strings = matches!(&returned, convert::Type::Nominal { definition, .. }
+        if is_opaque(definition))
+        && !is_future(&returned);
     for (position, declared) in signature.inputs().iter().enumerate() {
         let input = substituted(declared, signature, substitutions)?;
         if (viewed_native(&input).is_some() && keeps_borrow(signature, position, declared))
             || lent_slice_element(declared, &input).is_some()
+            || (owns_strings && kept_str(signature, position, declared))
         {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether the input at `position`, declared `declared`, is a `&str` the
+/// call's output keeps (`Signature::lends`), as iced's `markdown::parse(
+/// &str)` gives an opaque iterator that borrows it.
+fn kept_str(
+    signature: &crate::classify::representability::signature::Signature,
+    position: usize,
+    declared: &convert::Type,
+) -> bool {
+    matches!(declared, convert::Type::Builtin(convert::Builtin::Str))
+        && u32::try_from(position).is_ok_and(|position| signature.lends().contains(&position))
 }
 
 /// Whether the output of a call may keep the borrow its input at

@@ -368,6 +368,13 @@ pub mod form {
     pub fn countdown(from: u32) -> impl Iterator<Item = u32> {
         (1..=from).rev()
     }
+
+    /// A function's opaque iterator that borrows the text it is given, as
+    /// iced's `markdown::parse(&str) -> impl Iterator<Item = Item> + '_`.
+    pub fn settings(text: &str) -> impl Iterator<Item = Setting<u16>> + '_ {
+        text.split(',')
+            .filter_map(|part| part.trim().parse().ok().map(Setting))
+    }
 }
 
 /// Trait impls on a type with a const parameter, as palette's `impl<T>
