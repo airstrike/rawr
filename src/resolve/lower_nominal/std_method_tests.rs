@@ -318,6 +318,84 @@ main();
     );
 }
 
+/// `insert`, `get_or_insert`, `get_or_insert_with` and
+/// `get_or_insert_default` give the place of the payload they leave, which
+/// `*..`, a `&mut self` call and a held `&mut` change, on a local, a field
+/// and an element; the borrow is the receiver's, as rustc checks it (#1001).
+#[test]
+fn an_option_s_inserting_methods_give_the_payload_s_place() {
+    let source = r#"
+use std::time::Instant;
+struct Timer {
+    start: Option<Instant>,
+    hits: Option<Vec<u32>>,
+    n: Option<i32>,
+}
+impl Timer {
+    fn started(&mut self) -> bool {
+        let _ = *self.start.get_or_insert_with(|| Instant::now());
+        self.start.is_some()
+    }
+}
+fn main() {
+    let mut o: Option<i32> = None;
+    *o.get_or_insert_with(|| 3) += 1;
+    *o.get_or_insert_with(|| 100) += 1;
+    println!("{o:?}");
+    let mut p: Option<i32> = Some(1);
+    let r = p.insert(5);
+    *r += 1;
+    *r += 1;
+    println!("{p:?}");
+    let mut q: Option<String> = None;
+    q.get_or_insert_default().push_str("hi");
+    q.get_or_insert(String::from("unused")).push('!');
+    println!("{q:?}");
+    let mut t = Timer { start: None, hits: None, n: None };
+    println!("{}", t.started());
+    t.hits.get_or_insert_with(Vec::new).push(7);
+    t.hits.get_or_insert_with(Vec::new).push(8);
+    *t.n.insert(2) *= 21;
+    println!("{:?} {:?}", t.hits, t.n);
+    let mut all = vec![None, Some(1)];
+    *all[0].get_or_insert(9) += 1;
+    println!("{all:?}");
+    let v = o.insert(10);
+    println!("{v}");
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Some(5)\nSome(7)\nSome(\"hi!\")\ntrue\nSome([7, 8]) Some(42)\n[Some(10), Some(1)]\n10\n"
+    );
+    let report = refused("fn main() { let o: Option<i32> = None; o.insert(1); }\nmain();\n");
+    assert!(report.contains("E0596"), "{report}");
+    let report = refused(
+        "fn main() { let mut o: Option<i32> = None; let r = o.get_or_insert(1); \
+         println!(\"{:?}\", o); *r += 1; }\nmain();\n",
+    );
+    assert!(report.contains("E0502"), "{report}");
+}
+
+/// A `&mut` local held on a place a setup reaches is read by a `format!`
+/// argument written inline, as one written after the string is (#1001).
+#[test]
+fn an_inline_format_argument_reads_a_held_place() {
+    let source = r#"
+fn main() {
+    let mut o: Option<i32> = Some(1);
+    let r = o.as_mut().unwrap();
+    println!("{r}");
+    let mut v = vec![2];
+    let x = v.get_mut(0).unwrap();
+    println!("{x:?}");
+}
+main();
+"#;
+    assert_eq!(printed(source), "1\n2\n");
+}
+
 /// A `Mutex`'s `get_mut()` and `into_inner()`, unwrapped as `lock()` is,
 /// reach its value (#949).
 #[test]

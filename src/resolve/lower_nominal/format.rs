@@ -1057,6 +1057,21 @@ impl<'a> Parser<'a> {
                                         );
                                     }
                                 }
+                                // A `&mut` local held on a place a call or
+                                // a setup reaches (`let r = o.insert(1);`)
+                                // is read as the expression `r` reads it.
+                                if let Some((aliased, Lvalue::Nested(_))) =
+                                    this.aliases.get(name.as_str())
+                                    && *aliased == binding.declaration
+                                {
+                                    let at = expression.start();
+                                    let token = Token::Identifier(Box::new(name.as_str().into()));
+                                    this.splice_tokens(vec![(token, at), (Token::Comma, at)]);
+                                    let captured = this.parse_expr()?;
+                                    this.expect(Token::Comma, "an inline `format!` argument")?;
+                                    arguments.push((Some(name.as_str().into()), captured));
+                                    return Ok(arguments.len() - 1);
+                                }
                                 // The macro borrows the local where it runs.
                                 this.mention(
                                     name.as_str(),
