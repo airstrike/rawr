@@ -2094,7 +2094,8 @@ impl<'a> Parser<'a> {
             Lvalue::Nested(nested) => {
                 let stored = match opened {
                     Some(parts) => parts.store(replacement.rendered_source()),
-                    None => self.store_nested(&nested, replacement.rendered_source()),
+                    None if compound => self.store_nested(&nested, replacement.rendered_source()),
+                    None => self.assign_nested(&nested, replacement.rendered_source()),
                 };
                 source.push(stored);
                 source.push_text(" }");

@@ -516,7 +516,8 @@ impl<'a> Parser<'a> {
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
             Lvalue::Nested(nested) => match opened {
                 Some(parts) => parts.store(replacement.rendered_source()),
-                None => self.store_nested(&nested, replacement.rendered_source()),
+                None if compound => self.store_nested(&nested, replacement.rendered_source()),
+                None => self.assign_nested(&nested, replacement.rendered_source()),
             },
         };
         Ok((rendered, replacement.span))

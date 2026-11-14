@@ -59,8 +59,9 @@ impl<T> MaybeSend for T {}
 pub struct Future(Arc<Mutex<Option<Kind>>>);
 
 enum Kind {
-    /// An async body's step function, not yet started.
-    Script(item::Value),
+    /// An async body's step function, not yet started, and the program
+    /// that made it, as any thread may call it.
+    Script(item::Value, Option<Program>),
     /// A native future, made when first polled.
     Native(Make),
     /// Futures polled together; their outputs in order, as a tuple.
@@ -80,7 +81,7 @@ impl Future {
     /// with `()` it starts, and called with a [`Frame`] it goes on.
     #[must_use]
     pub fn script(step: item::Value) -> Self {
-        Self::of(Kind::Script(step))
+        Self::of(Kind::Script(step, here()))
     }
 
     /// A native future that `make` makes on the thread that first polls it.
@@ -112,6 +113,7 @@ impl Future {
     pub fn into_script(self) -> Script {
         Script {
             poller: Poller::from(&self),
+            away: None,
         }
     }
 
@@ -168,35 +170,43 @@ where
                 }
             };
         }
-        let value = match this.script.poller.poll(cx) {
-            Pending => return Pending,
-            Ready(Ok(value)) => value,
-            Ready(Err(error)) => panic!("{}", message(&error)),
-        };
-        let Some(finish) = this.finish.take() else {
-            panic!("rawr: a future was polled after it ended");
-        };
-        if owns() {
-            return Ready(finish(value));
-        }
-        let output = Arc::new(Mutex::new((None, Some(cx.waker().clone()))));
-        let shared = Arc::downgrade(&output);
-        this.output = Some(output);
-        on_owner(move || {
-            let Some(shared) = shared.upgrade() else {
-                return;
+        let Self {
+            script,
+            finish,
+            output,
+        } = this;
+        // The output is made in the script's arena, as its bodies run.
+        script.polled(|poller| {
+            let value = match poller.poll(cx) {
+                Pending => return Pending,
+                Ready(Ok(value)) => value,
+                Ready(Err(error)) => panic!("{}", message(&error)),
             };
-            let made = finish(value);
-            let waker = {
-                let mut state = lock(&shared);
-                state.0 = Some(made);
-                state.1.take()
+            let Some(finish) = finish.take() else {
+                panic!("rawr: a future was polled after it ended");
             };
-            if let Some(waker) = waker {
-                waker.wake();
+            if owns() || !served() {
+                return Ready(finish(value));
             }
-        });
-        Pending
+            let made = Arc::new(Mutex::new((None, Some(cx.waker().clone()))));
+            let shared = Arc::downgrade(&made);
+            *output = Some(made);
+            on_owner(move || {
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
+                let made = finish(value);
+                let waker = {
+                    let mut state = lock(&shared);
+                    state.0 = Some(made);
+                    state.1.take()
+                };
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            });
+            Pending
+        })
     }
 }
 
@@ -204,6 +214,10 @@ where
 /// is built with `sync`.
 pub struct Script {
     poller: Poller,
+    /// The native values its bodies hold between two polls on threads no
+    /// owner serves, which go with it to the thread that polls it next.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    away: Option<Box<dyn std::any::Any + Send>>,
 }
 
 impl std::fmt::Debug for Script {
@@ -215,7 +229,26 @@ impl std::fmt::Debug for Script {
 impl Script {
     /// Poll for the Rawr output, or the error that ended it.
     pub fn poll_output(&mut self, cx: &mut Context<'_>) -> std::task::Poll<RawrResultOf<Dynamic>> {
-        self.poller.poll(cx)
+        self.polled(|poller| poller.poll(cx))
+    }
+
+    /// `work` with the poller where the script's bodies run. On a thread
+    /// that no owner serves, as a tokio worker polling iced's
+    /// `Task::perform` future, that is inside the arena the script takes
+    /// from poll to poll, so the native values a body holds across an
+    /// `.await` are there on whichever thread polls it next (#1949).
+    fn polled<R>(&mut self, work: impl FnOnce(&mut Poller) -> R) -> R {
+        if owns() || served() {
+            return work(&mut self.poller);
+        }
+        #[cfg(feature = "rust-import")]
+        let arrived = crate::island::arrive(&mut self.away);
+        let output = work(&mut self.poller);
+        #[cfg(feature = "rust-import")]
+        if arrived {
+            self.away = crate::island::depart();
+        }
+        output
     }
 }
 
@@ -223,7 +256,7 @@ impl std::future::Future for Script {
     type Output = crate::Value;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<Self::Output> {
-        match self.poller.poll(cx) {
+        match self.poll_output(cx) {
             std::task::Poll::Pending => std::task::Poll::Pending,
             std::task::Poll::Ready(Ok(value)) => std::task::Poll::Ready(crate::Value::from(value)),
             std::task::Poll::Ready(Err(error)) => panic!("{}", message(&error)),
@@ -273,7 +306,9 @@ impl From<&Future> for Poller {
             .take();
         match kind {
             None => Self::Failed(Some(failure("rawr: this future was already awaited"))),
-            Some(Kind::Script(step)) => Self::Script(Box::new(Stepper::new(step))),
+            Some(Kind::Script(step, program)) => {
+                Self::Script(Box::new(Stepper::new(step, program)))
+            }
             Some(Kind::Native(make)) => Self::Native {
                 make: Some(make),
                 running: None,
@@ -361,10 +396,13 @@ impl Poller {
     }
 }
 
-/// An async body run step by step on the owner thread.
+/// An async body run step by step: on the owner thread, or where it is
+/// polled when no owner serves this process's async code.
 struct Stepper {
     shared: Arc<Mutex<Step>>,
     awaiting: Option<Box<Poller>>,
+    /// The program the body was made in, as any thread may call it.
+    program: Option<Program>,
 }
 
 struct Step {
@@ -395,7 +433,7 @@ enum State {
 }
 
 impl Stepper {
-    fn new(step: item::Value) -> Self {
+    fn new(step: item::Value, program: Option<Program>) -> Self {
         Self {
             shared: Arc::new(Mutex::new(Step {
                 step: Some(step),
@@ -405,6 +443,7 @@ impl Stepper {
                 waker: None,
             })),
             awaiting: None,
+            program,
         }
     }
 
@@ -434,7 +473,22 @@ impl Stepper {
                 State::Idle => {
                     if owns() {
                         drop(step);
-                        run(&self.shared);
+                        run(&self.shared, |step, arguments| {
+                            with_host(|host| host.invoke(step, arguments))
+                        });
+                    } else if !served() {
+                        // No owner drains steps, as in an iced app whose
+                        // main thread runs its event loop: the step runs
+                        // where its executor polls it, as Rust's does,
+                        // in an evaluation of its own (D490, #1949).
+                        drop(step);
+                        let program = self.program.clone();
+                        run(&self.shared, |step, arguments| {
+                            let program = program?;
+                            let _entry = entry();
+                            let _running = Running::enter(&program);
+                            Some(program.invoke(step, arguments))
+                        });
                     } else {
                         step.state = State::Queued;
                         step.waker = Some(cx.waker().clone());
@@ -446,7 +500,9 @@ impl Stepper {
                             let Some(shared) = shared.upgrade() else {
                                 return;
                             };
-                            run(&shared);
+                            run(&shared, |step, arguments| {
+                                with_host(|host| host.invoke(step, arguments))
+                            });
                             let waker = lock(&shared).waker.take();
                             drop(shared);
                             if let Some(waker) = waker {
@@ -496,8 +552,12 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Run one step of the body in `shared` on this, the owner thread.
-fn run(shared: &Mutex<Step>) {
+/// Run one step of the body in `shared` by `invoke`, which calls the step
+/// function in the program: `None` when no program runs here.
+fn run(
+    shared: &Mutex<Step>,
+    invoke: impl FnOnce(&item::Value, &mut [Dynamic]) -> Option<RawrResultOf<Dynamic>>,
+) {
     let (step, argument) = {
         let mut state = lock(shared);
         let argument = match (state.frame.take(), state.input.take()) {
@@ -513,7 +573,7 @@ fn run(shared: &Mutex<Step>) {
     // A panic in a step, as native code's, is its future's: it reaches the
     // thread that polls it, not the owner's runtime.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        with_host(|host| host.invoke(&step, &mut [argument]))
+        invoke(&step, &mut [argument])
             .unwrap_or_else(|| Err(failure("rawr: no program runs async code on this thread")))
     }));
     let mut state = lock(shared);
@@ -991,9 +1051,8 @@ impl Callable {
         let function = function
             .try_cast_result::<item::Value>()
             .map_err(|_| failure(format!("expected a closure, found `{actual}`")))?;
-        let program = with_host(|host| host.share())
-            .flatten()
-            .ok_or_else(|| failure("rawr: no program runs closures on this thread"))?;
+        let program =
+            here().ok_or_else(|| failure("rawr: no program runs closures on this thread"))?;
         let kept = keep(&function, &program);
         if outermost() {
             with_held(|all| all.push(Arc::downgrade(&kept)));
@@ -1253,6 +1312,52 @@ pub fn on_owner(work: impl FnOnce() + MaybeSend + 'static) {
     } else {
         send(Job::new(work));
     }
+}
+
+/// Whether an owner thread runs the steps other threads send it: the
+/// runtime entry's poll drains them (D527), or a forward hands them on.
+fn served() -> bool {
+    #[cfg(feature = "sync")]
+    if lock(&DRIVER).is_some() {
+        return true;
+    }
+    FORWARD.get().is_some()
+}
+
+thread_local! {
+    /// The program of the step running on this thread, which no owner
+    /// serves: the futures and closures the step makes are its program's.
+    static RUNNING: RefCell<Option<Program>> = const { RefCell::new(None) };
+}
+
+/// A step running in its program on a thread no owner serves, till it
+/// drops.
+struct Running(Option<Program>);
+
+impl Running {
+    fn enter(program: &Program) -> Self {
+        Self(RUNNING.with(|running| running.replace(Some(program.clone()))))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        RUNNING.with(|running| *running.borrow_mut() = outer);
+    }
+}
+
+/// The program this thread's async bodies run in, as any thread may call
+/// it: the step's running here, else the generation current here, else the
+/// one the process published.
+fn here() -> Option<Program> {
+    if let Some(program) = RUNNING.with(|running| running.borrow().clone()) {
+        return Some(program);
+    }
+    #[cfg(feature = "sync")]
+    return current_program();
+    #[cfg(not(feature = "sync"))]
+    return None;
 }
 
 /// Whether this thread runs async steps.

@@ -9592,6 +9592,25 @@ fn language_ref_cell_panics_on_a_conflicting_borrow() {
     assert_eq!(value, 2);
 }
 
+/// rustc evaluates an assignment's value before its place: the shared
+/// borrow the value takes ends before `borrow_mut` lends the place, as
+/// ferris's `*rotation.radians_mut() = rotation.radians() + ..` (#1945).
+#[test]
+fn language_an_assignment_evaluates_its_value_before_its_place() {
+    let value = run(r#"
+        use std::cell::RefCell;
+        pub fn run() -> i64 {
+            let cell = RefCell::new(5);
+            *cell.borrow_mut() = { let old = *cell.borrow(); old * 2 + 1 };
+            let pair = RefCell::new((1, 2));
+            pair.borrow_mut().0 = { let old = pair.borrow().1; old + 10 };
+            *cell.borrow() * 100 + pair.borrow().0
+        }
+        run()
+    "#);
+    assert_eq!(value, 1112);
+}
+
 #[test]
 fn language_one_variant_enum_let_is_irrefutable() {
     let value = run(r#"
