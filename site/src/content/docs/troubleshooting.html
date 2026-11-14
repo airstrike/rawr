@@ -11,7 +11,7 @@
 
 <h2 id="not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</h2>
 <div class="block diag">
-  <pre><code><span class="e">error[RAWR-ENVIRONMENT-MISSING-SOURCE]</span><span class="h">: `/home/you/app/src/main.rs` is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.</span>
+  <pre><code><span class="e">error</span><span class="h">: `/home/you/app/src/main.rs` is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.</span>
   <span class="c">= help:</span> add `// rawr` as the first line of the crate root, or of a module it declares, to run it with Rawr</code></pre>
 </div>
 <p>Add the line as the help says. A single <code>.rs</code> file runs without it.</p>
@@ -19,7 +19,7 @@
 
 <h2 id="script-dependencies">&ldquo;Not allowed in embedded manifests&rdquo;</h2>
 <div class="block diag">
-  <pre><code><span class="e">error[RAWR-ENVIRONMENT-PACKAGE-MANIFEST]</span><span class="h">: `lib` is not allowed in embedded manifests</span></code></pre>
+  <pre><code><span class="e">error</span><span class="h">: `lib` is not allowed in embedded manifests</span></code></pre>
 </div>
 <p>A script&rsquo;s frontmatter holds a table that cargo refuses in a script, and rawr refuses it with cargo&rsquo;s message. Remove the table, or move the code into a Cargo package. <a href="/docs/run#scripts">Run</a> says how rawr runs a script with dependencies.</p>
 

@@ -10,6 +10,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use rawr_cli::color;
+
 use crate::owner;
 use crate::plain::Plain;
 
@@ -19,7 +21,7 @@ frontmatter, or native modules. The program runs in a runner that links the\n\
 rawr crate and the program's own dependencies, built in the project's build\n\
 directory beside `cargo build`.\n\n\
 Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import test [path] [filter] [-- options]\n                                       Run the program's `#[test]` functions, as `cargo test`\n  rawr-import cache warm               Build what a first run here builds once per toolchain\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
-Options:\n  -h, --help       Show this help\n  -V, --version    Show the version";
+Options:\n  -h, --help       Show this help\n  -V, --version    Show the version\n  --color <when>   Colour errors: auto, always or never, as cargo's `--color`";
 
 /// Run `rawr-import` with `arguments`, the executable name excluded.
 #[must_use]
@@ -46,7 +48,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     let arguments = match rawr_cli::target_arguments(arguments) {
         Ok(arguments) => arguments,
         Err(message) => {
-            eprintln!("error: {message}");
+            eprintln!("{}: {message}", color::label(color::Level::Error));
             return ExitCode::from(2);
         }
     };
@@ -58,7 +60,10 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(message) => {
-                eprintln!("error: {message}; run `rawr-import --help` for usage");
+                eprintln!(
+                    "{}: {message}; run `rawr-import --help` for usage",
+                    color::label(color::Level::Error)
+                );
                 ExitCode::from(2)
             }
         };
@@ -95,7 +100,10 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     match request {
         Ok((check, path)) => program(check, path.as_ref(), &program_arguments),
         Err(message) => {
-            eprintln!("error: {message}; run `rawr-import --help` for usage");
+            eprintln!(
+                "{}: {message}; run `rawr-import --help` for usage",
+                color::label(color::Level::Error)
+            );
             ExitCode::from(2)
         }
     }
@@ -117,7 +125,10 @@ fn cache(words: &[String]) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!("error: `cache` takes `warm` or `clean`; run `rawr-import --help` for usage");
+            eprintln!(
+                "{}: `cache` takes `warm` or `clean`; run `rawr-import --help` for usage",
+                color::label(color::Level::Error)
+            );
             return ExitCode::from(2);
         }
     }
@@ -125,7 +136,10 @@ fn cache(words: &[String]) -> ExitCode {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
     else {
-        eprintln!("error: rawr's home needs the environment variable `CARGO_HOME` or `HOME`");
+        eprintln!(
+            "{}: rawr's home needs the environment variable `CARGO_HOME` or `HOME`",
+            color::label(color::Level::Error)
+        );
         return ExitCode::FAILURE;
     };
     rawr_import::host::clean(&cargo_home);
@@ -141,17 +155,20 @@ fn warm() -> ExitCode {
     let directory = match std::env::current_dir() {
         Ok(directory) => directory,
         Err(error) => {
-            eprintln!("error: the current directory can't be read: {error}");
+            eprintln!(
+                "{}: the current directory can't be read: {error}",
+                color::label(color::Level::Error)
+            );
             return ExitCode::FAILURE;
         }
     };
     let said = rawr_import::progress::said();
     if let Err(message) = crate::project::toolchain(&directory) {
-        eprintln!("error: {message}");
+        eprintln!("{}: {message}", color::label(color::Level::Error));
         return ExitCode::FAILURE;
     }
     if let Err(error) = rawr_import::runner::runtime::warm(&directory) {
-        eprintln!("error: {error}");
+        eprintln!("{}: {error}", color::label(color::Level::Error));
         return ExitCode::FAILURE;
     }
     if rawr_import::progress::said() == said {
@@ -224,7 +241,10 @@ fn tests(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
     let options = match rawr_cli::harness::Options::parse(arguments) {
         Ok(options) => options,
         Err(message) => {
-            eprintln!("error: {message}; run `rawr-import --help` for usage");
+            eprintln!(
+                "{}: {message}; run `rawr-import --help` for usage",
+                color::label(color::Level::Error)
+            );
             return ExitCode::from(2);
         }
     };

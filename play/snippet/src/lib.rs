@@ -6,7 +6,7 @@ pub mod plain;
 mod report;
 
 pub use plain::without_tests;
-pub use report::{in_source, panic, report, without_positions};
+pub use report::{in_source, located, panic, report, without_positions};
 
 /// Identity used for the wrapped source in diagnostics.
 pub const SOURCE_NAME: &str = "play.rs";

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rawr::reload::source;
+use rawr_cli::color;
 use rawr_import::{process::resident, supervisor::snapshot::attempt::Scope};
 
 #[cfg(test)]
@@ -584,7 +585,10 @@ pub(super) fn attempt(
                 .commit_inputs(staged)
                 .map_err(|error| super::framework(error, diagnostic.clone()))?
             {
-                rawr_import::process::say(format_args!("warning: file watcher: {warning}"));
+                rawr_import::process::say(format_args!(
+                    "{}: file watcher: {warning}",
+                    color::label(color::Level::Warning)
+                ));
             }
             Ok(Attempt::Swapped(Respawn {
                 snapshot: bytes,

@@ -15,6 +15,7 @@ use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{Duration, Instant};
 
 use crate::base;
+use crate::color;
 
 /// The variable that tells a `rawr` process to run the program at its path
 /// once, as the process [`run`] starts.
@@ -147,7 +148,10 @@ pub fn run(
     let mut child = match start(&location, &name, arguments) {
         Ok(child) => Some(child),
         Err(error) => {
-            eprintln!("error: cannot start the program: {error}");
+            eprintln!(
+                "{}: cannot start the program: {error}",
+                color::label(color::Level::Error)
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -167,7 +171,10 @@ pub fn run(
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    eprintln!("error: cannot wait for the program: {error}");
+                    eprintln!(
+                        "{}: cannot wait for the program: {error}",
+                        color::label(color::Level::Error)
+                    );
                     return ExitCode::FAILURE;
                 }
             }
@@ -222,7 +229,10 @@ pub fn run(
         child = match start(&location, &name, arguments) {
             Ok(child) => Some(child),
             Err(error) => {
-                eprintln!("error: cannot start the program: {error}");
+                eprintln!(
+                    "{}: cannot start the program: {error}",
+                    color::label(color::Level::Error)
+                );
                 return ExitCode::FAILURE;
             }
         };
@@ -242,6 +252,7 @@ fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Resu
     #[cfg(not(unix))]
     let _ = name;
     rawr::project::cargo::features::Selection::selected().hand(&mut command);
+    crate::color::hand(&mut command);
     command
         .args(arguments)
         .env(PROGRAM, location)

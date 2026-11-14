@@ -13,6 +13,7 @@
 pub mod base;
 pub mod cargo;
 pub mod cells;
+pub mod color;
 pub mod diagnostic;
 pub mod events;
 pub mod harness;
@@ -36,7 +37,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     let arguments = match target_arguments(arguments) {
         Ok(arguments) => arguments,
         Err(message) => {
-            eprintln!("error: {message}");
+            eprintln!("{}: {message}", color::label(color::Level::Error));
             return ExitCode::from(2);
         }
     };
@@ -71,7 +72,10 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         }) => register(claude, codex, path),
         Ok(Request::Other) => forward(&arguments),
         Err(message) => {
-            eprintln!("error: {message}; run `rawr --help` for usage");
+            eprintln!(
+                "{}: {message}; run `rawr --help` for usage",
+                color::label(color::Level::Error)
+            );
             ExitCode::from(2)
         }
     }
@@ -84,6 +88,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
 /// process is asked with: what every binary that is handed the program
 /// reads.
 pub fn target_arguments(arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
+    let arguments = color::take(arguments)?;
     let arguments = if arguments
         .first()
         .is_some_and(|command| command == "run" || command == "check" || command == "test")
@@ -482,7 +487,7 @@ fn help(installed: &[layer::Installed]) -> String {
             ));
         }
     }
-    help.push_str("\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the version\n\nRAWR_VERBOSE=1 says how the program was loaded and where it went.");
+    help.push_str("\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the version\n  --color <when>   Colour errors: auto, always or never, as cargo's `--color`\n\nRAWR_VERBOSE=1 says how the program was loaded and where it went.");
     help
 }
 
@@ -656,7 +661,7 @@ fn new_help(installed: &[layer::Installed]) -> String {
 /// installed binary that offers it.
 fn create(path: PathBuf, template: Option<&str>, arguments: &[OsString]) -> ExitCode {
     if let Some(refusal) = new::outside_workspace(&path) {
-        eprintln!("error: {refusal}");
+        eprintln!("{}: {refusal}", color::label(color::Level::Error));
         return ExitCode::FAILURE;
     }
     let Some(template) = template else {
@@ -669,7 +674,7 @@ fn create(path: PathBuf, template: Option<&str>, arguments: &[OsString]) -> Exit
                 ExitCode::SUCCESS
             }
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("{}: {error}", color::label(color::Level::Error));
                 ExitCode::FAILURE
             }
         };
@@ -685,14 +690,14 @@ fn create(path: PathBuf, template: Option<&str>, arguments: &[OsString]) -> Exit
         .find(|known| offers(&known.manifest))
     {
         eprintln!(
-            "error: the `{template}` template comes with {}, which is not installed. Install it with:\n{}",
+            "{}: the `{template}` template comes with {}, which is not installed. Install it with:\n{}", color::label(color::Level::Error),
             known.manifest.name,
             layer::install_lines(&known)
         );
         return ExitCode::FAILURE;
     }
     eprintln!(
-        "error: no installed binary offers a template named `{template}`; run `rawr new --help` for the templates"
+        "{}: no installed binary offers a template named `{template}`; run `rawr new --help` for the templates", color::label(color::Level::Error)
     );
     ExitCode::from(2)
 }
@@ -737,7 +742,11 @@ fn doctor(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
             Ok(status) if status.success() => {}
             Ok(_) => code = ExitCode::FAILURE,
             Err(error) => {
-                eprintln!("error: cannot run {}: {error}", binary.path.display());
+                eprintln!(
+                    "{}: cannot run {}: {error}",
+                    color::label(color::Level::Error),
+                    binary.path.display()
+                );
                 code = ExitCode::FAILURE;
             }
         }
@@ -757,7 +766,8 @@ fn forward(arguments: &[OsString]) -> ExitCode {
     for known in layer::catalog() {
         if let Some(command) = known.manifest.provided(arguments) {
             eprintln!(
-                "error: `{command}` comes with {}, which is not installed. Install it with:\n{}",
+                "{}: `{command}` comes with {}, which is not installed. Install it with:\n{}",
+                color::label(color::Level::Error),
                 known.manifest.name,
                 layer::install_lines(&known)
             );
@@ -768,7 +778,10 @@ fn forward(arguments: &[OsString]) -> ExitCode {
         .first()
         .map(|word| word.to_string_lossy().into_owned())
         .unwrap_or_default();
-    eprintln!("error: unknown command `{command}`; run `rawr --help` for usage");
+    eprintln!(
+        "{}: unknown command `{command}`; run `rawr --help` for usage",
+        color::label(color::Level::Error)
+    );
     ExitCode::from(2)
 }
 
@@ -778,18 +791,27 @@ fn hand_off(binary: &Path, arguments: &[OsString]) -> ExitCode {
     let mut command = Command::new(binary);
     command.args(arguments);
     rawr::project::cargo::features::Selection::selected().hand(&mut command);
+    color::hand(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         let error = command.exec();
-        eprintln!("error: cannot run {}: {error}", binary.display());
+        eprintln!(
+            "{}: cannot run {}: {error}",
+            color::label(color::Level::Error),
+            binary.display()
+        );
         ExitCode::FAILURE
     }
     #[cfg(not(unix))]
     match command.status() {
         Ok(status) => ExitCode::from(status.code().map_or(1, |code| code as u8)),
         Err(error) => {
-            eprintln!("error: cannot run {}: {error}", binary.display());
+            eprintln!(
+                "{}: cannot run {}: {error}",
+                color::label(color::Level::Error),
+                binary.display()
+            );
             ExitCode::FAILURE
         }
     }
@@ -805,14 +827,14 @@ fn serve(path: Option<PathBuf>) -> ExitCode {
     let root = match path.map_or_else(std::env::current_dir, Ok) {
         Ok(root) => std::fs::canonicalize(&root).unwrap_or(root),
         Err(error) => {
-            eprintln!("error: rawr mcp: {error}");
+            eprintln!("{}: rawr mcp: {error}", color::label(color::Level::Error));
             return ExitCode::FAILURE;
         }
     };
     match mcp::serve(root) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: rawr mcp: {error}");
+            eprintln!("{}: rawr mcp: {error}", color::label(color::Level::Error));
             ExitCode::FAILURE
         }
     }
@@ -829,7 +851,8 @@ fn register(claude: bool, codex: bool, path: Option<PathBuf>) -> ExitCode {
     };
     if !claude && !codex {
         eprintln!(
-            "error: {} has no `.claude` or `.codex` directory; pass `--claude`, `--codex` or both",
+            "{}: {} has no `.claude` or `.codex` directory; pass `--claude`, `--codex` or both",
+            color::label(color::Level::Error),
             root.display()
         );
         return ExitCode::from(2);
@@ -837,7 +860,11 @@ fn register(claude: bool, codex: bool, path: Option<PathBuf>) -> ExitCode {
     let entry = match init::Entry::current(&root) {
         Ok(entry) => entry,
         Err(error) => {
-            eprintln!("error: rawr init: {}: {error}", root.display());
+            eprintln!(
+                "{}: rawr init: {}: {error}",
+                color::label(color::Level::Error),
+                root.display()
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -859,7 +886,7 @@ fn register(claude: bool, codex: bool, path: Option<PathBuf>) -> ExitCode {
                 agents.push(agent);
             }
             Err(error) => {
-                eprintln!("error: rawr init: {error}");
+                eprintln!("{}: rawr init: {error}", color::label(color::Level::Error));
                 return ExitCode::FAILURE;
             }
         }

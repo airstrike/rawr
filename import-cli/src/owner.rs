@@ -8,6 +8,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use rawr::diagnostic;
+use rawr_cli::color;
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const IDLE_POLL: Duration = Duration::from_millis(25);
@@ -353,7 +354,9 @@ pub fn run_program(
                 }
                 Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
                 Err(report) if !interactive || watcher.is_none() => return Err(report),
-                Err(Some(report)) => rawr_import::process::say(diagnostic::render(&report)),
+                Err(Some(report)) => {
+                    rawr_import::process::say(rawr_cli::diagnostic::render(&report))
+                }
                 Err(None) => {}
             }
             let Some(waiting) = watcher.as_ref() else {
@@ -708,7 +711,7 @@ fn session(
                         // Latest wins: a newer save reports for itself.
                         Err(_) if adapter.deadline().is_some() => {}
                         Err(report) => {
-                            rawr_import::process::say(diagnostic::render(&report));
+                            rawr_import::process::say(rawr_cli::diagnostic::render(&report));
                             rawr_cli::events::failed(&report);
                         }
                     }
@@ -794,10 +797,11 @@ fn session(
                             swap = None;
                             for error in adapter
                                 .commit_inputs(staged)
-                                .map_err(|error| framework(error, source.clone()))?
+                                .map_err(|error| watching(error, source.clone()))?
                             {
                                 rawr_import::process::say(format_args!(
-                                    "warning: file watcher: {error}"
+                                    "{}: file watcher: {error}",
+                                    color::label(color::Level::Warning)
                                 ));
                             }
                             continue;
@@ -839,7 +843,7 @@ fn session(
                 let observation = match inputs.encode_observation() {
                     Ok(observation) => observation,
                     Err(error) => {
-                        settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                        settle_failure(&mut lane, &adapter, watching(error, source.clone()))?;
                         continue;
                     }
                 };
@@ -901,10 +905,11 @@ fn session(
                             restarts = crate::Restarts::default();
                             for error in adapter
                                 .commit_inputs(staged)
-                                .map_err(|error| framework(error, source.clone()))?
+                                .map_err(|error| watching(error, source.clone()))?
                             {
                                 rawr_import::process::say(format_args!(
-                                    "warning: file watcher: {error}"
+                                    "{}: file watcher: {error}",
+                                    color::label(color::Level::Warning)
                                 ));
                             }
                             continue;
@@ -1093,10 +1098,11 @@ fn session(
                         restarts = crate::Restarts::default();
                         for error in adapter
                             .commit_inputs(staged)
-                            .map_err(|error| framework(error, source.clone()))?
+                            .map_err(|error| watching(error, source.clone()))?
                         {
                             rawr_import::process::say(format_args!(
-                                "warning: file watcher: {error}"
+                                "{}: file watcher: {error}",
+                                color::label(color::Level::Warning)
                             ));
                         }
                     }
@@ -1105,7 +1111,7 @@ fn session(
                     // start: no program runs, and it takes the full start.
                     Err(report) if lane.current_key().is_none() => {
                         drop(staged);
-                        rawr_import::process::say(diagnostic::render(&report));
+                        rawr_import::process::say(rawr_cli::diagnostic::render(&report));
                         return Ok(Ended::Restart(
                             manifests.restart_line(&next_manifests),
                             None,
@@ -1118,7 +1124,7 @@ fn session(
                         adapter
                             .gate()
                             .observe(Instant::now())
-                            .map_err(|error| framework(error, source.clone()))?;
+                            .map_err(|error| watching(error, source.clone()))?;
                     }
                     Err(report) => {
                         drop(staged);
@@ -1139,7 +1145,7 @@ fn session(
                 Ok(rawr_watch::Notice::Backend(error)) => {
                     retain_report(
                     &mut lane,
-                    framework(
+                    watching(
                         format!("the file watcher stopped, so saves no longer reload the program: {error}"),
                         source.clone(),
                     ),
@@ -1381,7 +1387,7 @@ fn initial_watched_program(
         Ok(adapter) => adapter,
         Err(error) => {
             drop(lane.shutdown());
-            return Err(framework(error, source).into());
+            return Err(watching(error, source).into());
         }
     };
 
@@ -1406,7 +1412,7 @@ fn initial_watched_program(
         let observation = initial
             .inputs
             .encode_observation()
-            .map_err(|error| framework(error, source.clone()))?;
+            .map_err(|error| watching(error, source.clone()))?;
         match lane.replace_built_started_watched(
             initial.built,
             initial.snapshot,
@@ -1419,7 +1425,10 @@ fn initial_watched_program(
                     .commit_inputs(staged)
                     .map_err(|error| framework(error, source.clone()))?
                 {
-                    rawr_import::process::say(format_args!("warning: file watcher: {error}"));
+                    rawr_import::process::say(format_args!(
+                        "{}: file watcher: {error}",
+                        color::label(color::Level::Warning)
+                    ));
                 }
                 return Ok((lane, adapter, initial.manifests, native_baseline));
             }
@@ -1627,11 +1636,11 @@ fn settle_failure(
 
 fn retain_report(lane: &mut Lane, report: diagnostic::Report) -> Result<(), diagnostic::Report> {
     rawr_cli::events::failed(&report);
-    let rendered = diagnostic::render(&report);
     rawr_import::process::say(format_args!(
-        "rawr: the save failed; the last good program keeps running\n{rendered}"
+        "rawr: the save failed; the last good program keeps running\n{}",
+        rawr_cli::diagnostic::render(&report)
     ));
-    lane.report(&rendered)
+    lane.report(&diagnostic::render(&report))
         .map_err(|error| framework(error, None))
 }
 
@@ -1717,9 +1726,11 @@ fn copied(
             rawr::Position::new(line, start),
             rawr::Position::new(line, end),
         );
-        diagnostic::Report::error(diagnostic::code::FRAMEWORK_NATIVE, failure.to_string())
+        let headline = crate::report::Task::Build.headline(Some(marked.identity()));
+        diagnostic::Report::error(diagnostic::code::FRAMEWORK_NATIVE, headline)
             .primary(marked, span, None)
             .ok()
+            .map(|report| report.note(failure.to_string()))
     })();
     match report {
         Some(report) => report.finish(),
@@ -1727,10 +1738,17 @@ fn copied(
     }
 }
 
-/// A failure of the runner's machinery, reported against `source`.
+/// A failure of the runner's machinery while it builds the program,
+/// reported against `source` as rustc reports a failure of its own.
 pub fn framework(
     error: impl std::fmt::Display,
     source: impl Into<Option<diagnostic::Source>>,
 ) -> diagnostic::Report {
-    crate::report::report(diagnostic::code::FRAMEWORK_NATIVE, error, source.into())
+    crate::report::failure(crate::report::Task::Build, error, source.into())
+}
+
+/// A failure to watch the program's files for saves, reported against
+/// `source` as [`framework`] reports a failure.
+fn watching(error: impl std::fmt::Display, source: diagnostic::Source) -> diagnostic::Report {
+    crate::report::failure(crate::report::Task::Watch, error, Some(source))
 }

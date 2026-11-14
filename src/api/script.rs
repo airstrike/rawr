@@ -605,8 +605,9 @@ mod tests {
         assert_eq!(
             error(script.func::<(f64, f64), f64>("price")),
             "error[E0308]: mismatched types\n \
-             --> <script>:1:1-1:43\n \
-             1 | fn price(subtotal: f64, items: i64) -> f64 {\n   \
+             --> <script>:1:1\n  \
+             |\n\
+             1 | fn price(subtotal: f64, items: i64) -> f64 {\n  \
              | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ \
              expected `fn(f64, f64) -> f64`, found `fn(f64, i64) -> f64`"
         );

@@ -1,158 +1,191 @@
-//! Concise human rendering for canonical diagnostic reports.
+//! Human rendering for canonical diagnostic reports, as rustc renders its
+//! own: through `annotate-snippets`, the crate rustc renders with. Each
+//! label is a marker under its source line, the primary one under the
+//! `-->` arrow, and notes and help follow as `= note:` and `= help:`.
 
-use std::fmt::Write as _;
+use annotate_snippets::{Annotation, AnnotationKind, Group, Level, Origin, Renderer, Snippet};
 
-use super::{Label, LabelKind, Report};
+use super::{ExternalLabel, Label, LabelKind, Report, Severity, Source};
 
-/// Render one canonical report for terminals, clipboards, and durable text logs.
+/// Whether a rendering carries a terminal's colours.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Color {
+    /// Plain text, for a pipe, a file, a log or an agent.
+    Never,
+    /// rustc's colours, as ANSI escapes, for a terminal.
+    Always,
+}
+
+/// Render one canonical report as plain text, for clipboards, durable logs
+/// and agents.
 #[must_use]
 pub fn render(report: &Report) -> String {
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "{}{}: {}",
-        report.severity(),
-        report.code().tag(),
-        report.message()
-    );
+    render_with(report, Color::Never)
+}
+
+/// Render one canonical report as rustc renders its diagnostics, in
+/// rustc's colours when `color` is [`Color::Always`].
+#[must_use]
+pub fn render_with(report: &Report, color: Color) -> String {
+    let renderer = match color {
+        Color::Never => Renderer::plain(),
+        Color::Always => Renderer::styled(),
+    };
+    // An external label's file is read here, as rustc reads a source it
+    // points into, so its line shows under the label.
+    let external: Vec<Option<String>> = report
+        .external_labels()
+        .iter()
+        .map(|label| std::fs::read_to_string(label.position().file()).ok())
+        .collect();
+    let level = match report.severity() {
+        Severity::Error => Level::ERROR,
+        Severity::Warning => Level::WARNING,
+    };
+    let title = level.primary_title(report.message());
+    let title = match report.code().rustc() {
+        Some(code) => title.id(code),
+        None => title,
+    };
+    let mut group = Group::with_title(title);
+    for source in labelled(report) {
+        let annotations = report
+            .labels()
+            .iter()
+            .filter(|label| label.source() == source)
+            .filter_map(annotation);
+        group = group.element(
+            Snippet::source(source.text())
+                .path(shown(source.identity()))
+                .annotations(annotations),
+        );
+    }
+    let mut unread = Vec::new();
+    for (label, text) in report.external_labels().iter().zip(&external) {
+        match text
+            .as_deref()
+            .and_then(|text| external_snippet(label, text))
+        {
+            Some(snippet) => group = group.element(snippet),
+            None => {
+                let ((line, column), _) = label.position().positions();
+                group = group.element(
+                    Origin::path(shown(label.position().file()))
+                        .line(line as usize)
+                        .char_column(column as usize + 1),
+                );
+                unread.extend(label.message());
+            }
+        }
+    }
     for source in report.sources().iter().filter(|source| {
         !report
             .labels()
             .iter()
             .any(|label| label.source() == *source)
     }) {
-        let _ = writeln!(output, " --> {}", source.identity());
-    }
-    for label in report.labels() {
-        render_label(&mut output, label);
-    }
-    for label in report.external_labels() {
-        let ((start_line, start_column), (end_line, end_column)) = label.position().positions();
-        let bytes = label.position().byte_range();
-        let _ = write!(
-            output,
-            " ::: {}:{start_line}:{start_column}",
-            label.position().file()
-        );
-        if start_line != end_line || start_column != end_column {
-            let _ = write!(output, "-{end_line}:{end_column}");
-        }
-        let _ = write!(output, " [bytes {}..{}]", bytes.start, bytes.end);
-        if let Some(message) = label.message() {
-            let _ = write!(output, " {message}");
-        }
-        let _ = writeln!(output);
+        group = group.element(Origin::path(shown(source.identity())));
     }
     if let Some(help) = report.help() {
-        let _ = writeln!(output, "  = help: {help}");
+        group = group.element(Level::HELP.message(help));
     }
-    for note in report.notes() {
-        let _ = writeln!(output, "  = note: {note}");
+    for note in report.notes().chain(unread) {
+        group = group.element(Level::NOTE.message(note));
     }
+    let mut output = renderer.render(&[group]);
+    output.push('\n');
     output
 }
 
-fn render_label(output: &mut String, label: &Label) {
-    let span = label.span();
-    let start = span.start();
-    let end = span.end();
-    let (Some(start_line), Some(end_line)) = (start.line(), end.line()) else {
-        return;
-    };
-    let start_column = start.position().unwrap_or(1);
-    let end_column = end.position().unwrap_or(1);
-    let arrow = match label.kind() {
-        LabelKind::Primary => "-->",
-        LabelKind::Secondary => ":::",
-    };
-    let _ = write!(
-        output,
-        " {arrow} {}:{start_line}:{start_column}",
-        label.source().identity()
-    );
-    if start_line != end_line || start_column != end_column {
-        let _ = write!(output, "-{end_line}:{end_column}");
+/// `file` as rustc and cargo show a path: from the current directory when
+/// it is under it.
+fn shown(file: &str) -> std::borrow::Cow<'_, str> {
+    let path = std::path::Path::new(file);
+    let relative = std::env::current_dir()
+        .ok()
+        .and_then(|directory| Some(path.strip_prefix(directory).ok()?.to_str()?.to_owned()))
+        .filter(|relative| !relative.is_empty());
+    match relative {
+        Some(relative) => relative.into(),
+        None => file.into(),
     }
-    let _ = writeln!(output);
+}
 
-    let width = decimal_width(start_line.max(end_line));
-    if let Some(line) = source_line(label, start_line) {
-        render_source_line(output, width, start_line, line);
-        let prefix = marker_prefix(line, start_column);
-        let count = if start_line == end_line {
-            end_column.saturating_sub(start_column).max(1)
-        } else {
-            line.chars().count().saturating_sub(start_column - 1).max(1)
-        };
-        render_marker(output, width, &prefix, count, label, true);
-    }
-
-    if end_line != start_line {
-        let _ = writeln!(output, " {:width$} | ...", "", width = width);
-        if let Some(line) = source_line(label, end_line).filter(|_| end_column > 1) {
-            render_source_line(output, width, end_line, line);
-            render_marker(output, width, "", end_column - 1, label, false);
+/// The sources the report's labels are in, the primary label's first, as
+/// rustc puts the `-->` arrow at the primary span.
+fn labelled(report: &Report) -> Vec<&Source> {
+    let primary = report
+        .labels()
+        .iter()
+        .filter(|label| label.kind() == LabelKind::Primary);
+    let secondary = report
+        .labels()
+        .iter()
+        .filter(|label| label.kind() == LabelKind::Secondary);
+    let mut sources: Vec<&Source> = Vec::new();
+    for label in primary.chain(secondary) {
+        if !sources.contains(&label.source()) {
+            sources.push(label.source());
         }
     }
+    sources
 }
 
-fn source_line(label: &Label, line: usize) -> Option<&str> {
-    label
-        .source()
-        .text()
-        .split('\n')
-        .nth(line.saturating_sub(1))
-}
-
-fn render_source_line(output: &mut String, width: usize, number: usize, line: &str) {
-    let _ = writeln!(
-        output,
-        " {number:>width$} | {line}",
-        number = number,
-        width = width
+/// The marker of `label` under its source line, at its byte range in its
+/// source's text. A label without a line has no marker.
+fn annotation(label: &Label) -> Option<Annotation<'_>> {
+    let span = label.span();
+    let text = label.source().text();
+    let start = offset(
+        text,
+        span.start().line()?,
+        span.start().position().unwrap_or(1),
     );
-}
-
-fn render_marker(
-    output: &mut String,
-    width: usize,
-    prefix: &str,
-    count: usize,
-    label: &Label,
-    show_message: bool,
-) {
-    let marker = match label.kind() {
-        LabelKind::Primary => '^',
-        LabelKind::Secondary => '-',
+    let end = offset(text, span.end().line()?, span.end().position().unwrap_or(1)).max(start);
+    let kind = match label.kind() {
+        LabelKind::Primary => AnnotationKind::Primary,
+        LabelKind::Secondary => AnnotationKind::Context,
     };
-    let markers: String = std::iter::repeat_n(marker, count).collect();
-    let _ = write!(output, " {:width$} | {prefix}{markers}", "", width = width);
-    if let Some(message) = label.message().filter(|_| show_message) {
-        let _ = write!(output, " {message}");
-    }
-    let _ = writeln!(output);
+    Some(kind.span(start..end).label(label.message()))
 }
 
-fn marker_prefix(line: &str, one_based_column: usize) -> String {
-    line.chars()
-        .take(one_based_column.saturating_sub(1))
-        .map(|character| if character == '\t' { '\t' } else { ' ' })
-        .collect()
+/// The byte offset in `text` of the one-based `line` and character
+/// `column`. A column past the line's end is its end.
+fn offset(text: &str, line: usize, column: usize) -> usize {
+    let start: usize = text
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum();
+    let rest = text.get(start..).unwrap_or_default();
+    let line = rest.split('\n').next().unwrap_or_default();
+    let within = line
+        .char_indices()
+        .nth(column.saturating_sub(1))
+        .map_or(line.len(), |(at, _)| at);
+    start + within
 }
 
-const fn decimal_width(mut value: usize) -> usize {
-    let mut width = 1;
-    while value >= 10 {
-        value /= 10;
-        width += 1;
-    }
-    width
+/// An external label's marker under its line in `text`, the file it names
+/// as read now: `None` when its byte range no longer falls in the file.
+fn external_snippet<'text>(
+    label: &'text ExternalLabel,
+    text: &'text str,
+) -> Option<Snippet<'text, Annotation<'text>>> {
+    let bytes = label.position().byte_range();
+    let range = bytes.start as usize..bytes.end as usize;
+    text.get(range.clone())?;
+    Some(
+        Snippet::source(text)
+            .path(shown(label.position().file()))
+            .annotation(AnnotationKind::Context.span(range).label(label.message())),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::render;
-    use crate::diagnostic::{code, Report, Source};
+    use super::{render, render_with, Color};
+    use crate::diagnostic::{code, ExternalPosition, Report, Source};
     use crate::{Position, Span};
 
     #[cfg(feature = "rust-import")]
@@ -185,10 +218,12 @@ mod tests {
         assert_eq!(
             render(&report),
             concat!(
-                "error[RAWR-RESOLVE-DUPLICATE-ITEM]: duplicate `Task`\n",
-                " --> src/main.rs:1:10-1:19\n",
-                " 1 | #[derive(Serialize)]\n",
-                "   |          ^^^^^^^^^\n",
+                "error: duplicate `Task`\n",
+                " --> src/main.rs:1:10\n",
+                "  |\n",
+                "1 | #[derive(Serialize)]\n",
+                "  |          ^^^^^^^^^\n",
+                "  |\n",
                 "  = note: this error originates in the derive macro `Serialize`\n",
             )
         );
@@ -218,19 +253,100 @@ mod tests {
         assert_eq!(
             render(&report),
             concat!(
-                "error[RAWR-RESOLVE-DUPLICATE-ITEM]: duplicate `β`\n",
-                " --> src/main.rs:1:2-2:5\n",
-                " 1 | αβγ\n",
-                "   |  ^^ duplicate spans two lines\n",
-                "   | ...\n",
-                " 2 | line two\n",
-                "   | ^^^^\n",
-                " ::: src/other.rs:1:1-1:6\n",
-                " 1 | first\n",
-                "   | ----- first declared here\n",
+                "error: duplicate `β`\n",
+                " --> src/main.rs:1:2\n",
+                "  |\n",
+                "1 |   αβγ\n",
+                "  |  __^\n",
+                "2 | | line two\n",
+                "  | |____^ duplicate spans two lines\n",
+                "  |\n",
+                " ::: src/other.rs:1:1\n",
+                "  |\n",
+                "1 |   first\n",
+                "  |   ----- first declared here\n",
+                "  |\n",
                 "  = help: rename it\n",
                 "  = note: characters, not bytes, determine columns\n",
             )
         );
+    }
+
+    /// A label in a file the report keeps no text of shows that file's
+    /// line, read as rustc reads a source it points into.
+    #[test]
+    fn an_external_label_shows_its_source_line() {
+        let directory = std::env::temp_dir().join(format!("rawr-render-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("lib.rs");
+        std::fs::write(&file, "pub fn first() {}\npub fn second() {}\n").unwrap();
+        let file = file.to_string_lossy().into_owned();
+        let source = Source::new("src/main.rs", "fn main() { second(1) }\n").unwrap();
+        let report = Report::error(
+            code::RESOLVE_ARGUMENT_COUNT,
+            "this function takes 0 arguments but 1 argument was supplied",
+        )
+        .primary(
+            source,
+            Span::new(Position::new(1, 13), Position::new(1, 19)),
+            None,
+        )
+        .unwrap()
+        .secondary_external(
+            ExternalPosition::checked(file.as_str(), 25, 31, (2, 7), (2, 13)).unwrap(),
+            Some("function defined here".into()),
+        )
+        .finish();
+        let rendered = render(&report);
+        std::fs::remove_dir_all(&directory).unwrap();
+
+        assert_eq!(
+            rendered,
+            format!(
+                concat!(
+                    "error[E0061]: this function takes 0 arguments but 1 argument was supplied\n",
+                    " --> src/main.rs:1:13\n",
+                    "  |\n",
+                    "1 | fn main() {{ second(1) }}\n",
+                    "  |             ^^^^^^\n",
+                    "  |\n",
+                    " ::: {file}:2:8\n",
+                    "  |\n",
+                    "2 | pub fn second() {{}}\n",
+                    "  |        ------ function defined here\n",
+                ),
+                file = file
+            )
+        );
+    }
+
+    #[test]
+    fn a_coloured_rendering_is_the_plain_one_with_escapes() {
+        let source = Source::new("src/main.rs", "let x = 1;\n").unwrap();
+        let report = Report::error(code::RESOLVE_TYPE_MISMATCH, "mismatched types")
+            .primary(
+                source,
+                Span::new(Position::new(1, 9), Position::new(1, 10)),
+                Some("expected `bool`".into()),
+            )
+            .unwrap()
+            .finish();
+        let coloured = render_with(&report, Color::Always);
+
+        assert!(coloured.contains("\u{1b}["), "{coloured}");
+        assert_eq!(plain(&coloured), render(&report));
+    }
+
+    /// `text` without its SGR escapes.
+    fn plain(text: &str) -> String {
+        let mut plain = String::new();
+        let mut rest = text;
+        while let Some(at) = rest.find('\u{1b}') {
+            plain.push_str(&rest[..at]);
+            let end = rest[at..].find('m').map_or(rest.len(), |end| at + end + 1);
+            rest = &rest[end..];
+        }
+        plain.push_str(rest);
+        plain
     }
 }

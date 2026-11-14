@@ -14,7 +14,7 @@
 - Is: a tree-walking interpreter over a fully checked program; calls into native code (crates, native modules, std collections) run at native speed. Keep hot loops native.
 - Is not: a compiler, Miri, a MIR interpreter, or a new language. Marked files are ordinary `.rs` files; rust-analyzer handles them.
 - Not every valid Rust runs. Unsupported code fails the check with an error naming the construct (one error per check). Some invalid Rust passes rawr's check; `cargo check` (run by `rawr check` and beside `rawr run`) catches it.
-- Errors: where rustc has one, rawr uses rustc's code and wording (`error[E0599]`, `E0382`, `E0502`...). rawr-only errors carry `RAWR-<STAGE>-...` codes, which may change.
+- Errors: where rustc has one, rawr uses rustc's code and wording (`error[E0599]`, `E0382`, `E0502`...). rawr-only errors print as `error: message`, as rustc's codeless ones do; their `RAWR-<STAGE>-...` code, which may change, is in `rawr mcp`'s data only. Errors are coloured on a terminal by cargo's rules (`--color`, `CARGO_TERM_COLOR`, `NO_COLOR`).
 - Full: https://rawr.airstrike.fyi/docs/how-it-works, https://rawr.airstrike.fyi/docs/reference/overview
 
 ## Install

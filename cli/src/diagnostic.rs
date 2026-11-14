@@ -18,10 +18,11 @@ use serde_json::{json, Value};
 /// in, one JSON object per line, beside the rendering it prints.
 pub const SINK: &str = "RAWR_DIAGNOSTICS";
 
-/// Render one canonical report for terminal output.
+/// Render one canonical report for this process's stderr: in rustc's
+/// colours when stderr takes them ([`crate::color::stderr`]).
 #[must_use]
 pub fn render(report: &Report) -> String {
-    rawr::diagnostic::render(report)
+    rawr::diagnostic::render_with(report, crate::color::stderr())
 }
 
 /// Print `report` to stderr, and record it as data when [`SINK`] names a
@@ -311,21 +312,6 @@ mod tests {
     use rawr::{Position, Span};
     use serde_json::json;
     use std::path::Path;
-
-    #[test]
-    fn cli_uses_the_core_canonical_report_rendering() {
-        let source = Source::new("src/main.rs", "alpha\n").unwrap();
-        let report = Report::error(code::PARSE_SYNTAX, "invalid source")
-            .primary(
-                source,
-                Span::new(Position::new(1, 1), Position::new(1, 6)),
-                Some("parse failed".into()),
-            )
-            .unwrap()
-            .finish();
-
-        assert_eq!(super::render(&report), rawr::diagnostic::render(&report));
-    }
 
     #[test]
     fn a_report_becomes_one_positioned_diagnostic_with_an_absolute_file() {

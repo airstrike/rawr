@@ -24,6 +24,7 @@
   <tr><td><code>rawr -V</code>, <code>--version</code></td><td>Prints the version.</td></tr>
 </table>
 <p>Set <code>RAWR_VERBOSE=1</code> to see how a program was loaded and which binary ran it.</p>
+<p>Errors print as rustc and cargo print theirs, in their colours on a terminal. rawr follows cargo&rsquo;s colour rules: <code>--color &lt;when&gt;</code> (<code>auto</code>, <code>always</code> or <code>never</code>) before any <code>--</code>, else <code>CARGO_TERM_COLOR</code>, else <code>auto</code>, which colours a terminal unless <code>NO_COLOR</code> is set. A pipe, a log and <code>rawr mcp</code> get plain text.</p>
 
 <h2 id="test">Tests</h2>
 <p><code>rawr test</code> builds the program as <code>cargo test</code> builds it, so <code>#[cfg(test)]</code> items are in and <code>cfg!(test)</code> is true. Then it runs each <code>#[test]</code> function of the crate one after another, in name order. It reports them in <code>cargo test</code>&rsquo;s format: <code>running N tests</code>, a <code>test name ... ok</code> or <code>FAILED</code> line for each, the output and panic of each failure, and the <code>test result:</code> line.</p>

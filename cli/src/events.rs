@@ -157,7 +157,7 @@ pub fn failed_cargo(outcome: &crate::cargo::Outcome) {
         "line": field("line").unwrap_or(Value::Null),
         "column": field("column").unwrap_or(Value::Null),
         "diagnostics": outcome.diagnostics,
-        "rendered": outcome.render(),
+        "rendered": outcome.render(rawr::diagnostic::Color::Never),
     }));
 }
 

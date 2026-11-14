@@ -11,6 +11,8 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 rawr = { path = "..", features = ["sync", "debugging", "syntax"] }
 rawr-location = { path = "../location" }
+# Cargo's coloured rendering of rustc's errors, stripped for a pipe.
+anstream = { version = "1.0.0", default-features = false }
 rawr-watch = { path = "../watch" }
 serde_json = "1.0.45"
 toml_edit = { package = "rawr-toml-edit", path = "../toml/edit", default-features = false, features = ["parse", "display"] }

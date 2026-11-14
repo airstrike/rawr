@@ -154,7 +154,7 @@ fn export_unknown_members_read_like_rustc() {
     let error = engine.compile("use shop::Order;\nfn f(order: Order) -> i64 {\n    order.itmes\n}\n").unwrap_err();
     assert!(matches!(error.err_type(), rawr::ParseErrorType::Resolution(rawr::resolve::Error::UnknownMember { .. })));
     let display = error.to_string();
-    assert!(display.starts_with("error[E0609]: no field `itmes` on type `Order`\n --> <script>:3:11-3:16"), "{display}");
+    assert!(display.starts_with("error[E0609]: no field `itmes` on type `Order`\n --> <script>:3:11"), "{display}");
     assert_eq!(format!("{error:?}"), display);
 
     let error = engine.compile("use shop::Order;\nfn f(order: Order) -> f64 {\n    order.totl(1.0)\n}\n").unwrap_err();
@@ -302,7 +302,7 @@ fn tallying() -> Engine {
 fn export_field_called_like_a_method_is_rustc_e0599() {
     let error = engine().compile("use shop::Order;\nfn f(order: Order) -> i64 {\n    order.items()\n}\n").unwrap_err();
     let text = error.to_string();
-    assert!(text.starts_with("error[E0599]: no method named `items` found for `Order` in the current scope\n --> <script>:3:11-3:16"), "{text}");
+    assert!(text.starts_with("error[E0599]: no method named `items` found for `Order` in the current scope\n --> <script>:3:11"), "{text}");
     assert!(text.ends_with("= help: to use the field `items`, remove the parentheses"), "{text}");
 }
 
@@ -310,7 +310,7 @@ fn export_field_called_like_a_method_is_rustc_e0599() {
 fn export_method_read_like_a_field_is_rustc_e0615() {
     let error = engine().compile("use shop::Order;\nfn f(order: Order) -> f64 {\n    order.total\n}\n").unwrap_err();
     let text = error.to_string();
-    assert!(text.starts_with("error[E0615]: attempted to take value of method `total` on type `Order`\n --> <script>:3:11-3:16"), "{text}");
+    assert!(text.starts_with("error[E0615]: attempted to take value of method `total` on type `Order`\n --> <script>:3:11"), "{text}");
 }
 
 #[test]

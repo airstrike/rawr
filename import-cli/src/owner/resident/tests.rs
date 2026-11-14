@@ -218,7 +218,7 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
         panic!("a cold retry must capture current source before continuing native preparation");
     };
     assert!(
-        !report.message().contains("no admitted runner"),
+        !rawr::diagnostic::render(&report).contains("no admitted runner"),
         "source capture must fail first"
     );
 }
