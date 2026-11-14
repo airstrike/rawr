@@ -7342,6 +7342,18 @@ fn assemble<B: crate::surface::Runner>(
     }
     let files = files.into_boxed_slice();
     let file_records = file_records.into_boxed_slice();
+    // Which fields have a store reads their types' paths, as the source's
+    // rendering did, so the entries name the adapters it wrote: a field of
+    // a `Vec` of crate values, as custom_shader's `Scene::cubes` (#1932).
+    let facade = key
+        .request
+        .facade_plan()
+        .map(|bytes| {
+            crate::surface::facade::Plan::decode(bytes)
+                .map_err(|_| request::drift("generated profile bindings plan"))
+        })
+        .transpose()?;
+    let _type_paths = TypePaths::install(facade.as_ref());
     let mut entries = Vec::new();
     entries
         .try_reserve_exact(key.request.plans.len())
@@ -8833,18 +8845,23 @@ impl Support {
         let mut group_of = Vec::new();
         let mut declared = Vec::new();
         for found in families.iter().chain(&impls) {
-            match found.name.as_deref().and_then(|name| by_name.get(name)) {
+            // A frame's keys and tables sort with the frame.
+            let name = found
+                .name
+                .as_deref()
+                .map(|name| frame::owner(name).unwrap_or(name));
+            match name.and_then(|name| by_name.get(name)) {
                 Some(&at) => {
                     groups[at].1.push(found.text);
                     declared[at] |= found.declares;
                     group_of.push(at);
                 }
                 None => {
-                    if let Some(name) = found.name.as_deref() {
+                    if let Some(name) = name {
                         by_name.insert(name, groups.len());
                     }
                     group_of.push(groups.len());
-                    groups.push((found.name.clone(), vec![found.text]));
+                    groups.push((name.map(str::to_owned), vec![found.text]));
                     declared.push(found.declares);
                 }
             }
@@ -8856,7 +8873,27 @@ impl Support {
                 group.0 = None;
             }
         }
-        let sorted = program.sort(&groups);
+        let mut sorted = program.sort(&groups);
+        // A frame goes with the impl whose function it is: one that a
+        // program's impl uses is the program's, though it names nothing of
+        // the program itself, as serde's `__FieldVisitor::visit_u64` frame
+        // (#1938).
+        for index in 0..groups.len() {
+            let Some(name) = groups[index]
+                .0
+                .as_deref()
+                .filter(|name| frame::is_frame(name))
+            else {
+                continue;
+            };
+            let used = groups.iter().zip(&sorted).any(|((_, texts), program)| {
+                *program
+                    && texts
+                        .iter()
+                        .any(|text| program::identifiers(text).any(|word| word == name))
+            });
+            sorted[index] |= used;
+        }
         for (index, found) in families.iter().enumerate() {
             let files = support.files(sorted[group_of[index]]);
             files.families.extend_from_slice(found.text.as_bytes());

@@ -183,7 +183,7 @@ fn dependencies(manifest: &DocumentMut) -> Vec<(String, String)> {
 }
 
 /// The identifiers of `text`, strings' and comments' among them.
-fn identifiers(text: &str) -> impl Iterator<Item = &str> {
+pub(super) fn identifiers(text: &str) -> impl Iterator<Item = &str> {
     text.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .filter(|word| !word.is_empty())
 }

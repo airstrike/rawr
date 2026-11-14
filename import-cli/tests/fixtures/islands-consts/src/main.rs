@@ -11,4 +11,5 @@ fn main() {
     println!("weights {:?}", theme::weights());
     println!("family {}", theme::family());
     println!("{}", theme::version());
+    println!("{}", theme::heading());
 }

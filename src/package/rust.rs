@@ -477,6 +477,13 @@ fn app_crate(
         } else {
             widened
         };
+        // Under a marked root, a native type is named by its path whatever
+        // module declares it (#1932).
+        let copy = if entry.native_root().is_none() {
+            super::polyglot::modules_public(&copy)
+        } else {
+            copy
+        };
         files.push((sources.join(relative), copy));
     }
     if !entry.is_script() {
@@ -1082,13 +1089,22 @@ fn declared_by_rust(entry: &super::graph::Package, path: &[crate::ImmutableStrin
 
 fn app_library(entry: &super::graph::Package, module_root: &std::path::Path) -> String {
     use std::collections::BTreeMap;
-    // The native modules a marked module declares.
+    // The native modules a marked module declares, and the `use`
+    // declarations of its that native paths go through (#1932).
     #[derive(Default)]
     struct Node {
         file: bool,
+        uses: Vec<String>,
         children: BTreeMap<String, Node>,
     }
     let mut root = Node::default();
+    for re_export in entry.re_exports() {
+        let mut node = &mut root;
+        for segment in re_export.modules() {
+            node = node.children.entry(segment.to_string()).or_default();
+        }
+        node.uses.push(re_export.declaration().to_owned());
+    }
     for module in entry.rust_modules() {
         let path = module.modules();
         if declared_by_rust(entry, path) {
@@ -1101,8 +1117,11 @@ fn app_library(entry: &super::graph::Package, module_root: &std::path::Path) -> 
         node.file = true;
     }
     fn render(node: &Node, depth: usize, text: &mut String) {
+        let indent = "    ".repeat(depth);
+        for declaration in &node.uses {
+            text.push_str(&format!("{indent}{declaration}"));
+        }
         for (name, child) in &node.children {
-            let indent = "    ".repeat(depth);
             if child.file {
                 text.push_str(&format!("{indent}pub mod {name};\n"));
             } else {
@@ -1118,8 +1137,13 @@ fn app_library(entry: &super::graph::Package, module_root: &std::path::Path) -> 
         entry.name(),
         module_root.display().to_string(),
     );
+    let uses = std::mem::take(&mut root.uses);
     render(&root, 1, &mut text);
     text.push_str("}\n");
+    // The root's own, where the crate's paths start.
+    for declaration in uses {
+        text.push_str(&declaration);
+    }
     // A package with no `.rs` modules re-exports none.
     let names = root.children.keys().cloned().collect::<Vec<_>>();
     if !names.is_empty() {

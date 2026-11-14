@@ -146,7 +146,7 @@ impl Frame {
             arguments.push(generic.name().to_owned());
         }
         let name = format!(
-            "RawrFrame_{}",
+            "{PREFIX}{}",
             function
                 .member()
                 .chars()
@@ -189,7 +189,7 @@ impl Frame {
     /// The static of each opaque type's slot, by identity, as
     /// `FrameCurrent` takes it.
     pub(super) fn keys(&self) -> String {
-        format!("{}_KEYS", self.name)
+        format!("{}{KEYS}", self.name)
     }
 
     /// An empty frame of the call, at its type parameters.
@@ -302,7 +302,7 @@ impl Frame {
 
     fn give_{slot}(&mut self, arena: &mut Arena, value: {rust}) -> Result<Dynamic, Error> {{
         let at = self.keep_{slot}(value);
-        let handle = frame_handle(arena, self.nonce, {slot}, at, {name}_table_{slot}())?;
+        let handle = frame_handle(arena, self.nonce, {slot}, at, {name}{TABLE}{slot}())?;
         // Before the frame is lent, its nonce is the lend's to come.
         if self.nonce == 0 {{
             self.fresh.push(handle.clone_cast::<NativeHandle>());
@@ -342,7 +342,7 @@ impl Frame {
                 tables,
                 "
 #[allow(non_snake_case)]
-fn {name}_table_{slot}() -> OpaqueTable {{
+fn {name}{TABLE}{slot}() -> OpaqueTable {{
     static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();
     OpaqueTable(TABLE.get_or_init(|| {{
         vec![
@@ -363,7 +363,7 @@ fn {name}_table_{slot}() -> OpaqueTable {{
         Ok(format!(
             "
 #[allow(non_upper_case_globals)]
-static {name}_KEYS: &[([u8; 32], u32)] = &[{keys}];
+static {name}{KEYS}: &[([u8; 32], u32)] = &[{keys}];
 
 /// The frame of a generic function of the script's impl (#593).
 #[allow(non_camel_case_types, dead_code)]
@@ -434,6 +434,33 @@ impl<{header}> Frame for {name}<{arguments}> {{
                 &format!("self.mutable_{slot}(arguments.arena, receiver, "),
             ))
     }
+}
+
+/// What every frame's name starts with.
+const PREFIX: &str = "RawrFrame_";
+/// What a frame's static of its slots' keys adds to its name.
+const KEYS: &str = "_KEYS";
+/// What a frame's table of a slot adds to its name, before the slot.
+const TABLE: &str = "_table_";
+
+/// Whether a top-level item's name is a frame's or one of its parts'.
+pub(super) fn is_frame(name: &str) -> bool {
+    name.starts_with(PREFIX)
+}
+
+/// The frame a top-level item of a frame is part of, by its name: a
+/// frame's keys and tables go where its declaration goes, so the runner's
+/// crate that holds the frame holds them too (#1938). `None` for an item
+/// of no frame.
+pub(super) fn owner(name: &str) -> Option<&str> {
+    if !is_frame(name) {
+        return None;
+    }
+    if let Some(frame) = name.strip_suffix(KEYS) {
+        return Some(frame);
+    }
+    let (frame, slot) = name.rsplit_once(TABLE)?;
+    (!slot.is_empty() && slot.bytes().all(|byte| byte.is_ascii_digit())).then_some(frame)
 }
 
 /// The path of the trait `path` names, as its root spells it: an impl may
