@@ -1922,6 +1922,6 @@
     {"t":"T1920","issue":1920,"title":"T1920: arithmetic_overflow and unconditional_panic through locals and 128-bit integer types","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"rustlings"},"decisions":[],"commit":null,"release":null},
     {"t":"T1921","issue":1921,"title":"T1921: E0382 suggestions for moves by method call and for loop, and labels on the derive-Clone note","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"parity","row":"rustlings"},"decisions":[],"commit":null,"release":null},
     {"t":"T1922","issue":1922,"title":"T1922: Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"parity","row":"build-phase"},"decisions":["D608"],"commit":null,"release":null},
-    {"t":"T1923","issue":1923,"title":"T1923: A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo…","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T1923","issue":1923,"title":"T1923: A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo…","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":"72d2a316d","release":null}
   ]
 }

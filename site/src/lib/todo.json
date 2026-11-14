@@ -4249,7 +4249,7 @@
     {"issue":1920,"title":"arithmetic_overflow and unconditional_panic through locals and 128-bit integer types","state":"open","category":"Divergences from rustc"},
     {"issue":1921,"title":"E0382 suggestions for moves by method call and for loop, and labels on the derive-Clone note","state":"open","category":"Divergences from rustc"},
     {"issue":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1923,"title":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo…","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":1923,"title":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo…","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
