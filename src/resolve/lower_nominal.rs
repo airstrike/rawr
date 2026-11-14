@@ -362,10 +362,10 @@ struct Parser<'a> {
     closures: Vec<closure::Scope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
-    /// The type of a capture rawr knows isn't `Send`, of each closure
+    /// A capture that keeps a closure from being `Send`, of each closure
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
-    unsent_captures: BTreeMap<Span, Ty>,
+    unsent_captures: BTreeMap<Span, closure::Unsent>,
     /// A local a closure that isn't `move` borrows, of each closure that
     /// borrows one, by the closure's span: what a `'static` bound refuses
     /// (rustc's E0373), as `std::thread::spawn`'s does.

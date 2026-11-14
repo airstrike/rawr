@@ -16,6 +16,9 @@ pub(super) static STEPS: &[Step] = &[
     Step::Module("num"),
     Step::Module("path"),
     Step::Module("process"),
+    Step::Module("sync"),
+    Step::Module("sync::mpsc"),
+    Step::Module("thread"),
     Step::Module("time"),
     Step::Held {
         std: "std::path::PathBuf",
@@ -122,6 +125,50 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Copy,
             capability::Kind::PartialEq,
             capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::mpsc::RecvError",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::mpsc::TryRecvError",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::sync::mpsc::RecvTimeoutError",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::thread::Builder",
+        capabilities: &[
+            capability::Kind::Debug,
             capability::Kind::Send,
             capability::Kind::Static,
         ],
@@ -2569,6 +2616,66 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Builtin(Builtin::String),
     },
     Step::Item {
+        path: "sync::mpsc::TryRecvError::Empty",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::mpsc::TryRecvError"),
+    },
+    Step::Item {
+        path: "sync::mpsc::TryRecvError::Disconnected",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::mpsc::TryRecvError"),
+    },
+    Step::Item {
+        path: "sync::mpsc::RecvTimeoutError::Timeout",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::mpsc::RecvTimeoutError"),
+    },
+    Step::Item {
+        path: "sync::mpsc::RecvTimeoutError::Disconnected",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("sync::mpsc::RecvTimeoutError"),
+    },
+    Step::Item {
+        path: "sync::mpsc::RecvError::to_string",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::String),
+    },
+    Step::Item {
+        path: "sync::mpsc::TryRecvError::to_string",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::String),
+    },
+    Step::Item {
+        path: "sync::mpsc::RecvTimeoutError::to_string",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::String),
+    },
+    Step::Item {
+        path: "thread::Builder::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("thread::Builder"),
+    },
+    Step::Item {
+        path: "thread::Builder::name",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Registered("thread::Builder"),
+    },
+    Step::Item {
+        path: "thread::Builder::stack_size",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[Ty::Builtin(Builtin::Usize)],
+        output: Ty::Registered("thread::Builder"),
+    },
+    Step::Item {
         path: "time::UNIX_EPOCH",
         kind: Kind::Value,
         inputs: &[],
@@ -3315,6 +3422,242 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "process::abort_immediate",
         std: "std::process::abort_immediate",
+    },
+    Step::StdAlias {
+        path: "sync::Arc",
+        std: "std::sync::Arc",
+    },
+    Step::StdAlias {
+        path: "sync::Barrier",
+        std: "std::sync::Barrier",
+    },
+    Step::StdAlias {
+        path: "sync::BarrierWaitResult",
+        std: "std::sync::BarrierWaitResult",
+    },
+    Step::StdAlias {
+        path: "sync::Condvar",
+        std: "std::sync::Condvar",
+    },
+    Step::StdAlias {
+        path: "sync::LazyLock",
+        std: "std::sync::LazyLock",
+    },
+    Step::StdAlias {
+        path: "sync::LockResult",
+        std: "std::sync::LockResult",
+    },
+    Step::StdAlias {
+        path: "sync::MappedMutexGuard",
+        std: "std::sync::MappedMutexGuard",
+    },
+    Step::StdAlias {
+        path: "sync::MappedRwLockReadGuard",
+        std: "std::sync::MappedRwLockReadGuard",
+    },
+    Step::StdAlias {
+        path: "sync::MappedRwLockWriteGuard",
+        std: "std::sync::MappedRwLockWriteGuard",
+    },
+    Step::StdAlias {
+        path: "sync::Mutex",
+        std: "std::sync::Mutex",
+    },
+    Step::StdAlias {
+        path: "sync::MutexGuard",
+        std: "std::sync::MutexGuard",
+    },
+    Step::StdAlias {
+        path: "sync::ONCE_INIT",
+        std: "std::sync::ONCE_INIT",
+    },
+    Step::StdAlias {
+        path: "sync::Once",
+        std: "std::sync::Once",
+    },
+    Step::StdAlias {
+        path: "sync::OnceLock",
+        std: "std::sync::OnceLock",
+    },
+    Step::StdAlias {
+        path: "sync::OnceState",
+        std: "std::sync::OnceState",
+    },
+    Step::StdAlias {
+        path: "sync::PoisonError",
+        std: "std::sync::PoisonError",
+    },
+    Step::StdAlias {
+        path: "sync::ReentrantLock",
+        std: "std::sync::ReentrantLock",
+    },
+    Step::StdAlias {
+        path: "sync::ReentrantLockGuard",
+        std: "std::sync::ReentrantLockGuard",
+    },
+    Step::StdAlias {
+        path: "sync::RwLock",
+        std: "std::sync::RwLock",
+    },
+    Step::StdAlias {
+        path: "sync::RwLockReadGuard",
+        std: "std::sync::RwLockReadGuard",
+    },
+    Step::StdAlias {
+        path: "sync::RwLockWriteGuard",
+        std: "std::sync::RwLockWriteGuard",
+    },
+    Step::StdAlias {
+        path: "sync::SyncView",
+        std: "std::sync::SyncView",
+    },
+    Step::StdAlias {
+        path: "sync::TryLockError",
+        std: "std::sync::TryLockError",
+    },
+    Step::StdAlias {
+        path: "sync::TryLockResult",
+        std: "std::sync::TryLockResult",
+    },
+    Step::StdAlias {
+        path: "sync::UniqueArc",
+        std: "std::sync::UniqueArc",
+    },
+    Step::StdAlias {
+        path: "sync::WaitTimeoutResult",
+        std: "std::sync::WaitTimeoutResult",
+    },
+    Step::StdAlias {
+        path: "sync::Weak",
+        std: "std::sync::Weak",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::IntoIter",
+        std: "std::sync::mpsc::IntoIter",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::Iter",
+        std: "std::sync::mpsc::Iter",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::Receiver",
+        std: "std::sync::mpsc::Receiver",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::SendError",
+        std: "std::sync::mpsc::SendError",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::Sender",
+        std: "std::sync::mpsc::Sender",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::SyncSender",
+        std: "std::sync::mpsc::SyncSender",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::TryIter",
+        std: "std::sync::mpsc::TryIter",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::TrySendError",
+        std: "std::sync::mpsc::TrySendError",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::channel",
+        std: "std::sync::mpsc::channel",
+    },
+    Step::StdAlias {
+        path: "sync::mpsc::sync_channel",
+        std: "std::sync::mpsc::sync_channel",
+    },
+    Step::StdAlias {
+        path: "thread::AccessError",
+        std: "std::thread::AccessError",
+    },
+    Step::StdAlias {
+        path: "thread::JoinHandle",
+        std: "std::thread::JoinHandle",
+    },
+    Step::StdAlias {
+        path: "thread::LocalKey",
+        std: "std::thread::LocalKey",
+    },
+    Step::StdAlias {
+        path: "thread::Result",
+        std: "std::thread::Result",
+    },
+    Step::StdAlias {
+        path: "thread::Scope",
+        std: "std::thread::Scope",
+    },
+    Step::StdAlias {
+        path: "thread::ScopedJoinHandle",
+        std: "std::thread::ScopedJoinHandle",
+    },
+    Step::StdAlias {
+        path: "thread::Thread",
+        std: "std::thread::Thread",
+    },
+    Step::StdAlias {
+        path: "thread::ThreadId",
+        std: "std::thread::ThreadId",
+    },
+    Step::StdAlias {
+        path: "thread::add_spawn_hook",
+        std: "std::thread::add_spawn_hook",
+    },
+    Step::StdAlias {
+        path: "thread::available_parallelism",
+        std: "std::thread::available_parallelism",
+    },
+    Step::StdAlias {
+        path: "thread::current",
+        std: "std::thread::current",
+    },
+    Step::StdAlias {
+        path: "thread::current_id",
+        std: "std::thread::current_id",
+    },
+    Step::StdAlias {
+        path: "thread::panicking",
+        std: "std::thread::panicking",
+    },
+    Step::StdAlias {
+        path: "thread::park",
+        std: "std::thread::park",
+    },
+    Step::StdAlias {
+        path: "thread::park_timeout",
+        std: "std::thread::park_timeout",
+    },
+    Step::StdAlias {
+        path: "thread::park_timeout_ms",
+        std: "std::thread::park_timeout_ms",
+    },
+    Step::StdAlias {
+        path: "thread::scope",
+        std: "std::thread::scope",
+    },
+    Step::StdAlias {
+        path: "thread::sleep",
+        std: "std::thread::sleep",
+    },
+    Step::StdAlias {
+        path: "thread::sleep_ms",
+        std: "std::thread::sleep_ms",
+    },
+    Step::StdAlias {
+        path: "thread::sleep_until",
+        std: "std::thread::sleep_until",
+    },
+    Step::StdAlias {
+        path: "thread::spawn",
+        std: "std::thread::spawn",
+    },
+    Step::StdAlias {
+        path: "thread::yield_now",
+        std: "std::thread::yield_now",
     },
     Step::StdAlias {
         path: "time::Duration",

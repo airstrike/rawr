@@ -2068,9 +2068,12 @@ pub(crate) fn std_pointer(path: &str) -> Option<&'static str> {
 pub(crate) const MPSC_SENDER: &str = "MpscSender";
 /// Rawr's builtin name for `std::sync::mpsc::Receiver`.
 pub(crate) const MPSC_RECEIVER: &str = "MpscReceiver";
+/// Rawr's builtin name for `std::sync::mpsc::SyncSender`.
+pub(crate) const MPSC_SYNC_SENDER: &str = "MpscSyncSender";
 
 /// Rawr's builtin name for the std thread type `path` names: `Mutex`,
-/// `JoinHandle`, or a `Sender` or `Receiver` of `std::sync::mpsc`.
+/// `JoinHandle`, `ScopedJoinHandle`, or a `Sender`, `SyncSender` or
+/// `Receiver` of `std::sync::mpsc`.
 pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
     match path {
         "Mutex" | "sync::Mutex" | "std::sync::Mutex" => Some("Mutex"),
@@ -2080,6 +2083,13 @@ pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
         }
         "Receiver" | "mpsc::Receiver" | "sync::mpsc::Receiver" | "std::sync::mpsc::Receiver" => {
             Some(MPSC_RECEIVER)
+        }
+        "SyncSender"
+        | "mpsc::SyncSender"
+        | "sync::mpsc::SyncSender"
+        | "std::sync::mpsc::SyncSender" => Some(MPSC_SYNC_SENDER),
+        "ScopedJoinHandle" | "thread::ScopedJoinHandle" | "std::thread::ScopedJoinHandle" => {
+            Some("ScopedJoinHandle")
         }
         _ => None,
     }

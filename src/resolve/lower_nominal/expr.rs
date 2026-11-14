@@ -1267,7 +1267,13 @@ impl<'a> Parser<'a> {
         {
             match binding.qualified.as_str() {
                 "std::thread::spawn" => return self.parse_thread_spawn(name_span.start()),
-                "std::sync::mpsc::channel" => return self.parse_channel(name_span.start()),
+                "std::thread::scope" => return self.parse_thread_scope(name_span.start()),
+                "std::sync::mpsc::channel" => {
+                    return self.parse_channel(name_span.start(), thread::Bound::Unbounded);
+                }
+                "std::sync::mpsc::sync_channel" => {
+                    return self.parse_channel(name_span.start(), thread::Bound::Bounded);
+                }
                 _ => {}
             }
         }

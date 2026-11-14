@@ -122,13 +122,32 @@ pub(super) fn declare(
             Held::Text(_) => None,
         })
         .collect::<Vec<_>>();
-    let module = |path: &str| path.split_once("::").map(|(module, _)| module.to_owned());
-    let modules = values
+    let forms = values
         .iter()
         .flat_map(|value| value.forms())
-        .filter_map(|form| module(held::Value::facade(form)))
-        .chain(bound.iter().filter_map(|path| module(path)))
+        .map(held::Value::facade)
         .collect::<BTreeSet<_>>();
+    // Each module above a held type or a bound item, outermost first:
+    // `sync` and `sync::mpsc` of `sync::mpsc::TryRecvError`. A held type's
+    // member is under its type's modules.
+    let mut modules = BTreeSet::new();
+    for path in forms
+        .iter()
+        .copied()
+        .chain(bound.iter().map(String::as_str))
+    {
+        let mut owner = path.rsplit_once("::").map(|(owner, _)| owner);
+        if forms.contains(owner.unwrap_or_default()) {
+            owner = owner
+                .and_then(|owner| owner.rsplit_once("::"))
+                .map(|(owner, _)| owner);
+        }
+        let mut module = owner;
+        while let Some(path) = module {
+            modules.insert(path.to_owned());
+            module = path.rsplit_once("::").map(|(parent, _)| parent);
+        }
+    }
     for module in &modules {
         sink.module(module.as_str())?;
     }

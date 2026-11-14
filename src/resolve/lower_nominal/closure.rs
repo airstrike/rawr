@@ -14,6 +14,15 @@ use crate::tokenizer::Token;
 use crate::{ImmutableString, Position, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A capture that keeps its closure from being `Send`: one it holds that
+/// rawr knows isn't `Send`, or one it borrows that isn't `Sync`, as `&T` is
+/// `Send` only where `T` is `Sync`.
+#[derive(Clone)]
+pub(super) struct Unsent {
+    pub(super) ty: Ty,
+    pub(super) borrowed: bool,
+}
+
 /// A closure passed to the host: it becomes its own generated function, an
 /// item the host invokes like a named function, after the values it
 /// captured.
@@ -828,14 +837,19 @@ impl<'a> Parser<'a> {
             flow.set_origins(expression, closure.origins.clone());
             flow.set_closure_keeps(expression, closure.keeps.clone());
         }
-        if let Some(ty) = scope
-            .captures
-            .iter()
-            .filter_map(|name| self.bindings.get(name.as_str()))
-            .map(|binding| self.inference.resolve(&binding.ty))
-            .find(|ty| self.not_send(ty))
-        {
-            self.unsent_captures.insert(expression, ty);
+        if let Some(unsent) = scope.captures.iter().find_map(|name| {
+            let ty = self
+                .inference
+                .resolve(&self.bindings.get(name.as_str())?.ty);
+            let borrowed = !moved && !scope.consumed.contains(name);
+            let refused = if borrowed {
+                !self.shared_between_threads(&ty)
+            } else {
+                self.not_send(&ty)
+            };
+            refused.then_some(Unsent { ty, borrowed })
+        }) {
+            self.unsent_captures.insert(expression, unsent);
         }
         if !moved
             && let Some(name) = scope

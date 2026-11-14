@@ -396,6 +396,126 @@ main();
     assert_eq!(printed(source), "1\n2\n");
 }
 
+/// `try_recv` and `recv_timeout` give std's own `TryRecvError` and
+/// `RecvTimeoutError`, and `recv` std's `RecvError`, which a program
+/// matches, compares and writes as std does; a channel's halves and its
+/// turbofish are named in a body as rustc reads them (#950).
+#[test]
+fn a_receive_s_errors_are_std_s_own() {
+    let source = r#"
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::time::Duration;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+    println!("{:?}", rx.try_recv());
+    tx.send(1).unwrap();
+    println!("{:?}", rx.try_recv());
+    match rx.try_recv() {
+        Err(TryRecvError::Empty) => println!("empty"),
+        Err(_) => println!("gone"),
+        Ok(v) => println!("{v}"),
+    }
+    println!("{:?}", rx.recv_timeout(Duration::from_millis(5)));
+    drop(tx);
+    let gone = rx.try_recv().unwrap_err();
+    println!("{gone:?} {gone} {}", gone == TryRecvError::Disconnected);
+    let timed = rx.recv_timeout(Duration::from_millis(5));
+    println!("{:?} {}", timed, timed == Err(RecvTimeoutError::Disconnected));
+    let e = rx.recv().unwrap_err();
+    println!("{e:?} {e} {}", e.to_string().len());
+    let pair = std::sync::mpsc::channel::<u8>();
+    let (tx, rx): (mpsc::Sender<u8>, std::sync::mpsc::Receiver<u8>) = pair;
+    tx.send(3).unwrap();
+    println!("{:?}", rx.try_recv());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Err(Empty)\nOk(1)\nempty\nErr(Timeout)\n\
+         Disconnected receiving on a closed channel true\nErr(Disconnected) true\n\
+         RecvError receiving on a closed channel 29\nOk(3)\n"
+    );
+    let report = refused(
+        "use std::sync::mpsc;\nfn main() { let (tx, rx) = mpsc::channel::<i32>(); \
+         let _ = rx.recv_timeout(5); tx.send(1).unwrap(); }\nmain();\n",
+    );
+    assert!(report.contains("E0308"), "{report}");
+}
+
+/// A `sync_channel`'s sender waits while the channel is full, a scope's
+/// threads borrow what outlives it and are joined before it returns, and a
+/// `thread::Builder` names the thread it spawns, as std's do (#950).
+#[cfg(feature = "sync")]
+#[test]
+fn a_sync_channel_a_scope_and_a_builder_run_as_std_s() {
+    let source = r#"
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::sync_channel(1);
+    let producer = thread::spawn(move || {
+        for n in 0..4 {
+            tx.send(n * n).unwrap();
+        }
+    });
+    let got: Vec<i32> = rx.iter().collect();
+    producer.join().unwrap();
+    println!("{got:?}");
+    let (tx, rx) = mpsc::sync_channel::<String>(0);
+    let other = tx.clone();
+    thread::spawn(move || other.send(String::from("met")).unwrap());
+    println!("{}", rx.recv().unwrap());
+    drop(tx);
+
+    let numbers = vec![1, 2, 3, 4];
+    let mut total = 0;
+    let both = thread::scope(|s| {
+        let first = s.spawn(|| numbers.iter().sum::<i32>());
+        let second: thread::ScopedJoinHandle<'_, usize> = s.spawn(|| numbers.len());
+        s.spawn(|| {
+            total += numbers[0] + numbers[3];
+        });
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    println!("{both:?} {total} {numbers:?}");
+
+    let builder = thread::Builder::new().name(String::from("worker")).stack_size(64 * 1024);
+    let handle: thread::JoinHandle<i32> = builder.spawn(|| 6 * 7).unwrap();
+    println!("{}", handle.join().unwrap());
+    let spawned: std::io::Result<thread::JoinHandle<u8>> = thread::Builder::new().spawn(|| 1);
+    println!("{:?}", spawned.map(|handle| handle.join().unwrap()).ok());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[0, 1, 4, 9]\nmet\n(10, 4) 5 [1, 2, 3, 4]\n42\nSome(1)\n"
+    );
+}
+
+/// A scoped thread's closure may borrow, but what it borrows must be
+/// `Sync`, and a builder's closure must not borrow a local, as rustc checks
+/// `Scope::spawn`'s and `Builder::spawn`'s bounds (#950).
+#[test]
+fn a_scoped_or_built_thread_s_closure_meets_std_s_bounds() {
+    let report = refused(
+        "use std::rc::Rc;\nuse std::thread;\nfn main() { let shared = Rc::new(5); \
+         thread::scope(|s| { s.spawn(|| println!(\"{shared}\")); }); }\nmain();\n",
+    );
+    assert!(
+        report.contains("E0277") && report.contains("cannot be shared between threads safely"),
+        "{report}"
+    );
+    let report = refused(
+        "use std::thread;\nfn main() { let v = vec![1]; \
+         let h = thread::Builder::new().spawn(|| v.len()).unwrap(); h.join().unwrap(); }\nmain();\n",
+    );
+    assert!(report.contains("E0373"), "{report}");
+}
+
 /// A `Mutex`'s `get_mut()` and `into_inner()`, unwrapped as `lock()` is,
 /// reach its value (#949).
 #[test]

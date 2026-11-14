@@ -1752,9 +1752,7 @@ impl<'a> Parser<'a> {
             }
             // A `ParseIntError` and kin is its message.
             Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
-            Ty::Thread(thread::Kind::SendError | thread::Kind::RecvError, _) => {
-                Some(self.thread_text(value, false))
-            }
+            Ty::Thread(thread::Kind::SendError, _) => Some(self.thread_text(value, false)),
             // A `Cow` writes what it derefs to.
             Ty::Cow(borrowed) => {
                 let payload = self.prelude_op(PreludeOp::CowValue, [value]);
