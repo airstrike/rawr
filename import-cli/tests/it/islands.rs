@@ -86,6 +86,55 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
     assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
 }
 
+/// A save whose native build fails, here at its link, leaves the program
+/// running, and a save back to the sources it was built from owes no
+/// native build: a body edit after it swaps in place, and the program
+/// keeps its count (#1892).
+#[test]
+fn a_save_back_from_a_failed_native_build_swaps_in_place() {
+    let root = ISLANDS.project();
+    let main = root.join("src/main.rs");
+    let physics = root.join("src/physics.rs");
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    run.until(|line| parse(line).is_some_and(|(tick, _)| tick >= 3));
+    let original = fs::read_to_string(&main).unwrap();
+    fs::write(
+        &main,
+        original.replace(
+            "fn main() {",
+            "unsafe extern \"C\" {\n    fn rawr_islands_never_defined();\n}\n\nfn main() {\n    \
+             if std::env::var_os(\"RAWR_ISLANDS_NEVER\").is_some() {\n        \
+             unsafe { rawr_islands_never_defined() };\n    }",
+        ),
+    )
+    .unwrap();
+    // The build fails; the program keeps ticking.
+    while !run
+        .seen
+        .iter()
+        .any(|line| line.contains("rawr_islands_never_defined"))
+    {
+        run.until(|_| true);
+    }
+    let failed = run.seen.len();
+    fs::write(&main, &original).unwrap();
+    edit(&physics, "const SCALE: i64 = 1;", "const SCALE: i64 = 100;");
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
+    let (tick, _) = parse(&swapped).unwrap();
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{status}\n{seen}");
+    assert!(tick > 3, "{seen}");
+    let after = &run.seen[failed..];
+    assert!(
+        !after.iter().any(|line| line.contains("restarting")
+            || line.contains("still owed")
+            || parse(line).is_some_and(|(tick, _)| tick == 1)),
+        "{seen}"
+    );
+}
+
 /// A private field on a type native code holds restarts the program once
 /// (#1761): the save prepares again, says why, and starts the program
 /// again, running the save.
@@ -3153,6 +3202,84 @@ fn a_run_of_a_marked_type_missing_a_native_supertrait_fails_with_cargo_s_error_a
     assert!(printed.contains("src/badge.rs"), "{printed}");
     assert!(!printed.contains("RAWR-"), "{printed}");
     assert!(!printed.contains("__Rawr"), "{printed}");
+    assert!(!printed.contains("target/rawr"), "{printed}");
+}
+
+/// A marked call whose argument doesn't satisfy the crate method's bound,
+/// as inboard's `.spacing("zero")` for an `impl Into<Pixels>` (#1891): the
+/// running program's save fails with rustc's E0277 at the argument, with
+/// no preparation or native build, and so does `rawr check`, with nothing
+/// of rawr's generated crates.
+#[test]
+fn a_marked_argument_that_misses_a_crate_bound_fails_its_check_at_the_marked_line() {
+    let root = THEME.project();
+    let events = root.join("events.jsonl");
+    let stop = root.join("stop");
+    let mut run = start(
+        &root,
+        &[
+            ("ISLANDS_STOP", stop.clone()),
+            ("RAWR_MCP_EVENTS", events.clone()),
+        ],
+    );
+    run.until(|line| line.starts_with("tick "));
+    let before = fs::read_to_string(&events).unwrap();
+    let home = root.join("src/home.rs");
+    edit(
+        &home,
+        "column![top_bar].spacing(0)",
+        "column![top_bar].spacing(\"zero\")",
+    );
+    let told = run.told(&events, |text| {
+        text[before.len()..].contains("\"event\":\"failed\"")
+    });
+    let after = &told[before.len()..];
+    let failed = after
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "failed")
+        .unwrap();
+    let rendered = failed["rendered"].as_str().unwrap_or_default();
+    assert!(
+        failed["diagnostics"][0]["code"] == "E0277"
+            && failed["file"] == home.to_string_lossy().as_ref()
+            && failed["line"] == 263
+            && rendered.starts_with(
+                "error[E0277]: the trait bound `ui::Pixels: From<&str>` is not satisfied\n"
+            )
+            && rendered.contains("src/home.rs:263:52")
+            && !rendered.contains("RAWR-"),
+        "{failed}"
+    );
+    assert!(!after.contains("\"event\":\"preparing\""), "{told}");
+    fs::write(&stop, "").unwrap();
+    run.told(&events, |text| {
+        text.contains("{\"event\":\"ended\",\"status\":0}")
+    });
+    run.child.kill().unwrap();
+    run.wait();
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(!check.status.success(), "{printed}");
+    assert!(
+        printed.contains("error[E0277]: the trait bound `Pixels: From<&str>` is not satisfied"),
+        "{printed}"
+    );
+    assert!(printed.contains("src/home.rs:263:"), "{printed}");
+    assert!(!printed.contains("RAWR-"), "{printed}");
+    assert!(!printed.contains("__rawr"), "{printed}");
     assert!(!printed.contains("target/rawr"), "{printed}");
 }
 

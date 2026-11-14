@@ -156,6 +156,17 @@ impl<B> Slot<B> {
         Installation::Installed(self.current.replace(candidate))
     }
 
+    /// The cold replacement for `revision`'s miss failed before it ran, as a
+    /// native build that fails does (#1892): no replacement is owed for it
+    /// any more, so the next save begins on the current owner, whose own
+    /// compile says whether its build covers that save. A newer miss stays
+    /// owed.
+    pub fn forget_miss(&mut self, revision: super::Revision) {
+        if self.newest_miss == Some(revision) {
+            self.newest_miss = None;
+        }
+    }
+
     /// Borrow the complete identity of the current route.
     #[must_use]
     pub fn key(&self) -> Option<super::GenerationKey> {

@@ -21,6 +21,8 @@ impl<'a> Parser<'a> {
         })?;
         let facade = owner.fingerprint().clone();
         #[cfg(feature = "rust-import")]
+        self.check_into_arguments(&item, &requirements, arguments)?;
+        #[cfg(feature = "rust-import")]
         if self.imported.is_some() {
             let count = arguments
                 .iter()

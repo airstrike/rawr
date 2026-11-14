@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 176;
+const CLASSIFIER_VERSION: u32 = 177;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -3172,10 +3172,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 && !names_other_parameter(target, u32::MAX)
                 && self.is_core_trait(trait_id, "Into")
             {
+                // Core's `Into` by its path, so the check rejects an
+                // argument none of the cases takes as rustc does (#1891).
                 let cases = self.conversion_cases(target)?;
                 if !cases.is_empty() {
                     self.retain_array::<Case>(cases.len())?;
-                    relations.push(Relation::new(*index, converted, cases));
+                    relations.push(
+                        Relation::new(*index, converted, cases)
+                            .of_std(Some("core::convert::Into".into())),
+                    );
                 }
                 continue;
             }

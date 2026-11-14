@@ -432,6 +432,12 @@ impl<B> Lane<B> {
         self.slot.compile(request, snapshot).map_err(Error::Process)
     }
 
+    /// The native build for `revision`'s miss failed: the running runner
+    /// owes no replacement for it (#1892).
+    pub(crate) fn forget_miss(&mut self, revision: rawr_import::supervisor::Revision) {
+        self.slot.forget_miss(revision);
+    }
+
     /// Capture the child's request before mutable native preparation.
     pub(crate) fn begin_compile(
         &mut self,

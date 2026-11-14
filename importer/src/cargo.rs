@@ -920,7 +920,11 @@ impl Request {
                         .starts_with("registry+https://github.com/rust-lang/crates.io-index")
                         || cargo_id.starts_with("sparse+https://index.crates.io/") =>
                 {
-                    config::Dependency::registry(alias, &format!("={}", package.version()))?
+                    // Without its build metadata (`0.1.13+1.0.8`), which a
+                    // requirement ignores and cargo warns about (#1891).
+                    let version = package.version();
+                    let (version, _) = version.split_once('+').unwrap_or((version, ""));
+                    config::Dependency::registry(alias, &format!("={version}"))?
                 }
                 unit::PackageSource::Git { cargo_id, .. } => {
                     // The same source id as the project's, so the project's

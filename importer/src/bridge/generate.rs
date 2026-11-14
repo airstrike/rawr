@@ -7542,7 +7542,13 @@ fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
     } else if let Some(directory) = hidden.source.strip_prefix("path+file://") {
         table.insert("path", directory.into());
     } else {
-        table.insert("version", format!("={}", hidden.version).into());
+        // Without its build metadata (`1.1.5+spec-1.1.0`), which a
+        // requirement ignores and cargo warns about (#1891).
+        let (version, _) = hidden
+            .version
+            .split_once('+')
+            .unwrap_or((&hidden.version, ""));
+        table.insert("version", format!("={version}").into());
     }
     table.insert("default-features", false.into());
     table
@@ -26564,6 +26570,24 @@ mod tests {
         assert_eq!(
             document["dependencies"]["__rawr_crate_ui_shell_0123456789abcdef"]["path"].as_str(),
             Some("/app/ui_shell")
+        );
+    }
+
+    /// A registry crate a macro's `$crate` names, whose locked version has
+    /// build metadata (`toml_parser 1.1.5+spec-1.1.0`), is pinned without
+    /// it: a requirement ignores the metadata, and cargo warns about it in
+    /// every manifest that writes it (#1891).
+    #[test]
+    fn a_hidden_registry_crate_is_pinned_without_its_build_metadata() {
+        let table = super::hidden_dependency(&super::HiddenCrate {
+            segment: "__rawr_crate_toml_parser_0123456789abcdef".to_owned(),
+            package: "toml_parser".to_owned(),
+            version: "1.1.5+spec-1.1.0".to_owned(),
+            source: "registry+https://github.com/rust-lang/crates.io-index".to_owned(),
+        });
+        assert_eq!(
+            table.get("version").and_then(|version| version.as_str()),
+            Some("=1.1.5")
         );
     }
 
