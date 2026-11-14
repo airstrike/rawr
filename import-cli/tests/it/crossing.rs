@@ -470,6 +470,21 @@ fn a_handle_a_later_renderer_fixes_through_a_boxed_method_runs() {
     );
 }
 
+/// iced's screenshot at iced's own renderer (#1939): the fallback renderer
+/// over backends a public path reaches is no alias's only name, so its
+/// handle is the generic impl's `A::Handle` at that instance, which fixes
+/// `picture(handle)`'s `Handle` before `impl Into<Handle>` would take the
+/// argument's `&Handle` (E0271 before). The output is `cargo run`'s.
+#[test]
+fn a_handle_a_generic_renderer_impl_gives_at_its_instance_runs() {
+    let (rawr, cargo) = both_printed("opened.rs", "Increment");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("view pad 0 picture Handle { name: \"open\" }@1 [Increment]"),
+        "{rawr}"
+    );
+}
+
 /// iced's editor (#1633): `action(new_icon(), ..)` calls the program's
 /// `fn new_icon<Message>() -> impl Widget<Message>`, whose `Message` only
 /// the bound of `action`'s parameter fixes, from the message a later

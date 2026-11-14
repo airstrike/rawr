@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 181;
+const CLASSIFIER_VERSION: u32 = 186;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2742,26 +2742,24 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 }
                 cases.push(Case::new(this, Box::new([value])));
             }
-            // A generic implementation at each type only a crate's alias
+            // A generic implementation at each concrete type it is read at
+            // (`projection_candidates`): at a type only a crate's alias
             // names, as `impl<A, B> geometry::Renderer for Renderer<A, B>`
             // is at iced's `Renderer`, whose `Geometry` is then canvas's
-            // `Geometry` (T318).
-            for index in self.instance_aliases() {
-                let Some(model::Kind::TypeAlias { ty: instance, .. }) = self
-                    .graph
-                    .definitions()
-                    .nth(*index)
-                    .map(model::Definition::kind)
-                else {
+            // `Geometry` (T318), and at the other impls' self types, as
+            // `impl<A, B> image::Renderer for fallback::Renderer<A, B>` is
+            // at `fallback::Renderer<wgpu::Renderer, tiny_skia::Renderer>`,
+            // whose `Handle` is wgpu's `A::Handle` (#1939).
+            let read = self
+                .graph
+                .definition_index(&first.associated)
+                .and_then(|associated| self.projection_cases(&first.trait_id, associated));
+            for case in read.iter().flat_map(|read| read.iter()) {
+                let Some(value) = self.associated_through(rest, case.value.clone()) else {
                     continue;
                 };
-                let Some(value) = self
-                    .associated_at(&first.trait_id, &first.name, instance, 0)
-                    .and_then(|value| self.associated_through(rest, value))
+                let (Ok(this), Ok(value)) = (self.convert(&case.candidate), self.convert(&value))
                 else {
-                    continue;
-                };
-                let (Ok(this), Ok(value)) = (self.convert(instance), self.convert(&value)) else {
                     continue;
                 };
                 if names_other_parameter(&this, u32::MAX)
@@ -12958,7 +12956,7 @@ fn argument_binders_static(signature: &model::Signature) -> Option<model::Signat
         let named = signature
             .inputs()
             .fold(receiver, |named, input| named.and(naming(input, &late)))
-            .and(match naming(signature.output(), &late) {
+            .and(match output_naming(signature, &late) {
                 Naming::Not => Naming::Not,
                 Naming::Argument | Naming::Otherwise => Naming::Otherwise,
             });
@@ -12971,6 +12969,52 @@ fn argument_binders_static(signature: &model::Signature) -> Option<model::Signat
         });
     }
     (kept.len() < signature.binders().len()).then(|| chosen.with_binders(kept.into()))
+}
+
+/// How `signature`'s output names `lifetime`. An opaque output, as an
+/// `async fn`'s future, captures every lifetime of the inputs, so it is
+/// named by its bounds alone, as wgpu's `initialize_adapter_from_env_or_
+/// default(.., surface: Option<&Surface<'_>>)` gives a future of an
+/// `Adapter`, which names none (#1937). A capture of a lifetime the call
+/// picks is the lifetime the call picks.
+fn output_naming(signature: &model::Signature, lifetime: &model::Lifetime) -> Naming {
+    let model::Type::ImplTrait { bounds, .. } = signature.output() else {
+        return naming(signature.output(), lifetime);
+    };
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => naming(ty, lifetime),
+        model::Argument::Lifetime(named) if named == lifetime => Naming::Otherwise,
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => Naming::Not,
+    };
+    let outlives = |named: &model::Lifetime| {
+        if named == lifetime {
+            Naming::Otherwise
+        } else {
+            Naming::Not
+        }
+    };
+    bounds.iter().fold(Naming::Not, |named, predicate| {
+        named.and(match predicate {
+            model::Predicate::Bound {
+                bound: model::Bound::Trait { arguments, .. },
+                ..
+            } => arguments
+                .iter()
+                .fold(Naming::Not, |named, next| named.and(argument(next))),
+            model::Predicate::Bound {
+                bound: model::Bound::MaybeSized,
+                ..
+            }
+            | model::Predicate::ConstEvaluatable(_) => Naming::Not,
+            model::Predicate::ProjectionEquality { ty, .. } => naming(ty, lifetime),
+            model::Predicate::TypeOutlives {
+                lifetime: named, ..
+            } => outlives(named),
+            model::Predicate::LifetimeOutlives { longer, shorter } => {
+                outlives(longer).and(outlives(shorter))
+            }
+        })
+    })
 }
 
 /// How a type names a lifetime ([`naming`]).
@@ -13331,11 +13375,14 @@ fn names_late_lifetime(ty: &model::Type) -> bool {
         model::Type::Array { element, .. } | model::Type::RawPointer { ty: element, .. } => {
             names_late_lifetime(element)
         }
-        // A function pointer, a trait object or an opaque type is held to
-        // its own rules elsewhere.
-        model::Type::FunctionPointer(_)
-        | model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. } => true,
+        // An opaque type names what it captures, which rustc gives exactly:
+        // an edition 2021 `-> impl Future<..>`, as wgpu's `request_device(
+        // &self, desc: &DeviceDescriptor<'_>)` gives, captures none of the
+        // call's lifetimes (#1937).
+        model::Type::ImplTrait { captures, .. } => captures.iter().any(argument),
+        // A function pointer or a trait object is held to its own rules
+        // elsewhere.
+        model::Type::FunctionPointer(_) | model::Type::TraitObject { .. } => true,
         model::Type::Primitive(_)
         | model::Type::Parameter { .. }
         | model::Type::SelfType(_)

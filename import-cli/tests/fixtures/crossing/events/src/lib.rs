@@ -662,6 +662,30 @@ pub mod widgets {
         type Handle = crate::image::Handle;
     }
 
+    /// Backends a public path reaches, as iced's `renderer::wgpu` and
+    /// `tiny_skia` are: a fallback renderer over them is no alias's only
+    /// name, so its handle is the generic impl's at the program's instance.
+    pub mod open {
+        use parts::imaging;
+
+        /// A backend.
+        pub struct Wide;
+        /// Another.
+        pub struct Narrow;
+
+        /// A renderer over both, as iced's `Renderer` is over the backends
+        /// its features enable.
+        pub type Renderer = super::fallback::Renderer<Wide, Narrow>;
+
+        impl imaging::Renderer for Wide {
+            type Handle = crate::image::Handle;
+        }
+
+        impl imaging::Renderer for Narrow {
+            type Handle = crate::image::Handle;
+        }
+    }
+
     /// A renderer over two backends draws the first's handles, as iced's
     /// fallback renderer does.
     impl<A, B> imaging::Renderer for fallback::Renderer<A, B>
