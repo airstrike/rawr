@@ -1012,10 +1012,7 @@ fn prepare_resolving(
         }
         None => request,
     };
-    let outputs = rawr_import::location::outputs_here(&project);
-    let native = rawr::reload::source::Inputs::imported(request.watch())
-        .outside(&outputs)
-        .with_checkouts(&rawr_import::location::checkouts_here());
+    let native = crate::owner::resident::native_inputs(&project, request.watch());
     let inputs = rawr::reload::source::Inputs::from_graph(&source).with_native(&native);
     Ok(
         crate::Prepared::new(request, transport, project, inputs, &graph, limits)

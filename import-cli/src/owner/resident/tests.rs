@@ -223,6 +223,46 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
     );
 }
 
+/// A native build's proof names the generated runner's own files under
+/// Rawr's store, and its sources and lock are Rawr's writes: a change under
+/// `target/rawr` starts no save and is no native change, while one to the
+/// program's own native input is both (#1890).
+#[test]
+fn a_change_under_target_rawr_triggers_nothing() {
+    let fixture = Fixture::new();
+    let native = fixture.root.join("native.rs");
+    fs::write(&native, "pub fn value() -> i64 { 1 }\n").unwrap();
+    let target = rawr_import::location::outputs_here(&fixture.root)[0].clone();
+    let generated = target.join("rawr/store/executions/0a1b/generated/final");
+    let lock = generated.join("Cargo.lock");
+    let kept = target.join("rawr/crate/src/main.rs");
+    for file in [&lock, &generated.join("src/main.rs"), &kept] {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, "").unwrap();
+    }
+    let watch = [
+        Watch::Exact(native.clone()),
+        Watch::Exact(lock.clone()),
+        Watch::Tree(generated.clone()),
+        Watch::Exact(kept.clone()),
+    ];
+    let inputs = fixture
+        .inputs()
+        .with_native(&super::native_inputs(&fixture.root, watch));
+    let adapter = rawr_watch::Adapter::manual_inputs(inputs, Duration::ZERO).unwrap();
+    let baseline = adapter.native_baseline();
+
+    for file in [&lock, &generated.join("src/main.rs"), &kept] {
+        adapter.inject_modify(file);
+    }
+    assert!(adapter.start(Instant::now()).is_none());
+    assert!(adapter.resident_change(&baseline).is_none());
+
+    adapter.inject_modify(&native);
+    assert!(adapter.start(Instant::now()).is_some());
+    assert!(adapter.resident_change(&baseline).is_some());
+}
+
 #[test]
 fn resident_parent_only_native_event_invalidates_parent_baseline() {
     let fixture = Fixture::new();

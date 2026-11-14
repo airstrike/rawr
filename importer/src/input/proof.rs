@@ -549,6 +549,41 @@ pub(crate) enum Entry {
 }
 
 impl Entry {
+    /// Whether this entry is one of the generated runner's own files, which
+    /// Rawr writes into its store.
+    fn generated(&self) -> bool {
+        matches!(
+            self,
+            Self::File {
+                role: Role::Harness,
+                ..
+            } | Self::Missing {
+                role: Role::Harness,
+                ..
+            }
+        )
+    }
+
+    /// Whether a build wrote what this entry proves: the generated runner's
+    /// own files, or a path under one of `outputs`. A workspace is one when
+    /// each of its paths is.
+    fn written(&self, outputs: &[PathBuf]) -> bool {
+        let under = |path: &str| {
+            let path = crate::location::resolved(Path::new(path));
+            outputs.iter().any(|output| path.starts_with(output))
+        };
+        match self {
+            _ if self.generated() => true,
+            Self::Workspace { paths, .. } => {
+                !paths.is_empty() && paths.iter().all(|path| under(path))
+            }
+            Self::File { path, .. } | Self::Directory { path, .. } | Self::Missing { path, .. } => {
+                under(path)
+            }
+            _ => false,
+        }
+    }
+
     /// What this entry proves, as a person names it: a file by its path,
     /// a package by its id, a variable by its name.
     fn subject(&self) -> String {
@@ -920,10 +955,17 @@ impl Proof {
     /// The input that changed from `older` to this proof, in one line, as
     /// "`src/theme/button.rs` changed": the first entry that is new,
     /// changed or gone. `None` when every entry is the same.
-    pub(crate) fn change_from(&self, older: &Self) -> Option<String> {
+    ///
+    /// What a build wrote is never named: an entry under `outputs`, the
+    /// directories builds write ([`crate::location::outputs_here`]), and
+    /// the generated runner's own files, which each build places in an
+    /// execution of its own under Rawr's store (#1890). Their place moves
+    /// with every build, and what they hold follows from the inputs named.
+    pub(crate) fn change_from(&self, older: &Self, outputs: &[PathBuf]) -> Option<String> {
         let changed = |newer: &[Entry], older: &[Entry]| {
             newer
                 .iter()
+                .filter(|entry| !entry.written(outputs))
                 .find(|entry| !older.contains(entry))
                 .map(Entry::subject)
         };
@@ -960,34 +1002,40 @@ impl Proof {
     /// Clone only bounded filesystem identities required by the production
     /// watcher; environment and scalar proof entries remain non-filesystem
     /// freshness evidence.
+    ///
+    /// The generated runner's own files are Rawr's writes, never a save,
+    /// and are not watched (#1890).
     pub fn watch(&self) -> impl Iterator<Item = Watch> + '_ {
-        self.entries.iter().flat_map(|entry| {
-            let paths = match entry {
-                Entry::Workspace { paths, .. } => Some(paths.as_ref()),
-                _ => None,
-            };
-            paths
-                .into_iter()
-                .flatten()
-                .map(|path| Watch::Exact(PathBuf::from(path.as_ref())))
-                .chain(match entry {
-                    Entry::Workspace { .. } => None,
-                    Entry::File { path, .. } | Entry::Missing { path, .. } => {
-                        Some(Watch::Exact(PathBuf::from(path.as_ref())))
-                    }
-                    Entry::Directory { path, .. }
-                    | Entry::Registry { root: path, .. }
-                    | Entry::Git { root: path, .. } => {
-                        Some(Watch::Tree(PathBuf::from(path.as_ref())))
-                    }
-                    Entry::Environment { .. }
-                    | Entry::EnvironmentProjection { .. }
-                    | Entry::Fact { .. }
-                    | Entry::BuildMessage { .. }
-                    | Entry::Directive { .. } => None,
-                })
-                .chain(followed(entry))
-        })
+        self.entries
+            .iter()
+            .filter(|entry| !entry.generated())
+            .flat_map(|entry| {
+                let paths = match entry {
+                    Entry::Workspace { paths, .. } => Some(paths.as_ref()),
+                    _ => None,
+                };
+                paths
+                    .into_iter()
+                    .flatten()
+                    .map(|path| Watch::Exact(PathBuf::from(path.as_ref())))
+                    .chain(match entry {
+                        Entry::Workspace { .. } => None,
+                        Entry::File { path, .. } | Entry::Missing { path, .. } => {
+                            Some(Watch::Exact(PathBuf::from(path.as_ref())))
+                        }
+                        Entry::Directory { path, .. }
+                        | Entry::Registry { root: path, .. }
+                        | Entry::Git { root: path, .. } => {
+                            Some(Watch::Tree(PathBuf::from(path.as_ref())))
+                        }
+                        Entry::Environment { .. }
+                        | Entry::EnvironmentProjection { .. }
+                        | Entry::Fact { .. }
+                        | Entry::BuildMessage { .. }
+                        | Entry::Directive { .. } => None,
+                    })
+                    .chain(followed(entry))
+            })
     }
 
     /// Each path package's name and directory, from the Cargo package ids
@@ -1705,7 +1753,9 @@ impl Write for Hashing {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{evaluate, protected_digest, Entry, Proof, ProtectedEntry, Recipe, Role, SCHEMA};
+    use super::{
+        evaluate, protected_digest, Entry, Proof, ProtectedEntry, Recipe, Role, Watch, SCHEMA,
+    };
     use crate::cargo::unit::ArtifactProfile;
     use crate::cargo::{self, Limits};
     use crate::input::build::{Artifact, Evidence, Key, Package, Script};
@@ -2898,16 +2948,16 @@ mod tests {
         };
         let proof = |entries: Vec<Entry>| Proof::fixture_stored(entries.into_boxed_slice());
         let before = proof(vec![file("/p/src/main.rs", 1), variable("cc")]);
-        assert_eq!(before.change_from(&before), None);
+        assert_eq!(before.change_from(&before, &[]), None);
         assert_eq!(
             proof(vec![file("/p/src/main.rs", 2), variable("cc")])
-                .change_from(&before)
+                .change_from(&before, &[])
                 .as_deref(),
             Some("`/p/src/main.rs` changed")
         );
         assert_eq!(
             proof(vec![file("/p/src/main.rs", 1)])
-                .change_from(&before)
+                .change_from(&before, &[])
                 .as_deref(),
             Some("the environment variable `CC` changed")
         );
@@ -2917,9 +2967,54 @@ mod tests {
                 file("/p/src/new.rs", 1),
                 variable("cc")
             ])
-            .change_from(&before)
+            .change_from(&before, &[])
             .as_deref(),
             Some("`/p/src/new.rs` changed")
         );
+    }
+
+    /// A restart never names what a build wrote (#1890): the generated
+    /// runner's manifest and lock, which each build places in an execution
+    /// of its own under Rawr's store, nor a file under a target directory.
+    /// The native input that changed beside them is named, and they are
+    /// not watched.
+    #[test]
+    fn a_changed_proof_names_no_file_a_build_wrote() {
+        let file = |role: Role, path: &str, digest: u8| Entry::File {
+            role,
+            package_id: None,
+            path: path.into(),
+            bytes: 1,
+            digest: [digest; 32],
+        };
+        let built = |execution: &str, source: u8| {
+            let generated = format!("/p/target/rawr/store/executions/{execution}/generated/final");
+            Proof::fixture_stored(Box::from([
+                file(Role::Harness, &format!("{generated}/Cargo.toml"), 1),
+                file(Role::Harness, &format!("{generated}/Cargo.lock"), 1),
+                file(
+                    Role::DefaultPackageSource,
+                    &format!("{generated}/src/main.rs"),
+                    1,
+                ),
+                file(Role::DependencySource, "/p/src/main.rs", source),
+            ]))
+        };
+        let outputs = [PathBuf::from("/p/target")];
+        let before = built("a", 1);
+        assert_eq!(built("b", 1).change_from(&before, &outputs), None);
+        assert_eq!(
+            built("b", 2).change_from(&before, &outputs).as_deref(),
+            Some("`/p/src/main.rs` changed")
+        );
+        let watched = before.watch().collect::<Vec<_>>();
+        assert!(
+            !watched.iter().any(|watch| matches!(
+                watch,
+                Watch::Exact(path) if path.ends_with("Cargo.lock") || path.ends_with("Cargo.toml")
+            )),
+            "{watched:?}"
+        );
+        assert!(watched.contains(&Watch::Exact(PathBuf::from("/p/src/main.rs"))));
     }
 }
