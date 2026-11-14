@@ -21,7 +21,7 @@
 //! as `opaque(content)`: its trait is implemented for the type's shape, each
 //! opaque position a parameter of the opaque type's bounds ([`Shape`]).
 //!
-//! A script type's proxy that takes such a type as an argument, as loupe's
+//! A script type's proxy that takes such a type as an argument, as a
 //! `Zoomed<impl Widget>`, names it by a name of the runner's ([`named`]).
 
 use std::collections::BTreeMap;
@@ -50,7 +50,7 @@ thread_local! {
 }
 
 /// The name a script type's proxy takes the type spelled `key` at `'x`
-/// by, a type that holds an opaque type, as loupe's `Zoomed<impl Widget>`
+/// by, a type that holds an opaque type, as a `Zoomed<impl Widget>`
 /// takes what `explain` gives: `RawrOpaqueName0`. A proxy holds only the
 /// script's value, so its arguments name types and hold none, and each
 /// opaque type takes a name no other type has.

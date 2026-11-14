@@ -1444,8 +1444,8 @@ impl Models {
     }
 
     /// The path the crate trait this source names `name` is known by, when
-    /// another module's trait has that name too, as `sidebar::Shape` of
-    /// `Shape` in `mod sidebar`.
+    /// another module's trait has that name too, as `panel::Shape` of
+    /// `Shape` in `mod panel`.
     pub(super) fn trait_name(&self, name: &str) -> Option<&ImmutableString> {
         self.trait_names.get(&(self.context, name.into()))
     }

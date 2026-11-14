@@ -1199,7 +1199,7 @@ impl<'a> Parser<'a> {
 
     /// The trait arguments of each impl of the generic trait `trait_name`
     /// for `owner`, each impl's own parameters fresh but those the owner's
-    /// type arguments `owner_arguments` are: `impl<M> IntoContent<M> for
+    /// type arguments `owner_arguments` are: `impl<M> IntoView<M> for
     /// Content<M>` gives `Content<i64>` the arguments `[i64]`.
     pub(super) fn impl_candidates(
         &mut self,

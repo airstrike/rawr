@@ -4847,7 +4847,7 @@ fn item_input_ty(
 /// An item's input. A `&str` or `&'static str` is a shared reference to
 /// the string, as rustc sees it, so it stays apart from a `String` input:
 /// iced's `Id::from` has both, and the argument picks one. A `&str` an
-/// input holds, as a future's `Option<&str>` or `(&str, &Catalog)` does,
+/// input holds, as a future's `Option<&str>` or `(&str, &Cache)` does,
 /// is a borrow there too (#677), as the program's checker reads it.
 fn input_ty(
     source: &representability::convert::Type,

@@ -120,7 +120,7 @@ pub(super) fn parse_placeholder(index: usize) -> String {
 }
 
 /// A trait's name as a generated name holds it: a trait known by its path,
-/// `home::IntoContent`, as `home__IntoContent`.
+/// `home::IntoView`, as `home__IntoView`.
 fn identifier(trait_name: &str) -> std::borrow::Cow<'_, str> {
     if trait_name.contains("::") {
         trait_name.replace("::", "__").into()

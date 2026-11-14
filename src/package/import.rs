@@ -702,7 +702,7 @@ pub(crate) fn crossing_impls(
         match ty {
             // A mirror's impls are rawr's copy of the crate's own (#1249).
             // A unit enum's holder takes the script's impls as a proxy
-            // does, as tour's `From<Language> for String` (#1987).
+            // does, as a program's `From<Language> for String` (#1987).
             Type::Script {
                 path,
                 arguments,
@@ -4144,7 +4144,7 @@ impl Types {
     }
 
     /// `item_input` of a type other than `Cow<str>`. A `&str` that an
-    /// input holds, as a future's `Option<&str>` or `(&str, &Catalog)`
+    /// input holds, as a future's `Option<&str>` or `(&str, &Index)`
     /// does, is a borrow there too (#677).
     fn input_charged(
         ty: &representability::convert::Type,

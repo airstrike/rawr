@@ -268,8 +268,8 @@ impl Homed for InPlace {
     }
 }
 
-/// A native value a view's widget borrows past its call, as `qr_code(&self.
-/// data)` and `pick_list(Some(&self.backend), ..)` do (D568): shared with
+/// A native value a view's widget borrows past its call, as `qr_code(&data)`
+/// and `pick_list(Some(&self.backend), ..)` do (D568): shared with
 /// the pins of the script value the view was lent, which keep it for as
 /// long as the view can borrow it. Its slot reaches it here, and takes it
 /// back once those pins let it go.
@@ -1700,8 +1700,8 @@ pub fn depart() -> Option<Box<dyn Any + Send>> {
 /// The native values the script value `value` captured in `arena`, each
 /// of a `Send` type, out of it and into an arena of their own whose
 /// handles the captures hold from now on: what a future or a closure that
-/// native code may run on another thread carries there (#1985), as
-/// gallery's `async move { .. bytes .. }` that a tokio worker polls. Each
+/// native code may run on another thread carries there (#1985), as an
+/// `async move { .. bytes .. }` block that a tokio worker polls. Each
 /// poll or call arrives in it (`arrive`). `None` when the captures hold
 /// none.
 #[allow(dead_code)]
@@ -1754,8 +1754,8 @@ pub fn carry(value: &mut Dynamic, arena: &mut Arena) -> Option<Box<dyn Any + Sen
 }
 
 /// What a script closure native code may call on another thread carries
-/// ([`carry`]), as tokio's `spawn_blocking` calls gallery's `move ||
-/// .. bytes.as_slice()`.
+/// ([`carry`]), as tokio's `spawn_blocking` calls a `move ||
+/// .. bytes.as_slice()` closure.
 #[allow(dead_code)]
 pub struct Carried(std::sync::Mutex<Option<Box<dyn Any + Send>>>);
 
@@ -3523,8 +3523,8 @@ impl<T: 'static> ViewedArgument<T> {
     /// The value `value` names: one native code lent, or one its slot
     /// shares.
     pub fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
-        // A static's place, of a body or of native code (D862), as
-        // loading_spinners' `&easing::EMPHASIZED` is (#610).
+        // A static's place, of a body or of native code (D862), as a
+        // crate's `&easing::EMPHASIZED` static is (#610).
         if let Some(lasting) = __rawr_internal::place::statics::lasting::<T>(&value) {
             return Ok(Self::Lasting(lasting));
         }
@@ -7583,7 +7583,7 @@ fn assemble<B: crate::surface::Runner>(
     let file_records = file_records.into_boxed_slice();
     // Which fields have a store reads their types' paths, as the source's
     // rendering did, so the entries name the adapters it wrote: a field of
-    // a `Vec` of crate values, as custom_shader's `Scene::cubes` (#1932).
+    // a `Vec` of crate values, as a `Scene { cubes: Vec<Cube> }` (#1932).
     let facade = key
         .request
         .facade_plan()
@@ -9094,7 +9094,7 @@ impl Support {
             // A frame's keys and tables sort with the frame. An impl of a
             // trait the sources declare for a crate's type sorts with the
             // trait, so rustc's orphan rule finds the trait in its crate, as
-            // `RawrOpaque0` for markdown's `Hover<impl Widget, ..>` (#2001).
+            // `RawrOpaque0` for a crate's `Hover<impl Widget, ..>` (#2001).
             let name = found
                 .name
                 .as_deref()
@@ -11790,7 +11790,7 @@ fn region_operand(
         },
     };
     // In the receiver's region, where an argument that carries its lifetime
-    // is too, as pane_grid's `content.title_bar(title_bar)` takes one.
+    // is too, as iced's `pane_grid::Content::title_bar(title_bar)` takes one.
     let scoped = operand.scoped();
     let mut body = Vec::new();
     {
@@ -12135,7 +12135,7 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
         return Ok(Vec::new());
     };
     // A scope frame's call takes what it borrows into the frame. A future
-    // holds what it borrows after the call, as fount's `async fn load(font:
+    // holds what it borrows after the call, as an `async fn load(font:
     // &Font)` does: its inputs are leased from their slots instead (D683.2).
     if signature.scope().is_some()
         || is_future(&substituted(signature.output(), signature, substitutions)?)
@@ -13456,12 +13456,12 @@ fn render_adapter_body(
             let pins = !opens && replay.is_none() && lends_str_to_output(signature, substitutions)?;
             let _pins = PinnedStrings::enter(pins);
             // A crate value the output borrows past the call, as
-            // `qr_code(&self.data)` gives a `QRCode<'a>` (D568).
+            // `qr_code(&data)` gives a `QRCode<'a>` (D568).
             let viewed = !opens && replay.is_none() && views_natives(signature, substitutions)?;
             let _viewed = ViewedArguments::enter(viewed);
             // Or one native code lent a marked function and keeps as long
-            // as its anchored result, as inboard's `inbox::view(inbox_state,
-            // ..)` takes (#1413), which a plain output's call reaches in
+            // as its anchored result, as a marked `view(state, ..)` of a lent
+            // `&'a State` takes (#1413), which a plain output's call reaches in
             // that result's region, beside any `&str` it pins there (#1509).
             // An opaque output owns what it borrows (`lent_cell`), and a
             // future borrows nothing past its call.
@@ -13776,7 +13776,7 @@ fn render_adapter_body(
             slots,
             crossings,
         } => {
-            // A crate value a builder keeps in `Self`, as loading_spinners'
+            // A crate value a builder keeps in `Self`, as a crate's
             // `Linear::easing(mut self, easing: &'a Easing) -> Self` keeps
             // its easing (#610): borrowed as long as the value it is kept
             // in, as a function's output borrows one (D568). A static's
@@ -14115,7 +14115,7 @@ fn render_adapter_body(
                         // outside it is at `'static`, which joins the
                         // argument only when its type shortens, as
                         // `region_arena` takes an argument: an invariant
-                        // one, as pane_grid's `Content<'a, ..>` that
+                        // one, as iced's `pane_grid::Content<'a, ..>` that
                         // `title_bar` takes, is the region's or none.
                         let invariant = REGION_ARGUMENTS.get()
                             && !lifetime_free
@@ -14977,8 +14977,8 @@ fn render_anchored_output(
 }
 
 /// A call whose opaque output borrows a crate value native code lent a
-/// slot and keeps as long as the slot's output, as elevato's `view` gives
-/// `floors(building, ..)` of the `&'a Building` its `View<'a, ..>` lends
+/// slot and keeps as long as the slot's output, as a `view` gives
+/// `rows(model, ..)` of the `&'a Model` its `View<'a, ..>` lends
 /// (#1770, #965): made in the slot's region through the output's wrapper
 /// (`declare_lent_given`), which the slot takes it out of at the lend's
 /// lifetime. Each lent input is reached there as it is, never copied. A
@@ -15394,8 +15394,8 @@ fn render_method_opening(
 }
 
 /// The body of a scope frame's call whose output borrows a receiver native
-/// code lent the program (D558.3), as `inbox.view()` of a lent `&'a
-/// inbox::State` gives an `Element<'a, Message>` (#1413), within an `if
+/// code lent the program (D558.3), as `state.view()` of a lent `&'a
+/// State` gives an `Element<'a, Message>` (#1413), within an `if
 /// let Some(lent)`. A lend native code keeps as long as an anchored call's
 /// result is borrowed in that call's region, where the output stays, so the
 /// result may keep it. Any other is reached through its accessor while the
@@ -15492,9 +15492,9 @@ fn lent_opening(
 
 /// The body of a scope frame's call on a `&self` receiver of the arena
 /// whose output keeps a lend native code keeps beside it (`kept`), as
-/// inboard's `wizard.view(catalog, theme)` of a marked `home::State`
-/// native code holds by its handle, whose open wizard is the program's
-/// (D961), keeps `theme: &'a Theme`. The output can be borrowed with that
+/// a `child.view(items, theme)` of a marked parent state native code
+/// holds by its handle, whose open child is the program's (D961), keeps
+/// `theme: &'a Theme`. The output can be borrowed with that
 /// lend only in the anchored region of the call native code lent it to, so
 /// it is made there, the receiver shared with that region's pins, which
 /// keep it as long as rustc lets native code hold the output: till native
@@ -15543,8 +15543,8 @@ fn arena_anchored(
     )
 }
 
-/// Each input a scope frame's output keeps with its receiver, as
-/// inboard's `wizard.view(catalog, theme)` keeps `theme: &'a Theme`
+/// Each input a scope frame's output keeps with its receiver, as a
+/// view keeps a `&'a` borrow of an argument for its output's life
 /// (`Signature::lends`), by position, with its crate type: a value the
 /// frame shares with its pins, or a lend native code keeps it reaches in
 /// the anchored region (`ViewedArgument`).
@@ -15717,7 +15717,7 @@ fn render_scoped_receiver(
     // Out of the region, the arguments are the arena's, at `'static`: one
     // of a type invariant in its lifetime can't join a receiver of the
     // region, so a call of the two is the region branch's alone
-    // (`region_inputs`), as pane_grid's `content.title_bar(title_bar)` is.
+    // (`region_inputs`), as iced's `pane_grid::Content::title_bar` is.
     if !REGION_ARGUMENTS.get() {
         for input in signature.inputs().iter().skip(skip) {
             let ty = substituted(input, signature, substitutions)?;
@@ -15891,7 +15891,7 @@ fn render_scoped_input(
 }
 
 /// The call of a `&self` method whose `&mut` input keeps the receiver
-/// borrowed for as long as the value it refers to lives, as integration's
+/// borrowed for as long as the value it refers to lives, as a
 /// `scene.draw(&mut render_pass)` lends `scene` to the `RenderPass<'a>`
 /// that `Scene::clear` put in its scope frame's region (`Signature::
 /// keep_receiver`). The call runs in that region, which lends the value
@@ -16163,8 +16163,8 @@ fn slot_outputs(plan: &Plan) -> Vec<String> {
 
 /// Declare the wrapper of the crate function `plan`, whose opaque output
 /// borrows a crate value it takes by `&T` (`lent_cell`), when a slot gives
-/// that output to native code (`slot_outputs`): as elevato's `view` gives
-/// `floors(building, ..)` of the building native code lent it, which the
+/// that output to native code (`slot_outputs`): as a `view` gives
+/// `rows(model, ..)` of the model native code lent it, which the
 /// slot hands back at the lend's lifetime (#1770, #965). The call is made
 /// in the slot's region through the wrapper, whose inputs are the call's
 /// at `'x`, so the slot names its output as what the wrapper gives.
@@ -16805,11 +16805,10 @@ fn render_borrowed_receiver(
     // of its slot and lends the arena while it runs, as a function does
     // (D551.6), so the closure's own native calls reach the arena. So does
     // a method of a value generic over a script type, which may call a
-    // script function it keeps, as elevato's `Simulation<P, M>::frame`
+    // script function it keeps, as a generic `Engine<P, M>::frame`
     // calls the program's `update` (#1432). A `&self` method holds it
     // shared, so a value a view still borrows stays readable, as
-    // pane_grid's `self.panes.len()` beside `PaneGrid::new(&self.panes,
-    // ..)`.
+    // `state.len()` beside `PaneGrid::new(&state, ..)`.
     let calls_back = signature.inputs().iter().any(|ty| {
         callable_parameter(ty, signature)
             || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature))
@@ -17440,7 +17439,7 @@ fn render_guard(
     // `&Theme`, whose `palette()` the program reads (#954): the method is
     // called through its accessor, and the copy goes out of it. So is one
     // a native place names, as the field `config.org` of a lent `&Config`
-    // is, whose `user(&id) -> Option<&User>` inboard's inbox reads: the
+    // is, whose `user(&id) -> Option<&User>` a view reads: the
     // method is called where the place is, inside one claim of it.
     if matches!(guard, Guard::Shared | Guard::OptionShared) && matches!(receiver, Receiver::Shared)
     {
@@ -18695,7 +18694,7 @@ fn render_slot(
     // generic over its type, which the witness picks where the call takes
     // the slot.
     // An opaque output made of a value native code lent the slot, as
-    // elevato's `view` gives `floors(building, ..)` of the `&'a Building`
+    // a `view` gives `rows(model, ..)` of the `&'a Model`
     // it is lent (#1770), is made in the slot's region through its
     // wrapper (`declare_lent_given`): the slot gives it at the lend's
     // lifetime as what the wrapper gives, `impl Bounds + use<'x>`, and the
@@ -18802,8 +18801,8 @@ fn render_slot(
             }
             // A native value the function borrows: lent for the call alone,
             // as a script impl's function is (D558.3), so the function reads
-            // the value native code holds at each call, as elevato's
-            // `update(.., building: &Building)` does, and nothing is copied
+            // the value native code holds at each call, as an
+            // `update(.., model: &Model)` does, and nothing is copied
             // or asks `Clone` (#1405). A closure gives each `&mut` parameter
             // back after its value, as `Path::new(|p| ..)`'s does, so it is
             // one of the call's places. Where the output is at the slot's
@@ -20101,7 +20100,7 @@ fn render_take_input(
     // What a future borrows lives for the future's life (#677): a `&str`
     // is the program's own string, pinned per site as a `&'static str` is
     // (D694), with nothing copied, and a type that holds borrows, as
-    // fount's `Option<&Catalog>`, leases what it holds, recursively.
+    // an `Option<&Index>`, leases what it holds, recursively.
     // So is a type parameter a `&str` fills, as tokio's
     // `fs::read_to_string(path: impl AsRef<Path>)` takes one.
     let future = is_future(&substituted(signature.output(), signature, substitutions)?);
@@ -20219,7 +20218,7 @@ fn render_take_input(
         .map_err(request::unwritable)
 }
 
-/// How an input that holds borrows, as `Option<&Catalog>`, is leased for
+/// How an input that holds borrows, as `Option<&Index>`, is leased for
 /// the call or its future (#677): the Rust type that holds what it lends
 /// (`held`), the expression that takes it from the Rawr value `value_N` at
 /// depth `N` (`take`), and how a borrow of it is made again (`borrow`).
@@ -20668,7 +20667,7 @@ fn render_take_callable(
     let source =
         format!("(**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()");
     // A closure whose output is at a lifetime of the call's own, as
-    // pane_grid's `PaneGrid::new(state, |id, pane, max| Content<'a, ..>)`
+    // iced's `PaneGrid::new(state, |id, pane, max| Content<'a, ..>)`
     // takes: made where the call is, so in the region of a call made in
     // one it gives its output at that region's lifetime (`regional`).
     if boxed_callable(signature.output()).is_none()
@@ -20794,7 +20793,7 @@ fn render_take_optional_callable(
 }
 
 /// The family of the output of the closure `call` fills when it is at a
-/// lifetime of the call's own, as `Content<'a, ..>` of pane_grid's
+/// lifetime of the call's own, as `Content<'a, ..>` of iced's
 /// `PaneGrid::new(state, view: impl Fn(..) -> Content<'a, ..>)` is: the
 /// closure is called while the call runs, so its output is made where the
 /// call is. Not one a type parameter names, as `W` of iced's `lazy` or
@@ -21766,7 +21765,7 @@ fn render_from_dynamic(
             )
         }
         // Rawr's `Rc` or `Arc` of a value Rust holds as its own, as the
-        // `Arc<String>` editor's async block gives `Task::perform`: Rust's
+        // `Arc<String>` an async block gives `Task::perform`: Rust's
         // pointer to that value, which crosses by value.
         ty if let Some((pointer, element)) = counted_element(ty)
             && element.crosses_by_value() =>
@@ -22133,7 +22132,7 @@ fn render_to_dynamic(
             )
         }
         // Rust's `Rc` or `Arc` of a value that crosses by value, as the
-        // `Arc<String>` editor's `Task::perform` gives its message: rawr's
+        // `Arc<String>` a `Task::perform` gives its message: rawr's
         // pointer to that value, which moves out when the pointer is the
         // only one.
         ty if let Some((pointer, element)) = counted_element(ty)
@@ -22334,8 +22333,8 @@ fn render_to_dynamic(
         {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from(String::from({value})))")
         }
-        // A `&T` native code gives a script closure, as pane_grid's
-        // `view(pane, &state, ..)` gives `&S`: a copy.
+        // A `&T` native code gives a script closure, as iced's
+        // `PaneGrid::new` gives its view closure `&S`: a copy.
         convert::Type::Borrowed { mutable: false, ty: lent }
             if matches!(**lent, convert::Type::Nominal { .. } | convert::Type::Builtin(_))
                 && **lent != convert::Type::Builtin(convert::Builtin::Str) =>
@@ -22401,7 +22400,7 @@ fn holds_script(ty: &convert::Type) -> bool {
     }
 }
 
-/// Whether `ty` names a script type anywhere, as `Simulation<State,
+/// Whether `ty` names a script type anywhere, as `Engine<State,
 /// Message>` does: native code that holds a value of it may call script
 /// code back.
 fn names_script(ty: &convert::Type) -> bool {
@@ -23157,8 +23156,8 @@ fn render_container_path(
             .map_err(request::unwritable);
     }
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
-    // An impl that fixes some of its type's arguments, as pane_grid's
-    // `Content<'a, Message, Void, W, ..>`, or names its parameters in
+    // An impl that fixes some of its type's arguments, as iced's
+    // `pane_grid::Content<'a, Message, Void, W, ..>`, or names its parameters in
     // another order, as iced's `Map<W, F, A>` of `impl<W, A, B, F, ..>`:
     // that instance, its own parameters given their substitutions. A
     // callable one, as `Map`'s `F: Fn(A) -> B`, is the receiver's, which
@@ -23689,8 +23688,8 @@ fn lent_cell(
 }
 
 /// The value the opaque output of a `&self` method that keeps its
-/// receiver borrowed lives in (`Signature::lends_receiver`), as
-/// integration's `controls.view()` gives: it owns the receiver, shared out
+/// receiver borrowed lives in (`Signature::lends_receiver`), as a
+/// `controls.view()` gives: it owns the receiver, shared out
 /// of its arena slot by its `Rc`, which goes back to the slot once the
 /// value has dropped. `None` for another call, or one whose traits have no
 /// Rust spelling.
@@ -24352,7 +24351,7 @@ impl Drop for ViewedArguments {
 
 /// The crate type of a `&T`, or of an `Option<&T>`, that a call takes: a
 /// value the runner's arena holds, which its output may borrow past the
-/// call, as `qr_code(&self.data)` gives a `QRCode<'a>` and `pick_list(Some(
+/// call, as `qr_code(&data)` gives a `QRCode<'a>` and `pick_list(Some(
 /// &self.backend), ..)` a `PickList` whose `V` is `&Backend`.
 fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
     let ty = match ty {
@@ -24510,8 +24509,8 @@ fn kept_str(
 /// output names, which the classifier reads as kept (`Signature::lends`),
 /// or what a type parameter or an `Option` holds, as `pick_list(Some(
 /// &self.backend), ..)` gives a `PickList` whose `V` is `&Backend`. A
-/// reference at a lifetime the output doesn't name, as elevato's
-/// `view<'a, M: 'a>(&Building) -> Element<'a, M>` takes, is borrowed for
+/// reference at a lifetime the output doesn't name, as a
+/// `view<'a, M: 'a>(&Model) -> Element<'a, M>` takes, is borrowed for
 /// the call alone, so a value native code lent a script function fills it
 /// as rustc lets the borrow pass on (#1406).
 fn keeps_borrow(
@@ -25281,9 +25280,9 @@ fn is_proxied(ty: &convert::Type) -> bool {
 /// How the facade names the mirror of the script type at `path` in rawr's
 /// copy of its crate (#1249), as every native signature that names the
 /// type spells it. A marked type written either way is spelled this one
-/// way, so its values have one scope family: inboard's `Element<'a,
-/// inbox::Message, Theme>` that `inbox::view(.., theme)` gives is the
-/// `Element` whose `map` it calls. None when no native item names it.
+/// way, so its values have one scope family: the `Element<'a,
+/// child::Message, Theme>` a marked `child::view(.., theme)` gives is the
+/// `Element` whose `map` the caller calls. None when no native item names it.
 fn mirror_path(path: &str) -> Option<String> {
     let identity = PATH_IDENTITIES.with_borrow(|identities| identities.get(path).copied())?;
     TYPE_PATHS.with_borrow(|paths| paths.get(&identity).cloned())
@@ -26230,7 +26229,7 @@ fn render_impl_function(
                 ),
             )
         }
-        // A reference to a crate value the receiver holds, as markdown's
+        // A reference to a crate value the receiver holds, as a
         // `fn theme(&self) -> &Theme` gives `self.theme` (#2001): the value
         // where it is, shared from its slot and held in the receiver's pins,
         // so it lives as long as `&self` is borrowed, as rustc ties the
@@ -27272,7 +27271,7 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
             ..
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
-        // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives,
+        // A closure's `&S`, as iced's `PaneGrid::new` gives its view,
         // or `&State` of the program's own, as `.theme(|state| ..)` takes.
         convert::Type::Nominal { .. }
         | convert::Type::Builtin(_)

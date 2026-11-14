@@ -7845,7 +7845,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             if parameters.is_empty() {
                 return Err(reject::Kind::GenericImplementation.into());
             }
-            // An impl may fix some of its type's arguments, as pane_grid's
+            // An impl may fix some of its type's arguments, as iced's pane_grid
             // `impl<'a, Message, W, ..> Content<'a, Message, Void, W, ..>`
             // does: its own parameters stand in order among them, and the
             // bridge reaches the type at that instance.
@@ -7977,7 +7977,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // An invocation's signature declares each of its parameters, and
             // an argument's `impl Fn(..)` has no name to declare, as in
             // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`,
-            // unless Rawr makes its closure, as pane_grid's `PaneGrid::new(
+            // unless Rawr makes its closure, as iced's pane_grid `PaneGrid::new(
             // &state, impl Fn(Pane, &S, bool) -> Content)`, or a slot fills
             // it, as `Cache<Renderer>::draw` lends its closure a `&mut
             // Frame<Renderer>` (T318).
@@ -8348,7 +8348,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// An input native code gives a script closure: a value, a copy of
-    /// what a shared reference names, as pane_grid's `view(pane, &state,
+    /// what a shared reference names, as iced's pane_grid `view(pane, &state,
     /// is_maximized)` gives `&S`, or a crate value lent `&mut` for the
     /// call, as a trait's `with_translation(v, f: impl FnOnce(&mut Self))`
     /// lends the renderer.
@@ -8800,7 +8800,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// by calling the methods of the value inside (#856), as `wrap(s: impl
     /// Show)` takes a `view(&items)` that lives beside its items, and as
     /// iced's `UserInterface::build(root: impl Widget<Message, Theme,
-    /// Renderer>)` takes integration's `controls.view()`, whose `Widget`
+    /// Renderer>)` takes a crate's `controls.view()`, whose `Widget`
     /// has `Meta` (#1997). Each method takes `&self` or `&mut self`, has no
     /// type parameters of its own, and each type of its signature has a
     /// Rust spelling, lifetimes and all (`spelled`). A method only a
@@ -9296,7 +9296,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// An immutable `static`, read by its path where the bridge runs: a
-    /// slice of values the bridge clones (game_of_life's `pub static ALL:
+    /// slice of values the bridge clones (a crate's `pub static ALL:
     /// &[Preset]`), or a primitive.
     ///
     /// A slice of crate values without `Clone` that borrow nothing, as a
@@ -9312,7 +9312,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         if let Some(scalars) = self.static_scalars(ty) {
             return Ok(representability::constant::Plan::new(scalars, None));
         }
-        // A `LazyLock<T>` of a crate value, as loading_spinners' `pub static
+        // A `LazyLock<T>` of a crate value, as a crate's `pub static
         // EMPHASIZED: LazyLock<Easing>`: the place of the `T` it derefs to,
         // which every use of the static reaches through `Deref` (#610). The
         // bridge reads it as `&STATIC`, which the read's `&'static T`
@@ -9468,7 +9468,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     length: None,
                 })
             }
-            // An `Option` of a tuple, as pane_grid's `State::split` gives
+            // An `Option` of a tuple, as iced's pane_grid `State::split` gives
             // `Option<(Pane, Split)>`: Rawr's `Option` of its tuple.
             model::Type::Definition { id, arguments }
                 if let Some(model::Type::Tuple(members)) = self
@@ -9486,7 +9486,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     .ok_or(Error::Cardinality)?;
                 Ok(Type::Option(Box::new(self.convert_value(element)?)))
             }
-            // A `Result` of values, as changelog's `async fn list()` gives
+            // A `Result` of values, as a crate's `async fn list()` gives
             // `Result<(Self, Vec<Contribution>), Error>`: Rawr's `Result`
             // of the tuple and `Vec` it holds.
             model::Type::Definition { id, arguments }
@@ -9944,8 +9944,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let mut lends = Vec::new();
         let scope = if borrows_receiver {
             // The frame's output keeps a `&'a T` it takes as long as it
-            // keeps the receiver, as inboard's `wizard.view(catalog, theme)`
-            // keeps `theme`.
+            // keeps the receiver, as a view keeps a `&'a` argument for its
+            // output's life.
             if let model::Receiver::Reference { lifetime, .. } = signature.receiver() {
                 lends = signature
                     .inputs()
@@ -11536,7 +11536,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return self.convert_value(ty);
         };
         // What the future gives is a value the bridge gives Rawr, as a
-        // plain output is: changelog's `async fn list() -> Result<(Self,
+        // plain output is: a crate's `async fn list() -> Result<(Self,
         // Vec<Contribution>), Error>` gives a tuple holding a `Vec`. A
         // projection of the function's parameter it names is that
         // projection's synthetic parameter, as the signature's own are.
@@ -11621,7 +11621,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// An `async fn` whose own lifetimes only lend its inputs to its future,
-    /// as fount's `async fn load(family: &str, catalog: Option<&Catalog>)`:
+    /// as a crate's `async fn load(name: &str, cache: Option<&Cache>)`:
     /// the future borrows what its inputs borrow, whatever their types, as
     /// rustc sees it, and its output names none of the function's own
     /// lifetimes (D695.3). Each input is leased by what its value borrows
@@ -12039,7 +12039,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// A `&self` method whose opaque output, not a future, captures the
-    /// receiver's lifetime and no other of the call's own, as integration's
+    /// receiver's lifetime and no other of the call's own, as a crate's
     /// `Controls::view(&self) -> impl Widget<..>` does under edition 2024's
     /// capture rules, and as `+ '_` or `use<'_>` writes it: the value keeps
     /// the receiver borrowed for as long as it lives, and moves in each
@@ -12316,7 +12316,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             ) if lifetime == receiver => Some((&**ty, *mutability == model::Mutability::Mutable)),
             _ => None,
         };
-        // An `Option<&T>` the method lends from its receiver, as pane_grid's
+        // An `Option<&T>` the method lends from its receiver, as iced's pane_grid
         // `State::get(&self, pane)` and `get_mut(&mut self, pane)` give:
         // `Some` of a copy or of a place, or `None` (T012).
         if signature.guard().is_none()
@@ -12439,8 +12439,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 representability::convert::Builtin::Arguments,
             ));
         }
-        // A type that holds borrows, as fount's `load(family: &str, catalog:
-        // Option<&Catalog>)` takes an `Option<&Catalog>`: each borrow in it
+        // A type that holds borrows, as a crate's `load(name: &str, cache:
+        // Option<&Cache>)` takes an `Option<&Cache>`: each borrow in it
         // is lent as the borrow alone is, recursively, and `None` lends
         // nothing (#677). Nothing is special to `Option`: a `Result` lends
         // what its variant holds, as `Result<&Font, String>` does, and a
@@ -12453,9 +12453,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .map(|definition| (definition, arguments)),
             _ => None,
         };
-        // So is a borrow at the signature's own lifetime, as inboard's
-        // `nav_section<'a, ..>(heading: Option<&'a str>, ..) -> Element<'a,
-        // ..>` takes (#1413).
+        // So is a borrow at the signature's own lifetime, as a view's
+        // `section<'a, ..>(heading: Option<&'a str>, ..) -> Element<'a, ..>`
+        // takes (#1413).
         if let Some((definition, arguments)) = definition
             && let Some(element) = option_element(definition, arguments)
             && (names_late_lifetime(element) || matches!(element, model::Type::Reference { .. }))
@@ -12665,7 +12665,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 }
                 // `&f32` of a number, as `PartialOrd<f32>::lt(&self, &f32)`
                 // and `PartialEq<f32>::eq` take the right-hand side of
-                // clock's `rotation < 180.0` (T412): the number, lent.
+                // a crate's `rotation < 180.0` (T412): the number, lent.
                 model::Type::Primitive(_) => {
                     if let Ok(
                         scalar @ representability::convert::Type::Builtin(
@@ -13470,7 +13470,7 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
 }
 
 /// A method whose output may borrow its receiver and whose other own
-/// lifetimes only lend its inputs for the call, as `Organization::user(
+/// lifetimes only lend its inputs for the call, as a lookup's `user(
 /// &self, id: &Id) -> Option<&User>`, which rustc reads as `for<'a, 'b>
 /// fn(&'a Self, &'b Id) -> Option<&'a User>`. Elided lifetimes are
 /// late-bound, and they are the call's own: the receiver's binder is the
@@ -13494,7 +13494,7 @@ fn receiver_binder_lends_inputs(signature: &model::Signature) -> bool {
 }
 
 /// A `&self` method that lends its receiver into a `&mut` input for as
-/// long as the value that input refers to lives, as integration's
+/// long as the value that input refers to lives, as a crate's
 /// `Scene::draw<'a>(&'a self, render_pass: &mut RenderPass<'a>)`, which
 /// rustc reads as `for<'a, 'b> fn(&'a Scene, &'b mut RenderPass<'a>)`:
 /// the receiver's lifetime is named elsewhere only as a lifetime argument
@@ -13637,8 +13637,8 @@ fn is_str_reference(ty: &model::Type) -> bool {
         if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
 }
 
-/// The type of a `const` or `static` of `&str`, as inboard's `pub const
-/// UI_FAMILY: &str`, which is `&'static str` in either: a borrow of Rawr's
+/// The type of a `const` or `static` of `&str`, as a crate's `pub const
+/// FAMILY: &str`, which is `&'static str` in either: a borrow of Rawr's
 /// string, read once where the bridge runs and kept for the runner's life,
 /// which a call taking `&'static str` takes pinned as it is (#1146).
 fn static_text(ty: &model::Type) -> Option<representability::convert::Type> {
@@ -14153,8 +14153,8 @@ fn borrows_receiver(
     // target, an async method's future holds its receiver (D513.6), and an
     // opaque or reference output is held to its own rules. An input may
     // name the receiver's lifetime as a crate type's lifetime argument, as
-    // inboard's `wizard::State::view<'a>(&'a self, catalog: View<'a>)`
-    // takes a value of borrows by value (#1225): the frame's lifetime, as
+    // a `State::view<'a>(&'a self, catalog: View<'a>)` takes a value of
+    // borrows by value (#1225): the frame's lifetime, as
     // the output's is. So may a shared reference at that lifetime, as its
     // `theme: &'a Theme` is, or a `&'a str`, as `titled(&'a self, title:
     // &'a str)` takes (#1503). Any other lifetime of the method's own is
@@ -14219,7 +14219,7 @@ fn text_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
 }
 
 /// Whether `ty` is a `&'r T` at `lifetime` of a crate's type `T` that
-/// borrows nothing else, as inboard's `theme: &'a Theme` is.
+/// borrows nothing else, as a view's `theme: &'a Theme` argument is.
 fn shares_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
     matches!(ty, model::Type::Reference {
         lifetime: named,
@@ -14231,7 +14231,7 @@ fn shares_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
 }
 
 /// Whether `output` is an `Option<&'r T>` of the receiver's lifetime `'r`,
-/// as pane_grid's `State::get_mut` gives: a borrow guard's place, not a
+/// as iced's pane_grid `State::get_mut` gives: a borrow guard's place, not a
 /// frame (T012). Another type of one borrowed argument, as iced's
 /// `Key::as_ref(&self) -> Key<&str>` gives, is a frame's value.
 fn lends_option_reference(

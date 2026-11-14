@@ -866,7 +866,7 @@ impl<'a> Parser<'a> {
             }
             // A blanket impl's function (`impl<T: Bound> Trait for T`) on a
             // value no impl or inherent function of that name is for, as
-            // `vec.into_content()` of inboard's `IntoContent`.
+            // `vec.into_view()` of a crate's `IntoView`.
             if matches!(self.peek(), Token::LeftParen | Token::Unit)
                 && let Some(definition) = self.blanket_receiver(&builtin, &member)
             {

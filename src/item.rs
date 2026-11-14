@@ -133,9 +133,9 @@ impl Key {
     }
 
     /// The path native code's call names this function by, and whether it
-    /// is owned: `widget::sidebar::Sidebar::content` for a method. A trait's
+    /// is owned: `widget::panel::Panel::content` for a method. A trait's
     /// impl for a crate's or a builtin type, as `impl From<&Theme> for
-    /// markdown::Settings` (#1466), is owned by `std::` and the type's path:
+    /// style::Settings` (#1466), is owned by `std::` and the type's path:
     /// it is named by `::` and the type's name, as rawr's copy of the crate
     /// names it, which knows the type only as the impl writes it. `None`
     /// for a function of a host type, which native code doesn't call.
@@ -820,7 +820,7 @@ pub struct GenericParam {
     pub default: Option<type_ref::Type>,
     /// An argument-position `impl Trait` read as a parameter of its own,
     /// which a turbofish doesn't name: `content::<Message>(..)` for
-    /// `fn content<Message>(content: impl IntoContent<Message>)`.
+    /// `fn content<Message>(content: impl IntoView<Message>)`.
     pub lifted: bool,
 }
 
@@ -976,7 +976,7 @@ pub struct Trait {
     pub supertraits: Box<[type_ref::Path]>,
     /// Type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[GenericParam]>,
-    /// Lifetime parameters: `'a` of `trait IntoContent<'a, Message>`.
+    /// Lifetime parameters: `'a` of `trait IntoView<'a, Message>`.
     pub lifetimes: Lifetimes,
     /// Complete item span.
     pub span: Span,

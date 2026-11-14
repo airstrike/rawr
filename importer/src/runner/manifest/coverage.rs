@@ -427,7 +427,7 @@ impl Projection<'_> {
                 ..
             } => (&**substitutions, &**constants, &**functions, &[][..]),
             // A builder replay is no use the compiler reports: a chain such as
-            // tooltip's `.gap(..).style(container::rounded_box)` is its
+            // a tooltip's `.gap(..).style(container::rounded_box)` is its
             // calls' own uses, each covered above (#1029).
             adapter::Operation::Builder { .. } => return None,
             // A generic type's variant or field is bound at the instance its

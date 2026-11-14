@@ -1580,7 +1580,7 @@ impl<'a> Parser<'a> {
     /// A bound `bounded: Trait<arguments>` on what a script function of the
     /// call gives, where its signature writes `impl Trait<..>`: rustc knows
     /// the value by that bound alone, so its arguments, the trait's
-    /// defaults filled in, are the bound's. url_handler's `view(&self) ->
+    /// defaults filled in, are the bound's. A `view(&self) ->
     /// impl Widget<Message>` gives a `Container` that is a widget of every
     /// renderer, and the `impl Widget<Message>` fixes iced's (#1072).
     #[cfg(feature = "rust-import")]

@@ -2325,7 +2325,7 @@ fn parse_trait(
 ) -> ParseResult<crate::item::Trait> {
     input.next();
     let name = parse_name(input, "after 'trait'")?;
-    // `trait Convert<T>`, `trait IntoContent<'a, Message>`.
+    // `trait Convert<T>`, `trait IntoView<'a, Message>`.
     let (generics, lifetimes) = parse_generics(input)?;
     // `trait Named: Shape + Clone`.
     let supertraits = if matches!(input.peek(), Some((Token::Colon, _))) {

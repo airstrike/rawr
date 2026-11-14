@@ -297,8 +297,8 @@ impl<'a> Parser<'a> {
     /// While an opaque output is revealed, the written `impl Trait`'s
     /// arguments and defaults fix what the tail left open before the body's
     /// end falls back (`finish_structural_instances`), as rustc proves an
-    /// opaque type's bounds before its fallback. The renderer of iced's
-    /// gallery's viewer, `Some(opaque(mouse_area(container(image))))` in an
+    /// opaque type's bounds before its fallback. The renderer of an image
+    /// viewer's `Some(opaque(mouse_area(container(image))))` in an
     /// `Option<impl Widget<Message>>`, is then the default one, which fixes
     /// the image's `Handle` (#1213) before `impl Into<Handle>` would take
     /// the argument's type, so the revealed output names iced's handle. What
@@ -530,7 +530,7 @@ impl<'a> Parser<'a> {
                     Ty::Result(next()?, next()?)
                 } else {
                     // A crate's or the program's own generic type, as
-                    // loupe's `Loupe<impl Widget<Message> + 'a>`: the type
+                    // a wrapper widget's `Zoom<impl Widget<Message> + 'a>`: the type
                     // at the arguments built here, each opaque one the
                     // body's tail binds.
                     match Ty::from_resolved(output) {

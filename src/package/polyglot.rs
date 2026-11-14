@@ -704,8 +704,8 @@ fn use_end(tokens: &[Token<'_>], index: usize) -> Option<usize> {
 /// support table at the crate's root and the runner name by its path
 /// (D869), as [`root_items_public`]'s are. rustc lets the native caller
 /// name the type where it calls, though no path from the root may reach
-/// it, as inboard's `workspace::spreadsheet` declares `mod sidebar;` and
-/// uses its `Message`.
+/// it, as a module that declares a private `mod panel;` uses its
+/// `Message`.
 #[cfg_attr(
     not(all(feature = "rust-import", not(target_arch = "wasm32"))),
     allow(dead_code)
@@ -723,7 +723,7 @@ pub(crate) fn named_items_public(text: &str, names: &std::collections::BTreeSet<
 /// `text`, a native module of a crate whose root is marked, with `pub `
 /// before each of its own `mod` items that has no visibility. A marked
 /// module reads a native value's public fields and methods whatever
-/// module its type is declared in, as `custom_shader`'s `Scene` holds a
+/// module its type is declared in, as a crate's `Scene` holds a
 /// `Camera` of the private `scene::camera` (#1932); the runner names
 /// the type by its path, so each module on the way is public in rawr's
 /// copy, as D876 widens one for an instance's type. The user's source and

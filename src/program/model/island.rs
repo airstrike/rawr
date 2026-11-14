@@ -68,7 +68,7 @@ pub(crate) const HASHED_MAP: u8 = 27;
 /// program's copy for its output borrows instead (`scope::Pins::pin`).
 pub(crate) const KEPT_TEXT: u8 = 28;
 /// A program value native code holds as std's trait object, as the
-/// `Box<dyn Iterator<Item = T>>` a marked `Header::new` keeps the program's
+/// `Box<dyn Iterator<Item = T>>` a marked `Bar::new` keeps the program's
 /// iterator in (#1600): its handle among the kept values. The runner writes
 /// it where a member declared so holds the program's own value, and native
 /// code holds the value by it; native code that gives it back gives the
@@ -105,10 +105,10 @@ pub(crate) const ANCHORED: u8 = 32;
 pub(crate) const RELEASES: u8 = 64;
 /// The first byte of a call's header: two masks follow the releases' keys.
 /// The first names the arguments given for the call alone, as a by-value
-/// `View<'a>` of borrows (#1225): what is left of each once the call
+/// `Props<'a>` of borrows (#1225): what is left of each once the call
 /// returns drops then. The second names the lends kept with the call's
-/// anchor, as `&'a inbox::State` of `view<'a>(&'a self, inbox: &'a
-/// inbox::State) -> Element<'a, Message>` (#1413): what the result
+/// anchor, as `&'a panel::State` of `view<'a>(&'a self, panel: &'a
+/// panel::State) -> Element<'a, Message>` (#1413): what the result
 /// borrows of each lives in the anchored region.
 pub(crate) const SCOPES: u8 = 128;
 
@@ -130,10 +130,10 @@ struct Writing<'a> {
 pub(crate) struct Types {
     paths: BTreeMap<String, type_def::Identity>,
     /// What the native values each member of a script type's value holds
-    /// are attested as, by the type and its variant: the `themedef::Theme`
-    /// of `Theme::Selected(themedef::Theme)`, which native code gives by
-    /// value (#1466), or the `wizard::State` of a field of
-    /// `Option<wizard::State>` (#1475).
+    /// are attested as, by the type and its variant: the `palette::Theme`
+    /// of `Theme::Selected(palette::Theme)`, which native code gives by
+    /// value (#1466), or the `child::State` of a field of
+    /// `Option<child::State>` (#1475).
     parts: Parts,
 }
 
@@ -574,7 +574,7 @@ impl Model {
     /// What the native values each marked function's by-value parameters
     /// hold are attested as, by whether it belongs to a type and its path:
     /// a bare native one's own type, or each one inside an `Option`, a
-    /// `Vec`, a `Box` or a tuple, as `home_grid: Option<Element<'a,
+    /// `Vec`, a `Box` or a tuple, as `grid: Option<Element<'a,
     /// grid::Message>>` holds one (#1224).
     pub(crate) fn island_input_parts(
         &self,
@@ -960,7 +960,7 @@ impl Model {
 
     /// [`Model::island_write_with`] of a member of a struct or a variant,
     /// declared `ty`: a `Box<dyn Iterator<Item = T>>` that holds the
-    /// program's own iterator, as inboard's `Header::actions` holds the
+    /// program's own iterator, as a marked `Bar::items` holds the
     /// `Box::new(actions.into_iter())` its marked `new` made, is kept under
     /// a handle, which native code pulls from (#1600). A native one moves
     /// as any native value does.

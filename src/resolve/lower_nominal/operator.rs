@@ -922,7 +922,7 @@ impl<'a> Parser<'a> {
                 value.span = expression;
                 return Ok(Some(value));
             }
-            // An imported type's operator no binding has yet, as clock's
+            // An imported type's operator no binding has yet, as a
             // `Radians / 12.0`: a miss the importer answers with the
             // type's impl of the operator's trait.
             #[cfg(feature = "rust-import")]
