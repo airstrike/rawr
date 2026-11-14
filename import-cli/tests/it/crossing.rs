@@ -2741,6 +2741,19 @@ fn a_crate_call_takes_a_borrowing_result_of_a_trait_with_arguments_and_a_supertr
     );
 }
 
+/// #2001: a program's impl of a crate trait whose `fn palette(&self) ->
+/// &Palette` gives a crate value the program holds, by a field that
+/// borrows it or by one that owns it, as markdown's `Viewer::theme` gives
+/// `self.theme`: native code reads the value where it is, the same place
+/// on each call, and the program changes it `&mut` once the borrow ends.
+/// The output is `cargo run`'s.
+#[test]
+fn a_script_impl_gives_native_code_a_reference_to_a_crate_value_it_holds() {
+    let (rawr, cargo) = both_printed("styled.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "lent dusk true\nagain noon true\nowned dawn true");
+}
+
 /// #856: pushing to the items while a wrapped result that borrows them
 /// lives is rustc's E0502, which stops the program before anything runs,
 /// with cargo's report alone.
