@@ -56,7 +56,8 @@
       {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]},
       {"text":"A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing.","issues":[1983]},
       {"text":"A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit.","issues":[1990]},
-      {"text":"Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one.","issues":[1984]}
+      {"text":"Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one.","issues":[1984]},
+      {"text":"A `&self` method whose `impl Trait` result captures the receiver, as edition 2024 does by default or as `+ '_` writes it, keeps the receiver borrowed for as long as the result lives.","issues":[1991]}
     ]
   },
   "releases": [

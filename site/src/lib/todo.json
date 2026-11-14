@@ -63,7 +63,8 @@
         {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]},
         {"text":"A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing.","issues":[1983]},
         {"text":"A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit.","issues":[1990]},
-        {"text":"Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one.","issues":[1984]}
+        {"text":"Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one.","issues":[1984]},
+        {"text":"A `&self` method whose `impl Trait` result captures the receiver, as edition 2024 does by default or as `+ '_` writes it, keeps the receiver borrowed for as long as the result lives.","issues":[1991]}
       ]
     },
     "releases": [
@@ -4364,12 +4365,13 @@
     {"issue":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open","category":"No glue (D593)"},
     {"issue":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"closed","category":"Health"},
     {"issue":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"closed","category":"Platforms"},
-    {"issue":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"open","category":"No glue (D593)"},
-    {"issue":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"open","category":"No glue (D593)"},
+    {"issue":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"closed","category":"No glue (D593)"},
+    {"issue":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"closed","category":"No glue (D593)"},
     {"issue":1993,"title":"rawr mcp screenshot: check a locked session, an off-screen window and a 2x display","state":"open","category":"Health"},
     {"issue":1994,"title":"Runtime entries each hold full copies of the runtime's libraries (about 431 MB at opt-level 3)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1995,"title":"A program rawr runs on Linux gets rawr's menu items (restart, screenshot, about, exit) and keeps its own name","state":"open","category":"Platforms"},
-    {"issue":1996,"title":"A program rawr runs on Windows gets rawr's menu items (restart, screenshot, about, exit)","state":"open","category":"Platforms"}
+    {"issue":1996,"title":"A program rawr runs on Windows gets rawr's menu items (restart, screenshot, about, exit)","state":"open","category":"Platforms"},
+    {"issue":1997,"title":"A lent cell implements an opaque type's trait with arguments, supertraits or borrowing methods (Widget<M, T, R>)","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5031,7 +5033,7 @@
             {"number":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"open"},
             {"number":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"open"},
             {"number":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open"},
-            {"number":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"open"}
+            {"number":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"closed"}
           ],
           "milestone": "0.3"
         },
@@ -5095,7 +5097,8 @@
             {"number":1803,"title":"After a native edit removed a function's generic, the runner still called it with the old turbofish (E0107)","state":"open"},
             {"number":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"closed"},
             {"number":1968,"title":"A borrowing opaque value bounded by a core trait besides Iterator (`impl Iterator + Clone`) can't be kept","state":"open"},
-            {"number":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"open"}
+            {"number":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"closed"},
+            {"number":1997,"title":"A lent cell implements an opaque type's trait with arguments, supertraits or borrowing methods (Widget<M, T, R>)","state":"open"}
           ]
         }
       ]
