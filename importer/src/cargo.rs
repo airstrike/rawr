@@ -4366,13 +4366,19 @@ fn workspace_node_authority(
     Ok(bytes.into_boxed_slice())
 }
 
+/// The resolver Cargo uses for the workspace whose root manifest is
+/// `document`: `[workspace] resolver` or the root package's own `resolver`,
+/// else the root package's edition default, else "1" for a virtual root.
+/// An edition the root inherits (`edition.workspace = true`) is
+/// `[workspace.package] edition`, as Cargo reads it.
 fn authority_resolver(document: &DocumentMut) -> Result<&str> {
-    if let Some(resolver) = document
-        .get("workspace")
-        .and_then(Item::as_table)
+    let workspace = document.get("workspace").and_then(Item::as_table_like);
+    let package = document.get("package").and_then(Item::as_table_like);
+    let declared = workspace
         .and_then(|workspace| workspace.get("resolver"))
-        .and_then(Item::as_str)
-    {
+        .or_else(|| package.and_then(|package| package.get("resolver")))
+        .and_then(Item::as_str);
+    if let Some(resolver) = declared {
         return if matches!(resolver, "1" | "2" | "3") {
             Ok(resolver)
         } else {
@@ -4382,17 +4388,28 @@ fn authority_resolver(document: &DocumentMut) -> Result<&str> {
             })
         };
     }
-    let edition = document
-        .get("package")
-        .and_then(Item::as_table)
+    let edition = package
         .and_then(|package| package.get("edition"))
+        .and_then(|edition| {
+            let inherited = edition
+                .as_table_like()
+                .and_then(|edition| edition.get("workspace"))
+                .and_then(Item::as_bool)
+                == Some(true);
+            if inherited {
+                workspace
+                    .and_then(|workspace| workspace.get("package"))
+                    .and_then(Item::as_table_like)
+                    .and_then(|shared| shared.get("edition"))
+            } else {
+                Some(edition)
+            }
+        })
         .and_then(Item::as_str);
-    let resolver = if edition == Some("2024") {
-        "3"
-    } else if edition == Some("2021") {
-        "2"
-    } else {
-        "1"
+    let resolver = match edition {
+        Some("2024") => "3",
+        Some("2021") => "2",
+        _ => "1",
     };
     Ok(resolver)
 }
@@ -5701,5 +5718,43 @@ mod project_lock_tests {
             fs::read_to_string(&lock).expect("the harness lock is reseeded"),
             PROJECT_LOCK
         );
+    }
+}
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::*;
+
+    fn resolver(manifest: &str) -> String {
+        let document = manifest
+            .parse::<DocumentMut>()
+            .expect("the fixture manifest is TOML");
+        authority_resolver(&document)
+            .expect("the fixture names a supported resolver")
+            .to_owned()
+    }
+
+    /// A root package that inherits its edition takes the workspace's
+    /// `[workspace.package] edition` default, as Cargo does.
+    #[test]
+    fn inherited_edition_picks_the_workspace_editions_resolver() {
+        let dotted = "[workspace]\nmembers = [\"core\"]\n\n[workspace.package]\nedition = \"2024\"\n\n[package]\nname = \"root\"\nedition.workspace = true\n";
+        let inline = "[workspace.package]\nedition = \"2021\"\n\n[workspace]\n\n[package]\nname = \"root\"\nedition = { workspace = true }\n";
+        assert_eq!(resolver(dotted), "3");
+        assert_eq!(resolver(inline), "2");
+    }
+
+    /// A declared resolver wins over the edition, from `[workspace]` or the
+    /// root package; a virtual root without one is resolver 1.
+    #[test]
+    fn declared_resolver_wins_over_the_edition_default() {
+        let workspace =
+            "[workspace]\nresolver = \"2\"\n\n[package]\nname = \"root\"\nedition = \"2024\"\n";
+        let package = "[package]\nname = \"root\"\nedition = \"2024\"\nresolver = \"1\"\n";
+        let virtual_root =
+            "[workspace]\nmembers = [\"core\"]\n\n[workspace.package]\nedition = \"2024\"\n";
+        assert_eq!(resolver(workspace), "2");
+        assert_eq!(resolver(package), "1");
+        assert_eq!(resolver(virtual_root), "1");
     }
 }
