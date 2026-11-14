@@ -127,7 +127,7 @@ impl<'a> Parser<'a> {
 
     /// The path ahead from its first segment `name`, which is read: its
     /// segments up to a turbofish or anything else, their span, and the
-    /// token after them.
+    /// token after them, which is the `::` of a turbofish (#1980).
     pub(super) fn peek_path(&self, name: &str, name_span: Span) -> (String, Span, Option<Token>) {
         let mut ahead = self.input.clone();
         let mut path = name.to_owned();
@@ -137,10 +137,10 @@ impl<'a> Parser<'a> {
             let Some((Token::DoubleColon, _)) = next else {
                 break;
             };
-            let Some((Token::Identifier(segment), position)) = ahead.next() else {
-                next = None;
+            let Some((Token::Identifier(segment), position)) = ahead.clone().next() else {
                 break;
             };
+            ahead.next();
             path.push_str("::");
             path.push_str(segment.as_str());
             end = text_end(position, segment.as_str());
