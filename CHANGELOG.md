@@ -20,6 +20,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A string literal or `&'static str` const passed where a crate takes `impl Into<T>` lives for the program when T converts only from `&'static str`, as iced's `.id(..)`, `operation::focus(..)` and `scrollable::snap_to(..)` take one. (#726)
 - A float pair passed as `impl Into<Size>`, as iced's `window_size((500.0, 800.0))`, takes f32s, as rustc infers them. (#1941)
 - A crate method that returns `&Path`, as directories' `ProjectDirs::data_dir()`, and a tokio future that takes `&[u8]`, as `fs::write(path, json.as_bytes())`, no longer fail to build. (#1942, #1943)
+- A path that starts with `::` after a keyword, as gallery's `match ::image::load_from_memory(..)`, names its crate. (#1935)
+- A crate trait that a `use` inside a function brings into scope, as game_of_life's `use itertools::Itertools;`, gives its methods to calls in that function. (#1936)
+- `std::convert::identity` runs, a std function passed as a value (`.on_link_click(std::convert::identity)`, `.map(std::mem::take)`) is the closure that calls it, and a one-argument call accepts a trailing comma. (#1944)
 
 ## 0.3.213 (2026-11-13)
 
