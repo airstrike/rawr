@@ -29,6 +29,8 @@ pub(crate) mod config;
 pub mod declaration;
 mod dependency;
 mod messages;
+#[cfg(test)]
+mod output_tests;
 #[cfg(feature = "rustc-driver")]
 pub(crate) use dependency::scan::{escape_environment, escape_path};
 pub mod fingerprint;
@@ -1968,7 +1970,7 @@ fn rmeta_digest(
 
 /// Whether `path` is the separate debug info `split-debuginfo = "packed"`
 /// writes beside an output: a macOS `.dSYM` bundle, a `.dwp` or a `.pdb`.
-fn split_debuginfo(path: &Path) -> bool {
+pub(crate) fn split_debuginfo(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
         Some("dSYM" | "dwp" | "pdb")
