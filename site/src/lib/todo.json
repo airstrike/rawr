@@ -57,7 +57,9 @@
         {"text":"A full-path std call with a turbofish, as `std::sync::mpsc::channel::<u8>()`, is a call again beside a std function named as a value.","issues":[1980]},
         {"text":"A closure's `?` converts its error through From into the error the closure's tail gives, as rustc infers it, instead of fixing the error type at the first `?`.","issues":[1977]},
         {"text":"A value that keeps a `&'a mut` and a `&'a` of the crate values it was made from, as integration's `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`, lives in its block and holds both places for its life, as rustc's borrow does.","issues":[1973]},
-        {"text":"A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function.","issues":[1981]}
+        {"text":"A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function.","issues":[1981]},
+        {"text":"A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502.","issues":[1982]},
+        {"text":"`&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work.","issues":[1982]}
       ]
     },
     "releases": [
@@ -4349,7 +4351,7 @@
     {"issue":1979,"title":"`Write` for `io::Cursor<Vec<u8>>` is missing from the std table","state":"open","category":"Divergences from rustc"},
     {"issue":1980,"title":"A full-path std call with a turbofish (`std::sync::mpsc::channel::<u8>()`) is a syntax error on main","state":"closed","category":"Divergences from rustc"},
     {"issue":1981,"title":"A fn item coerced to a native trait object through a crate's blanket impl over Fn (markdown's `&Code::highlight`)","state":"closed","category":"Divergences from rustc"},
-    {"issue":1982,"title":"A method whose `&'a self` borrow is kept by a `&mut T<'a>` input a scope frame holds is refused (integration)","state":"open","category":"No glue (D593)"},
+    {"issue":1982,"title":"A method whose `&'a self` borrow is kept by a `&mut T<'a>` input a scope frame holds is refused (integration)","state":"closed","category":"No glue (D593)"},
     {"issue":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"open","category":"Health"},
     {"issue":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1985,"title":"A program family's blanket RawrOpaque impl in the runner bin crate breaks the orphan rule (E0210, gallery)","state":"open","category":"No glue (D593)"},
@@ -4357,7 +4359,9 @@
     {"issue":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"open","category":"No glue (D593)"},
     {"issue":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open","category":"No glue (D593)"},
     {"issue":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"open","category":"Health"},
-    {"issue":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"open","category":"Platforms"}
+    {"issue":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"open","category":"Platforms"},
+    {"issue":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"open","category":"No glue (D593)"},
+    {"issue":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5014,11 +5018,12 @@
             {"number":1973,"title":"A function whose output borrows &'a and &'a mut inputs at one early-bound lifetime is refused (integration)","state":"closed"},
             {"number":1975,"title":"A program's Rc or Arc of a by-value type passed as a crate call's argument doesn't cross as Rust's pointer","state":"open"},
             {"number":1981,"title":"A fn item coerced to a native trait object through a crate's blanket impl over Fn (markdown's `&Code::highlight`)","state":"closed"},
-            {"number":1982,"title":"A method whose `&'a self` borrow is kept by a `&mut T<'a>` input a scope frame holds is refused (integration)","state":"open"},
+            {"number":1982,"title":"A method whose `&'a self` borrow is kept by a `&mut T<'a>` input a scope frame holds is refused (integration)","state":"closed"},
             {"number":1985,"title":"A program family's blanket RawrOpaque impl in the runner bin crate breaks the orphan rule (E0210, gallery)","state":"open"},
             {"number":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"open"},
             {"number":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"open"},
-            {"number":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open"}
+            {"number":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open"},
+            {"number":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -5081,7 +5086,8 @@
             {"number":1797,"title":"crossing::an_opaque_widget_takes_the_types_a_later_use_fixes fails E0308 in an opaque table entry on main","state":"closed"},
             {"number":1803,"title":"After a native edit removed a function's generic, the runner still called it with the old turbofish (E0107)","state":"open"},
             {"number":1804,"title":"#1769's inference misses a callee with a lifetime, an outlives bound and an extension trait with defaulted parameters","state":"closed"},
-            {"number":1968,"title":"A borrowing opaque value bounded by a core trait besides Iterator (`impl Iterator + Clone`) can't be kept","state":"open"}
+            {"number":1968,"title":"A borrowing opaque value bounded by a core trait besides Iterator (`impl Iterator + Clone`) can't be kept","state":"open"},
+            {"number":1991,"title":"A &self method's edition-2024 opaque output that captures the receiver (Controls::view) is borrowed from a closure","state":"open"}
           ]
         }
       ]

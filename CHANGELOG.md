@@ -51,6 +51,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A closure's `?` converts its error through From into the error the closure's tail gives, as rustc infers it, instead of fixing the error type at the first `?`. (#1977)
 - A value that keeps a `&'a mut` and a `&'a` of the crate values it was made from, as integration's `Scene::clear(&view, &mut encoder, color)` gives a `RenderPass<'a>`, lives in its block and holds both places for its life, as rustc's borrow does. (#1973)
 - A function or closure, borrowed or boxed, can be used as a crate trait's object when the crate implements the trait for every function of one signature, as iced's markdown takes `&Code::highlight` as a `&dyn Highlighter<Code>`; native code calling the object's methods runs the program's function. (#1981)
+- A `&self` method that lends its receiver to a value it takes by `&mut`, as integration's `scene.draw(&mut render_pass)`, works, and the receiver stays borrowed while that value lives, so changing it meanwhile is rustc's E0502. (#1982)
+- `&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work. (#1982)
 
 ## 0.3.213 (2026-11-13)
 
