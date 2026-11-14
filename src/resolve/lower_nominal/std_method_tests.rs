@@ -318,6 +318,240 @@ main();
     );
 }
 
+/// `insert`, `get_or_insert`, `get_or_insert_with` and
+/// `get_or_insert_default` give the place of the payload they leave, which
+/// `*..`, a `&mut self` call and a held `&mut` change, on a local, a field
+/// and an element; the borrow is the receiver's, as rustc checks it (#1001).
+#[test]
+fn an_option_s_inserting_methods_give_the_payload_s_place() {
+    let source = r#"
+use std::time::Instant;
+struct Timer {
+    start: Option<Instant>,
+    hits: Option<Vec<u32>>,
+    n: Option<i32>,
+}
+impl Timer {
+    fn started(&mut self) -> bool {
+        let _ = *self.start.get_or_insert_with(|| Instant::now());
+        self.start.is_some()
+    }
+}
+fn main() {
+    let mut o: Option<i32> = None;
+    *o.get_or_insert_with(|| 3) += 1;
+    *o.get_or_insert_with(|| 100) += 1;
+    println!("{o:?}");
+    let mut p: Option<i32> = Some(1);
+    let r = p.insert(5);
+    *r += 1;
+    *r += 1;
+    println!("{p:?}");
+    let mut q: Option<String> = None;
+    q.get_or_insert_default().push_str("hi");
+    q.get_or_insert(String::from("unused")).push('!');
+    println!("{q:?}");
+    let mut t = Timer { start: None, hits: None, n: None };
+    println!("{}", t.started());
+    t.hits.get_or_insert_with(Vec::new).push(7);
+    t.hits.get_or_insert_with(Vec::new).push(8);
+    *t.n.insert(2) *= 21;
+    println!("{:?} {:?}", t.hits, t.n);
+    let mut all = vec![None, Some(1)];
+    *all[0].get_or_insert(9) += 1;
+    println!("{all:?}");
+    let v = o.insert(10);
+    println!("{v}");
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Some(5)\nSome(7)\nSome(\"hi!\")\ntrue\nSome([7, 8]) Some(42)\n[Some(10), Some(1)]\n10\n"
+    );
+    let report = refused("fn main() { let o: Option<i32> = None; o.insert(1); }\nmain();\n");
+    assert!(report.contains("E0596"), "{report}");
+    let report = refused(
+        "fn main() { let mut o: Option<i32> = None; let r = o.get_or_insert(1); \
+         println!(\"{:?}\", o); *r += 1; }\nmain();\n",
+    );
+    assert!(report.contains("E0502"), "{report}");
+}
+
+/// A `&mut` local held on a place a setup reaches is read by a `format!`
+/// argument written inline, as one written after the string is (#1001).
+#[test]
+fn an_inline_format_argument_reads_a_held_place() {
+    let source = r#"
+fn main() {
+    let mut o: Option<i32> = Some(1);
+    let r = o.as_mut().unwrap();
+    println!("{r}");
+    let mut v = vec![2];
+    let x = v.get_mut(0).unwrap();
+    println!("{x:?}");
+}
+main();
+"#;
+    assert_eq!(printed(source), "1\n2\n");
+}
+
+/// `try_recv` and `recv_timeout` give std's own `TryRecvError` and
+/// `RecvTimeoutError`, and `recv` std's `RecvError`, which a program
+/// matches, compares and writes as std does; a channel's halves and its
+/// turbofish are named in a body as rustc reads them (#950).
+#[test]
+fn a_receive_s_errors_are_std_s_own() {
+    let source = r#"
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::time::Duration;
+
+fn main() {
+    let (tx, rx) = mpsc::channel::<i32>();
+    println!("{:?}", rx.try_recv());
+    tx.send(1).unwrap();
+    println!("{:?}", rx.try_recv());
+    match rx.try_recv() {
+        Err(TryRecvError::Empty) => println!("empty"),
+        Err(_) => println!("gone"),
+        Ok(v) => println!("{v}"),
+    }
+    println!("{:?}", rx.recv_timeout(Duration::from_millis(5)));
+    drop(tx);
+    let gone = rx.try_recv().unwrap_err();
+    println!("{gone:?} {gone} {}", gone == TryRecvError::Disconnected);
+    let timed = rx.recv_timeout(Duration::from_millis(5));
+    println!("{:?} {}", timed, timed == Err(RecvTimeoutError::Disconnected));
+    let e = rx.recv().unwrap_err();
+    println!("{e:?} {e} {}", e.to_string().len());
+    let pair = std::sync::mpsc::channel::<u8>();
+    let (tx, rx): (mpsc::Sender<u8>, std::sync::mpsc::Receiver<u8>) = pair;
+    tx.send(3).unwrap();
+    println!("{:?}", rx.try_recv());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Err(Empty)\nOk(1)\nempty\nErr(Timeout)\n\
+         Disconnected receiving on a closed channel true\nErr(Disconnected) true\n\
+         RecvError receiving on a closed channel 29\nOk(3)\n"
+    );
+    let report = refused(
+        "use std::sync::mpsc;\nfn main() { let (tx, rx) = mpsc::channel::<i32>(); \
+         let _ = rx.recv_timeout(5); tx.send(1).unwrap(); }\nmain();\n",
+    );
+    assert!(report.contains("E0308"), "{report}");
+}
+
+/// A `sync_channel`'s sender waits while the channel is full, a scope's
+/// threads borrow what outlives it and are joined before it returns, and a
+/// `thread::Builder` names the thread it spawns, as std's do (#950).
+#[cfg(feature = "sync")]
+#[test]
+fn a_sync_channel_a_scope_and_a_builder_run_as_std_s() {
+    let source = r#"
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::sync_channel(1);
+    let producer = thread::spawn(move || {
+        for n in 0..4 {
+            tx.send(n * n).unwrap();
+        }
+    });
+    let got: Vec<i32> = rx.iter().collect();
+    producer.join().unwrap();
+    println!("{got:?}");
+    let (tx, rx) = mpsc::sync_channel::<String>(0);
+    let other = tx.clone();
+    thread::spawn(move || other.send(String::from("met")).unwrap());
+    println!("{}", rx.recv().unwrap());
+    drop(tx);
+
+    let numbers = vec![1, 2, 3, 4];
+    let mut total = 0;
+    let both = thread::scope(|s| {
+        let first = s.spawn(|| numbers.iter().sum::<i32>());
+        let second: thread::ScopedJoinHandle<'_, usize> = s.spawn(|| numbers.len());
+        s.spawn(|| {
+            total += numbers[0] + numbers[3];
+        });
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    println!("{both:?} {total} {numbers:?}");
+
+    let builder = thread::Builder::new().name(String::from("worker")).stack_size(64 * 1024);
+    let handle: thread::JoinHandle<i32> = builder.spawn(|| 6 * 7).unwrap();
+    println!("{}", handle.join().unwrap());
+    let spawned: std::io::Result<thread::JoinHandle<u8>> = thread::Builder::new().spawn(|| 1);
+    println!("{:?}", spawned.map(|handle| handle.join().unwrap()).ok());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[0, 1, 4, 9]\nmet\n(10, 4) 5 [1, 2, 3, 4]\n42\nSome(1)\n"
+    );
+}
+
+/// A scoped thread's closure may borrow, but what it borrows must be
+/// `Sync`, and a builder's closure must not borrow a local, as rustc checks
+/// `Scope::spawn`'s and `Builder::spawn`'s bounds (#950).
+#[test]
+fn a_scoped_or_built_thread_s_closure_meets_std_s_bounds() {
+    let report = refused(
+        "use std::rc::Rc;\nuse std::thread;\nfn main() { let shared = Rc::new(5); \
+         thread::scope(|s| { s.spawn(|| println!(\"{shared}\")); }); }\nmain();\n",
+    );
+    assert!(
+        report.contains("E0277") && report.contains("cannot be shared between threads safely"),
+        "{report}"
+    );
+    let report = refused(
+        "use std::thread;\nfn main() { let v = vec![1]; \
+         let h = thread::Builder::new().spawn(|| v.len()).unwrap(); h.join().unwrap(); }\nmain();\n",
+    );
+    assert!(report.contains("E0373"), "{report}");
+}
+
+/// A lock no thread poisoned: `unwrap_or_else` of a `PoisonError` handler
+/// holds it as `unwrap()` does, `is_poisoned()` is `false`, and
+/// `into_inner()` kept as its `LockResult` is `Ok` of the value (#949).
+#[test]
+fn a_mutex_s_lock_results_are_std_s() {
+    let source = r#"
+use std::sync::{Mutex, PoisonError};
+
+fn main() {
+    let m = Mutex::new(vec![1]);
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(2);
+    {
+        let mut guard = m.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.push(3);
+    }
+    println!("{} {:?}", m.is_poisoned(), m.lock().unwrap());
+    m.clear_poison();
+    let mut n = Mutex::new(5);
+    *n.get_mut().unwrap_or_else(|e| e.into_inner()) += 1;
+    match n.into_inner() {
+        Ok(value) => println!("{value}"),
+        Err(poisoned) => println!("poisoned {}", poisoned.into_inner()),
+    }
+    let r: Result<Vec<i32>, PoisonError<Vec<i32>>> = m.into_inner();
+    println!("{:?}", r.unwrap());
+}
+main();
+"#;
+    assert_eq!(printed(source), "false [1, 2, 3]\n6\n[1, 2, 3]\n");
+    let report = refused(
+        "use std::sync::Mutex;\nfn main() { let m = Mutex::new(1); \
+         let _ = m.lock().unwrap_or_else(|e| 5); }\nmain();\n",
+    );
+    assert!(report.contains("E0308"), "{report}");
+}
+
 /// A `Mutex`'s `get_mut()` and `into_inner()`, unwrapped as `lock()` is,
 /// reach its value (#949).
 #[test]

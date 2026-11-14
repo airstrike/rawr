@@ -291,6 +291,15 @@ impl<'a> Parser<'a> {
                 value = parsed;
                 continue;
             }
+            // `builder.spawn(f)`: a thread std's own `thread::Builder`
+            // configures, which rawr starts as `thread::spawn` starts one.
+            if member.as_str() == "spawn"
+                && matches!(self.peek(), Token::LeftParen)
+                && self.is_thread_builder(&value.ty)
+            {
+                value = self.parse_builder_spawn(value, member_span)?;
+                continue;
+            }
             // `Box<T>` auto-derefs for method calls and fields, as in Rust.
             if let Some((unboxed, boxed)) = self.unbox(&value.ty) {
                 // `boxed.as_ref()` is a reference to the boxed value, as

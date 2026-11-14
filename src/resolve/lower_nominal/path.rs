@@ -205,7 +205,13 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::LeftParen | Token::Unit) || turbofish {
                 match full.as_str() {
                     "std::thread::spawn" => return self.parse_thread_spawn(first_span.start()),
-                    "std::sync::mpsc::channel" => return self.parse_channel(first_span.start()),
+                    "std::thread::scope" => return self.parse_thread_scope(first_span.start()),
+                    "std::sync::mpsc::channel" => {
+                        return self.parse_channel(first_span.start(), thread::Bound::Unbounded);
+                    }
+                    "std::sync::mpsc::sync_channel" => {
+                        return self.parse_channel(first_span.start(), thread::Bound::Bounded);
+                    }
                     _ => {}
                 }
             }

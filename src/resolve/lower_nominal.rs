@@ -375,10 +375,10 @@ struct Parser<'a> {
     /// `arithmetic_overflow` and `unconditional_panic` lints check.
     known_values: BTreeMap<Span, Known>,
     known_indices: Vec<KnownIndex>,
-    /// The type of a capture rawr knows isn't `Send`, of each closure
+    /// A capture that keeps a closure from being `Send`, of each closure
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
-    unsent_captures: BTreeMap<Span, Ty>,
+    unsent_captures: BTreeMap<Span, closure::Unsent>,
     /// A local a closure that isn't `move` borrows, of each closure that
     /// borrows one, by the closure's span: what a `'static` bound refuses
     /// (rustc's E0373), as `std::thread::spawn`'s does.

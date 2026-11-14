@@ -1,11 +1,14 @@
-//! `std::thread::spawn` and its `JoinHandle<T>`, and `std::sync::mpsc`'s
-//! `channel`, `Sender<T>` and `Receiver<T>`. Each spawned closure runs on a
-//! thread of its own, in parallel with the others (`eval::threads`), and a
-//! channel is std's own, carrying rawr's values. Which methods each type
-//! has is std's (`std_method`); how rawr runs each is here.
+//! `std::thread::spawn` and its `JoinHandle<T>`, `thread::scope` and its
+//! `Scope` and `ScopedJoinHandle<T>`, and `std::sync::mpsc`'s `channel`,
+//! `sync_channel`, `Sender<T>`, `SyncSender<T>` and `Receiver<T>`. Each
+//! spawned closure runs on a thread of its own, in parallel with the others
+//! (`eval::threads`), and a channel is std's own, carrying rawr's values.
+//! Which methods each type has is std's (`std_method`), and so are the
+//! errors a receive gives (`std_facade::sync`); how rawr runs each is here.
 //!
 //! A closure `spawn` takes must be `Send`, as std's bound says: one that
-//! captures what rawr knows isn't `Send`, as an `Rc`, is rustc's E0277.
+//! captures what rawr knows isn't `Send`, as an `Rc`, is rustc's E0277. A
+//! scoped thread may borrow what outlives its scope, which joins it.
 
 use super::*;
 
@@ -16,15 +19,23 @@ use super::*;
 pub(super) enum Kind {
     JoinHandle,
     Sender,
+    /// A `sync_channel`'s sending half, whose `send` waits while the
+    /// channel holds as many values as it is bounded to.
+    SyncSender,
     Receiver,
     /// `SendError<T>`, of a send no receiver takes.
     SendError,
-    /// `RecvError`, of a receive no sender can answer; its `Ty::Thread`
-    /// holds `()`.
-    RecvError,
     /// `Box<dyn Any + Send>`, the panic `join` gives; its `Ty::Thread`
     /// holds `()`.
     Panic,
+    /// `thread::Scope`, whose threads `scope` joins before it returns; its
+    /// `Ty::Thread` holds `()`.
+    Scope,
+    /// A scoped thread's `ScopedJoinHandle<T>`.
+    ScopedJoinHandle,
+    /// `PoisonError<T>`, of a lock a panicking thread held. No lock rawr
+    /// runs is poisoned, so no value of it is made.
+    PoisonError,
 }
 
 impl Kind {
@@ -32,7 +43,10 @@ impl Kind {
     pub(super) fn named(name: &str) -> Option<Self> {
         Some(match name {
             "JoinHandle" => Self::JoinHandle,
+            "ScopedJoinHandle" => Self::ScopedJoinHandle,
+            "PoisonError" => Self::PoisonError,
             crate::resolve::MPSC_SENDER => Self::Sender,
+            crate::resolve::MPSC_SYNC_SENDER => Self::SyncSender,
             crate::resolve::MPSC_RECEIVER => Self::Receiver,
             _ => return None,
         })
@@ -43,10 +57,13 @@ impl Kind {
         match self {
             Self::JoinHandle => format!("JoinHandle<{inner}>"),
             Self::Sender => format!("Sender<{inner}>"),
+            Self::SyncSender => format!("SyncSender<{inner}>"),
             Self::Receiver => format!("Receiver<{inner}>"),
             Self::SendError => format!("SendError<{inner}>"),
-            Self::RecvError => "RecvError".into(),
             Self::Panic => "Box<dyn Any + Send>".into(),
+            Self::Scope => "Scope<'_, '_>".into(),
+            Self::ScopedJoinHandle => format!("ScopedJoinHandle<'_, {inner}>"),
+            Self::PoisonError => format!("PoisonError<{inner}>"),
         }
     }
 
@@ -57,10 +74,13 @@ impl Kind {
         Some(match self {
             Self::JoinHandle => ("std::thread::join_handle::JoinHandle", true),
             Self::Sender => ("std::sync::mpsc::Sender", true),
+            Self::SyncSender => ("std::sync::mpsc::SyncSender", true),
             Self::Receiver => ("std::sync::mpsc::Receiver", true),
             Self::SendError => ("std::sync::mpsc::SendError", true),
-            Self::RecvError => ("std::sync::mpsc::RecvError", false),
             Self::Panic => return None,
+            Self::Scope => ("std::thread::scoped::Scope", false),
+            Self::ScopedJoinHandle => ("std::thread::scoped::ScopedJoinHandle", true),
+            Self::PoisonError => ("std::sync::poison::PoisonError", true),
         })
     }
 
@@ -76,14 +96,14 @@ impl Kind {
         !matches!(self, Self::Receiver | Self::Panic)
     }
 
-    /// Whether std implements `Clone` for the kind: a `Sender` only.
+    /// Whether std implements `Clone` for the kind: a sending half only.
     pub(super) const fn clones(self) -> bool {
-        matches!(self, Self::Sender)
+        matches!(self, Self::Sender | Self::SyncSender)
     }
 }
 
 /// The functions and methods rawr runs, by the code `invoke` takes.
-const METHODS: [&str; 11] = [
+const METHODS: [&str; 19] = [
     "spawn",
     "join",
     "is_finished",
@@ -95,6 +115,14 @@ const METHODS: [&str; 11] = [
     "iter",
     "debug",
     "display",
+    "recv_timeout",
+    "sync_channel",
+    "scope",
+    "scoped_spawn",
+    "builder_spawn",
+    "into_inner",
+    "get_ref",
+    "get_mut",
 ];
 
 fn code(name: &str) -> origin::Fragment {
@@ -105,9 +133,46 @@ fn code(name: &str) -> origin::Fragment {
     code.to_string().into()
 }
 
+/// What starts a thread: `thread::spawn`, a `thread::Builder`'s `spawn`,
+/// whose closures must live for the program, or a `Scope`'s, whose closure
+/// must live for the scope that joins it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Spawner {
+    Function,
+    Builder,
+    Scope,
+}
+
+impl Spawner {
+    /// The std function whose bounds the closure meets, as rustc names it.
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Function => "std::thread::spawn",
+            Self::Builder => "Builder::spawn",
+            Self::Scope => "Scope::<'scope, 'env>::spawn",
+        }
+    }
+}
+
+/// Whether a channel holds at most a bound of values, as `sync_channel`'s.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum Bound {
+    Unbounded,
+    Bounded,
+}
+
 /// A channel's sending half, std's own.
 #[derive(Clone)]
 pub(crate) struct Sender(std::sync::mpsc::Sender<Dynamic>);
+
+/// A bounded channel's sending half, std's own.
+#[derive(Clone)]
+pub(crate) struct SyncSender(std::sync::mpsc::SyncSender<Dynamic>);
+
+/// A `thread::scope`'s threads, which it joins before it returns.
+#[cfg(feature = "sync")]
+#[derive(Clone)]
+pub(crate) struct Scope(crate::Shared<std::sync::Mutex<Vec<crate::eval::threads::Handle>>>);
 
 /// A channel's receiving half, std's own, which one thread at a time
 /// receives from.
@@ -150,25 +215,43 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
         "is_finished" => is_finished(args[0]),
         "channel" => {
             let (sender, receiver) = std::sync::mpsc::channel();
-            let receiver = Receiver(crate::Shared::new(std::sync::Mutex::new(receiver)));
-            Ok(Dynamic::from_array(vec![
-                Dynamic::from(Sender(sender)),
-                Dynamic::from(receiver),
-            ]))
+            Ok(halves(Dynamic::from(Sender(sender)), receiver))
+        }
+        "sync_channel" => {
+            let bound = usize::try_from(args[2].as_int().unwrap_or(0)).unwrap_or(usize::MAX);
+            let (sender, receiver) = std::sync::mpsc::sync_channel(bound);
+            Ok(halves(Dynamic::from(SyncSender(sender)), receiver))
         }
         "send" => {
-            let sender = args[0]
-                .read_lock::<Sender>()
-                .map(|sender| sender.0.clone())
-                .ok_or_else(|| invariant("a `Sender` is not one at runtime"))?;
-            Ok(match sender.send(args[2].take()) {
+            let value = args[2].take();
+            let sent = match args[0].read_lock::<Sender>().map(|sender| sender.0.clone()) {
+                Some(sender) => sender.send(value),
+                None => args[0]
+                    .read_lock::<SyncSender>()
+                    .map(|sender| sender.0.clone())
+                    .ok_or_else(|| invariant("a `Sender` is not one at runtime"))?
+                    .send(value),
+            };
+            Ok(match sent {
                 Ok(()) => crate::result::ok(Dynamic::UNIT),
                 Err(_) => crate::result::err(Dynamic::from(SendError)),
             })
         }
+        "scope" => scope(context, args[0].take()),
+        // A `PoisonError`'s, of which no lock rawr runs makes one.
+        "into_inner" | "get_ref" | "get_mut" => Err(invariant("no lock rawr runs is poisoned")),
+        "builder_spawn" => {
+            let closure = args[2].take();
+            builder_spawn(context, args[0], closure)
+        }
+        "scoped_spawn" => {
+            let closure = args[2].take();
+            scoped_spawn(context, args[0], closure)
+        }
         // The receiver itself, which a `for` walks (`Receiver::values`).
         "iter" => Ok(args[0].clone()),
-        "recv" | "try_recv" => {
+        // Each error is std's own (`std_facade::sync`).
+        "recv" | "try_recv" | "recv_timeout" => {
             let receiver = args[0]
                 .read_lock::<Receiver>()
                 .map(|receiver| receiver.0.clone())
@@ -176,18 +259,25 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
             let receiver = receiver
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Ok(match METHODS[code] {
-                "recv" => receiver
-                    .recv()
-                    .map_or_else(|_| crate::result::err(Dynamic::UNIT), crate::result::ok),
-                _ => receiver
-                    .try_recv()
-                    .map_or_else(|_| crate::result::err(Dynamic::UNIT), crate::result::ok),
+            let received = match METHODS[code] {
+                "recv" => receiver.recv().map_err(Dynamic::from),
+                "try_recv" => receiver.try_recv().map_err(Dynamic::from),
+                _ => {
+                    let timeout = args[2]
+                        .read_lock::<std::time::Duration>()
+                        .map(|timeout| *timeout)
+                        .ok_or_else(|| invariant("a `Duration` is not Rust's at runtime"))?;
+                    receiver.recv_timeout(timeout).map_err(Dynamic::from)
+                }
+            };
+            Ok(match received {
+                Ok(value) => crate::result::ok(value),
+                Err(error) => crate::result::err(error),
             })
         }
         "clone" => Ok(args[0].clone()),
         "debug" => Ok(Dynamic::from(ImmutableString::from(debug(args[0])))),
-        "display" => Ok(Dynamic::from(ImmutableString::from(display(args[0])))),
+        "display" => Ok(Dynamic::from(ImmutableString::from(display()))),
         _ => Err(invariant("not a `std::thread` or `mpsc` operation")),
     }
 }
@@ -210,6 +300,113 @@ fn spawn(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResul
 fn spawn(_: Option<&NativeCallContext<'_>>, _: Dynamic) -> RawrResult {
     Err(invariant(
         "`std::thread::spawn` needs rawr built with its `sync` feature",
+    ))
+}
+
+/// A channel's two halves, as `channel` and `sync_channel` give them.
+fn halves(sender: Dynamic, receiver: std::sync::mpsc::Receiver<Dynamic>) -> Dynamic {
+    let receiver = Receiver(crate::Shared::new(std::sync::Mutex::new(receiver)));
+    Dynamic::from_array(vec![sender, Dynamic::from(receiver)])
+}
+
+/// `thread::scope(f)`: `f` called with a new scope, then each thread it
+/// spawned joined, as std's `scope` does before it returns. A scoped
+/// thread that panicked and that `f` didn't join is std's panic.
+#[cfg(feature = "sync")]
+fn scope(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResult {
+    let context = context.ok_or_else(|| invariant("a scope is made outside a call"))?;
+    let closure = closure
+        .try_cast::<crate::FnPtr>()
+        .ok_or_else(|| invariant("a scope's closure is no function"))?;
+    let threads = crate::Shared::new(std::sync::Mutex::new(Vec::new()));
+    let given = closure.call_raw(context, None, [Dynamic::from(Scope(threads.clone()))]);
+    let mut panicked = false;
+    // A scoped thread may spawn more in the scope before it ends: each
+    // round joins those the last left.
+    loop {
+        let spawned = std::mem::take(
+            &mut *threads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if spawned.is_empty() {
+            break;
+        }
+        for handle in spawned {
+            panicked |= matches!(handle.join(), Some(Err(_)));
+        }
+    }
+    let value = given?;
+    if panicked {
+        return Err(
+            EvalAltResult::ErrorRuntime("a scoped thread panicked".into(), Position::NONE).into(),
+        );
+    }
+    Ok(value)
+}
+
+/// `builder.spawn(f)`: `f` on a thread std's `builder` starts, or the
+/// error of one the system doesn't start.
+#[cfg(feature = "sync")]
+fn builder_spawn(
+    context: Option<&NativeCallContext<'_>>,
+    builder: &Dynamic,
+    closure: Dynamic,
+) -> RawrResult {
+    let context = context.ok_or_else(|| invariant("a thread is spawned outside a call"))?;
+    let closure = closure
+        .try_cast::<crate::FnPtr>()
+        .ok_or_else(|| invariant("a thread's closure is no function"))?;
+    crate::std_facade::thread::spawn(builder, |std, name| {
+        let started = context
+            .global_runtime_state()
+            .threads
+            .start(context, closure, std, name)?;
+        Ok(started.map(Dynamic::from))
+    })
+}
+
+#[cfg(not(feature = "sync"))]
+fn builder_spawn(_: Option<&NativeCallContext<'_>>, _: &Dynamic, _: Dynamic) -> RawrResult {
+    Err(invariant(
+        "`std::thread::Builder::spawn` needs rawr built with its `sync` feature",
+    ))
+}
+
+#[cfg(not(feature = "sync"))]
+fn scope(_: Option<&NativeCallContext<'_>>, _: Dynamic) -> RawrResult {
+    Err(invariant(
+        "`std::thread::scope` needs rawr built with its `sync` feature",
+    ))
+}
+
+/// `s.spawn(f)`: `f` on a thread of its own, which the scope `s` joins.
+#[cfg(feature = "sync")]
+fn scoped_spawn(
+    context: Option<&NativeCallContext<'_>>,
+    scope: &Dynamic,
+    closure: Dynamic,
+) -> RawrResult {
+    let threads = scope
+        .read_lock::<Scope>()
+        .map(|scope| scope.0.clone())
+        .ok_or_else(|| invariant("a `Scope` is not one at runtime"))?;
+    let handle = spawn(context, closure)?;
+    let joined = handle
+        .read_lock::<crate::eval::threads::Handle>()
+        .map(|handle| handle.clone())
+        .ok_or_else(|| invariant("a spawned thread gives no `JoinHandle`"))?;
+    threads
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(joined);
+    Ok(handle)
+}
+
+#[cfg(not(feature = "sync"))]
+fn scoped_spawn(_: Option<&NativeCallContext<'_>>, _: &Dynamic, _: Dynamic) -> RawrResult {
+    Err(invariant(
+        "`std::thread::scope` needs rawr built with its `sync` feature",
     ))
 }
 
@@ -252,27 +449,22 @@ fn is_finished(_: &Dynamic) -> RawrResult {
 fn debug(value: &Dynamic) -> String {
     if value.is::<Sender>() {
         "Sender { .. }".into()
+    } else if value.is::<SyncSender>() {
+        "SyncSender { .. }".into()
     } else if value.is::<Receiver>() {
         "Receiver { .. }".into()
     } else if value.is::<SendError>() {
         "SendError { .. }".into()
     } else if value.is::<Panic>() {
         "Any { .. }".into()
-    } else if value.is_unit() {
-        // `RecvError`, whose runtime value is `()`.
-        "RecvError".into()
     } else {
         "JoinHandle { .. }".into()
     }
 }
 
-/// std's `Display` of a channel's errors.
-fn display(value: &Dynamic) -> String {
-    if value.is::<SendError>() {
-        "sending on a closed channel".into()
-    } else {
-        "receiving on a closed channel".into()
-    }
+/// std's `Display` of a `SendError`, the one thread value it writes.
+fn display() -> String {
+    "sending on a closed channel".into()
 }
 
 impl Parser<'_> {
@@ -290,6 +482,23 @@ impl Parser<'_> {
                 call,
             ));
         };
+        let output = self.spawned(closure, Spawner::Function, call)?;
+        let source = self.prelude_op(
+            PreludeOp::Thread,
+            [closure.rendered_source(), code("spawn"), "()".into()],
+        );
+        Ok(self.operator_expr(source, Ty::Thread(Kind::JoinHandle, Box::new(output)), call))
+    }
+
+    /// The closure a thread runs, checked as std's `spawn` bounds it: `F:
+    /// Send`, `T: Send`, and `F: 'static` unless it is a scope's, whose
+    /// closure may borrow what outlives the scope. What the closure gives.
+    fn spawned(
+        &mut self,
+        closure: &mut ParsedExpr,
+        spawner: Spawner,
+        call: Span,
+    ) -> Result<Ty, Error> {
         let output = self.inference.fresh();
         let expected = Ty::Fn {
             inputs: Box::new([]),
@@ -298,7 +507,9 @@ impl Parser<'_> {
         self.coerce_expr(&expected, closure)?;
         self.move_local(closure)?;
         // `F: 'static`: a closure that borrows a local may outlive it.
-        if let Some(name) = self.borrowed_captures.get(&closure.span) {
+        if spawner != Spawner::Scope
+            && let Some(name) = self.borrowed_captures.get(&closure.span)
+        {
             return Err(Error::BorrowConflict {
                 code: "E0373",
                 message: format!(
@@ -313,27 +524,75 @@ impl Parser<'_> {
         // `F: Send` and `T: Send`, std's bounds.
         if let Some(unsent) = self.unsent_captures.get(&closure.span).cloned() {
             return Err(Error::MissingCapability {
-                owner: unsent.name(&self.models),
-                capability: "Send".into(),
+                owner: unsent.ty.name(&self.models),
+                capability: if unsent.borrowed { "Sync" } else { "Send" }.into(),
                 operation: closure.span,
                 derive: false,
-                required_by: Some("std::thread::spawn".into()),
+                required_by: Some(spawner.path().into()),
             });
         }
         self.pending_bounds
             .push((output.clone(), capability::Kind::Send, call));
-        let source = self.prelude_op(
-            PreludeOp::Thread,
-            [closure.rendered_source(), code("spawn"), "()".into()],
-        );
-        Ok(self.operator_expr(source, Ty::Thread(Kind::JoinHandle, Box::new(output)), call))
+        Ok(output)
     }
 
-    /// `std::sync::mpsc::channel()`, after its path: a `(Sender<T>,
-    /// Receiver<T>)` of one channel, `T` inferred from its uses.
-    pub(super) fn parse_channel(&mut self, start: Position) -> Result<ParsedExpr, Error> {
-        // `channel::<T>()`.
-        let item = if matches!(self.peek(), Token::DoubleColon) {
+    /// `std::thread::scope(f)`, after its path: `f` called with a
+    /// `&Scope`, whose threads are joined before the call gives what `f`
+    /// gave.
+    pub(super) fn parse_thread_scope(&mut self, start: Position) -> Result<ParsedExpr, Error> {
+        let scope = Ty::Reference {
+            mutable: false,
+            target: Box::new(Ty::Thread(Kind::Scope, Box::new(Ty::Unit))),
+        };
+        // `F: FnOnce(&Scope) -> T`: the closure's parameter is the scope.
+        self.closure_hints = vec![Some(Box::new([scope.clone()]))];
+        let (mut arguments, end) = self.parse_call_arguments("`scope` arguments")?;
+        let call = span(start, end);
+        let [closure] = arguments.as_mut_slice() else {
+            return Err(Error::argument_count(
+                Callee::Function,
+                crate::resolve::Qualified("std::thread", "scope").to_string(),
+                1,
+                arguments.len(),
+                call,
+            ));
+        };
+        let output = self.inference.fresh();
+        let expected = Ty::Fn {
+            inputs: Box::new([scope]),
+            output: Box::new(output.clone()),
+        };
+        self.coerce_expr(&expected, closure)?;
+        self.move_local(closure)?;
+        let source = self.prelude_op(
+            PreludeOp::Thread,
+            [closure.rendered_source(), code("scope"), "()".into()],
+        );
+        let output = self.inference.resolve(&output);
+        Ok(self.operator_expr(source, output, call))
+    }
+
+    /// `std::sync::mpsc::channel()`, or `sync_channel(bound)` when
+    /// `bounded`, after its path: a `(Sender<T>, Receiver<T>)` of one
+    /// channel, or a `(SyncSender<T>, Receiver<T>)`, `T` inferred from its
+    /// uses.
+    pub(super) fn parse_channel(
+        &mut self,
+        start: Position,
+        bounded: Bound,
+    ) -> Result<ParsedExpr, Error> {
+        // `channel::<T>()`, whose turbofish a path's parse may have read.
+        let item = if let Some(mut types) = self.pending_turbofish.take() {
+            if types.len() != 1 {
+                return Err(Error::InvalidTypeArguments {
+                    ty: "function".into(),
+                    expected: 1,
+                    actual: types.len(),
+                    reference: span(start, self.position()),
+                });
+            }
+            types.remove(0)
+        } else if matches!(self.peek(), Token::DoubleColon) {
             self.next();
             self.expect(Token::LessThan, "'<' after `channel::`")?;
             let item = self.parse_local_type()?;
@@ -342,26 +601,122 @@ impl Parser<'_> {
         } else {
             self.inference.fresh()
         };
-        let (arguments, end) = self.parse_call_arguments("`channel` arguments")?;
+        let (mut arguments, end) = self.parse_call_arguments("`channel` arguments")?;
         let call = span(start, end);
-        if !arguments.is_empty() {
+        let (function, sender) = match bounded {
+            Bound::Unbounded => ("channel", Kind::Sender),
+            Bound::Bounded => ("sync_channel", Kind::SyncSender),
+        };
+        let expected = usize::from(bounded == Bound::Bounded);
+        if arguments.len() != expected {
             return Err(Error::argument_count(
                 Callee::Function,
-                crate::resolve::Qualified("std::sync::mpsc", "channel").to_string(),
-                0,
+                crate::resolve::Qualified("std::sync::mpsc", function).to_string(),
+                expected,
                 arguments.len(),
                 call,
             ));
         }
+        let operand = match arguments.first_mut() {
+            Some(bound) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), bound)?;
+                bound.rendered_source()
+            }
+            None => "()".into(),
+        };
         let ty = Ty::Tuple(Box::new([
-            Ty::Thread(Kind::Sender, Box::new(item.clone())),
+            Ty::Thread(sender, Box::new(item.clone())),
             Ty::Thread(Kind::Receiver, Box::new(item)),
         ]));
+        let source = self.prelude_op(PreludeOp::Thread, ["()".into(), code(function), operand]);
+        Ok(self.operator_expr(source, ty, call))
+    }
+
+    /// Which of std's thread and channel types the path `path` names in a
+    /// body, by its module path or as imported, unless the program names a
+    /// type so: `thread::JoinHandle`, `mpsc::Receiver`.
+    pub(super) fn thread_named(&self, path: &str) -> Option<Kind> {
+        let named = |path: &str| crate::resolve::std_thread_type(path).and_then(Kind::named);
+        let last = path.rsplit("::").next().unwrap_or(path);
+        if self.models.get(last).is_some() {
+            return None;
+        }
+        if path.contains("::") {
+            return named(path);
+        }
+        self.models
+            .import(path)
+            .and_then(|binding| named(&binding.qualified))
+    }
+
+    /// `JoinHandle<T>`, `Sender<T>` or another of std's thread and channel
+    /// types in a body, after its name; a lifetime before `T` is erased.
+    pub(super) fn parse_thread_type(&mut self, kind: Kind) -> Result<Ty, Error> {
+        self.expect(Token::LessThan, "'<' after the type's name")?;
+        if self.skip_lifetime() {
+            self.expect(Token::Comma, "',' after the type's lifetime")?;
+        }
+        let inner = self.parse_local_type()?;
+        self.expect_close_angle("'>' after the type's argument")?;
+        Ok(Ty::Thread(kind, Box::new(inner)))
+    }
+
+    /// Whether `ty` is std's `thread::Builder`, which Rawr's std holds.
+    pub(super) fn is_thread_builder(&self, ty: &Ty) -> bool {
+        let path = format!("{}::thread::Builder", crate::std_facade::ROOT);
+        matches!(
+            self.inference.resolve(ty),
+            Ty::Host { proof, .. } if proof.definition.path().as_str() == path
+        )
+    }
+
+    /// `builder.spawn(f)` of std's `thread::Builder`, after the method's
+    /// name: `f` on a thread the builder names and sizes, as an
+    /// `io::Result<JoinHandle<T>>`. `spawn(self, f)` takes the builder.
+    pub(super) fn parse_builder_spawn(
+        &mut self,
+        mut builder: ParsedExpr,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let (mut arguments, end) = self.parse_call_arguments("`spawn` arguments")?;
+        let call = span(builder.span.start(), end);
+        let [closure] = arguments.as_mut_slice() else {
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified("Builder", "spawn").to_string(),
+                1,
+                arguments.len(),
+                call,
+            ));
+        };
+        let Some(error) = self.std_held("io::Error") else {
+            return Err(Error::NotYet {
+                path: "std::thread::Builder::spawn".into(),
+                reference: member_span,
+            });
+        };
+        self.move_local(&mut builder)?;
+        let output = self.spawned(closure, Spawner::Builder, call)?;
         let source = self.prelude_op(
             PreludeOp::Thread,
-            ["()".into(), code("channel"), "()".into()],
+            [
+                builder.rendered_source(),
+                code("builder_spawn"),
+                closure.rendered_source(),
+            ],
         );
-        Ok(self.operator_expr(source, ty, call))
+        let handle = Ty::Thread(Kind::JoinHandle, Box::new(output));
+        Ok(self.operator_expr(source, Ty::Result(Box::new(handle), Box::new(error)), call))
+    }
+
+    /// The error type Rawr's std holds as std's `sync::mpsc::{name}`, which
+    /// a receive gives; the not-yet error of `method` without it.
+    fn receive_error(&self, name: &str, method: &str, at: Span) -> Result<Ty, Error> {
+        self.std_held(&format!("sync::mpsc::{name}"))
+            .ok_or_else(|| Error::NotYet {
+                path: format!("std::sync::mpsc::Receiver::{method}").into(),
+                reference: at,
+            })
     }
 
     /// A method of a `JoinHandle`, `Sender` or `Receiver` (a reference
@@ -386,29 +741,56 @@ impl Parser<'_> {
         let error = |kind: Kind, inner: Ty| Ty::Thread(kind, Box::new(inner));
         let ty = match (kind, member.as_str(), arguments.len()) {
             // `join(self)` takes the handle.
-            (Kind::JoinHandle, "join", 0) => {
+            (Kind::JoinHandle | Kind::ScopedJoinHandle, "join", 0) => {
                 if owned {
                     self.move_local(&mut value)?;
                 }
                 Ty::Result(Box::new(inner), Box::new(error(Kind::Panic, Ty::Unit)))
             }
-            (Kind::JoinHandle, "is_finished", 0) => Ty::Bool,
-            (Kind::Sender, "send", 1) => {
+            (Kind::JoinHandle | Kind::ScopedJoinHandle, "is_finished", 0) => Ty::Bool,
+            // A poisoned lock's value, which no lock rawr runs gives.
+            (Kind::PoisonError, "into_inner", 0) => {
+                if owned {
+                    self.move_local(&mut value)?;
+                }
+                inner
+            }
+            (Kind::PoisonError, "get_ref" | "get_mut", 0) => Ty::Reference {
+                mutable: member.as_str() == "get_mut",
+                target: Box::new(inner),
+            },
+            (Kind::Sender | Kind::SyncSender, "send", 1) => {
                 self.coerce_expr(&inner, &mut arguments[0])?;
                 self.move_local(&mut arguments[0])?;
                 Ty::Result(Box::new(Ty::Unit), Box::new(error(Kind::SendError, inner)))
             }
-            (Kind::Sender, "clone", 0) => Ty::Thread(Kind::Sender, Box::new(inner)),
-            (Kind::Receiver, "recv" | "try_recv", 0) => {
-                // `try_recv`'s error is `TryRecvError`, which rawr doesn't
-                // name yet.
-                if member.as_str() == "try_recv" {
-                    return Err(Error::NotYet {
-                        path: "std::sync::mpsc::Receiver::try_recv".into(),
-                        reference: member_span,
-                    });
-                }
-                Ty::Result(Box::new(inner), Box::new(error(Kind::RecvError, Ty::Unit)))
+            (Kind::Sender | Kind::SyncSender, "clone", 0) => Ty::Thread(kind, Box::new(inner)),
+            (Kind::Receiver, "recv", 0) => {
+                let error = self.receive_error("RecvError", &member, member_span)?;
+                Ty::Result(Box::new(inner), Box::new(error))
+            }
+            (Kind::Receiver, "try_recv", 0) => {
+                let error = self.receive_error("TryRecvError", &member, member_span)?;
+                Ty::Result(Box::new(inner), Box::new(error))
+            }
+            (Kind::Receiver, "recv_timeout", 1) => {
+                self.coerce_expr(&Ty::Time(Time::Duration), &mut arguments[0])?;
+                let error = self.receive_error("RecvTimeoutError", &member, member_span)?;
+                Ty::Result(Box::new(inner), Box::new(error))
+            }
+            // `Scope::spawn(&'scope self, f)`: a thread the scope joins.
+            (Kind::Scope, "spawn", 1) => {
+                let output = self.spawned(&mut arguments[0], Spawner::Scope, call)?;
+                let source = self.prelude_op(
+                    PreludeOp::Thread,
+                    [
+                        value.rendered_source(),
+                        code("scoped_spawn"),
+                        operand(&arguments),
+                    ],
+                );
+                let ty = Ty::Thread(Kind::ScopedJoinHandle, Box::new(output));
+                return Ok(self.operator_expr(source, ty, call));
             }
             (Kind::Receiver, "iter", 0) => {
                 let source = self.prelude_op(

@@ -128,6 +128,21 @@ impl Threads {
         context: &NativeCallContext<'_>,
         closure: FnPtr,
     ) -> Result<Handle, Box<EvalAltResult>> {
+        self.start(context, closure, std::thread::Builder::new(), None)?
+            // What `std::thread::spawn` panics with.
+            .map_err(|error| panic(&format!("failed to spawn thread: {error:?}")))
+    }
+
+    /// [`spawn`](Self::spawn) with std's `builder`, which names the thread
+    /// `name`, as `Builder::spawn`: the error of a thread the system
+    /// doesn't start.
+    pub(crate) fn start(
+        &self,
+        context: &NativeCallContext<'_>,
+        closure: FnPtr,
+        builder: std::thread::Builder,
+        name: Option<String>,
+    ) -> Result<std::io::Result<Handle>, Box<EvalAltResult>> {
         let mut running = self
             .group
             .running
@@ -147,26 +162,28 @@ impl Threads {
         // the thread makes of it.
         let engine: &'static Engine = unsafe { &*std::ptr::from_ref(context.engine()) };
         let global = context.global_runtime_state().clone();
-        let name = context.fn_name().to_owned();
+        let function = context.fn_name().to_owned();
         let position = context.call_position();
-        let thread = std::thread::Builder::new()
-            .spawn(move || {
-                let context = NativeCallContext::from((engine, &*name, None, &global, position));
-                let outcome = closure.call_raw(&context, None, []);
-                // A thread that panics prints its panic as it ends, as
-                // Rust's panic hook does; `join` gives the payload.
-                if let Err(error) = &outcome
-                    && let Some(report) = crate::diagnostic::located(error)
-                {
-                    eprint!("{}", crate::diagnostic::panicked(&report, "<unnamed>"));
-                }
-                outcome
-            })
-            // What `std::thread::spawn` panics with.
-            .map_err(|error| panic(&format!("failed to spawn thread: {error:?}")))?;
+        let thread = builder.spawn(move || {
+            let context = NativeCallContext::from((engine, &*function, None, &global, position));
+            let outcome = closure.call_raw(&context, None, []);
+            // A thread that panics prints its panic as it ends, as
+            // Rust's panic hook does; `join` gives the payload.
+            if let Err(error) = &outcome
+                && let Some(report) = crate::diagnostic::located(error)
+            {
+                let name = name.as_deref().unwrap_or("<unnamed>");
+                eprint!("{}", crate::diagnostic::panicked(&report, name));
+            }
+            outcome
+        });
+        let thread = match thread {
+            Ok(thread) => thread,
+            Err(error) => return Ok(Err(error)),
+        };
         let slot = Shared::new(Mutex::new(Some(Thread::Program(thread))));
         running.push(slot.clone());
-        Ok(Handle(slot))
+        Ok(Ok(Handle(slot)))
     }
 }
 

@@ -1,7 +1,8 @@
-//! std's `path`, `ffi`, `io`, `env`, `fs` and `process` items for every
-//! program (D528.4). Every [`Engine`](crate::Engine) made by `Engine::new`
-//! declares them, and every runtime registry binds them, so a plain
-//! program, an embedding and an iced app all name `std::path::PathBuf`
+//! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `char`,
+//! `sync::mpsc`, `thread` and `time` items for every program (D528.4). Every
+//! [`Engine`](crate::Engine) made by `Engine::new` declares them, and every
+//! runtime registry binds them, so a plain program, an embedding and an
+//! iced app all name `std::path::PathBuf`
 //! (`resolve::std_reexport` sends those modules here). The `fs` functions,
 //! `env::args` and `process::id` reach the operating system only as far as
 //! the calling program's [`Access`](crate::Access) grants (D683.4).
@@ -25,6 +26,8 @@ mod num;
 mod path;
 mod process;
 mod step;
+mod sync;
+pub(crate) mod thread;
 mod time;
 
 pub(crate) use case::mapped as case_mapped;
@@ -149,6 +152,8 @@ fn build() -> Result<facade::Definition, host::Error> {
     io::register_debug();
     num::register_debug();
     case::register_debug();
+    sync::register_debug();
+    thread::register_debug();
     time::register_debug();
     let mut builder = facade::Builder::new(ROOT, facade::Abi::new(1)?)?;
     step::install(&mut builder, &held(), declared::STEPS)?;
@@ -162,6 +167,8 @@ fn held() -> Vec<held::Held> {
         io::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),
+        sync::HELD.as_slice(),
+        thread::HELD.as_slice(),
         time::HELD.as_slice(),
     ]
     .concat()
@@ -176,6 +183,8 @@ fn bind(binds: &mut impl Bind) {
     process::bind(binds);
     num::bind(binds);
     case::bind(binds);
+    sync::bind(binds);
+    thread::bind(binds);
     time::bind(binds);
 }
 

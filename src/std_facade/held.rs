@@ -47,10 +47,6 @@ pub(crate) struct Value {
     /// The capabilities rawr runs for the value. Each is declared when std
     /// implements its trait for the type too.
     pub runs: &'static [capability::Kind],
-    /// std's constants of the type, by their public paths:
-    /// `std::time::UNIX_EPOCH` of `SystemTime`. std's table doesn't record
-    /// a constant's type, so the binding states it.
-    pub constants: &'static [&'static str],
 }
 
 impl Value {

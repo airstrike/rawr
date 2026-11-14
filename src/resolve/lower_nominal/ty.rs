@@ -1179,11 +1179,21 @@ impl Ty {
                 thread::Kind::JoinHandle => Some(TypeId::of::<crate::eval::threads::Handle>()),
                 #[cfg(not(feature = "sync"))]
                 thread::Kind::JoinHandle => None,
+                #[cfg(feature = "sync")]
+                thread::Kind::ScopedJoinHandle => {
+                    Some(TypeId::of::<crate::eval::threads::Handle>())
+                }
+                #[cfg(feature = "sync")]
+                thread::Kind::Scope => Some(TypeId::of::<thread::Scope>()),
+                #[cfg(not(feature = "sync"))]
+                thread::Kind::ScopedJoinHandle | thread::Kind::Scope => None,
                 thread::Kind::Sender => Some(TypeId::of::<thread::Sender>()),
+                thread::Kind::SyncSender => Some(TypeId::of::<thread::SyncSender>()),
                 thread::Kind::Receiver => Some(TypeId::of::<thread::Receiver>()),
                 thread::Kind::SendError => Some(TypeId::of::<thread::SendError>()),
-                thread::Kind::RecvError => Some(TypeId::of::<()>()),
                 thread::Kind::Panic => Some(TypeId::of::<thread::Panic>()),
+                // No value is made: no lock rawr runs is poisoned.
+                thread::Kind::PoisonError => Some(TypeId::of::<Dynamic>()),
             },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
@@ -1247,7 +1257,10 @@ impl Ty {
             TypeId::of::<cell::Cell>(),
             #[cfg(feature = "sync")]
             TypeId::of::<crate::eval::threads::Handle>(),
+            #[cfg(feature = "sync")]
+            TypeId::of::<thread::Scope>(),
             TypeId::of::<thread::Sender>(),
+            TypeId::of::<thread::SyncSender>(),
             TypeId::of::<thread::Receiver>(),
             TypeId::of::<thread::SendError>(),
             TypeId::of::<thread::Panic>(),

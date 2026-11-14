@@ -37,7 +37,6 @@ pub(super) const HELD: [Held; 4] = [
             capability::Kind::Send,
             capability::Kind::Static,
         ],
-        constants: &[],
     }),
     Held::Value(held::Value {
         std: "std::io::ErrorKind",
@@ -59,7 +58,6 @@ pub(super) const HELD: [Held; 4] = [
             capability::Kind::Send,
             capability::Kind::Static,
         ],
-        constants: &[],
     }),
     Held::Value(held::Value {
         std: "std::io::Stdin",
@@ -72,7 +70,6 @@ pub(super) const HELD: [Held; 4] = [
         },
         crosses: false,
         runs: STREAM,
-        constants: &[],
     }),
     Held::Value(held::Value {
         std: "std::io::Stdout",
@@ -85,7 +82,6 @@ pub(super) const HELD: [Held; 4] = [
         },
         crosses: false,
         runs: STREAM,
-        constants: &[],
     }),
 ];
 

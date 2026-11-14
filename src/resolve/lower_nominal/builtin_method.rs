@@ -1079,6 +1079,59 @@ impl<'a> Parser<'a> {
                 source.push_text(format!(" {o}"));
                 owner
             }
+            // `&mut self -> &mut T`: the payload's place, after the
+            // receiver is given a value: always by `insert`, when it is
+            // `None` by the others.
+            "insert" | "get_or_insert" | "get_or_insert_with" | "get_or_insert_default" => {
+                let given = matches!(member.as_str(), "insert" | "get_or_insert");
+                arity(
+                    usize::from(given) + usize::from(member.as_str() == "get_or_insert_with"),
+                    &arguments,
+                )?;
+                let Some(lvalue) = value.lvalue.clone() else {
+                    return Err(self.unsupported(
+                        "an `Option` method giving `&mut` of its payload on a value that is not \
+                         a place",
+                    ));
+                };
+                self.mutable_use(&value, member_span);
+                let produced = match member.as_str() {
+                    "get_or_insert_with" => {
+                        self.callable_call(&mut arguments[0], &[], &element, Vec::new())?
+                    }
+                    "get_or_insert_default" => self.default_source(&element, member_span)?,
+                    _ => {
+                        self.coerce_expr(&element, &mut arguments[0])?;
+                        arguments[0].rendered_source()
+                    }
+                };
+                let some = self.prelude_op(PreludeOp::Some, [produced]);
+                let assignment = self.assign_place(&lvalue, some, value.span)?;
+                let mut setup = origin::Fragment::default();
+                if member.as_str() == "insert" {
+                    setup.push(assignment);
+                } else {
+                    let test = self.prelude_op(PreludeOp::IsSome, [value.rendered_source()]);
+                    setup.push_text("if !");
+                    setup.push(test);
+                    setup.push_text(" { ");
+                    setup.push(assignment);
+                    setup.push_text(" }");
+                }
+                source.push(setup.clone());
+                source.push_text(" ");
+                let payload = self.prelude_op(PreludeOp::Unwrap, [value.rendered_source()]);
+                source.push(payload);
+                payload_place = self.option_payload_place(&value, &element).map(|place| {
+                    let mut nested = places::as_nested(&place);
+                    nested.steps.insert(0, PlaceStep::Setup(setup));
+                    Lvalue::Nested(Box::new(nested))
+                });
+                Ty::Reference {
+                    mutable: true,
+                    target: Box::new(element),
+                }
+            }
             _ => {
                 return Err(Error::UnknownMember {
                     owner: owner.name(&self.models),
@@ -1103,7 +1156,15 @@ impl<'a> Parser<'a> {
             }
             _ => payload_place,
         };
-        if matches!(member.as_str(), "as_mut" | "as_deref_mut") {
+        if matches!(
+            member.as_str(),
+            "as_mut"
+                | "as_deref_mut"
+                | "insert"
+                | "get_or_insert"
+                | "get_or_insert_with"
+                | "get_or_insert_default"
+        ) {
             self.lend_place(&value, expression);
         }
         let mut parsed = self.operator_expr(source, ty, expression);

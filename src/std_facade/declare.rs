@@ -122,13 +122,32 @@ pub(super) fn declare(
             Held::Text(_) => None,
         })
         .collect::<Vec<_>>();
-    let module = |path: &str| path.split_once("::").map(|(module, _)| module.to_owned());
-    let modules = values
+    let forms = values
         .iter()
         .flat_map(|value| value.forms())
-        .filter_map(|form| module(held::Value::facade(form)))
-        .chain(bound.iter().filter_map(|path| module(path)))
+        .map(held::Value::facade)
         .collect::<BTreeSet<_>>();
+    // Each module above a held type or a bound item, outermost first:
+    // `sync` and `sync::mpsc` of `sync::mpsc::TryRecvError`. A held type's
+    // member is under its type's modules.
+    let mut modules = BTreeSet::new();
+    for path in forms
+        .iter()
+        .copied()
+        .chain(bound.iter().map(String::as_str))
+    {
+        let mut owner = path.rsplit_once("::").map(|(owner, _)| owner);
+        if forms.contains(owner.unwrap_or_default()) {
+            owner = owner
+                .and_then(|owner| owner.rsplit_once("::"))
+                .map(|(owner, _)| owner);
+        }
+        let mut module = owner;
+        while let Some(path) = module {
+            modules.insert(path.to_owned());
+            module = path.rsplit_once("::").map(|(parent, _)| parent);
+        }
+    }
     for module in &modules {
         sink.module(module.as_str())?;
     }
@@ -144,15 +163,6 @@ pub(super) fn declare(
         declared.extend(aliases(sink, &reader, module)?);
     }
     for path in bound {
-        if let Some(value) = values.iter().find(|value| {
-            value
-                .constants
-                .iter()
-                .any(|constant| held::Value::facade(constant) == path)
-        }) {
-            constant(sink, value, path)?;
-            continue;
-        }
         let (owner, name) = path.rsplit_once("::").unwrap_or(("", path));
         match values
             .iter()
@@ -260,18 +270,21 @@ fn aliases(
     Ok(declared)
 }
 
-/// Declare the constant at `path` of the held type `value`: an associated
-/// one where `path` is under the type's own, else a module's.
-fn constant(sink: &mut impl Sink, value: &held::Value, path: &str) -> Result<(), host::Error> {
-    let own = held::Value::facade(value.std);
-    let ty = Type::registered(own)?;
-    let associated = path
-        .rsplit_once("::")
-        .is_some_and(|(owner, _)| owner == own);
-    let kind = if associated {
-        step::Kind::AssociatedValue
-    } else {
-        step::Kind::Value
+/// Declare std's constant `item` at `path`, of the type its declaration
+/// writes, as `kind`. A constant of a type rawr doesn't represent is left
+/// out, as such a function is.
+fn constant(
+    sink: &mut impl Sink,
+    reader: &reader::Reader<'_>,
+    item: &std_table::Item,
+    path: &str,
+    kind: step::Kind,
+) -> Result<(), host::Error> {
+    let Some(ty) = item
+        .constant_type()
+        .and_then(|ty| reader.host(&solve::read(ty)))
+    else {
+        return Ok(());
     };
     sink.item(path, kind, Vec::new(), ty)
 }
@@ -286,10 +299,15 @@ fn member(
     name: &str,
 ) -> Result<(), host::Error> {
     let own = Type::registered(held::Value::facade(value.std))?;
-    let variant = std_table::item(&format!("{}::{name}", solve::definition(value.std)))
-        .is_some_and(|item| item.kind == "variant");
-    if variant {
-        return sink.item(path, step::Kind::AssociatedValue, Vec::new(), own);
+    let item = std_table::item(&format!("{}::{name}", solve::definition(value.std)));
+    match item {
+        Some(item) if item.kind == "variant" => {
+            return sink.item(path, step::Kind::AssociatedValue, Vec::new(), own);
+        }
+        Some(item) if item.kind == "assoc-const" => {
+            return constant(sink, reader, &item, path, step::Kind::AssociatedValue);
+        }
+        _ => {}
     }
     let mut forms = Vec::<reader::Form>::new();
     for (declaration, scoped) in declarations(reader, value, name) {
@@ -371,7 +389,7 @@ fn declarations<'a>(
     found
 }
 
-/// Declare the free function at `path`, std's `std::{path}`.
+/// Declare the free function or constant at `path`, std's `std::{path}`.
 fn function(
     sink: &mut impl Sink,
     reader: &reader::Reader<'_>,
@@ -383,6 +401,9 @@ fn function(
     let Some(item) = std_table::item(found.definition) else {
         return Ok(());
     };
+    if item.kind == "const" {
+        return constant(sink, reader, &item, path, step::Kind::Value);
+    }
     for form in reader.forms(item.declaration()) {
         sink.item(
             path,

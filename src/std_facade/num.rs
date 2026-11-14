@@ -26,7 +26,6 @@ pub(super) const HELD: [Held; 1] = [Held::Value(held::Value {
         capability::Kind::Send,
         capability::Kind::Static,
     ],
-    constants: &[],
 })];
 
 /// Register `Debug` for each type.

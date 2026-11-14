@@ -2413,6 +2413,11 @@ impl fmt::Display for Unsatisfied<'_> {
                 "`{}` cannot be sent between threads safely",
                 self.0
             ),
+            "Sync" => write!(
+                formatter,
+                "`{}` cannot be shared between threads safely",
+                self.0
+            ),
             "Sized" => write!(
                 formatter,
                 "the size for values of type `{}` cannot be known at compilation time",

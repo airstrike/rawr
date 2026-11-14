@@ -437,6 +437,9 @@ impl<'a> Parser<'a> {
             if let Some(kind) = self.cell_named(&name) {
                 return self.parse_cell_type(kind);
             }
+            if let Some(kind) = self.thread_named(&name) {
+                return self.parse_thread_type(kind);
+            }
             if let Some(range) = crate::resolve::std_range(&name)
                 && self.models.get(range).is_none()
             {
@@ -583,6 +586,12 @@ impl<'a> Parser<'a> {
             && let Some(kind) = self.cell_named(&name)
         {
             return self.parse_cell_type(kind);
+        }
+        if matches!(self.peek(), Token::LessThan)
+            && qualified.is_none()
+            && let Some(kind) = self.thread_named(&name)
+        {
+            return self.parse_thread_type(kind);
         }
         if let Some(range) = crate::resolve::std_range(&name)
             && matches!(self.peek(), Token::LessThan)
