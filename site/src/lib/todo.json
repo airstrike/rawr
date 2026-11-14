@@ -3,9 +3,9 @@
   "updated": "2026-11-14",
   "version": "0.3.213",
   "examples": {
-    "running": 22,
+    "running": 45,
     "total": 56,
-    "note": "Driven over rawr mcp against cargo, 2026-11-14: 22 match cargo click for click. Every other example except gallery, pokedex, todos, tour, integration and markdown now starts under rawr after tonight's fixes, but hasn't been compared yet: the drive waits on rawr mcp's in-process screenshot (#1989), now merged and installed next."
+    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14 on b8f6af78b: 45 of 56 behave as cargo does. Left: table and toast (#2003), editor (#2005), game_of_life (#2006), delineate (#2007, unconfirmed), gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), integration (#2000), markdown (#2001). system_information runs as cargo; its hot-reload save fails (#2004)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -4322,7 +4322,7 @@
     {"issue":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"closed","category":"No glue (D593)"},
     {"issue":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"closed","category":"No glue (D593)"},
     {"issue":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"closed","category":"No glue (D593)"},
-    {"issue":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open","category":"No glue (D593)"},
+    {"issue":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"closed","category":"No glue (D593)"},
     {"issue":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"closed","category":"No glue (D593)"},
     {"issue":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"closed","category":"No glue (D593)"},
@@ -4378,7 +4378,13 @@
     {"issue":1999,"title":"A program's impl of a crate trait whose function returns `impl Trait` returns the type its body…","state":"closed","category":"No glue (D593)"},
     {"issue":2000,"title":"integration panics with E0499 inside interface.draw(..) on its first frame, after UserInterface::build works","state":"open","category":"No glue (D593)"},
     {"issue":2001,"title":"A script impl of a crate trait returning a borrow of a crate value (markdown's fn theme -> &Theme) panics the generator","state":"open","category":"No glue (D593)"},
-    {"issue":2002,"title":"A borrowing result in the one-value forwarding cell can't run a program method returning another value of its type","state":"open","category":"No glue (D593)"}
+    {"issue":2002,"title":"A borrowing result in the one-value forwarding cell can't run a program method returning another value of its type","state":"open","category":"No glue (D593)"},
+    {"issue":2003,"title":"An if or match that picks one of several crate fn items always yields the first arm (table, toast)","state":"open","category":"No glue (D593)"},
+    {"issue":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"open","category":"Divergences from rustc"},
+    {"issue":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"open","category":"No glue (D593)"},
+    {"issue":2006,"title":"A struct-update literal over a derived-Default struct with FxHashSet fields has no constructor (game_of_life)","state":"open","category":"No glue (D593)"},
+    {"issue":2007,"title":"A widget operation run from on_scroll sees the layout from before that scroll (delineate)","state":"open","category":"No glue (D593)"},
+    {"issue":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open","category":"Hot reload of a marked `main` (D555)"}
   ],
   "groups": [
     {
@@ -5016,7 +5022,7 @@
             {"number":1943,"title":"A generated tokio adapter names an undeclared `argument_1_made` (todos)","state":"closed"},
             {"number":1944,"title":"A std fn item passed as a callback (`std::convert::identity`, tour) is RAWR-NOT-YET","state":"closed"},
             {"number":1945,"title":"ferris: `*self.rotation.radians_mut() = ...` panics: a Radians borrowed from native code used after its call","state":"closed"},
-            {"number":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"open"},
+            {"number":1946,"title":"A state change made by a click isn't drawn before the next input event (iced's exit example)","state":"closed"},
             {"number":1947,"title":"rawr mcp start returns running before a restarted program's window exists","state":"closed"},
             {"number":1949,"title":"A script future run on a crate's tokio worker panics: 'no program runs async code on this thread' (todos)","state":"closed"},
             {"number":1950,"title":"A &[u8] a generic parameter takes is kept for the runner's life once per content, so each todos save keeps its JSON","state":"open"},
@@ -5042,7 +5048,11 @@
             {"number":1988,"title":"rich_text!'s FromIterator call instantiates Rich::from_iter with rawr's Value as the iterator (tour)","state":"open"},
             {"number":1992,"title":"for over a crate's iterator whose items are a program type (IntoIter<Message>) is 'not iterable'","state":"closed"},
             {"number":2000,"title":"integration panics with E0499 inside interface.draw(..) on its first frame, after UserInterface::build works","state":"open"},
-            {"number":2001,"title":"A script impl of a crate trait returning a borrow of a crate value (markdown's fn theme -> &Theme) panics the generator","state":"open"}
+            {"number":2001,"title":"A script impl of a crate trait returning a borrow of a crate value (markdown's fn theme -> &Theme) panics the generator","state":"open"},
+            {"number":2003,"title":"An if or match that picks one of several crate fn items always yields the first arm (table, toast)","state":"open"},
+            {"number":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"open"},
+            {"number":2006,"title":"A struct-update literal over a derived-Default struct with FxHashSet fields has no constructor (game_of_life)","state":"open"},
+            {"number":2007,"title":"A widget operation run from on_scroll sees the layout from before that scroll (delineate)","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -5809,7 +5819,9 @@
             {"number":1757,"title":"The native-use record misses impls reached through a blanket impl or a Deref wrapper, and misreads an empty pathed impl","state":"open"},
             {"number":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open"},
             {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"},
-            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"}
+            {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"},
+            {"number":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"open"},
+            {"number":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open"}
           ]
         }
       ]
