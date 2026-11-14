@@ -1289,6 +1289,73 @@ impl<Theme> caption_core::Caption<'_, Theme> {
         self.look = Some(look);
         self
     }
+
+    /// The caption tagged `tag`, as iced's `.id(impl Into<Id>)`, whose
+    /// `&str` converts only at `'static` (`Tag`).
+    pub fn tagged(mut self, tag: impl Into<Tag>) -> Self {
+        self.text = format!("{} #{}", self.text, tag.into().0);
+        self
+    }
+
+    /// What the caption shows.
+    pub fn shown(&self) -> String {
+        self.text.clone()
+    }
+}
+
+/// A widget's tag, as iced's `widget::Id`: made from a string that lives
+/// for the program, or from an owned one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tag(std::borrow::Cow<'static, str>);
+
+impl From<&'static str> for Tag {
+    fn from(name: &'static str) -> Self {
+        Self(std::borrow::Cow::Borrowed(name))
+    }
+}
+
+impl From<String> for Tag {
+    fn from(name: String) -> Self {
+        Self(std::borrow::Cow::Owned(name))
+    }
+}
+
+/// The length of the tag `tag` converts to, as iced's `operation::
+/// focus(impl Into<Id>)` takes one.
+pub fn tag_length(tag: impl Into<Tag>) -> usize {
+    tag.into().0.len()
+}
+
+/// A width and a height, as iced's `Size<T = f32>`: made from a pair of
+/// its own numbers, or from a pair of `u32`s at its default.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Extent<T = f32> {
+    /// The width.
+    pub width: T,
+    /// The height.
+    pub height: T,
+}
+
+impl<T> From<(T, T)> for Extent<T> {
+    fn from((width, height): (T, T)) -> Self {
+        Self { width, height }
+    }
+}
+
+impl From<(u32, u32)> for Extent {
+    fn from((width, height): (u32, u32)) -> Self {
+        Self {
+            width: width as f32,
+            height: height as f32,
+        }
+    }
+}
+
+/// The area of `extent`, as iced's `window_size(impl Into<Size>)` takes
+/// one.
+pub fn area(extent: impl Into<Extent>) -> f32 {
+    let extent = extent.into();
+    extent.width * extent.height
 }
 
 /// A caption of a format string, as iced's `text!`.
