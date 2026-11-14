@@ -1702,7 +1702,7 @@ impl<'a> Builder<'a> {
                 spelled(&owner),
                 owner_path.display(),
                 path.display(),
-                used = &text[reference.range.clone()],
+                used = reference.segments.join("::"),
             )
             .into(),
             label,
