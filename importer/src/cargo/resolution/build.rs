@@ -420,6 +420,11 @@ fn capture_root(
         }
         children.sort_unstable();
         for path in children {
+            if crate::input::split_debuginfo(&path) {
+                // Packed debug info, which Cargo links beside a build
+                // script; nothing Rawr builds or runs reads it.
+                continue;
+            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| node::Error::Io {
                 operation: "inspect authoritative build entry",
                 path: path.clone(),
@@ -665,6 +670,11 @@ fn current_files_with_budget(
         }
         children.sort_unstable();
         for path in children {
+            if crate::input::split_debuginfo(&path) {
+                // Packed debug info, which Cargo links beside a build
+                // script; nothing Rawr builds or runs reads it.
+                continue;
+            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| node::Error::Io {
                 operation: "inspect restored authoritative build entry",
                 path: path.clone(),
