@@ -8670,6 +8670,7 @@ fn render_source(
             .map_or(0, |at| at + RUNTIME_GLOB.len());
         root.splice(at..at, PROGRAM_ROOT.iter().copied());
     }
+    root.extend_from_slice(root_main().as_bytes());
     sources.push((SOURCE_PATH.into(), root));
     let base = member::Member::Base {
         library: match (&program, script) {
@@ -9438,8 +9439,20 @@ use ::rawr_generated_runner_base::*;\n\
 #[allow(dead_code)]\n\
 #[path = \"rawr_runner.rs\"]\n\
 mod __rawr_main;\n\
-\n\
-fn main() {\n    __rawr_main::main()\n}\n";
+\n";
+
+/// The runner's `main`, after [`ROOT_SOURCE`]: it names the build of rawr
+/// that generated it, whose check kept what the runner reads, since the
+/// shared runtime it links carries no build of its own (#1606, #1983).
+fn root_main() -> String {
+    format!(
+        "fn main() {{\n    \
+         #[cfg(not(target_arch = \"wasm32\"))]\n    \
+         __rawr_internal::package::instances::identify({:?});\n    \
+         __rawr_main::main()\n}}\n",
+        crate::host::DIGEST
+    )
+}
 /// What the runner's module and each crate of adapters' module import from
 /// the base: the runtime.
 const RUNTIME_IMPORTS: &[u8] = b"#[allow(unused_imports)]\n\
