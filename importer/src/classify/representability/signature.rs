@@ -166,6 +166,12 @@ pub struct Signature {
     /// while that value lives.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     keep_receiver: Box<[u32]>,
+    /// A `&self` method's opaque output captures the receiver's lifetime,
+    /// as `Controls::view(&self) -> impl Widget<..>` does under edition
+    /// 2024's rules, or with `+ '_` or `use<'_>`: the output keeps the
+    /// receiver borrowed for as long as it lives.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lends_receiver: bool,
     /// A method's receiver is `&'static self`: only a static fills it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lasting_receiver: bool,
@@ -709,6 +715,7 @@ impl Signature {
             statics: Box::new([]),
             regional: Box::new([]),
             keep_receiver: Box::new([]),
+            lends_receiver: false,
             lasting_receiver: false,
             detached_future: false,
             assigns: false,
@@ -829,6 +836,18 @@ impl Signature {
     #[must_use]
     pub fn keep_receiver(&self) -> &[u32] {
         &self.keep_receiver
+    }
+
+    pub(crate) fn with_lends_receiver(mut self, lends: bool) -> Self {
+        self.lends_receiver = lends;
+        self
+    }
+
+    /// Whether the output, an opaque type, keeps the `&self` receiver
+    /// borrowed for as long as it lives.
+    #[must_use]
+    pub const fn lends_receiver(&self) -> bool {
+        self.lends_receiver
     }
 
     pub(crate) fn with_lasting_receiver(mut self, lasting: bool) -> Self {

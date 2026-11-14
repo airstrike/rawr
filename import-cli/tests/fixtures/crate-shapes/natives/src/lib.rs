@@ -2280,3 +2280,50 @@ pub mod frames {
         }
     }
 }
+
+/// A `&self` method whose opaque output captures the receiver's lifetime
+/// under edition 2024's rules, as integration's `Controls::view(&self) ->
+/// impl Widget<..>` does: the value borrows the receiver for as long as it
+/// lives.
+pub mod panels {
+    pub trait Show {
+        fn show(&self) -> String;
+    }
+
+    struct Shown<'a> {
+        label: &'a str,
+    }
+
+    impl Show for Shown<'_> {
+        fn show(&self) -> String {
+            format!("[{}]", self.label)
+        }
+    }
+
+    pub struct Panel {
+        label: String,
+    }
+
+    impl Panel {
+        pub fn new(label: &str) -> Self {
+            Self {
+                label: label.to_owned(),
+            }
+        }
+
+        pub fn view(&self) -> impl Show {
+            Shown { label: &self.label }
+        }
+
+        pub fn rename(&mut self, label: &str) {
+            label.clone_into(&mut self.label);
+        }
+    }
+
+    /// Takes a value of any type that shows, as iced's
+    /// `UserInterface::build(root: impl Into<Element<..>>, ..)` takes the
+    /// view.
+    pub fn framed(shown: impl Show) -> String {
+        format!("|{}|", shown.show())
+    }
+}

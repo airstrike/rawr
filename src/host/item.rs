@@ -127,6 +127,10 @@ pub struct Definition {
     /// receiver borrowed for as long as it lives, as `draw<'a>(&'a self,
     /// pass: &mut RenderPass<'a>)` keeps `self` in `pass`.
     keeps_receiver: u32,
+    /// The output keeps the receiver borrowed for as long as it lives,
+    /// as `controls.view()` of `view(&self) -> impl Widget<..>` keeps
+    /// `controls`.
+    lends_receiver: bool,
     /// A `macro_rules!` macro's source.
     rules: Option<crate::Shared<MacroRules>>,
     /// The proof-backed application this imported method stands for: its
@@ -186,6 +190,7 @@ pub struct Fingerprint {
     lent_static: u32,
     lends: u32,
     keeps_receiver: u32,
+    lends_receiver: bool,
     rules: Option<Box<[u8; 32]>>,
     application: Option<Box<[u8; 32]>>,
 }
@@ -241,6 +246,7 @@ impl Definition {
             lent_static: self.lent_static,
             lends: self.lends,
             keeps_receiver: self.keeps_receiver,
+            lends_receiver: self.lends_receiver,
             application: self.application,
             member: self.member,
             rules: self.rules.clone(),
@@ -267,6 +273,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: Some(crate::Shared::new(MacroRules {
@@ -303,6 +310,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -329,6 +337,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -353,6 +362,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -377,6 +387,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -404,6 +415,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -428,6 +440,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -453,6 +466,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -478,6 +492,7 @@ impl Definition {
             lent_static: 0,
             lends: 0,
             keeps_receiver: 0,
+            lends_receiver: false,
             application: None,
             member: None,
             rules: None,
@@ -638,6 +653,20 @@ impl Definition {
         index < 32 && self.keeps_receiver & (1 << index) != 0
     }
 
+    /// The output keeps the receiver borrowed for as long as it lives, as
+    /// `view(&self) -> impl Widget<..>` of edition 2024 does.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn lending_receiver(mut self, lends: bool) -> Self {
+        self.lends_receiver = lends;
+        self
+    }
+
+    /// Whether the output keeps the receiver borrowed for as long as it
+    /// lives.
+    pub(crate) const fn lends_receiver(&self) -> bool {
+        self.lends_receiver
+    }
+
     /// Whether the output keeps the borrows of the argument at `index`.
     pub(crate) const fn lends(&self, index: usize) -> bool {
         index < 32 && self.lends & (1 << index) != 0
@@ -677,6 +706,7 @@ impl Definition {
             lent_static: self.lent_static,
             lends: self.lends,
             keeps_receiver: self.keeps_receiver,
+            lends_receiver: self.lends_receiver,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         }
@@ -697,6 +727,7 @@ impl Definition {
             lent_static: self.lent_static,
             lends: self.lends,
             keeps_receiver: self.keeps_receiver,
+            lends_receiver: self.lends_receiver,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         })
@@ -779,6 +810,7 @@ impl Definition {
             lent_static: self.lent_static,
             lends: self.lends,
             keeps_receiver: self.keeps_receiver,
+            lends_receiver: self.lends_receiver,
             application: self.application,
             member: self.member,
             rules: self.rules.clone(),

@@ -12108,6 +12108,9 @@ impl Drop for OpaqueCell {
 /// How the value `plan` gives lives beside the crate values it borrows
 /// (`lent_cell`), as its adapter makes it, when it does.
 fn lends_cell(plan: &Plan) -> Result<Option<Owned>, request::Error> {
+    if let Some(owned) = receiver_cell(plan)? {
+        return Ok(Some(owned));
+    }
     let Operation::Function {
         signature,
         substitutions,
@@ -13809,6 +13812,18 @@ fn render_adapter_body(
                             argument_list(signature.inputs().len(), 1, output)?;
                             output.write_all(b"));\n").map_err(request::unwritable)?;
                         }
+                    }
+                    Receiver::Shared if let Some(owned) = receiver_cell(plan)? => {
+                        render_receiver_cell(
+                            plan,
+                            cohort,
+                            &owned,
+                            signature,
+                            substitutions,
+                            constants,
+                            *container_parameters,
+                            output,
+                        )?;
                     }
                     Receiver::Shared | Receiver::Mutable => {
                         render_borrowed_receiver(
@@ -23192,16 +23207,6 @@ fn lent_cell(
     if signature.lends().is_empty() {
         return Ok(None);
     }
-    let returned = substituted(signature.output(), signature, substitutions)?;
-    let Some((opaque, traits)) =
-        opaque_traits(signature, substitutions, &returned, root_trait_path, true)?
-    else {
-        return Ok(None);
-    };
-    let bounds = written_bounds(&traits)
-        .chain(["'a".to_owned()])
-        .collect::<Vec<_>>()
-        .join(" + ");
     let mut owners = Vec::new();
     for (position, declared) in signature.inputs().iter().enumerate() {
         let input = substituted(declared, signature, substitutions)?;
@@ -23232,6 +23237,128 @@ fn lent_cell(
         };
         owners.push((owner, name));
     }
+    owned_cell(signature, substitutions, owners)
+}
+
+/// The value the opaque output of a `&self` method that keeps its
+/// receiver borrowed lives in (`Signature::lends_receiver`), as
+/// integration's `controls.view()` gives: it owns the receiver, shared out
+/// of its arena slot by its `Rc`, which goes back to the slot once the
+/// value has dropped. `None` for another call, or one whose traits have no
+/// Rust spelling.
+fn receiver_cell(plan: &Plan) -> Result<Option<Owned>, request::Error> {
+    let Operation::Method {
+        receiver: Receiver::Shared,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        call: None,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(None);
+    };
+    if !signature.lends_receiver() {
+        return Ok(None);
+    }
+    let mut container = Vec::new();
+    render_container_path(
+        &rust_path(plan),
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    owned_cell(
+        signature,
+        substitutions,
+        vec![(
+            format!("std::rc::Rc<{container}>"),
+            "receiver_owned".to_owned(),
+        )],
+    )
+}
+
+/// The call of a `&self` method whose opaque output keeps its receiver
+/// borrowed (`receiver_cell`): the receiver, a value of the arena, is
+/// shared out of its slot by its `Rc`, which the output's cell owns, and
+/// the method is called on it there (`render_lent_cell`). The slot takes
+/// the receiver back once the cell drops, so a `&mut` of it after the
+/// output's life reaches it, as rustc ends the borrow there.
+#[allow(clippy::too_many_arguments)]
+fn render_receiver_cell(
+    plan: &Plan,
+    cohort: &[Plan],
+    owned: &Owned,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let [(_, owner)] = &owned.owners[..] else {
+        return Err(request::drift("a kept receiver's cell of several owners"));
+    };
+    let mut container = Vec::new();
+    render_container_path(
+        &rust_path(plan),
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        Receiver::Shared,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(request::unwritable)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    let call = format!("{{ let receiver: &{container} = {owner}; {call} }}");
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let entries = proxy_entries(cohort, &returned)?;
+    writeln!(
+        output,
+        "    let {owner} = {{ let handle = native_handle(arguments, 0, false)?; arguments.arena.share::<{container}>(handle)? }};"
+    )
+    .map_err(request::unwritable)?;
+    render_lent_cell(owned, &entries, &call, output).map_err(request::unwritable)
+}
+
+/// The value an opaque output of `signature` lives in beside `owners`,
+/// each an owned value's type and name (`Owned`): `None` when there are
+/// none, or the output isn't an opaque type whose traits Rust can write.
+fn owned_cell(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    owners: Vec<(String, String)>,
+) -> Result<Option<Owned>, request::Error> {
+    if owners.is_empty() {
+        return Ok(None);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let Some((opaque, traits)) =
+        opaque_traits(signature, substitutions, &returned, root_trait_path, true)?
+    else {
+        return Ok(None);
+    };
+    let bounds = written_bounds(&traits)
+        .chain(["'a".to_owned()])
+        .collect::<Vec<_>>()
+        .join(" + ");
     // The one trait, without arguments, the value implements through the
     // proxy (#856).
     let forwards = match (&traits[..], opaque.forwards()) {
@@ -23240,7 +23367,7 @@ fn lent_cell(
         }
         _ => None,
     };
-    Ok((!owners.is_empty()).then_some(Owned {
+    Ok(Some(Owned {
         bounds,
         owners,
         forwards,

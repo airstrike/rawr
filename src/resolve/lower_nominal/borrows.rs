@@ -834,7 +834,10 @@ impl Parser<'_> {
             };
             return Summary::taps(mode, vec![referent], Vec::new());
         }
-        let lends = item.guard().is_some() || *output == Ty::Str;
+        // `view(&self) -> impl Widget<..>`'s value captures the receiver's
+        // lifetime, under edition 2024's rules or by `+ '_`: it keeps the
+        // receiver borrowed for as long as it lives.
+        let lends = item.guard().is_some() || *output == Ty::Str || item.lends_receiver();
         match (mode, lends) {
             (Some(mode @ (signature::Receiver::Shared | signature::Receiver::Mutable)), true) => {
                 Summary::taps(Some(mode), vec![all(Input::Receiver)], Vec::new())

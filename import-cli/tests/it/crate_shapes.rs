@@ -439,6 +439,44 @@ fn a_method_lends_its_receiver_into_what_its_mut_input_refers_to() {
     );
 }
 
+/// A `&self` method's opaque output that captures the receiver's
+/// lifetime, as integration's `Controls::view(&self) -> impl Widget<..>`
+/// does under edition 2024's rules, is held as a value that borrows its
+/// receiver for as long as it lives: the receiver is changed again once the
+/// value has dropped, or moved into a call that takes an `impl Trait`
+/// (#1991).
+#[test]
+fn an_opaque_output_keeps_its_receiver_borrowed_while_it_lives() {
+    runs_as_cargo_does("panels", "[sky]\n|[sea]|\n[land]\n");
+}
+
+/// The receiver `panel.view()` captures stays borrowed while the value
+/// lives: rawr's own check refuses a `&mut` of it meanwhile with rustc's
+/// E0502 before anything runs (#1991).
+#[test]
+fn a_receiver_an_opaque_output_captures_stays_borrowed() {
+    let program = "// rawr\nuse natives::panels::{Panel, Show};\n\nfn main() {\n    let mut panel = Panel::new(\"sky\");\n    println!(\"start\");\n    let shown = panel.view();\n    panel.rename(\"sea\");\n    println!(\"{}\", shown.show());\n}\n";
+    let root = SHAPES.lease(&[("src/main.rs", program)]);
+    let directory = crate::support::scratch();
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = text(&run.stdout);
+    let stderr = text(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(!stdout.contains("start"), "{stdout}");
+    assert!(stderr.contains("E0502"), "{stderr}");
+}
+
 /// A `&mut` a pattern binds fills a crate's `&dyn Trait` input, reborrowed
 /// shared as rustc coerces it, as integration's `interface.update(window,
 /// ..)` passes its `&mut Arc<Window>`.
@@ -454,6 +492,14 @@ fn a_mut_binding_fills_a_crates_trait_object_input() {
 #[test]
 fn a_for_loops_over_a_crates_into_iterator() {
     runs_as_cargo_does("bags", "2\n3\n1\n");
+}
+
+/// A `for` loops over a crate's value whose items are the program's own
+/// type, as integration's `for message in messages` loops over iced's
+/// `shell::Bus<controls::Message>` (#1992).
+#[test]
+fn a_for_loops_over_a_crates_iterator_of_program_values() {
+    runs_as_cargo_does("bagged", "Renamed(\"sea\")\nCleared\nCleared\n");
 }
 
 /// A public field of a struct the crate implements `Drop` for is read
