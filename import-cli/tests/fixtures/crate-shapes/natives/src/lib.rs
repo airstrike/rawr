@@ -1985,3 +1985,20 @@ pub mod described {
 }
 
 pub use described::Labeled;
+
+/// A struct whose only public name is an alias of one instance of it, as
+/// wgpu's `SurfaceConfiguration = wgt::SurfaceConfiguration<Vec<
+/// TextureFormat>>` is.
+mod surface {
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Configuration<V> {
+        pub width: u32,
+        pub views: V,
+    }
+}
+
+pub type Configuration = surface::Configuration<Vec<u32>>;
+
+pub fn configure(configuration: &Configuration) -> u32 {
+    configuration.width + configuration.views.iter().sum::<u32>()
+}

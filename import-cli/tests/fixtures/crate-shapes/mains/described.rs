@@ -26,4 +26,11 @@ fn main() {
             .expect("request")
     });
     println!("{one} {two}");
+    let configuration = natives::Configuration {
+        width: 7,
+        views: vec![1, 2],
+    };
+    println!("{}", natives::configure(&configuration));
+    let natives::Configuration { width, .. } = configuration;
+    println!("{width}");
 }

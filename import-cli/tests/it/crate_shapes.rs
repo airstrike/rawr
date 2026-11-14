@@ -137,10 +137,12 @@ fn a_crates_type_aliases_name_their_targets_with_defaults() {
 /// build and match the aliased struct with the alias's arguments, as
 /// wgpu's `DeviceDescriptor<'a> = wgt::DeviceDescriptor<Option<&'a
 /// str>>` does (#1961). A `&self` method's `impl Future` that captures no
-/// lifetime is a future the call makes, as wgpu's `request_device` is.
+/// lifetime is a future the call makes, as wgpu's `request_device` is. An
+/// alias that is its struct's only public name, as wgpu's
+/// `SurfaceConfiguration`, has the struct's fields at its arguments.
 #[test]
 fn struct_literals_and_patterns_through_a_crates_type_alias() {
-    runs_as_cargo_does("described", "4 2\n3\ntrue\n5 10\n");
+    runs_as_cargo_does("described", "4 2\n3\ntrue\n5 10\n10\n7\n");
 }
 
 /// A module and a function of the same name (`mod text` and `fn text`),
