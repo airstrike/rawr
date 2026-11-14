@@ -33,7 +33,7 @@ pub struct Record {
 }
 
 /// One instance of a generic trampoline: the path its `Call` names, from
-/// the crate root, as `widget::sidebar::row_group`; the `type_name` of the
+/// the crate root, as `widget::list::row_group`; the `type_name` of the
 /// tuple of its type arguments, which the trampoline sends, as
 /// `(islands_theme::Message,)`; and each argument as a Rust path from the
 /// crate root, as `crate::Message`.

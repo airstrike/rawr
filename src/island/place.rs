@@ -89,8 +89,8 @@ pub struct Yoke<U: ?Sized + 'static> {
 
 impl<U: ?Sized + 'static> Yoke<U> {
     /// `owner`, kept with the guard `reach` makes of it. `reach` gives
-    /// none for a method whose `Option<&mut T>` is `None`, as pane_grid's
-    /// `state.get_mut(pane)` of a pane it lacks (#1334): the yoke has then
+    /// none for a method whose `Option<&mut T>` is `None`, as iced's
+    /// `pane_grid::State::get_mut(pane)` of a pane it lacks (#1334): the yoke has then
     /// ended already.
     pub fn new<T: Any>(
         owner: Box<T>,

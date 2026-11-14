@@ -766,7 +766,7 @@ fn bin_package(cargo: &super::manifest::cargo::Cargo) -> String {
 /// place under `to` beside the copied modules, so a macro that reads one
 /// relative to its module reads what the original reads: a crate's macro
 /// that expands to `include_str!("shader/vert.wgsl")` in the copy, as
-/// iced's integration example's `wgpu::include_wgsl!` does. A file is
+/// wgpu's `include_wgsl!` does. A file is
 /// linked where it can be and copied otherwise, and kept while it is as
 /// new as the original. Hidden directories, `target` and the copies' own
 /// tree are passed over.

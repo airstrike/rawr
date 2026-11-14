@@ -218,7 +218,7 @@ impl<'a> Parser<'a> {
                     _ => ty,
                 };
                 // rustc writes the trait with its arguments, each of its
-                // lifetimes as `'_`: `AsRef<str>`, `IntoContent<'_, i64>`.
+                // lifetimes as `'_`: `AsRef<str>`, `IntoView<'_, i64>`.
                 let lifetimes = self
                     .models
                     .traits
@@ -678,8 +678,8 @@ impl<'a> Parser<'a> {
     /// instance is chosen, as rustc selects that impl. A literal argument
     /// takes its kind: `50` for `impl Into<Pixels>` is the `u32` of
     /// `From<u32>`. A bound's argument takes the type the impl for a known
-    /// type gives: `M` of `impl IntoContent<'a, M>` given a `Content<Message>`
-    /// is `Message` by `impl<M> IntoContent<'_, M> for Content<M>`.
+    /// type gives: `M` of `impl IntoView<'a, M>` given a `Content<Message>`
+    /// is `Message` by `impl<M> IntoView<'_, M> for Content<M>`.
     #[cfg(feature = "rust-import")]
     fn fix_by_impls(&mut self) {
         let open = self

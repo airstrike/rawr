@@ -439,20 +439,20 @@ enum Pass {
     /// `Message`: moved to the interpreter, which keeps it (#1139).
     Give,
     /// A value of a type the marked crate doesn't declare whose type names
-    /// a lifetime, written `ty`, as inboard's by-value `View<'a>` of
+    /// a lifetime, written `ty`, as a by-value `Props<'a>` of
     /// borrows (#1225): moved to the interpreter for the call alone, as
     /// rustc lets the function keep nothing of it past the call but what
     /// its result borrows, which native code holds at those lifetimes.
     GiveForCall { ty: String },
     /// A value that holds native parts inside `Option`s, `Vec`s, `Box`es
-    /// and tuples, as inboard's `home_grid: Option<Element<'a,
+    /// and tuples, as `grid: Option<Element<'a,
     /// grid::Message>>` (#1224): each part moved to the interpreter by
     /// `give`, which writes the value `__value` part by part, as the
     /// result's parts come back. When its type, written `ty`, names a
     /// lifetime, for the call alone, as [`Pass::GiveForCall`].
     GiveHeld { give: String, ty: Option<String> },
-    /// `&[T]` of a type the marked crate doesn't declare, as inboard's
-    /// `browser_updates: &'a [extension::registry::Update]` (#1292): the
+    /// `&[T]` of a type the marked crate doesn't declare, as
+    /// `updates: &'a [registry::Update]` (#1292): the
     /// slice lent where it is for the call, as a `&T` is ([`Pass::Lend`]),
     /// its element written `element` with each named lifetime as `'_`.
     LendSlice { element: String },
@@ -468,7 +468,7 @@ enum Pass {
     /// program value it holds, which the call takes as its receiver (#1264).
     Object,
     /// An argument-position `impl Trait` of a marked trait, at `path` as
-    /// the signature writes it, as inboard's `impl IntoContent<'a,
+    /// the signature writes it, as `impl IntoView<'a,
     /// Message>`: the impl that applies to the argument's type gives it,
     /// by its [`GIVE`] function, as a value of a type it crosses as.
     /// `given` is the trait's [`GIVEN`] at the bound's arguments, by which
@@ -559,7 +559,7 @@ fn given_boxed(declared: &item::Trait) -> String {
 }
 
 /// What a trampoline makes of an argument-position `impl Trait`, as
-/// inboard's `ids: impl IntoIterator<Item = Id>`, whose value may be of
+/// `ids: impl IntoIterator<Item = Id>`, whose value may be of
 /// any type and borrow anything: an owned value of `ty`, written
 /// `written`, which implements the trait and which the body can use only
 /// as the trait allows, made by `make` from the argument, named
@@ -590,7 +590,7 @@ enum Owner<'o> {
     /// for Settings` (#1466): its values move as native ones do.
     Native,
     /// A type parameter of the impl, as `T` of a marked trait's `impl<T>
-    /// IntoContent for T where T: IntoIterator<..>`: no value of it
+    /// IntoView for T where T: IntoIterator<..>`: no value of it
     /// crosses but by the trait's [`GIVE`].
     Generic,
 }
@@ -766,13 +766,13 @@ struct Generator<'a> {
     shown: BTreeSet<&'a str>,
     /// The path of each marked trait whose name another module's marked
     /// trait has too, which the interpreter knows it by, as
-    /// `home::IntoContent` beside `sidebar::IntoContent`.
+    /// `home::IntoView` beside `panel::IntoView`.
     shared: BTreeSet<String>,
     /// The std traits each marked type implements, derived or written, by
     /// the type's name: what its stand-in implements too (#1301).
     implemented: BTreeMap<&'a str, BTreeSet<Std>>,
     /// Those of `crossing` that hold a native part, directly or in a field
-    /// of such a type, as `enum Theme { Selected(themedef::Theme) }`: a
+    /// of such a type, as `enum Theme { Selected(palette::Theme) }`: a
     /// borrow of one lends the interpreter its parts where they are, and a
     /// value moves them (#1469).
     holding: BTreeSet<String>,
@@ -794,7 +794,7 @@ struct Generator<'a> {
     /// tab<Message>` beside the module's `enum Message`.
     parameters: std::cell::RefCell<BTreeSet<String>>,
     /// What each name a `use` brings into a module stands for, by paths
-    /// from the crate root, the native root's among them: inboard's root
+    /// from the crate root, the native root's among them: a root's
     /// `pub use theme::Theme;` makes `crate::Theme` the marked
     /// `theme::Theme`.
     uses: BTreeMap<String, Vec<String>>,
@@ -1086,7 +1086,7 @@ impl<'a> Generator<'a> {
     /// in `file` (#1466): by its name in its own module or through a `use`,
     /// or by a path through `crate`, `self`, `super` or a child module. A
     /// type of a native module or of a dependency of the same name, as
-    /// `themedef::Theme` or `iced::Theme` beside a marked `Theme`, is not
+    /// `palette::Theme` or `iced::Theme` beside a marked `Theme`, is not
     /// it.
     fn marked(&self, file: &Source<'_>, path: &type_ref::Path) -> Option<&str> {
         if path.global {
@@ -1203,10 +1203,10 @@ impl<'a> Generator<'a> {
 
     /// How a field of `ty` crosses as part of its marked type's value
     /// ([`Held`]): by the wire format, as a native value of its own, as the
-    /// `themedef::Theme` of a marked `enum Theme { Selected(themedef::Theme)
+    /// `palette::Theme` of a marked `enum Theme { Selected(palette::Theme)
     /// }` (#1466), as a marked type that holds such values, or as an
     /// `Option`, `Vec`, `Box` or tuple of any of them, as the
-    /// `Option<wizard::State>` of inboard's `home::State` (#1475). `Err`
+    /// `Option<child::State>` of a marked `parent::State` (#1475). `Err`
     /// says why it can't.
     fn held<'f>(
         &self,
@@ -1230,7 +1230,7 @@ impl<'a> Generator<'a> {
                 Ok(Held::Tuple(members))
             }
             // A boxed trait object is one native part: the box. One of
-            // std's `Iterator`, as inboard's `Box<dyn Iterator<Item =
+            // std's `Iterator`, as a `Box<dyn Iterator<Item =
             // Element<'a, Message>> + 'a>`, may hold the program's own
             // iterator, which native code pulls from (#1600).
             type_ref::Type::Path(path)
@@ -1257,7 +1257,7 @@ impl<'a> Generator<'a> {
                     Container::Box => Held::Boxed(inner),
                 })
             }
-            // A `&'a str` field, as `title` of inboard's `Header<'a,
+            // A `&'a str` field, as `title` of a marked `Bar<'a,
             // Message>`: native code's own text (#1557).
             type_ref::Type::Reference {
                 mutable: false,
@@ -1326,8 +1326,8 @@ impl<'a> Generator<'a> {
                         self.crosses(file, inner, owner)
                     }
                     // A keyed collection crosses as the interpreter keeps
-                    // one, its entries sorted by key, as inboard's
-                    // `read_ids: HashSet<Id>`.
+                    // one, its entries sorted by key, as a
+                    // `seen: HashSet<Id>`.
                     ("HashSet" | "BTreeSet", [inner]) if single => self.crosses(file, inner, owner),
                     ("HashMap" | "BTreeMap", [key, value]) if single => {
                         self.crosses(file, key, owner)?;
@@ -2305,7 +2305,7 @@ impl<'a> Generator<'a> {
         owner: Owner<'_>,
     ) -> Option<String> {
         // The trait's own type arguments, as `Message` of `impl<'a,
-        // Message> IntoContent<'a, Message> for Content<'a, Message>`: each
+        // Message> IntoView<'a, Message> for Content<'a, Message>`: each
         // `'static` where the value moves, as the trait's own `GIVE` says.
         let arguments = declared
             .trait_
@@ -2646,7 +2646,7 @@ impl<'a> Generator<'a> {
         // them where they are, so a reference its result gives into them
         // is one into the receiver, as `&self.0.colors` is (#1468).
         let holding = matches!(owner, Owner::Marked(owner) if self.holding.contains(owner));
-        // So does one of a marked type copied whole, as inboard's
+        // So does one of a marked type copied whole, as an
         // `Id::as_str` gives `&self.0`: its text is in native code's value.
         let crossing = matches!(owner, Owner::Marked(owner) if self.crossing.contains(owner));
         let lent = crossing && matches!(function.receiver, Some(item::Receiver::Shared(_)));
@@ -2885,7 +2885,7 @@ impl<'a> Generator<'a> {
             .as_ref()
             .and_then(|_| self.anchor(file, function, receiver.as_ref(), &passes));
         // A call anchored on nothing whose result borrows nothing, as
-        // `label(inbox: &inbox::State, updates: &[Update]) -> String`, and
+        // `label(panel: &panel::State, updates: &[Update]) -> String`, and
         // that is lent a native value, keeps each shared lend for the call
         // alone: the runner runs it in
         // a region of its own that ends with it, where a crate fn's output
@@ -2900,7 +2900,7 @@ impl<'a> Generator<'a> {
                 )
             });
         // So are the native parts of a marked `&'a self` the result is
-        // anchored on, as inboard's open `wizard` is (#1413).
+        // anchored on, as an open child view's state is (#1413).
         match receiver {
             Some(pass @ Pass::LendParts { mutable: false })
                 if anchor == Some(Anchor::Receiver) || for_call =>
@@ -2918,7 +2918,7 @@ impl<'a> Generator<'a> {
             }
             None => {}
         }
-        // A native value lent `&'a`, as `inbox: &'a inbox::State` of
+        // A native value lent `&'a`, as `panel: &'a panel::State` of
         // `view<'a>(&'a self, ..)`, is borrowed as long as the anchored
         // result, which may borrow it (#1413).
         let mut lends_kept = if anchor.is_some() {
@@ -2928,9 +2928,9 @@ impl<'a> Generator<'a> {
         };
         // So is an anchor the result's elided lifetime names, as
         // `view(threads: &Store) -> Element<'_, Message>` names `threads`,
-        // native or marked: a marked `sidebar(theme: &Theme) -> Element<'_,
+        // native or marked: a marked `nav(theme: &Theme) -> Element<'_,
         // Message>` gives its lent theme on to native code through the
-        // marked `inbox<'a>(theme: &'a Theme)`, whose native call reaches
+        // marked `list<'a>(theme: &'a Theme)`, whose native call reaches
         // it in the anchored region.
         if let Some(Anchor::Argument(index)) = anchor
             && matches!(
@@ -4054,7 +4054,7 @@ impl Held<'_> {
 
 /// The item type, as written, of `inner`, the trait object of a boxed
 /// field written in `text`, when it is std's `dyn Iterator<Item = T>` with
-/// at most a lifetime beside it, as inboard's `dyn Iterator<Item =
+/// at most a lifetime beside it, as `dyn Iterator<Item =
 /// Element<'a, Message>> + 'a`: what [`Held::Pulled`] stands in for.
 fn pulled_item<'t>(text: &'t str, inner: &type_ref::Type) -> Option<&'t str> {
     let type_ref::Type::Path(path) = inner else {
@@ -4434,7 +4434,7 @@ fn instance(trait_: &type_ref::Path) -> String {
 
 /// The owner of a marked impl for the native type `written`, as the
 /// interpreter keys its functions: `::` and the type's name, as
-/// `::Settings` for `impl From<&Theme> for markdown::Settings` (#1466).
+/// `::Settings` for `impl From<&Theme> for style::Settings` (#1466).
 fn native_owner(written: &type_ref::Path) -> String {
     let name = written
         .segments
@@ -4910,7 +4910,7 @@ fn bounds(generic: &item::GenericParam) -> Vec<&type_ref::Path> {
 }
 
 /// The trait `bound` names, as a path without its arguments, which rustc
-/// infers: `IntoContent` of `IntoContent<'a, Message>`.
+/// infers: `IntoView` of `IntoView<'a, Message>`.
 fn trait_path(bound: &type_ref::Path) -> String {
     let names = bound
         .segments
@@ -4926,8 +4926,8 @@ fn trait_path(bound: &type_ref::Path) -> String {
 }
 
 /// The [`GIVEN`] trait of the marked trait `bound` names in `file`, at
-/// the bound's arguments: `crate::widget::sidebar::__RawrGivenIntoContent<'a,
-/// Message>` of `IntoContent<'a, Message>`, by its path from the crate's
+/// the bound's arguments: `crate::widget::panel::__RawrGivenIntoView<'a,
+/// Message>` of `IntoView<'a, Message>`, by its path from the crate's
 /// root, as no `use` brings it.
 fn given_path(file: &Source<'_>, bound: &type_ref::Path) -> String {
     let names = bound
@@ -5135,8 +5135,8 @@ fn each_lifetime(text: &str, with: &str) -> String {
 }
 
 /// The parameters of `function` lent `&` for its call whose type names a
-/// lifetime its result names, as `inbox: &'a inbox::State` of `view<'a>(
-/// &'a self, inbox: &'a inbox::State) -> Element<'a, Message>` (#1413), a
+/// lifetime its result names, as `panel: &'a panel::State` of `view<'a>(
+/// &'a self, panel: &'a panel::State) -> Element<'a, Message>` (#1413), a
 /// slice of native values (#1292) or a marked value's native parts: native
 /// code keeps each borrowed as long as the result.
 fn kept_lends(file: &Source<'_>, function: &item::Function, passes: &[Pass]) -> Vec<usize> {
@@ -5745,7 +5745,7 @@ macro_rules! give {
 }
 
 /// Put `$value`, a `&` of a native part of a marked type's value, as
-/// the `themedef::Theme` of `Theme::Selected(themedef::Theme)`, in
+/// the `palette::Theme` of `Theme::Selected(palette::Theme)`, in
 /// `$out` (#1466): by the wire format when its type crosses by it, as
 /// an alias of `usize` does, and else as a clone the interpreter keeps,
 /// with what its type has of [`Traits`].
@@ -5806,7 +5806,7 @@ impl<T> PartUncloned for Part<'_, T> {
 }
 
 /// A marked value that holds native parts (#1469), as `enum Theme {
-/// Selected(themedef::Theme) }`, crossing as Rust passes it: a borrow
+/// Selected(palette::Theme) }`, crossing as Rust passes it: a borrow
 /// lends each part where it is ([`lend_part!`]), a value moves each
 /// part, and a `&mut` takes back what the call made of it. Its other
 /// fields cross by the wire format.
@@ -6238,7 +6238,7 @@ impl Out {
 
 /// The program's own iterator, which native code holds as std's `Box<dyn
 /// Iterator<Item = T>>` by the handle the runner keeps it under, as
-/// inboard's `Header` holds the `Box::new(actions.into_iter())` its
+/// a marked `Bar` holds the `Box::new(items.into_iter())` its
 /// marked `new` made (#1600). Each `next` asks the interpreter for one
 /// item, which `item` reads as `T` crosses, so the program's iterator
 /// runs only as far as native code pulls.
@@ -7567,7 +7567,7 @@ impl<'c> Call<'c> {
         self.releases.push(anchor_of(value));
     }
     /// The next argument is given for the call alone, as a by-value
-    /// `View<'a>` of borrows (#1225): what the call leaves of it drops
+    /// `Props<'a>` of borrows (#1225): what the call leaves of it drops
     /// once it returns.
     pub fn for_call(&mut self) {
         self.for_call |= 1 << self.count;
@@ -7577,8 +7577,8 @@ impl<'c> Call<'c> {
         self.lent.len()
     }
     /// Each place lent since there were `from` is kept borrowed as long
-    /// as the call's anchored result (#1413), as `&'a inbox::State` of
-    /// `view<'a>(&'a self, inbox: &'a inbox::State) -> Element<'a,
+    /// as the call's anchored result (#1413), as `&'a panel::State` of
+    /// `view<'a>(&'a self, panel: &'a panel::State) -> Element<'a,
     /// Message>` is, so the result may borrow it.
     pub fn keep_lends(&mut self, from: usize) {
         for index in from..self.lent.len().min(64) {

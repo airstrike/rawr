@@ -93,7 +93,7 @@ impl Parser<'_> {
     /// The tokens after `open` through its matching close, which is not
     /// among them, and the close's position. The calls among them are not
     /// noted for `frame_effects` as they are taken: they run where the
-    /// expansion parses them (`stack![page, opaque(wizard.view(..))]`).
+    /// expansion parses them (`stack![page, opaque(child.view(..))]`).
     fn group_rest(
         &mut self,
         open: &Token,

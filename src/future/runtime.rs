@@ -145,7 +145,7 @@ impl Future {
     /// Give `carry` the step function of this future's body, whose
     /// captures it may change, to carry the native values they hold on
     /// this thread to the threads that poll it, in the arena it gives
-    /// back, as a tokio worker polls gallery's `async move { .. bytes ..
+    /// back, as a tokio worker polls a program's `async move { .. bytes ..
     /// }` (#1985). Where an owner serves the steps, they run on it, where
     /// the values are, and nothing is carried.
     pub fn carry(&self, carry: impl FnOnce(&mut Dynamic) -> Option<Away>) {

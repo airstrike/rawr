@@ -317,7 +317,7 @@ impl Inference {
             Ty::Projection(base, trait_name, name) => {
                 self.project(self.resolve(base), trait_name, name)
             }
-            // A generic script type's arguments, as component's
+            // A generic script type's arguments, as a custom component's
             // `NumericInput<Message>` holds its message's type.
             Ty::Script(definition, arguments) if !arguments.is_empty() => Ty::Script(
                 *definition,

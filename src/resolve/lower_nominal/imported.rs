@@ -495,7 +495,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                     return Err(crate::resolve::ImportedFailure::Surface(error));
                 }
                 // A body that passes another body's opaque output to a
-                // crate before that output is revealed, as multi_window's
+                // crate before that output is revealed, as
                 // `center(window.view(id))` does when `Window::view` comes
                 // later, waits for it. When nothing reveals, a failure that
                 // names an item Rawr doesn't know comes first: the crate is
@@ -984,7 +984,7 @@ pub(super) fn instance_templates(program: &mut Program) -> bool {
         };
         // Its parameters touch a crate's types where a crate's trait bounds
         // one, or where a function's signature names one, which the runner
-        // writes at a type (component's `update(..) -> Option<Message>`).
+        // writes at a type (a component's `update(..) -> Option<Message>`).
         let signatures = || {
             implementation.functions.iter().any(|function| {
                 function
@@ -1032,7 +1032,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
     mut readings: Option<&mut kept::Readings<'_>>,
 ) -> Result<bool, crate::resolve::ImportedFailure> {
     // A method of an impl of the program's own trait is one too, as the
-    // blanket `impl<'a, T, Message> IntoContent<'a, Message> for T` whose
+    // blanket `impl<'a, T, Message> IntoView<'a, Message> for T` whose
     // `into_content` calls a generic compiled per instantiation: rustc
     // selects its impl at each call's types.
     let traits = program
@@ -2164,8 +2164,8 @@ pub(super) fn native_impl(
             Some(instance) => substitute_parameters(ty, &instance.types),
             None => ty.clone(),
         };
-        // An associated type Rust code holds as a script value, as
-        // the_matrix's `type State = RefCell<Vec<Cache>>`, has none of the
+        // An associated type Rust code holds as a script value, as a
+        // program's `type State = RefCell<Vec<Cache>>`, has none of the
         // bounds the trait may ask of it, such as `Default`. The runner
         // names it by a proxy of its own beside the owner's, whose
         // `Default` is the type's (`model::associated_path`), and the
@@ -2337,7 +2337,7 @@ pub(super) fn native_impl(
                         .iter()
                         .map(|parameter| convert(&parameter.ty))
                         .collect::<Result<Box<[_]>, _>>()?,
-                    // An opaque output, as markdown's `fn image(..) -> impl
+                    // An opaque output, as a viewer's `fn image(..) -> impl
                     // Widget<Message> + 'a`, is the type its body revealed
                     // (`lower_nominal::reveal`), which no `impl Trait`
                     // names: the impl gives that type, as rustc lets an impl

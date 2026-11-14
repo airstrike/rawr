@@ -2072,7 +2072,7 @@ pub(super) struct Outline {
 enum Head {
     /// Written alone: `State`.
     Bare,
-    /// Below a path that starts with this name: `home` of `home::State`,
+    /// Below a path that starts with this name: `home` of `home::Model`,
     /// or of each name a `use` statement writes.
     Path(Box<str>),
     /// Below a path whose start the text doesn't spell as names:

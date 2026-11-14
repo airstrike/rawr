@@ -114,12 +114,12 @@ pub fn identifies(identify: Identify) {
 }
 
 /// Drop what a call left of an argument given for it alone: the native
-/// value it is, as a by-value `View<'a>` of borrows (#1225), or each one
+/// value it is, as a by-value `Props<'a>` of borrows (#1225), or each one
 /// inside its `Option`s, arrays and tuples, as an `Option<Element<'a,
 /// Message>>` (#1224). One the call moved on, as into a native function
 /// that took it, has nothing left to drop, and nor has one in `kept`, the
 /// native values of what native code holds by a handle the call gave it,
-/// as the elements of the program's iterator a marked `Header::new` keeps
+/// as the elements of the program's iterator a marked `Bar::new` keeps
 /// (#1600), which live as long as native code holds it.
 fn drop_left(value: &Dynamic, kept: &[[u64; 3]]) {
     if let Some(inner) = crate::option::read(value) {
@@ -2254,7 +2254,7 @@ impl Calls {
                 }
             }
         }
-        // An argument given for the call alone, as a by-value `View<'a>` of
+        // An argument given for the call alone, as a by-value `Props<'a>` of
         // borrows (#1225), drops once the call returns: its handle is kept
         // to reach what the call left of it.
         scoped.extend(
