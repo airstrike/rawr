@@ -147,7 +147,7 @@ function scratchRepo(name) {
   rmSync(dir, { recursive: true, force: true });
   const copy = (path) => cpSync(join(root, path), join(dir, path), { recursive: true });
   for (const path of ["plan/plan.mjs", "plan/schema", "plan/project.json", "scripts/bump-version.sh", "Cargo.toml", "Cargo.lock"]) copy(path);
-  for (const crate of ["codegen", "canonical", "cli", "importer", "directory", "toml", "import-cli", "macros", "location", "play", "reload", "watch", "web"]) {
+  for (const crate of ["codegen", "canonical", "cli", "importer", "directory", "toml", "import-cli", "hot", "macros", "location", "play", "reload", "watch", "web"]) {
     copy(`${crate}/Cargo.toml`);
   }
   execFileSync("git", ["init", "-q", dir]);
