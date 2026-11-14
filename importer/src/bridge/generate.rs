@@ -14050,6 +14050,11 @@ fn render_opening(
             "\n        let argument_{position} = with_arena(|arena| arena.take(argument_{position})).map_err(runtime_error)?;"
         ));
     }
+    // Each place the output keeps is held from here to the frame's end,
+    // declared before the region so it drops after the output does.
+    for place in kept_places(signature, substitutions)? {
+        unparked.push_str(&place.reach());
+    }
     let before = format!("{parked}{before}");
     let rebound = format!("{unparked}{rebound}");
     // The region's pins are declared before the output, which goes in the
@@ -14181,7 +14186,10 @@ fn render_anchored_opening(
     let encoding = request::unwritable;
     // A script closure, as `table::column(header, |event| ..)` takes with
     // its `&str` header, is made by the call's own slot, outside this path.
+    // So is a place the output keeps, which only the call's own frame holds
+    // (`KeptPlace`).
     if !functions.is_empty()
+        || !kept_places(signature, substitutions)?.is_empty()
         || !mappers.is_empty()
         || signature.parameters().iter().any(|parameter| {
             parameter.kind() == crate::classify::representability::signature::Kind::Callable
@@ -19406,6 +19414,15 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // A place a scope frame's output keeps is reached inside the frame, by
+    // its handle (`KeptPlace`).
+    if OPENS_FRAME.get()
+        && let Some(place) = kept_places(signature, substitutions)?
+            .into_iter()
+            .find(|place| place.index == local)
+    {
+        return writeln!(output, "    {}", place.handle()).map_err(request::unwritable);
+    }
     // A tuple that holds borrows is leased whole (`Lease`).
     if let convert::Type::Borrowed { .. } = ty
         && !leases_whole(&substituted(ty, signature, substitutions)?)
@@ -23386,6 +23403,89 @@ fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
         }
         _ => None,
     }
+}
+
+/// A `&'a T` or `&'a mut T` of a crate value a scope frame's output keeps
+/// (`Signature::lends`), as `clear(&'a TextureView, &'a mut CommandEncoder)
+/// -> RenderPass<'a>` takes ([`KeptPlace`]).
+struct KeptPlace {
+    /// The argument's index.
+    index: usize,
+    /// Whether the borrow is `&mut`.
+    mutable: bool,
+    /// The value's Rust type.
+    rust: String,
+}
+
+impl KeptPlace {
+    /// The input's handle, taken where the adapter takes its arguments,
+    /// which the frame's closure holds.
+    fn handle(&self) -> String {
+        let index = self.index;
+        format!("let argument_{index}_handle = native_handle(arguments, {index}, false)?;")
+    }
+
+    /// The place, reached inside the frame for as long as it runs: shared
+    /// with the frame for `&T`, as other shared borrows of it coexist, or
+    /// leased from its slot for `&mut T`, which refuses every other use
+    /// meanwhile (E0499). Each goes back once the frame ends.
+    fn reach(&self) -> String {
+        let Self {
+            index,
+            mutable,
+            rust,
+        } = self;
+        if *mutable {
+            format!(
+                "\n        let mut argument_{index}_held = with_arena(|arena| arena.lease_place::<{rust}>(argument_{index}_handle)).map_err(runtime_error)?;\n        let argument_{index} = argument_{index}_held.get_mut();"
+            )
+        } else {
+            format!(
+                "\n        let argument_{index}_held = with_arena(|arena| arena.share::<{rust}>(argument_{index}_handle)).map_err(runtime_error)?;\n        let argument_{index} = &*argument_{index}_held;"
+            )
+        }
+    }
+}
+
+/// The places a scope frame's output keeps ([`KeptPlace`]), at least one of
+/// them `&mut`; empty for any other call.
+fn kept_places(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Vec<KeptPlace>, request::Error> {
+    if signature.scope() != Some(crate::classify::representability::signature::Scope::Opens) {
+        return Ok(Vec::new());
+    }
+    let mut places = Vec::new();
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        if !u32::try_from(position).is_ok_and(|position| signature.lends().contains(&position)) {
+            continue;
+        }
+        let convert::Type::Borrowed { mutable, ty } =
+            substituted(declared, signature, substitutions)?
+        else {
+            continue;
+        };
+        if !matches!(*ty, convert::Type::Nominal { .. })
+            || is_value(&ty)
+            || is_facade_value(&ty)
+            || carries_lifetime(&ty)
+        {
+            continue;
+        }
+        let Some(rust) = concrete_type(&ty) else {
+            continue;
+        };
+        places.push(KeptPlace {
+            index: position,
+            mutable,
+            rust,
+        });
+    }
+    if !places.iter().any(|place| place.mutable) {
+        places.clear();
+    }
+    Ok(places)
 }
 
 /// Whether the call's output carries a lifetime, or is opaque, and an input

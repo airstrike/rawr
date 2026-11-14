@@ -2048,3 +2048,71 @@ pub mod capabilities {
         }
     }
 }
+
+/// A value that keeps a shared and an exclusive borrow of what its
+/// associated function takes at one early-bound lifetime, as iced's
+/// integration `Scene::clear(&'a TextureView, &'a mut CommandEncoder, Color)
+/// -> RenderPass<'a>` gives, and records into the place it borrows when it
+/// is dropped.
+pub mod passes {
+    pub struct Target {
+        name: String,
+    }
+
+    pub struct Encoder {
+        log: Vec<String>,
+    }
+
+    pub struct Pass<'a> {
+        target: &'a Target,
+        encoder: &'a mut Encoder,
+    }
+
+    impl Target {
+        pub fn new(name: &str) -> Self {
+            Self {
+                name: name.to_owned(),
+            }
+        }
+
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+
+        pub fn clear<'a>(target: &'a Target, encoder: &'a mut Encoder, color: u32) -> Pass<'a> {
+            encoder
+                .log
+                .push(format!("clear {} to {color}", target.name));
+            Pass { target, encoder }
+        }
+    }
+
+    impl Encoder {
+        pub fn new() -> Self {
+            Self { log: Vec::new() }
+        }
+
+        pub fn finish(self) -> String {
+            self.log.join(", ")
+        }
+    }
+
+    impl Default for Encoder {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Pass<'_> {
+        pub fn draw(&mut self, count: u32) {
+            let line = format!("draw {count} on {}", self.target.name);
+            self.encoder.log.push(line);
+        }
+    }
+
+    impl Drop for Pass<'_> {
+        fn drop(&mut self) {
+            self.encoder.log.push("end".to_owned());
+        }
+    }
+}
