@@ -5,16 +5,22 @@
 //! `sendEvent:`, keeps the window from making itself key or bringing its
 //! app forward. Nothing is posted to the window server.
 //!
-//! AppKit, QuartzCore and CoreGraphics are found in the process at run
+//! A capture of a window (#1989) is AppKit's too: the window draws a frame
+//! through its own renderer, read back from the Metal layer it drew into
+//! (see [`capture`]).
+//!
+//! AppKit, QuartzCore, Metal and CoreGraphics are found in the process at run
 //! time: a program that shows a window has loaded them, and one that
 //! hasn't shows no window.
 
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, OnceLock};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Once, OnceLock};
 use std::time::Duration;
 
 use super::{Button, Error, Gesture, Key, Modifiers, Point, Sent, Unit};
+use crate::inspect::screenshot;
 
 type Id = *mut c_void;
 type Sel = *const c_void;
@@ -108,6 +114,18 @@ struct Runtime {
     line_to: unsafe extern "C" fn(*mut c_void, *const c_void, f64, f64),
     close: unsafe extern "C" fn(*mut c_void),
     color: unsafe extern "C" fn(f64, f64, f64, f64) -> *mut c_void,
+    method: unsafe extern "C" fn(Id, Sel) -> *mut c_void,
+    implementation: unsafe extern "C" fn(*mut c_void) -> *const c_void,
+    implement: unsafe extern "C" fn(*mut c_void, *const c_void) -> *const c_void,
+    retain: unsafe extern "C" fn(Id) -> Id,
+    unretain: unsafe extern "C" fn(Id),
+    bitmap:
+        unsafe extern "C" fn(*mut u8, usize, usize, usize, usize, *mut c_void, u32) -> *mut c_void,
+    space: unsafe extern "C" fn(*const c_void) -> *mut c_void,
+    /// The address of `kCGColorSpaceSRGB`, the sRGB colour space's name.
+    srgb: usize,
+    translate: unsafe extern "C" fn(*mut c_void, f64, f64),
+    scale: unsafe extern "C" fn(*mut c_void, f64, f64),
 }
 
 unsafe extern "C" {
@@ -184,6 +202,22 @@ impl Runtime {
                 line_to: function(c"CGPathAddLineToPoint")?,
                 close: function(c"CGPathCloseSubpath")?,
                 color: function(c"CGColorCreateSRGB")?,
+                method: function(c"class_getInstanceMethod")?,
+                implementation: function(c"method_getImplementation")?,
+                implement: function(c"method_setImplementation")?,
+                retain: function(c"objc_retain")?,
+                unretain: function(c"objc_release")?,
+                bitmap: function(c"CGBitmapContextCreate")?,
+                space: function(c"CGColorSpaceCreateWithName")?,
+                srgb: {
+                    let name = symbol(c"kCGColorSpaceSRGB");
+                    if name.is_null() {
+                        return None;
+                    }
+                    name as usize
+                },
+                translate: function(c"CGContextTranslateCTM")?,
+                scale: function(c"CGContextScaleCTM")?,
             })
         }
     }
@@ -535,9 +569,16 @@ fn deliver(runtime: &Runtime, event: &Event, title: Option<&str>) -> Option<Sent
 /// The window titled `title`, or the front one: a visible window with a
 /// view.
 fn window(runtime: &Runtime, title: Option<&str>) -> Option<Id> {
+    windows(runtime).into_iter().find(|&window| {
+        title.is_none_or(|title| runtime.text(msg!(runtime, Id; window, "title")) == title)
+    })
+}
+
+/// The program's visible windows with a view, front first.
+fn windows(runtime: &Runtime) -> Vec<Id> {
     let application = runtime.application();
     if application.is_null() {
-        return None;
+        return Vec::new();
     }
     let windows = msg!(runtime, Id; application, "orderedWindows");
     let count = msg!(runtime, usize; windows, "count");
@@ -545,9 +586,7 @@ fn window(runtime: &Runtime, title: Option<&str>) -> Option<Id> {
         .map(|index| msg!(runtime, Id; windows, "objectAtIndex:", index => usize))
         .filter(|&window| msg!(runtime, u8; window, "isVisible") != 0)
         .filter(|&window| !msg!(runtime, Id; window, "contentView").is_null())
-        .find(|&window| {
-            title.is_none_or(|title| runtime.text(msg!(runtime, Id; window, "title")) == title)
-        })
+        .collect()
 }
 
 /// The view a pointer event at `base` goes to: the deepest under it, as the
@@ -790,6 +829,524 @@ fn cursor(runtime: &Runtime, window: Id, layer: Id, down: bool) -> Id {
     msg!(runtime, (); layer, "addSublayer:", cursor => Id);
     msg!(runtime, (); cursor, "release");
     cursor
+}
+
+/// `NSWindowOcclusionStateVisible`.
+const VISIBLE: usize = 1 << 1;
+
+/// The Metal layer a capture is drawing, while it draws.
+static ARMED: AtomicUsize = AtomicUsize::new(0);
+/// The window a capture shows as visible, while it draws.
+static FORCED: AtomicUsize = AtomicUsize::new(0);
+/// The drawable the armed layer last handed out, retained.
+static DRAWN: AtomicUsize = AtomicUsize::new(0);
+/// `-[CAMetalLayer nextDrawable]`'s own implementation.
+static NEXT_DRAWABLE: AtomicUsize = AtomicUsize::new(0);
+/// `-[NSWindow occlusionState]`'s own implementation.
+static OCCLUSION: AtomicUsize = AtomicUsize::new(0);
+
+/// A frame the window drew for a capture: its window, its content view,
+/// the Metal layer the content is drawn into and the drawable it was drawn
+/// into, each retained but the view, and the layer's settings the capture
+/// changed. Addresses, so the frame crosses to the main thread again.
+struct Drawn {
+    window: usize,
+    content: usize,
+    layer: usize,
+    drawable: usize,
+    framebuffer_only: bool,
+    display_sync: bool,
+}
+
+/// An origin in a Metal texture.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct Origin {
+    x: usize,
+    y: usize,
+    z: usize,
+}
+
+/// A size in a Metal texture.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct Extent {
+    width: usize,
+    height: usize,
+    depth: usize,
+}
+
+/// A frame's pixels, read back: four bytes each, rows top first.
+struct Pixels {
+    bytes: Vec<u8>,
+    width: usize,
+    height: usize,
+    /// Whether the bytes are blue, green, red, alpha, not red first.
+    bgra: bool,
+}
+
+/// Capture the window titled `title`, or the program's front window, into
+/// `file` (see [`screenshot`]): it draws a frame as it would for a redraw,
+/// shown as visible while it does, and the drawable its renderer drew
+/// into is read back, below the title bar its frame view draws.
+pub(in crate::inspect) fn capture(
+    title: Option<&str>,
+    file: &Path,
+    interrupted: &dyn Fn() -> bool,
+) -> Result<screenshot::Shot, screenshot::Error> {
+    let lost = |error: Error| match error {
+        Error::Ended => screenshot::Error::Ended,
+        _ => screenshot::Error::Interrupted,
+    };
+    let Some(runtime) = arrived(interrupted) else {
+        return Err(screenshot::Error::Window {
+            title: title.map(str::to_owned),
+            shown: Vec::new(),
+        });
+    };
+    let runtime = runtime.map_err(lost)?;
+    let wanted = title.map(str::to_owned);
+    let drawn = main(interrupted, move || draw(runtime, wanted.as_deref())).map_err(lost)??;
+    // The renderer committed its frame as it drew; the GPU finishes it
+    // within a frame.
+    std::thread::sleep(FRAME);
+    let file = file.to_owned();
+    main(interrupted, move || compose(runtime, &drawn, &file)).map_err(lost)?
+}
+
+/// Draw a frame of the window titled `title`, or the front one, with its
+/// layer armed.
+fn draw(runtime: &Runtime, title: Option<&str>) -> Result<Drawn, screenshot::Error> {
+    // SAFETY: the pool is pushed and popped on this thread around the
+    // objects this call makes.
+    let pool = unsafe { (runtime.push)() };
+    let drawn = window(runtime, title)
+        .ok_or_else(|| screenshot::Error::Window {
+            title: title.map(str::to_owned),
+            shown: titles(runtime),
+        })
+        .and_then(|window| {
+            let content = msg!(runtime, Id; window, "contentView");
+            let layer = metal(runtime, msg!(runtime, Id; content, "layer"))
+                .ok_or(screenshot::Error::Layer)?;
+            hook(runtime);
+            let framebuffer_only = msg!(runtime, u8; layer, "framebufferOnly") != 0;
+            let display_sync = msg!(runtime, u8; layer, "displaySyncEnabled") != 0;
+            // A drawable the capture reads back is more than a target, and
+            // one shown at once is free again while the window is covered.
+            msg!(runtime, (); layer, "setFramebufferOnly:", false => bool);
+            msg!(runtime, (); layer, "setDisplaySyncEnabled:", false => bool);
+            ARMED.store(layer as usize, Ordering::Release);
+            FORCED.store(window as usize, Ordering::Release);
+            let bounds = runtime.rect(content, "bounds\0");
+            // The view's own redraw: the window's renderer draws its frame.
+            msg!(runtime, (); content, "drawRect:", bounds => Rect);
+            ARMED.store(0, Ordering::Release);
+            FORCED.store(0, Ordering::Release);
+            let drawable = DRAWN.swap(0, Ordering::AcqRel);
+            let drawn = Drawn {
+                // SAFETY: retaining live objects, which `restore` releases.
+                window: unsafe { (runtime.retain)(window) } as usize,
+                content: content as usize,
+                // SAFETY: as for the window.
+                layer: unsafe { (runtime.retain)(layer) } as usize,
+                drawable,
+                framebuffer_only,
+                display_sync,
+            };
+            if drawable == 0 {
+                restore(runtime, &drawn);
+                return Err(screenshot::Error::Undrawn);
+            }
+            Ok(drawn)
+        });
+    // SAFETY: `pool` was pushed above on this thread.
+    unsafe { (runtime.pop)(pool) };
+    drawn
+}
+
+/// Read `drawn` back below its window's title bar, write the PNG to
+/// `file` and give the layer back its settings.
+fn compose(
+    runtime: &Runtime,
+    drawn: &Drawn,
+    file: &Path,
+) -> Result<screenshot::Shot, screenshot::Error> {
+    // SAFETY: the pool is pushed and popped on this thread around the
+    // objects this call makes.
+    let pool = unsafe { (runtime.push)() };
+    let shot = read(runtime, drawn).and_then(|pixels| {
+        let window = drawn.window as Id;
+        let content = drawn.content as Id;
+        let frame = msg!(runtime, Id; content, "superview");
+        let frame = if frame.is_null() { content } else { frame };
+        let bounds = runtime.rect(frame, "bounds\0");
+        let rep =
+            msg!(runtime, Id; frame, "bitmapImageRepForCachingDisplayInRect:", bounds => Rect);
+        if rep.is_null() {
+            return Err(screenshot::Error::Write(
+                "the window's frame drew no bitmap".to_owned(),
+            ));
+        }
+        msg!(runtime, (); frame, "cacheDisplayInRect:toBitmapImageRep:", bounds => Rect, rep => Id);
+        place(runtime, rep, frame, content, &pixels)?;
+        cursor_over(runtime, rep, frame, content);
+        let png = png(runtime, rep)?;
+        std::fs::write(file, png).map_err(|error| screenshot::Error::Write(error.to_string()))?;
+        let size = runtime.rect(window, "frame\0").size;
+        Ok(screenshot::Shot {
+            title: runtime.text(msg!(runtime, Id; window, "title")),
+            width: size.width,
+            height: size.height,
+            scale: msg!(runtime, f64; window, "backingScaleFactor"),
+            windows: titles(runtime),
+        })
+    });
+    restore(runtime, drawn);
+    // SAFETY: `pool` was pushed above on this thread.
+    unsafe { (runtime.pop)(pool) };
+    shot
+}
+
+/// Copy the drawable's texture into memory the CPU reads, on a queue of
+/// the layer's own device.
+fn read(runtime: &Runtime, drawn: &Drawn) -> Result<Pixels, screenshot::Error> {
+    let texture = msg!(runtime, Id; drawn.drawable as Id, "texture");
+    let format = msg!(runtime, usize; texture, "pixelFormat");
+    // MTLPixelFormatRGBA8Unorm(_sRGB) and BGRA8Unorm(_sRGB).
+    let bgra = match format {
+        70 | 71 => false,
+        80 | 81 => true,
+        other => return Err(screenshot::Error::Format(other as u64)),
+    };
+    let width = msg!(runtime, usize; texture, "width");
+    let height = msg!(runtime, usize; texture, "height");
+    let row = width * 4;
+    let device = msg!(runtime, Id; drawn.layer as Id, "device");
+    let queue = msg!(runtime, Id; device, "newCommandQueue");
+    // MTLResourceStorageModeShared.
+    let buffer = msg!(runtime, Id; device, "newBufferWithLength:options:", row * height => usize, 0_usize => usize);
+    if queue.is_null() || buffer.is_null() {
+        // SAFETY: releasing what `new…` made, nil being ignored.
+        unsafe {
+            (runtime.unretain)(queue);
+            (runtime.unretain)(buffer);
+        }
+        return Err(screenshot::Error::Write(
+            "the GPU gave no buffer for the frame".to_owned(),
+        ));
+    }
+    let commands = msg!(runtime, Id; queue, "commandBuffer");
+    let blit = msg!(runtime, Id; commands, "blitCommandEncoder");
+    msg!(runtime, (); blit,
+        "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:",
+        texture => Id,
+        0_usize => usize,
+        0_usize => usize,
+        Origin::default() => Origin,
+        Extent { width, height, depth: 1 } => Extent,
+        buffer => Id,
+        0_usize => usize,
+        row => usize,
+        row * height => usize,
+    );
+    msg!(runtime, (); blit, "endEncoding");
+    msg!(runtime, (); commands, "commit");
+    msg!(runtime, (); commands, "waitUntilCompleted");
+    let contents = msg!(runtime, *const u8; buffer, "contents");
+    // SAFETY: the shared buffer holds `row * height` bytes, written by the
+    // completed copy.
+    let bytes = unsafe { std::slice::from_raw_parts(contents, row * height) }.to_vec();
+    // SAFETY: releasing what `new…` made.
+    unsafe {
+        (runtime.unretain)(buffer);
+        (runtime.unretain)(queue);
+    }
+    Ok(Pixels {
+        bytes,
+        width,
+        height,
+        bgra,
+    })
+}
+
+/// Put `pixels` into `rep`, the frame view's bitmap, where the content
+/// view is in it.
+fn place(
+    runtime: &Runtime,
+    rep: Id,
+    frame: Id,
+    content: Id,
+    pixels: &Pixels,
+) -> Result<(), screenshot::Error> {
+    let samples = msg!(runtime, isize; rep, "samplesPerPixel");
+    let bits = msg!(runtime, isize; rep, "bitsPerPixel");
+    let planar = msg!(runtime, u8; rep, "isPlanar") != 0;
+    // NSBitmapFormatAlphaFirst.
+    let alpha_first = msg!(runtime, usize; rep, "bitmapFormat") & 1 != 0;
+    if samples != 4 || bits != 32 || planar || alpha_first {
+        return Err(screenshot::Error::Write(format!(
+            "the window's frame drew a bitmap of {samples} samples in {bits} bits a pixel"
+        )));
+    }
+    let wide = msg!(runtime, isize; rep, "pixelsWide").max(0) as usize;
+    let high = msg!(runtime, isize; rep, "pixelsHigh").max(0) as usize;
+    let stride = msg!(runtime, isize; rep, "bytesPerRow").max(0) as usize;
+    let data = msg!(runtime, *mut u8; rep, "bitmapData");
+    if data.is_null() {
+        return Err(screenshot::Error::Write(
+            "the window's frame drew no pixels".to_owned(),
+        ));
+    }
+    let (left, top) = offset(runtime, rep, frame, content);
+    // SAFETY: the bitmap holds `stride * high` bytes, which this function
+    // alone writes while it runs.
+    let target = unsafe { std::slice::from_raw_parts_mut(data, stride * high) };
+    let width = pixels.width.min(wide.saturating_sub(left));
+    let height = pixels.height.min(high.saturating_sub(top));
+    for y in 0..height {
+        let from = &pixels.bytes[y * pixels.width * 4..][..width * 4];
+        let to = &mut target[(top + y) * stride + left * 4..][..width * 4];
+        let (to, _) = to.as_chunks_mut::<4>();
+        let (from, _) = from.as_chunks::<4>();
+        for (to, &[first, green, third, _]) in to.iter_mut().zip(from) {
+            let (red, blue) = if pixels.bgra {
+                (third, first)
+            } else {
+                (first, third)
+            };
+            *to = [red, green, blue, 255];
+        }
+    }
+    Ok(())
+}
+
+/// Where the content view's top-left corner is in `rep`, in pixels.
+fn offset(runtime: &Runtime, rep: Id, frame: Id, content: Id) -> (usize, usize) {
+    let bounds = runtime.rect(frame, "bounds\0");
+    let placed = runtime.rect(content, "frame\0");
+    let scale = scale(runtime, rep, bounds);
+    let top = if msg!(runtime, u8; frame, "isFlipped") != 0 {
+        placed.origin.y
+    } else {
+        bounds.size.height - placed.origin.y - placed.size.height
+    };
+    let pixels = |points: f64| (points * scale).round().max(0.0) as usize;
+    (pixels(placed.origin.x), pixels(top))
+}
+
+/// Pixels per point in `rep`, a bitmap of `bounds`.
+fn scale(runtime: &Runtime, rep: Id, bounds: Rect) -> f64 {
+    let wide = msg!(runtime, isize; rep, "pixelsWide") as f64;
+    if bounds.size.width > 0.0 {
+        wide / bounds.size.width
+    } else {
+        1.0
+    }
+}
+
+/// Draw the agent cursor, when the window shows one, into `rep` where it
+/// is over the content view.
+fn cursor_over(runtime: &Runtime, rep: Id, frame: Id, content: Id) {
+    let layer = msg!(runtime, Id; content, "layer");
+    let Some(cursor) = named(runtime, layer, CURSOR) else {
+        return;
+    };
+    let wide = msg!(runtime, isize; rep, "pixelsWide").max(0) as usize;
+    let high = msg!(runtime, isize; rep, "pixelsHigh").max(0) as usize;
+    let stride = msg!(runtime, isize; rep, "bytesPerRow").max(0) as usize;
+    let data = msg!(runtime, *mut u8; rep, "bitmapData");
+    let bounds = runtime.rect(frame, "bounds\0");
+    let scale = scale(runtime, rep, bounds);
+    let (left, top) = offset(runtime, rep, frame, content);
+    let height = runtime.rect(content, "bounds\0").size.height;
+    let at = msg!(runtime, Vector; cursor, "position");
+    // SAFETY: a bitmap context over the bitmap's own pixels, eight bits
+    // to each of four premultiplied samples, alpha last, and the sRGB
+    // space it is drawn in, both released here; `srgb` is the address of
+    // Core Graphics' constant name.
+    unsafe {
+        let space = (runtime.space)(*(runtime.srgb as *const *const c_void));
+        let context = (runtime.bitmap)(data, wide, high, 8, stride, space, 1);
+        runtime.release(space);
+        if context.is_null() {
+            return;
+        }
+        // The context's origin is the bitmap's bottom-left corner.
+        let bottom = high as f64 - top as f64 - height * scale;
+        (runtime.translate)(context, left as f64, bottom);
+        (runtime.scale)(context, scale, scale);
+        if msg!(runtime, u8; layer, "contentsAreFlipped") != 0 {
+            (runtime.translate)(context, 0.0, height);
+            (runtime.scale)(context, 1.0, -1.0);
+        }
+        (runtime.translate)(context, at.x, at.y);
+        msg!(runtime, (); cursor, "renderInContext:", context => *mut c_void);
+        runtime.release(context);
+    }
+}
+
+/// The PNG of `rep`.
+fn png(runtime: &Runtime, rep: Id) -> Result<Vec<u8>, screenshot::Error> {
+    let properties = msg!(runtime, Id; runtime.class(c"NSDictionary"), "dictionary");
+    // NSBitmapImageFileTypePNG.
+    let data = msg!(runtime, Id; rep, "representationUsingType:properties:", 4_usize => usize, properties => Id);
+    if data.is_null() {
+        return Err(screenshot::Error::Write(
+            "AppKit made no PNG of the window".to_owned(),
+        ));
+    }
+    let bytes = msg!(runtime, *const u8; data, "bytes");
+    let length = msg!(runtime, usize; data, "length");
+    // SAFETY: the data's own bytes, alive in this autorelease pool.
+    Ok(unsafe { std::slice::from_raw_parts(bytes, length) }.to_vec())
+}
+
+/// Give the layer back the settings `draw` changed and release what it
+/// retained.
+fn restore(runtime: &Runtime, drawn: &Drawn) {
+    let layer = drawn.layer as Id;
+    msg!(runtime, (); layer, "setFramebufferOnly:", drawn.framebuffer_only => bool);
+    msg!(runtime, (); layer, "setDisplaySyncEnabled:", drawn.display_sync => bool);
+    // SAFETY: releasing what `draw` and the hook retained, nil being
+    // ignored.
+    unsafe {
+        (runtime.unretain)(drawn.drawable as Id);
+        (runtime.unretain)(layer);
+        (runtime.unretain)(drawn.window as Id);
+    }
+}
+
+/// The titles of the program's windows, front first.
+fn titles(runtime: &Runtime) -> Vec<String> {
+    windows(runtime)
+        .into_iter()
+        .map(|window| runtime.text(msg!(runtime, Id; window, "title")))
+        .collect()
+}
+
+/// The first Metal layer in `layer`'s tree, itself included.
+fn metal(runtime: &Runtime, layer: Id) -> Option<Id> {
+    let class = runtime.class(c"CAMetalLayer");
+    if layer.is_null() || class.is_null() {
+        return None;
+    }
+    let mut pending = vec![layer];
+    while let Some(layer) = pending.pop() {
+        if msg!(runtime, u8; layer, "isKindOfClass:", class => Id) != 0 {
+            return Some(layer);
+        }
+        let sublayers = msg!(runtime, Id; layer, "sublayers");
+        let count = msg!(runtime, usize; sublayers, "count");
+        pending.extend(
+            (0..count).map(|index| msg!(runtime, Id; sublayers, "objectAtIndex:", index => usize)),
+        );
+    }
+    None
+}
+
+/// The sublayer of `layer` named `name`.
+fn named(runtime: &Runtime, layer: Id, name: &CStr) -> Option<Id> {
+    if layer.is_null() {
+        return None;
+    }
+    let name = runtime.string(&name.to_string_lossy());
+    let sublayers = msg!(runtime, Id; layer, "sublayers");
+    let count = msg!(runtime, usize; sublayers, "count");
+    (0..count)
+        .map(|index| msg!(runtime, Id; sublayers, "objectAtIndex:", index => usize))
+        .find(|&sublayer| {
+            msg!(runtime, u8; msg!(runtime, Id; sublayer, "name"), "isEqualToString:", name => Id)
+                != 0
+        })
+}
+
+/// Put the capture's hooks in, once: `nextDrawable` keeps the armed
+/// layer's drawable, and `occlusionState` says the forced window is
+/// visible, so its renderer draws while it is covered. Neither changes
+/// anything for a layer or a window no capture names.
+fn hook(runtime: &Runtime) {
+    static HOOKED: Once = Once::new();
+    HOOKED.call_once(|| {
+        replace(
+            runtime,
+            c"CAMetalLayer",
+            "nextDrawable\0",
+            &NEXT_DRAWABLE,
+            next_drawable as *const c_void,
+        );
+        replace(
+            runtime,
+            c"NSWindow",
+            "occlusionState\0",
+            &OCCLUSION,
+            occlusion_state as *const c_void,
+        );
+    });
+}
+
+/// Replace `class`'s method for `selector` with `with`, keeping its own
+/// implementation in `original` first.
+fn replace(
+    runtime: &Runtime,
+    class: &CStr,
+    selector: &'static str,
+    original: &AtomicUsize,
+    with: *const c_void,
+) {
+    let class = runtime.class(class);
+    if class.is_null() {
+        return;
+    }
+    // SAFETY: the class's own method for the selector, whose
+    // implementation is kept before `with`, of the same C signature,
+    // takes its place.
+    unsafe {
+        let method = (runtime.method)(class, runtime.selector(selector));
+        if method.is_null() {
+            return;
+        }
+        original.store((runtime.implementation)(method) as usize, Ordering::Release);
+        (runtime.implement)(method, with);
+    }
+}
+
+/// `-[CAMetalLayer nextDrawable]` through the capture's hook.
+unsafe extern "C" fn next_drawable(layer: Id, selector: Sel) -> Id {
+    // SAFETY: `replace` kept the method's own implementation, of this
+    // signature, before this one took its place.
+    let drawable = unsafe {
+        let own: unsafe extern "C" fn(Id, Sel) -> Id =
+            std::mem::transmute(NEXT_DRAWABLE.load(Ordering::Acquire));
+        own(layer, selector)
+    };
+    if !drawable.is_null()
+        && ARMED.load(Ordering::Acquire) == layer as usize
+        && let Some(runtime) = Runtime::get()
+    {
+        // SAFETY: the drawable is kept until the capture reads it, and the
+        // one kept before is released.
+        unsafe {
+            let kept = (runtime.retain)(drawable);
+            (runtime.unretain)(DRAWN.swap(kept as usize, Ordering::AcqRel) as Id);
+        }
+    }
+    drawable
+}
+
+/// `-[NSWindow occlusionState]` through the capture's hook.
+unsafe extern "C" fn occlusion_state(window: Id, selector: Sel) -> usize {
+    // SAFETY: as in `next_drawable`.
+    let state = unsafe {
+        let own: unsafe extern "C" fn(Id, Sel) -> usize =
+            std::mem::transmute(OCCLUSION.load(Ordering::Acquire));
+        own(window, selector)
+    };
+    if FORCED.load(Ordering::Acquire) == window as usize {
+        state | VISIBLE
+    } else {
+        state
+    }
 }
 
 /// The C function `name` names, as a pointer of type `F`.

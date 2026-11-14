@@ -211,40 +211,6 @@ pub fn run(
     })
 }
 
-/// The pids under `root`, `root` included, from `ps`.
-#[must_use]
-pub fn tree(root: u32) -> Vec<u32> {
-    let Ok(output) = Command::new("ps")
-        // POSIX -A, which both BSD and procps ps read as every process.
-        .args(["-A", "-o", "pid=,ppid="])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
-        return vec![root];
-    };
-    let pairs: Vec<(u32, u32)> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
-        })
-        .collect();
-    let mut kept = vec![root];
-    let mut index = 0;
-    while index < kept.len() {
-        let parent = kept[index];
-        kept.extend(
-            pairs
-                .iter()
-                .filter(|(_, ppid)| *ppid == parent)
-                .map(|(pid, _)| *pid),
-        );
-        index += 1;
-    }
-    kept
-}
-
 /// An exit status as a number: the code, or 128 plus the signal.
 #[must_use]
 pub fn code(status: ExitStatus) -> i32 {
