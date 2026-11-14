@@ -13398,6 +13398,7 @@ fn render_adapter_body(
                 output.write_all(b"));\n").map_err(request::unwritable)?;
                 render_replay_insert(replay, facade, output)?;
             } else if !matches!(receiver, Receiver::Owned)
+                && !signature.detached_future()
                 && is_future(substitute(signature.output(), signature, substitutions)?)
             {
                 // An async method that borrows its receiver (D513.6): its
@@ -13409,9 +13410,7 @@ fn render_adapter_body(
                     "    let receiver = native_handle(arguments, 0, false)?;"
                 )
                 .map_err(request::unwritable)?;
-                output
-                    .write_all(b"    let held: Held<")
-                    .map_err(request::unwritable)?;
+                let mut container = Vec::new();
                 render_container_path(
                     &path,
                     signature,
@@ -13419,8 +13418,12 @@ fn render_adapter_body(
                     constants,
                     *container_parameters,
                     true,
-                    output,
+                    &mut container,
                 )?;
+                output
+                    .write_all(b"    let held: Held<")
+                    .map_err(request::unwritable)?;
+                output.write_all(&container).map_err(request::unwritable)?;
                 if matches!(receiver, Receiver::Mutable) {
                     output
                         .write_all(
@@ -13429,12 +13432,20 @@ fn render_adapter_body(
                         )
                         .map_err(request::unwritable)?;
                 } else {
+                    // The probe names the receiver's type: rustc picks the
+                    // clone or the lease by it only when it is known there.
                     output
                         .write_all(
                             b"> = {
         #[allow(unused_imports)]
         use {HoldClone as _, HoldLease as _};
-        (&HoldProbe::new()).hold(arguments.arena, receiver)?
+        (&HoldProbe::<",
+                        )
+                        .map_err(request::unwritable)?;
+                    output.write_all(&container).map_err(request::unwritable)?;
+                    output
+                        .write_all(
+                            b">::new()).hold(arguments.arena, receiver)?
     };
 ",
                         )
@@ -13665,10 +13676,13 @@ fn render_adapter_body(
                     }
                 }
                 // A method that takes `self` by value may give a Rust
-                // future, as `Response::text` does.
+                // future, as `Response::text` does, and so may one whose
+                // future holds no borrow, as wgpu's `request_device`.
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 match future_output(returned) {
-                    Some(element) if matches!(receiver, Receiver::Owned) => {
+                    Some(element)
+                        if matches!(receiver, Receiver::Owned) || signature.detached_future() =>
+                    {
                         render_give_task(element, "output", "imported", output)?;
                     }
                     _ => render_give_with(signature, substitutions, "output", output)?,

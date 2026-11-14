@@ -1547,7 +1547,13 @@ impl<'a> Parser<'a> {
             if matches!(form, crate::host::type_def::Form::Record)
                 && matches!(self.peek(), Token::LeftBrace)
             {
-                return self.parse_imported_struct(binding.qualified, definition, owner, name_span);
+                return self.parse_imported_struct(
+                    binding.qualified,
+                    definition,
+                    owner,
+                    &[],
+                    name_span,
+                );
             }
             if let Some(value) = self.imported_struct_value(
                 binding.qualified,
@@ -1558,6 +1564,17 @@ impl<'a> Parser<'a> {
             )? {
                 return Ok(value);
             }
+        }
+        // A crate's struct through the crate's type alias a `use` binds,
+        // as `Owned { .. }` after `use natives::Owned;` (#1961).
+        #[cfg(feature = "rust-import")]
+        if matches!(self.peek(), Token::LeftBrace)
+            && !self.no_struct
+            && let Some(binding) = self.models.import(&name).cloned().filter(|_| !local)
+            && matches!(binding.target, item::Import::Alias)
+            && let Some(value) = self.parse_aliased_struct(&binding.qualified, name_span)?
+        {
+            return Ok(value);
         }
 
         if matches!(self.peek(), Token::LeftBrace)

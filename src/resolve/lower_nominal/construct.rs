@@ -707,7 +707,13 @@ impl<'a> Parser<'a> {
                 return self.parse_host_struct(definition, name_span);
             }
             #[cfg(feature = "rust-import")]
-            return self.parse_imported_struct(binding.qualified, definition, owner, name_span);
+            return self.parse_imported_struct(
+                binding.qualified,
+                definition,
+                owner,
+                &[],
+                name_span,
+            );
             #[cfg(not(feature = "rust-import"))]
             let _ = owner;
         }
@@ -1313,16 +1319,73 @@ impl<'a> Parser<'a> {
             }
             _ => return Ok(None),
         }
-        self.parse_imported_struct(path, definition, owner, path_span)
+        self.parse_imported_struct(path, definition, owner, &[], path_span)
             .map(Some)
     }
 
+    /// `A { .. }` where `A` at `path` is a crate's type alias of a crate's
+    /// record struct, as wgpu's `DeviceDescriptor<'a> =
+    /// wgt::DeviceDescriptor<Option<&'a str>>`: the struct, with the
+    /// alias's arguments, as rustc builds it. `None` when `path` is no such
+    /// alias.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn parse_aliased_struct(
+        &mut self,
+        path: &str,
+        name_span: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let Some(Ty::Host { proof, arguments }) = self.aliased_struct(path, name_span)? else {
+            return Ok(None);
+        };
+        let definition = proof.definition.clone();
+        let path = definition.path().as_str().into();
+        self.parse_imported_struct(path, definition, proof.owner.clone(), &arguments, name_span)
+            .map(Some)
+    }
+
+    /// The type a crate's type alias at `path` names when it is a crate's
+    /// record struct, each of the alias's parameters fresh, as an
+    /// expression or a pattern names `Owned` of `type Owned =
+    /// Described<u32>`.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn aliased_struct(&mut self, path: &str, span: Span) -> Result<Option<Ty>, Error> {
+        let Some(crate::host::Entry::TypeAlias(alias)) = self.models.host.entry(path) else {
+            return Ok(None);
+        };
+        let target = alias.target().clone();
+        let owner = self.models.host.type_owner(path).cloned();
+        let ty = self.instantiate_host_type(
+            &target,
+            &mut BTreeMap::new(),
+            path,
+            span,
+            owner.as_ref(),
+            None,
+        )?;
+        let Ty::Host { proof, .. } = &ty else {
+            return Ok(None);
+        };
+        let record = matches!(
+            proof.definition.shape(),
+            crate::host::type_def::Shape::Struct {
+                form: crate::host::type_def::Form::Record,
+                ..
+            }
+        );
+        Ok((record && proof.definition.identity().imported().is_some()).then_some(ty))
+    }
+
+    /// The struct expression of the crate's struct `definition` at `path`.
+    /// `known` holds its arguments when the path is an alias that fixes
+    /// them, as `Owned` of `type Owned = Described<u32>`, and is empty
+    /// otherwise.
     #[cfg(feature = "rust-import")]
     pub(super) fn parse_imported_struct(
         &mut self,
         path: ImmutableString,
         definition: crate::host::type_def::Definition,
         owner: Option<crate::host::facade::Dependency>,
+        known: &[Ty],
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let crate::host::type_def::Shape::Struct {
@@ -1362,6 +1425,9 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|_| self.inference.fresh())
             .collect::<Box<[_]>>();
+        for (parameter, argument) in instance.iter().zip(known) {
+            self.require_type(parameter, argument, name_span)?;
+        }
         if let Some((expected, depth)) = &self.collect_hint
             && *depth == self.expression_stack.len()
             && let Ty::Host { proof, arguments } = self.inference.resolve(expected)

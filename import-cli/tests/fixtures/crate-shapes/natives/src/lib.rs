@@ -1927,3 +1927,61 @@ pub mod web {
         }
     }
 }
+
+/// Struct literals and patterns through a crate's type aliases, as
+/// wgpu's `DeviceDescriptor<'a> = wgt::DeviceDescriptor<Option<&'a str>>`.
+pub mod described {
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Described<L> {
+        pub label: L,
+        pub count: u32,
+    }
+
+    impl<L: Default> Default for Described<L> {
+        fn default() -> Self {
+            Self {
+                label: L::default(),
+                count: 1,
+            }
+        }
+    }
+
+    pub type Owned = Described<u32>;
+    pub type Labeled<'a> = Described<Option<&'a str>>;
+
+    pub fn describe(descriptor: &Labeled<'_>) -> String {
+        format!("{:?} {}", descriptor.label, descriptor.count)
+    }
+
+    /// Takes a borrow of an alias's struct and gives a future, as wgpu's
+    /// `Adapter::request_device(&self, desc: &DeviceDescriptor<'_>) ->
+    /// impl Future<..> + WasmNotSend` does.
+    pub struct Adapter;
+
+    pub trait NotSend {}
+
+    impl<T> NotSend for T {}
+
+    impl Adapter {
+        pub fn request(
+            &self,
+            descriptor: &Labeled<'_>,
+        ) -> impl std::future::Future<Output = Result<(u32, u32), ()>> + NotSend + use<> {
+            let count = descriptor.count;
+            async move { Ok((count, count * 2)) }
+        }
+    }
+
+    /// The future's output, polled to its end on this thread.
+    pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        loop {
+            if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut context) {
+                return output;
+            }
+        }
+    }
+}
+
+pub use described::Labeled;

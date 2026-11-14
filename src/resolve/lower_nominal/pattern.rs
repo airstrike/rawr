@@ -1366,7 +1366,7 @@ impl<'a> Parser<'a> {
                 .is_some_and(|(name, _)| name.starts_with(char::is_uppercase))
             && matches!(
                 self.models.host.entry(&self.host_pattern_owner(&segments)),
-                Some(crate::host::Entry::Type(_))
+                Some(crate::host::Entry::Type(_) | crate::host::Entry::TypeAlias(_))
             )
         {
             let (variant, variant_span) = segments.last().cloned().expect("a pattern path");
@@ -3311,7 +3311,21 @@ impl<'a> Parser<'a> {
                         definition.identity().imported() == proof.definition.identity().imported()
                     })
         };
-        if written != owner_path.as_str() && !reexported() {
+        // A crate's struct through the crate's type alias, as `Owned { .. }`
+        // of `type Owned = Described<u32>`, is the struct with the alias's
+        // arguments (#1961).
+        let elsewhere = written != owner_path.as_str() && !reexported();
+        #[cfg(feature = "rust-import")]
+        let elsewhere = elsewhere
+            && !if pattern.host_struct {
+                self.aliased_struct(&written, pattern.owner_span)?
+            } else {
+                None
+            }
+            .map(|aliased| self.require_type(&aliased, ty, pattern.owner_span))
+            .transpose()?
+            .is_some();
+        if elsewhere {
             return Err(Error::TypeMismatch {
                 expected: owner_path.as_str().into(),
                 actual: written.into(),

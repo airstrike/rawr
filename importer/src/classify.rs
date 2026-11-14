@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 195;
+const CLASSIFIER_VERSION: u32 = 200;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9668,7 +9668,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // future holds. An `async fn` method that borrows its receiver holds
         // the borrow across its awaits: its future holds a copy of a `Clone`
         // receiver or the receiver itself, lent from Rawr until the future
-        // ends (D513.6).
+        // ends (D513.6). A borrowing method's `impl Future` that captures
+        // none of the call's lifetimes, as wgpu's `request_device(&self,
+        // ..)` gives, holds no borrow, so it crosses as a free function's.
         let rewritten = rewrite(signature.output());
         // An opaque `impl Trait` the function gives is a type of its own,
         // at the type parameters the caller fixes (`iced::widget::iced`).
@@ -9683,6 +9685,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .chain(valued.iter().copied().filter(|_| values))
                 .collect(),
         );
+        let detached_future = matches!(signature.receiver(), model::Receiver::Reference { .. })
+            && !signature.async_function()
+            && matches!(rewritten, model::Type::ImplTrait { .. })
+            && !names_late_lifetime(&rewritten)
+            && self.future_type_output(&rewritten).is_some();
         let output = match signature.receiver() {
             // `-> !`: the call never gives a value. `!` is no other
             // position's type on stable Rust.
@@ -9692,7 +9699,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             model::Receiver::None | model::Receiver::Value { .. } => {
                 self.convert_output(&rewritten, rewrite)
             }
-            model::Receiver::Reference { .. } if signature.async_function() => {
+            model::Receiver::Reference { .. } if signature.async_function() || detached_future => {
                 self.convert_output(&rewritten, rewrite)
             }
             // A `&[T]` the method lends from its receiver, typed as the
@@ -9913,6 +9920,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 ..
             }
         ))
+        .with_detached_future(detached_future)
         .with_opaques(opaques.into_boxed_slice());
         // A receiver of an impl that fixes its type's arguments, as
         // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.
