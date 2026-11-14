@@ -26,7 +26,9 @@
 //!   T>`, `fn sort(&mut self) where T: Ord`. A free function has its
 //!   declaration too, `fn read<P: AsRef<std::path::Path>>(path: P) ->
 //!   Result<Vec<u8>, std::io::Error>`, and a type alias the type it names,
-//!   `Result<T, std::io::Error>` (D711 step 6).
+//!   `Result<T, std::io::Error>` (D711 step 6). A free or inherent
+//!   constant has its declaration, `const UNIX_EPOCH:
+//!   std::time::SystemTime`.
 //!
 //! - `impls.tsv` (D711 step 3): `trait  key  self  arguments  generics
 //!   where  associated`, one line per impl of a stable trait that stable
@@ -383,6 +385,21 @@ impl Item {
         } else {
             self.detail
         }
+    }
+
+    /// A free or associated constant's type, as its declaration writes it:
+    /// `std::time::SystemTime` of `std::time::UNIX_EPOCH`. `None` for any
+    /// other item.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only `declare` reads it, to write `declared`")
+    )]
+    pub(crate) fn constant_type(&self) -> Option<&'static str> {
+        if !matches!(self.kind, "const" | "assoc-const") {
+            return None;
+        }
+        let (_, ty) = self.detail.strip_prefix("const ")?.split_once(": ")?;
+        Some(ty)
     }
 
     /// The last segment of the item's path: `from_str` of

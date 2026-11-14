@@ -29,7 +29,6 @@ pub(super) const HELD: [Held; 2] = [
         },
         crosses: true,
         runs: RUNS,
-        constants: &[],
     }),
     Held::Value(held::Value {
         std: "std::char::ToLowercase",
@@ -42,7 +41,6 @@ pub(super) const HELD: [Held; 2] = [
         },
         crosses: true,
         runs: RUNS,
-        constants: &[],
     }),
 ];
 

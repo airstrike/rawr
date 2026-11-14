@@ -38,7 +38,6 @@ pub(super) const HELD: [Held; 2] = [
             capability::Kind::Send,
             capability::Kind::Static,
         ],
-        constants: &["std::time::UNIX_EPOCH", "std::time::SystemTime::UNIX_EPOCH"],
     }),
     Held::Value(held::Value {
         std: "std::time::SystemTimeError",
@@ -56,7 +55,6 @@ pub(super) const HELD: [Held; 2] = [
             capability::Kind::Send,
             capability::Kind::Static,
         ],
-        constants: &[],
     }),
 ];
 

@@ -849,12 +849,12 @@ bool::ok_or_else	assoc-fn	s		fn ok_or_else<E, F: FnOnce() -> E>(self, f: F) -> R
 bool::then	assoc-fn	s		fn then<T, F: FnOnce() -> T>(self, f: F) -> Option<T>
 bool::then_some	assoc-fn	s		fn then_some<T>(self, t: T) -> Option<T>
 char	primitive	s	
-char::MAX	assoc-const	s	
-char::MAX_LEN_UTF16	assoc-const	s	
-char::MAX_LEN_UTF8	assoc-const	s	
-char::MIN	assoc-const	s	
-char::REPLACEMENT_CHARACTER	assoc-const	s	
-char::UNICODE_VERSION	assoc-const	s	
+char::MAX	assoc-const	s		const MAX: char
+char::MAX_LEN_UTF16	assoc-const	s		const MAX_LEN_UTF16: usize
+char::MAX_LEN_UTF8	assoc-const	s		const MAX_LEN_UTF8: usize
+char::MIN	assoc-const	s		const MIN: char
+char::REPLACEMENT_CHARACTER	assoc-const	s		const REPLACEMENT_CHARACTER: char
+char::UNICODE_VERSION	assoc-const	s		const UNICODE_VERSION: (u8, u8, u8)
 char::as_ascii	assoc-fn	u ascii_char 110998 -		fn as_ascii(&self) -> Option<std::ascii::Char>
 char::as_ascii_unchecked	assoc-fn	u ascii_char 110998 -		fn as_ascii_unchecked(&self) -> std::ascii::Char
 char::case	assoc-fn	u titlecase 153892 -		fn case(self) -> Option<std::char::CharCase>
@@ -1051,8 +1051,8 @@ core::ascii::ascii_char::AsciiChar::LessThanSign	variant	u ascii_char_variants 1
 core::ascii::ascii_char::AsciiChar::LineFeed	variant	u ascii_char_variants 110998 -	
 core::ascii::ascii_char::AsciiChar::LineTabulation	variant	u ascii_char_variants 110998 -	
 core::ascii::ascii_char::AsciiChar::LowLine	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::MAX	assoc-const	u ascii_char 110998 -	
-core::ascii::ascii_char::AsciiChar::MIN	assoc-const	u ascii_char 110998 -	
+core::ascii::ascii_char::AsciiChar::MAX	assoc-const	u ascii_char 110998 -		const MAX: std::ascii::Char
+core::ascii::ascii_char::AsciiChar::MIN	assoc-const	u ascii_char 110998 -		const MIN: std::ascii::Char
 core::ascii::ascii_char::AsciiChar::NegativeAcknowledge	variant	u ascii_char_variants 110998 -	
 core::ascii::ascii_char::AsciiChar::Null	variant	u ascii_char_variants 110998 -	
 core::ascii::ascii_char::AsciiChar::NumberSign	variant	u ascii_char_variants 110998 -	
@@ -1249,14 +1249,14 @@ core::char::CharCase::Upper	variant	u titlecase 153892 -
 core::char::EscapeDebug	struct	s	
 core::char::EscapeDefault	struct	s	
 core::char::EscapeUnicode	struct	s	
-core::char::MAX	const	s	
-core::char::REPLACEMENT_CHARACTER	const	s	
+core::char::MAX	const	s		const MAX: char
+core::char::REPLACEMENT_CHARACTER	const	s		const REPLACEMENT_CHARACTER: char
 core::char::ToCasefold	struct	u casefold 154742 -	
 core::char::ToLowercase	struct	s	
 core::char::ToTitlecase	struct	u titlecase 153892 -	
 core::char::ToUppercase	struct	s	
 core::char::TryFromCharError	struct	s	
-core::char::UNICODE_VERSION	const	s	
+core::char::UNICODE_VERSION	const	s		const UNICODE_VERSION: (u8, u8, u8)
 core::char::convert::CharTryFromError	struct	s	
 core::char::convert::ParseCharError	struct	s	
 core::char::decode::DecodeUtf16	struct	s	I
@@ -1369,101 +1369,101 @@ core::error::Request::would_be_satisfied_by_value_of	assoc-fn	u error_generic_me
 core::error::Source	struct	u error_iter 58520 -	'a
 core::error::request_ref	fn	u error_generic_member_access 99301 -	T	fn request_ref<'a, T: ?Sized, impl Error + ?Sized: std::error::Error + ?Sized>(err: &'a impl Error + ?Sized) -> Option<&'a T>
 core::error::request_value	fn	u error_generic_member_access 99301 -	T	fn request_value<'a, T, impl Error + ?Sized: std::error::Error + ?Sized>(err: &'a impl Error + ?Sized) -> Option<T>
-core::f128::consts::E	const	u f128 116909 -	
-core::f128::consts::EULER_GAMMA	const	u f128 116909 -	
-core::f128::consts::FRAC_1_PI	const	u f128 116909 -	
-core::f128::consts::FRAC_1_SQRT_2	const	u f128 116909 -	
-core::f128::consts::FRAC_1_SQRT_2PI	const	u f128 116909 -	
-core::f128::consts::FRAC_1_SQRT_3	const	u f128 116909 -	
-core::f128::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -	
-core::f128::consts::FRAC_1_SQRT_PI	const	u f128 116909 -	
-core::f128::consts::FRAC_2_PI	const	u f128 116909 -	
-core::f128::consts::FRAC_2_SQRT_PI	const	u f128 116909 -	
-core::f128::consts::FRAC_PI_2	const	u f128 116909 -	
-core::f128::consts::FRAC_PI_3	const	u f128 116909 -	
-core::f128::consts::FRAC_PI_4	const	u f128 116909 -	
-core::f128::consts::FRAC_PI_6	const	u f128 116909 -	
-core::f128::consts::FRAC_PI_8	const	u f128 116909 -	
-core::f128::consts::GOLDEN_RATIO	const	u f128 116909 -	
-core::f128::consts::LN_10	const	u f128 116909 -	
-core::f128::consts::LN_2	const	u f128 116909 -	
-core::f128::consts::LOG10_2	const	u f128 116909 -	
-core::f128::consts::LOG10_E	const	u f128 116909 -	
-core::f128::consts::LOG2_10	const	u f128 116909 -	
-core::f128::consts::LOG2_E	const	u f128 116909 -	
-core::f128::consts::PI	const	u f128 116909 -	
-core::f128::consts::SQRT_2	const	u f128 116909 -	
-core::f128::consts::SQRT_3	const	u f128 116909 -	
-core::f128::consts::SQRT_5	const	u more_float_constants 146939 -	
-core::f128::consts::TAU	const	u f128 116909 -	
-core::f16::consts::E	const	u f16 116909 -	
-core::f16::consts::EULER_GAMMA	const	u f16 116909 -	
-core::f16::consts::FRAC_1_PI	const	u f16 116909 -	
-core::f16::consts::FRAC_1_SQRT_2	const	u f16 116909 -	
-core::f16::consts::FRAC_1_SQRT_2PI	const	u f16 116909 -	
-core::f16::consts::FRAC_1_SQRT_3	const	u f16 116909 -	
-core::f16::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -	
-core::f16::consts::FRAC_1_SQRT_PI	const	u f16 116909 -	
-core::f16::consts::FRAC_2_PI	const	u f16 116909 -	
-core::f16::consts::FRAC_2_SQRT_PI	const	u f16 116909 -	
-core::f16::consts::FRAC_PI_2	const	u f16 116909 -	
-core::f16::consts::FRAC_PI_3	const	u f16 116909 -	
-core::f16::consts::FRAC_PI_4	const	u f16 116909 -	
-core::f16::consts::FRAC_PI_6	const	u f16 116909 -	
-core::f16::consts::FRAC_PI_8	const	u f16 116909 -	
-core::f16::consts::GOLDEN_RATIO	const	u f16 116909 -	
-core::f16::consts::LN_10	const	u f16 116909 -	
-core::f16::consts::LN_2	const	u f16 116909 -	
-core::f16::consts::LOG10_2	const	u f16 116909 -	
-core::f16::consts::LOG10_E	const	u f16 116909 -	
-core::f16::consts::LOG2_10	const	u f16 116909 -	
-core::f16::consts::LOG2_E	const	u f16 116909 -	
-core::f16::consts::PI	const	u f16 116909 -	
-core::f16::consts::SQRT_2	const	u f16 116909 -	
-core::f16::consts::SQRT_3	const	u f16 116909 -	
-core::f16::consts::SQRT_5	const	u more_float_constants 146939 -	
-core::f16::consts::TAU	const	u f16 116909 -	
-core::f32::DIGITS	const	s	
-core::f32::EPSILON	const	s	
-core::f32::INFINITY	const	s	
-core::f32::MANTISSA_DIGITS	const	s	
-core::f32::MAX	const	s	
-core::f32::MAX_10_EXP	const	s	
-core::f32::MAX_EXP	const	s	
-core::f32::MIN	const	s	
-core::f32::MIN_10_EXP	const	s	
-core::f32::MIN_EXP	const	s	
-core::f32::MIN_POSITIVE	const	s	
-core::f32::NAN	const	s	
-core::f32::NEG_INFINITY	const	s	
-core::f32::RADIX	const	s	
-core::f32::consts::E	const	s	
-core::f32::consts::EULER_GAMMA	const	s	
-core::f32::consts::FRAC_1_PI	const	s	
-core::f32::consts::FRAC_1_SQRT_2	const	s	
-core::f32::consts::FRAC_1_SQRT_2PI	const	u more_float_constants 146939 -	
-core::f32::consts::FRAC_1_SQRT_3	const	u more_float_constants 146939 -	
-core::f32::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -	
-core::f32::consts::FRAC_1_SQRT_PI	const	u more_float_constants 146939 -	
-core::f32::consts::FRAC_2_PI	const	s	
-core::f32::consts::FRAC_2_SQRT_PI	const	s	
-core::f32::consts::FRAC_PI_2	const	s	
-core::f32::consts::FRAC_PI_3	const	s	
-core::f32::consts::FRAC_PI_4	const	s	
-core::f32::consts::FRAC_PI_6	const	s	
-core::f32::consts::FRAC_PI_8	const	s	
-core::f32::consts::GOLDEN_RATIO	const	s	
-core::f32::consts::LN_10	const	s	
-core::f32::consts::LN_2	const	s	
-core::f32::consts::LOG10_2	const	s	
-core::f32::consts::LOG10_E	const	s	
-core::f32::consts::LOG2_10	const	s	
-core::f32::consts::LOG2_E	const	s	
-core::f32::consts::PI	const	s	
-core::f32::consts::SQRT_2	const	s	
-core::f32::consts::SQRT_3	const	u more_float_constants 146939 -	
-core::f32::consts::SQRT_5	const	u more_float_constants 146939 -	
-core::f32::consts::TAU	const	s	
+core::f128::consts::E	const	u f128 116909 -		const E: f128
+core::f128::consts::EULER_GAMMA	const	u f128 116909 -		const EULER_GAMMA: f128
+core::f128::consts::FRAC_1_PI	const	u f128 116909 -		const FRAC_1_PI: f128
+core::f128::consts::FRAC_1_SQRT_2	const	u f128 116909 -		const FRAC_1_SQRT_2: f128
+core::f128::consts::FRAC_1_SQRT_2PI	const	u f128 116909 -		const FRAC_1_SQRT_2PI: f128
+core::f128::consts::FRAC_1_SQRT_3	const	u f128 116909 -		const FRAC_1_SQRT_3: f128
+core::f128::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -		const FRAC_1_SQRT_5: f128
+core::f128::consts::FRAC_1_SQRT_PI	const	u f128 116909 -		const FRAC_1_SQRT_PI: f128
+core::f128::consts::FRAC_2_PI	const	u f128 116909 -		const FRAC_2_PI: f128
+core::f128::consts::FRAC_2_SQRT_PI	const	u f128 116909 -		const FRAC_2_SQRT_PI: f128
+core::f128::consts::FRAC_PI_2	const	u f128 116909 -		const FRAC_PI_2: f128
+core::f128::consts::FRAC_PI_3	const	u f128 116909 -		const FRAC_PI_3: f128
+core::f128::consts::FRAC_PI_4	const	u f128 116909 -		const FRAC_PI_4: f128
+core::f128::consts::FRAC_PI_6	const	u f128 116909 -		const FRAC_PI_6: f128
+core::f128::consts::FRAC_PI_8	const	u f128 116909 -		const FRAC_PI_8: f128
+core::f128::consts::GOLDEN_RATIO	const	u f128 116909 -		const GOLDEN_RATIO: f128
+core::f128::consts::LN_10	const	u f128 116909 -		const LN_10: f128
+core::f128::consts::LN_2	const	u f128 116909 -		const LN_2: f128
+core::f128::consts::LOG10_2	const	u f128 116909 -		const LOG10_2: f128
+core::f128::consts::LOG10_E	const	u f128 116909 -		const LOG10_E: f128
+core::f128::consts::LOG2_10	const	u f128 116909 -		const LOG2_10: f128
+core::f128::consts::LOG2_E	const	u f128 116909 -		const LOG2_E: f128
+core::f128::consts::PI	const	u f128 116909 -		const PI: f128
+core::f128::consts::SQRT_2	const	u f128 116909 -		const SQRT_2: f128
+core::f128::consts::SQRT_3	const	u f128 116909 -		const SQRT_3: f128
+core::f128::consts::SQRT_5	const	u more_float_constants 146939 -		const SQRT_5: f128
+core::f128::consts::TAU	const	u f128 116909 -		const TAU: f128
+core::f16::consts::E	const	u f16 116909 -		const E: f16
+core::f16::consts::EULER_GAMMA	const	u f16 116909 -		const EULER_GAMMA: f16
+core::f16::consts::FRAC_1_PI	const	u f16 116909 -		const FRAC_1_PI: f16
+core::f16::consts::FRAC_1_SQRT_2	const	u f16 116909 -		const FRAC_1_SQRT_2: f16
+core::f16::consts::FRAC_1_SQRT_2PI	const	u f16 116909 -		const FRAC_1_SQRT_2PI: f16
+core::f16::consts::FRAC_1_SQRT_3	const	u f16 116909 -		const FRAC_1_SQRT_3: f16
+core::f16::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -		const FRAC_1_SQRT_5: f16
+core::f16::consts::FRAC_1_SQRT_PI	const	u f16 116909 -		const FRAC_1_SQRT_PI: f16
+core::f16::consts::FRAC_2_PI	const	u f16 116909 -		const FRAC_2_PI: f16
+core::f16::consts::FRAC_2_SQRT_PI	const	u f16 116909 -		const FRAC_2_SQRT_PI: f16
+core::f16::consts::FRAC_PI_2	const	u f16 116909 -		const FRAC_PI_2: f16
+core::f16::consts::FRAC_PI_3	const	u f16 116909 -		const FRAC_PI_3: f16
+core::f16::consts::FRAC_PI_4	const	u f16 116909 -		const FRAC_PI_4: f16
+core::f16::consts::FRAC_PI_6	const	u f16 116909 -		const FRAC_PI_6: f16
+core::f16::consts::FRAC_PI_8	const	u f16 116909 -		const FRAC_PI_8: f16
+core::f16::consts::GOLDEN_RATIO	const	u f16 116909 -		const GOLDEN_RATIO: f16
+core::f16::consts::LN_10	const	u f16 116909 -		const LN_10: f16
+core::f16::consts::LN_2	const	u f16 116909 -		const LN_2: f16
+core::f16::consts::LOG10_2	const	u f16 116909 -		const LOG10_2: f16
+core::f16::consts::LOG10_E	const	u f16 116909 -		const LOG10_E: f16
+core::f16::consts::LOG2_10	const	u f16 116909 -		const LOG2_10: f16
+core::f16::consts::LOG2_E	const	u f16 116909 -		const LOG2_E: f16
+core::f16::consts::PI	const	u f16 116909 -		const PI: f16
+core::f16::consts::SQRT_2	const	u f16 116909 -		const SQRT_2: f16
+core::f16::consts::SQRT_3	const	u f16 116909 -		const SQRT_3: f16
+core::f16::consts::SQRT_5	const	u more_float_constants 146939 -		const SQRT_5: f16
+core::f16::consts::TAU	const	u f16 116909 -		const TAU: f16
+core::f32::DIGITS	const	s		const DIGITS: u32
+core::f32::EPSILON	const	s		const EPSILON: f32
+core::f32::INFINITY	const	s		const INFINITY: f32
+core::f32::MANTISSA_DIGITS	const	s		const MANTISSA_DIGITS: u32
+core::f32::MAX	const	s		const MAX: f32
+core::f32::MAX_10_EXP	const	s		const MAX_10_EXP: i32
+core::f32::MAX_EXP	const	s		const MAX_EXP: i32
+core::f32::MIN	const	s		const MIN: f32
+core::f32::MIN_10_EXP	const	s		const MIN_10_EXP: i32
+core::f32::MIN_EXP	const	s		const MIN_EXP: i32
+core::f32::MIN_POSITIVE	const	s		const MIN_POSITIVE: f32
+core::f32::NAN	const	s		const NAN: f32
+core::f32::NEG_INFINITY	const	s		const NEG_INFINITY: f32
+core::f32::RADIX	const	s		const RADIX: u32
+core::f32::consts::E	const	s		const E: f32
+core::f32::consts::EULER_GAMMA	const	s		const EULER_GAMMA: f32
+core::f32::consts::FRAC_1_PI	const	s		const FRAC_1_PI: f32
+core::f32::consts::FRAC_1_SQRT_2	const	s		const FRAC_1_SQRT_2: f32
+core::f32::consts::FRAC_1_SQRT_2PI	const	u more_float_constants 146939 -		const FRAC_1_SQRT_2PI: f32
+core::f32::consts::FRAC_1_SQRT_3	const	u more_float_constants 146939 -		const FRAC_1_SQRT_3: f32
+core::f32::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -		const FRAC_1_SQRT_5: f32
+core::f32::consts::FRAC_1_SQRT_PI	const	u more_float_constants 146939 -		const FRAC_1_SQRT_PI: f32
+core::f32::consts::FRAC_2_PI	const	s		const FRAC_2_PI: f32
+core::f32::consts::FRAC_2_SQRT_PI	const	s		const FRAC_2_SQRT_PI: f32
+core::f32::consts::FRAC_PI_2	const	s		const FRAC_PI_2: f32
+core::f32::consts::FRAC_PI_3	const	s		const FRAC_PI_3: f32
+core::f32::consts::FRAC_PI_4	const	s		const FRAC_PI_4: f32
+core::f32::consts::FRAC_PI_6	const	s		const FRAC_PI_6: f32
+core::f32::consts::FRAC_PI_8	const	s		const FRAC_PI_8: f32
+core::f32::consts::GOLDEN_RATIO	const	s		const GOLDEN_RATIO: f32
+core::f32::consts::LN_10	const	s		const LN_10: f32
+core::f32::consts::LN_2	const	s		const LN_2: f32
+core::f32::consts::LOG10_2	const	s		const LOG10_2: f32
+core::f32::consts::LOG10_E	const	s		const LOG10_E: f32
+core::f32::consts::LOG2_10	const	s		const LOG2_10: f32
+core::f32::consts::LOG2_E	const	s		const LOG2_E: f32
+core::f32::consts::PI	const	s		const PI: f32
+core::f32::consts::SQRT_2	const	s		const SQRT_2: f32
+core::f32::consts::SQRT_3	const	u more_float_constants 146939 -		const SQRT_3: f32
+core::f32::consts::SQRT_5	const	u more_float_constants 146939 -		const SQRT_5: f32
+core::f32::consts::TAU	const	s		const TAU: f32
 core::f32::math::abs_sub	fn	s		fn abs_sub(x: f32, other: f32) -> f32
 core::f32::math::cbrt	fn	u core_float_math 137578 -		fn cbrt(x: f32) -> f32
 core::f32::math::ceil	fn	u core_float_math 137578 -		fn ceil(x: f32) -> f32
@@ -1477,47 +1477,47 @@ core::f32::math::round	fn	u core_float_math 137578 -		fn round(x: f32) -> f32
 core::f32::math::round_ties_even	fn	u core_float_math 137578 -		fn round_ties_even(x: f32) -> f32
 core::f32::math::sqrt	fn	u core_float_math 137578 -		fn sqrt(x: f32) -> f32
 core::f32::math::trunc	fn	u core_float_math 137578 -		fn trunc(x: f32) -> f32
-core::f64::DIGITS	const	s	
-core::f64::EPSILON	const	s	
-core::f64::INFINITY	const	s	
-core::f64::MANTISSA_DIGITS	const	s	
-core::f64::MAX	const	s	
-core::f64::MAX_10_EXP	const	s	
-core::f64::MAX_EXP	const	s	
-core::f64::MIN	const	s	
-core::f64::MIN_10_EXP	const	s	
-core::f64::MIN_EXP	const	s	
-core::f64::MIN_POSITIVE	const	s	
-core::f64::NAN	const	s	
-core::f64::NEG_INFINITY	const	s	
-core::f64::RADIX	const	s	
-core::f64::consts::E	const	s	
-core::f64::consts::EULER_GAMMA	const	s	
-core::f64::consts::FRAC_1_PI	const	s	
-core::f64::consts::FRAC_1_SQRT_2	const	s	
-core::f64::consts::FRAC_1_SQRT_2PI	const	u more_float_constants 146939 -	
-core::f64::consts::FRAC_1_SQRT_3	const	u more_float_constants 146939 -	
-core::f64::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -	
-core::f64::consts::FRAC_1_SQRT_PI	const	u more_float_constants 146939 -	
-core::f64::consts::FRAC_2_PI	const	s	
-core::f64::consts::FRAC_2_SQRT_PI	const	s	
-core::f64::consts::FRAC_PI_2	const	s	
-core::f64::consts::FRAC_PI_3	const	s	
-core::f64::consts::FRAC_PI_4	const	s	
-core::f64::consts::FRAC_PI_6	const	s	
-core::f64::consts::FRAC_PI_8	const	s	
-core::f64::consts::GOLDEN_RATIO	const	s	
-core::f64::consts::LN_10	const	s	
-core::f64::consts::LN_2	const	s	
-core::f64::consts::LOG10_2	const	s	
-core::f64::consts::LOG10_E	const	s	
-core::f64::consts::LOG2_10	const	s	
-core::f64::consts::LOG2_E	const	s	
-core::f64::consts::PI	const	s	
-core::f64::consts::SQRT_2	const	s	
-core::f64::consts::SQRT_3	const	u more_float_constants 146939 -	
-core::f64::consts::SQRT_5	const	u more_float_constants 146939 -	
-core::f64::consts::TAU	const	s	
+core::f64::DIGITS	const	s		const DIGITS: u32
+core::f64::EPSILON	const	s		const EPSILON: f64
+core::f64::INFINITY	const	s		const INFINITY: f64
+core::f64::MANTISSA_DIGITS	const	s		const MANTISSA_DIGITS: u32
+core::f64::MAX	const	s		const MAX: f64
+core::f64::MAX_10_EXP	const	s		const MAX_10_EXP: i32
+core::f64::MAX_EXP	const	s		const MAX_EXP: i32
+core::f64::MIN	const	s		const MIN: f64
+core::f64::MIN_10_EXP	const	s		const MIN_10_EXP: i32
+core::f64::MIN_EXP	const	s		const MIN_EXP: i32
+core::f64::MIN_POSITIVE	const	s		const MIN_POSITIVE: f64
+core::f64::NAN	const	s		const NAN: f64
+core::f64::NEG_INFINITY	const	s		const NEG_INFINITY: f64
+core::f64::RADIX	const	s		const RADIX: u32
+core::f64::consts::E	const	s		const E: f64
+core::f64::consts::EULER_GAMMA	const	s		const EULER_GAMMA: f64
+core::f64::consts::FRAC_1_PI	const	s		const FRAC_1_PI: f64
+core::f64::consts::FRAC_1_SQRT_2	const	s		const FRAC_1_SQRT_2: f64
+core::f64::consts::FRAC_1_SQRT_2PI	const	u more_float_constants 146939 -		const FRAC_1_SQRT_2PI: f64
+core::f64::consts::FRAC_1_SQRT_3	const	u more_float_constants 146939 -		const FRAC_1_SQRT_3: f64
+core::f64::consts::FRAC_1_SQRT_5	const	u more_float_constants 146939 -		const FRAC_1_SQRT_5: f64
+core::f64::consts::FRAC_1_SQRT_PI	const	u more_float_constants 146939 -		const FRAC_1_SQRT_PI: f64
+core::f64::consts::FRAC_2_PI	const	s		const FRAC_2_PI: f64
+core::f64::consts::FRAC_2_SQRT_PI	const	s		const FRAC_2_SQRT_PI: f64
+core::f64::consts::FRAC_PI_2	const	s		const FRAC_PI_2: f64
+core::f64::consts::FRAC_PI_3	const	s		const FRAC_PI_3: f64
+core::f64::consts::FRAC_PI_4	const	s		const FRAC_PI_4: f64
+core::f64::consts::FRAC_PI_6	const	s		const FRAC_PI_6: f64
+core::f64::consts::FRAC_PI_8	const	s		const FRAC_PI_8: f64
+core::f64::consts::GOLDEN_RATIO	const	s		const GOLDEN_RATIO: f64
+core::f64::consts::LN_10	const	s		const LN_10: f64
+core::f64::consts::LN_2	const	s		const LN_2: f64
+core::f64::consts::LOG10_2	const	s		const LOG10_2: f64
+core::f64::consts::LOG10_E	const	s		const LOG10_E: f64
+core::f64::consts::LOG2_10	const	s		const LOG2_10: f64
+core::f64::consts::LOG2_E	const	s		const LOG2_E: f64
+core::f64::consts::PI	const	s		const PI: f64
+core::f64::consts::SQRT_2	const	s		const SQRT_2: f64
+core::f64::consts::SQRT_3	const	u more_float_constants 146939 -		const SQRT_3: f64
+core::f64::consts::SQRT_5	const	u more_float_constants 146939 -		const SQRT_5: f64
+core::f64::consts::TAU	const	s		const TAU: f64
 core::f64::math::abs_sub	fn	u core_float_math 137578 -		fn abs_sub(x: f64, other: f64) -> f64
 core::f64::math::cbrt	fn	u core_float_math 137578 -		fn cbrt(x: f64) -> f64
 core::f64::math::ceil	fn	u core_float_math 137578 -		fn ceil(x: f64) -> f64
@@ -2130,13 +2130,13 @@ core::io::error::CustomOwner	struct	u core_io_internals - exposed only for libst
 core::io::error::CustomOwner::from_raw	assoc-fn	u core_io_internals - exposed only for libstd		fn from_raw(custom: std::ptr::NonNull<core::io::Custom>) -> core::io::CustomOwner
 core::io::error::CustomOwner::into_raw	assoc-fn	u core_io_internals - exposed only for libstd		fn into_raw(self) -> std::ptr::NonNull<core::io::Custom>
 core::io::error::Error	struct	s	
-core::io::error::Error::INVALID_UTF8	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::NO_ADDRESSES	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::READ_EXACT_EOF	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::UNKNOWN_THREAD_COUNT	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::UNSUPPORTED_PLATFORM	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::WRITE_ALL_EOF	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::ZERO_TIMEOUT	assoc-const	u core_io_internals - exposed only for libstd	
+core::io::error::Error::INVALID_UTF8	assoc-const	u core_io_internals - exposed only for libstd		const INVALID_UTF8: std::io::Error
+core::io::error::Error::NO_ADDRESSES	assoc-const	u core_io_internals - exposed only for libstd		const NO_ADDRESSES: std::io::Error
+core::io::error::Error::READ_EXACT_EOF	assoc-const	u core_io_internals - exposed only for libstd		const READ_EXACT_EOF: std::io::Error
+core::io::error::Error::UNKNOWN_THREAD_COUNT	assoc-const	u core_io_internals - exposed only for libstd		const UNKNOWN_THREAD_COUNT: std::io::Error
+core::io::error::Error::UNSUPPORTED_PLATFORM	assoc-const	u core_io_internals - exposed only for libstd		const UNSUPPORTED_PLATFORM: std::io::Error
+core::io::error::Error::WRITE_ALL_EOF	assoc-const	u core_io_internals - exposed only for libstd		const WRITE_ALL_EOF: std::io::Error
+core::io::error::Error::ZERO_TIMEOUT	assoc-const	u core_io_internals - exposed only for libstd		const ZERO_TIMEOUT: std::io::Error
 core::io::error::Error::downcast	assoc-fn	s		fn downcast<E: std::error::Error + Send + Sync>(self) -> Result<E, std::io::Error>
 core::io::error::Error::from_custom_owner	assoc-fn	u core_io_internals - exposed only for libstd		fn from_custom_owner(custom: core::io::CustomOwner) -> std::io::Error
 core::io::error::Error::from_raw_os_error	assoc-fn	s		fn from_raw_os_error(code: i32) -> std::io::Error
@@ -2442,30 +2442,30 @@ core::iter::traits::marker::InPlaceIterable::MERGE_BY	assoc-const	u inplace_iter
 core::iter::traits::marker::TrustedFused	trait	u trusted_fused - -		
 core::iter::traits::marker::TrustedLen	trait	u trusted_len 37572 -		Iterator
 core::iter::traits::marker::TrustedStep	trait	u trusted_step 85731 -		Copy
-core::legacy_int_modules::i128::MAX	const	s	
-core::legacy_int_modules::i128::MIN	const	s	
-core::legacy_int_modules::i16::MAX	const	s	
-core::legacy_int_modules::i16::MIN	const	s	
-core::legacy_int_modules::i32::MAX	const	s	
-core::legacy_int_modules::i32::MIN	const	s	
-core::legacy_int_modules::i64::MAX	const	s	
-core::legacy_int_modules::i64::MIN	const	s	
-core::legacy_int_modules::i8::MAX	const	s	
-core::legacy_int_modules::i8::MIN	const	s	
-core::legacy_int_modules::isize::MAX	const	s	
-core::legacy_int_modules::isize::MIN	const	s	
-core::legacy_int_modules::u128::MAX	const	s	
-core::legacy_int_modules::u128::MIN	const	s	
-core::legacy_int_modules::u16::MAX	const	s	
-core::legacy_int_modules::u16::MIN	const	s	
-core::legacy_int_modules::u32::MAX	const	s	
-core::legacy_int_modules::u32::MIN	const	s	
-core::legacy_int_modules::u64::MAX	const	s	
-core::legacy_int_modules::u64::MIN	const	s	
-core::legacy_int_modules::u8::MAX	const	s	
-core::legacy_int_modules::u8::MIN	const	s	
-core::legacy_int_modules::usize::MAX	const	s	
-core::legacy_int_modules::usize::MIN	const	s	
+core::legacy_int_modules::i128::MAX	const	s		const MAX: i128
+core::legacy_int_modules::i128::MIN	const	s		const MIN: i128
+core::legacy_int_modules::i16::MAX	const	s		const MAX: i16
+core::legacy_int_modules::i16::MIN	const	s		const MIN: i16
+core::legacy_int_modules::i32::MAX	const	s		const MAX: i32
+core::legacy_int_modules::i32::MIN	const	s		const MIN: i32
+core::legacy_int_modules::i64::MAX	const	s		const MAX: i64
+core::legacy_int_modules::i64::MIN	const	s		const MIN: i64
+core::legacy_int_modules::i8::MAX	const	s		const MAX: i8
+core::legacy_int_modules::i8::MIN	const	s		const MIN: i8
+core::legacy_int_modules::isize::MAX	const	s		const MAX: isize
+core::legacy_int_modules::isize::MIN	const	s		const MIN: isize
+core::legacy_int_modules::u128::MAX	const	s		const MAX: u128
+core::legacy_int_modules::u128::MIN	const	s		const MIN: u128
+core::legacy_int_modules::u16::MAX	const	s		const MAX: u16
+core::legacy_int_modules::u16::MIN	const	s		const MIN: u16
+core::legacy_int_modules::u32::MAX	const	s		const MAX: u32
+core::legacy_int_modules::u32::MIN	const	s		const MIN: u32
+core::legacy_int_modules::u64::MAX	const	s		const MAX: u64
+core::legacy_int_modules::u64::MIN	const	s		const MIN: u64
+core::legacy_int_modules::u8::MAX	const	s		const MAX: u8
+core::legacy_int_modules::u8::MIN	const	s		const MIN: u8
+core::legacy_int_modules::usize::MAX	const	s		const MAX: usize
+core::legacy_int_modules::usize::MIN	const	s		const MIN: usize
 core::macros::assert_eq	macro	s	
 core::macros::assert_matches	macro	s	
 core::macros::assert_ne	macro	s	
@@ -2576,7 +2576,7 @@ core::mem::align_of	fn	s	T	fn align_of<T>() -> usize
 core::mem::align_of_val	fn	s	T	fn align_of_val<T: ?Sized>(val: &T) -> usize
 core::mem::align_of_val_raw	fn	u layout_for_ptr 69835 -	T	fn align_of_val_raw<T: ?Sized>(val: *const T) -> usize
 core::mem::alignment::Alignment	struct	u ptr_alignment_type 102070 -	
-core::mem::alignment::Alignment::MIN	assoc-const	u ptr_alignment_type 102070 -	
+core::mem::alignment::Alignment::MIN	assoc-const	u ptr_alignment_type 102070 -		const MIN: std::mem::Alignment
 core::mem::alignment::Alignment::as_nonzero	assoc-fn	u ptr_alignment_type 102070 -		fn as_nonzero(self) -> std::num::NonZero<usize>
 core::mem::alignment::Alignment::as_nonzero_usize	assoc-fn	u ptr_alignment_type 102070 -		fn as_nonzero_usize(self) -> std::num::NonZero<usize>
 core::mem::alignment::Alignment::as_usize	assoc-fn	u ptr_alignment_type 102070 -		fn as_usize(self) -> usize
@@ -2633,11 +2633,11 @@ core::mem::size_of_val_raw	fn	u layout_for_ptr 69835 -	T	fn size_of_val_raw<T: ?
 core::mem::swap	fn	s	T	fn swap<T>(x: &mut T, y: &mut T)
 core::mem::take	fn	s	T	fn take<T: Default>(dest: &mut T) -> T
 core::mem::transmutability::Assume	struct	u transmutability 99571 -	
-core::mem::transmutability::Assume::ALIGNMENT	assoc-const	u transmutability 99571 -	
-core::mem::transmutability::Assume::LIFETIMES	assoc-const	u transmutability 99571 -	
-core::mem::transmutability::Assume::NOTHING	assoc-const	u transmutability 99571 -	
-core::mem::transmutability::Assume::SAFETY	assoc-const	u transmutability 99571 -	
-core::mem::transmutability::Assume::VALIDITY	assoc-const	u transmutability 99571 -	
+core::mem::transmutability::Assume::ALIGNMENT	assoc-const	u transmutability 99571 -		const ALIGNMENT: std::mem::Assume
+core::mem::transmutability::Assume::LIFETIMES	assoc-const	u transmutability 99571 -		const LIFETIMES: std::mem::Assume
+core::mem::transmutability::Assume::NOTHING	assoc-const	u transmutability 99571 -		const NOTHING: std::mem::Assume
+core::mem::transmutability::Assume::SAFETY	assoc-const	u transmutability 99571 -		const SAFETY: std::mem::Assume
+core::mem::transmutability::Assume::VALIDITY	assoc-const	u transmutability 99571 -		const VALIDITY: std::mem::Assume
 core::mem::transmutability::Assume::and	assoc-fn	u transmutability 99571 -		fn and(self, other_assumptions: std::mem::Assume) -> std::mem::Assume
 core::mem::transmutability::Assume::but_not	assoc-fn	u transmutability 99571 -		fn but_not(self, other_assumptions: std::mem::Assume) -> std::mem::Assume
 core::mem::transmutability::TransmuteFrom	trait	u transmutability 99571 -	Src const:ASSUME=_	
@@ -2717,10 +2717,10 @@ core::net::ip_addr::IpAddr::is_unspecified	assoc-fn	s		fn is_unspecified(&self) 
 core::net::ip_addr::IpAddr::parse_ascii	assoc-fn	u addr_parse_ascii 101035 -		fn parse_ascii(b: &[u8]) -> Result<std::net::IpAddr, std::net::AddrParseError>
 core::net::ip_addr::IpAddr::to_canonical	assoc-fn	s		fn to_canonical(&self) -> std::net::IpAddr
 core::net::ip_addr::Ipv4Addr	struct	s	
-core::net::ip_addr::Ipv4Addr::BITS	assoc-const	s	
-core::net::ip_addr::Ipv4Addr::BROADCAST	assoc-const	s	
-core::net::ip_addr::Ipv4Addr::LOCALHOST	assoc-const	s	
-core::net::ip_addr::Ipv4Addr::UNSPECIFIED	assoc-const	s	
+core::net::ip_addr::Ipv4Addr::BITS	assoc-const	s		const BITS: u32
+core::net::ip_addr::Ipv4Addr::BROADCAST	assoc-const	s		const BROADCAST: std::net::Ipv4Addr
+core::net::ip_addr::Ipv4Addr::LOCALHOST	assoc-const	s		const LOCALHOST: std::net::Ipv4Addr
+core::net::ip_addr::Ipv4Addr::UNSPECIFIED	assoc-const	s		const UNSPECIFIED: std::net::Ipv4Addr
 core::net::ip_addr::Ipv4Addr::as_octets	assoc-fn	u ip_as_octets 137259 -		fn as_octets(&self) -> &[u8; 4]
 core::net::ip_addr::Ipv4Addr::from_bits	assoc-fn	s		fn from_bits(bits: u32) -> std::net::Ipv4Addr
 core::net::ip_addr::Ipv4Addr::from_octets	assoc-fn	s		fn from_octets(octets: [u8; 4]) -> std::net::Ipv4Addr
@@ -2742,9 +2742,9 @@ core::net::ip_addr::Ipv4Addr::to_bits	assoc-fn	s		fn to_bits(self) -> u32
 core::net::ip_addr::Ipv4Addr::to_ipv6_compatible	assoc-fn	s		fn to_ipv6_compatible(&self) -> std::net::Ipv6Addr
 core::net::ip_addr::Ipv4Addr::to_ipv6_mapped	assoc-fn	s		fn to_ipv6_mapped(&self) -> std::net::Ipv6Addr
 core::net::ip_addr::Ipv6Addr	struct	s	
-core::net::ip_addr::Ipv6Addr::BITS	assoc-const	s	
-core::net::ip_addr::Ipv6Addr::LOCALHOST	assoc-const	s	
-core::net::ip_addr::Ipv6Addr::UNSPECIFIED	assoc-const	s	
+core::net::ip_addr::Ipv6Addr::BITS	assoc-const	s		const BITS: u32
+core::net::ip_addr::Ipv6Addr::LOCALHOST	assoc-const	s		const LOCALHOST: std::net::Ipv6Addr
+core::net::ip_addr::Ipv6Addr::UNSPECIFIED	assoc-const	s		const UNSPECIFIED: std::net::Ipv6Addr
 core::net::ip_addr::Ipv6Addr::as_octets	assoc-fn	u ip_as_octets 137259 -		fn as_octets(&self) -> &[u8; 16]
 core::net::ip_addr::Ipv6Addr::from_bits	assoc-fn	s		fn from_bits(bits: u128) -> std::net::Ipv6Addr
 core::net::ip_addr::Ipv6Addr::from_octets	assoc-fn	s		fn from_octets(octets: [u8; 16]) -> std::net::Ipv6Addr
@@ -2880,7 +2880,7 @@ core::num::imp::dec2flt::dec2flt	fn	u dec2flt - internal routines only exposed f
 core::num::imp::dec2flt::decimal::Decimal	struct	u dec2flt - internal routines only exposed for testing	
 core::num::imp::dec2flt::decimal::Decimal::try_fast_path	assoc-fn	u dec2flt - internal routines only exposed for testing		fn try_fast_path<F>(&self) -> Option<F>
 core::num::imp::dec2flt::decimal_seq::DecimalSeq	struct	u dec2flt - internal routines only exposed for testing	
-core::num::imp::dec2flt::decimal_seq::DecimalSeq::MAX_DIGITS	assoc-const	u dec2flt - internal routines only exposed for testing	
+core::num::imp::dec2flt::decimal_seq::DecimalSeq::MAX_DIGITS	assoc-const	u dec2flt - internal routines only exposed for testing		const MAX_DIGITS: usize
 core::num::imp::dec2flt::decimal_seq::DecimalSeq::trim	assoc-fn	u dec2flt - internal routines only exposed for testing		fn trim(&mut self)
 core::num::imp::dec2flt::decimal_seq::parse_decimal_seq	fn	u dec2flt - internal routines only exposed for testing		fn parse_decimal_seq(s: &[u8]) -> core::num::imp::dec2flt::decimal_seq::DecimalSeq
 core::num::imp::dec2flt::lemire::compute_float	fn	u dec2flt - internal routines only exposed for testing	F	fn compute_float<F>(q: i64, w: u64) -> core::num::imp::dec2flt::common::BiasedFp
@@ -2890,7 +2890,7 @@ core::num::imp::diy_float::Fp	struct	u core_private_diy_float - internal routine
 core::num::imp::diy_float::Fp::mul	assoc-fn	u core_private_diy_float - internal routines only exposed for testing		fn mul(self, other: core::num::imp::diy_float::Fp) -> core::num::imp::diy_float::Fp
 core::num::imp::diy_float::Fp::normalize	assoc-fn	u core_private_diy_float - internal routines only exposed for testing		fn normalize(self) -> core::num::imp::diy_float::Fp
 core::num::imp::diy_float::Fp::normalize_to	assoc-fn	u core_private_diy_float - internal routines only exposed for testing		fn normalize_to(self, e: i16) -> core::num::imp::diy_float::Fp
-core::num::imp::flt2dec::MAX_SIG_DIGITS	const	u flt2dec - internal routines only exposed for testing	
+core::num::imp::flt2dec::MAX_SIG_DIGITS	const	u flt2dec - internal routines only exposed for testing		const MAX_SIG_DIGITS: usize
 core::num::imp::flt2dec::Sign	enum	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::Sign::Minus	variant	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::Sign::MinusPlus	variant	u flt2dec - internal routines only exposed for testing	
@@ -2908,11 +2908,11 @@ core::num::imp::flt2dec::round_up	fn	u flt2dec - internal routines only exposed 
 core::num::imp::flt2dec::strategy::dragon::format_exact	fn	u flt2dec - internal routines only exposed for testing		fn format_exact<'a>(d: &core::num::imp::flt2dec::Decoded, buf: &'a mut [std::mem::MaybeUninit<u8>], limit: i16) -> (&'a [u8], i16)
 core::num::imp::flt2dec::strategy::dragon::format_shortest	fn	u flt2dec - internal routines only exposed for testing		fn format_shortest<'a>(d: &core::num::imp::flt2dec::Decoded, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> (&'a [u8], i16)
 core::num::imp::flt2dec::strategy::dragon::mul_pow10	fn	u flt2dec - internal routines only exposed for testing		fn mul_pow10(x: &mut core::num::imp::bignum::Big32x40, n: usize) -> &mut core::num::imp::bignum::Big32x40
-core::num::imp::flt2dec::strategy::grisu::ALPHA	const	u flt2dec - internal routines only exposed for testing	
+core::num::imp::flt2dec::strategy::grisu::ALPHA	const	u flt2dec - internal routines only exposed for testing		const ALPHA: i16
 core::num::imp::flt2dec::strategy::grisu::CACHED_POW10	static	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::strategy::grisu::CACHED_POW10_FIRST_E	const	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::strategy::grisu::CACHED_POW10_LAST_E	const	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::strategy::grisu::GAMMA	const	u flt2dec - internal routines only exposed for testing	
+core::num::imp::flt2dec::strategy::grisu::CACHED_POW10_FIRST_E	const	u flt2dec - internal routines only exposed for testing		const CACHED_POW10_FIRST_E: i16
+core::num::imp::flt2dec::strategy::grisu::CACHED_POW10_LAST_E	const	u flt2dec - internal routines only exposed for testing		const CACHED_POW10_LAST_E: i16
+core::num::imp::flt2dec::strategy::grisu::GAMMA	const	u flt2dec - internal routines only exposed for testing		const GAMMA: i16
 core::num::imp::flt2dec::strategy::grisu::cached_power	fn	u flt2dec - internal routines only exposed for testing		fn cached_power(alpha: i16, gamma: i16) -> (i16, core::num::imp::diy_float::Fp)
 core::num::imp::flt2dec::strategy::grisu::format_exact	fn	u flt2dec - internal routines only exposed for testing		fn format_exact<'a>(d: &core::num::imp::flt2dec::Decoded, buf: &'a mut [std::mem::MaybeUninit<u8>], limit: i16) -> (&'a [u8], i16)
 core::num::imp::flt2dec::strategy::grisu::format_exact_opt	fn	u flt2dec - internal routines only exposed for testing		fn format_exact_opt<'a>(d: &core::num::imp::flt2dec::Decoded, buf: &'a mut [std::mem::MaybeUninit<u8>], limit: i16) -> Option<(&'a [u8], i16)>
@@ -2961,7 +2961,7 @@ core::num::imp::traits::Int	trait	u num_internals - internal routines only expos
 core::num::imp::traits::Int::ONE	assoc-const	u num_internals - internal routines only exposed for testing	required	const ONE: Self
 core::num::imp::traits::Int::ZERO	assoc-const	u num_internals - internal routines only exposed for testing	required	const ZERO: Self
 core::num::niche_types::CodePointInner	struct	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
-core::num::niche_types::CodePointInner::ZERO	assoc-const	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
+core::num::niche_types::CodePointInner::ZERO	assoc-const	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		const ZERO: core::num::niche_types::CodePointInner
 core::num::niche_types::CodePointInner::as_inner	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn as_inner(self) -> u32
 core::num::niche_types::CodePointInner::new	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new(val: u32) -> Option<core::num::niche_types::CodePointInner>
 core::num::niche_types::CodePointInner::new_unchecked	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new_unchecked(val: u32) -> core::num::niche_types::CodePointInner
@@ -2974,7 +2974,7 @@ core::num::niche_types::I64NotAllOnes::as_inner	assoc-fn	u temporary_niche_types
 core::num::niche_types::I64NotAllOnes::new	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new(val: i64) -> Option<core::num::niche_types::I64NotAllOnes>
 core::num::niche_types::I64NotAllOnes::new_unchecked	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new_unchecked(val: i64) -> core::num::niche_types::I64NotAllOnes
 core::num::niche_types::Nanoseconds	struct	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
-core::num::niche_types::Nanoseconds::ZERO	assoc-const	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
+core::num::niche_types::Nanoseconds::ZERO	assoc-const	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		const ZERO: core::num::niche_types::Nanoseconds
 core::num::niche_types::Nanoseconds::as_inner	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn as_inner(self) -> u32
 core::num::niche_types::Nanoseconds::new	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new(val: u32) -> Option<core::num::niche_types::Nanoseconds>
 core::num::niche_types::Nanoseconds::new_unchecked	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new_unchecked(val: u32) -> core::num::niche_types::Nanoseconds
@@ -3046,9 +3046,9 @@ core::num::niche_types::UsizeNoHighBit::as_inner	assoc-fn	u temporary_niche_type
 core::num::niche_types::UsizeNoHighBit::new	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new(val: usize) -> Option<core::num::niche_types::UsizeNoHighBit>
 core::num::niche_types::UsizeNoHighBit::new_unchecked	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		fn new_unchecked(val: usize) -> core::num::niche_types::UsizeNoHighBit
 core::num::nonzero::NonZero	struct	s	T
-core::num::nonzero::NonZero::BITS	assoc-const	s	
-core::num::nonzero::NonZero::MAX	assoc-const	s	
-core::num::nonzero::NonZero::MIN	assoc-const	s	
+core::num::nonzero::NonZero::BITS	assoc-const	s		const BITS: u32
+core::num::nonzero::NonZero::MAX	assoc-const	s		const MAX: std::num::NonZero<u8>
+core::num::nonzero::NonZero::MIN	assoc-const	s		const MIN: std::num::NonZero<u8>
 core::num::nonzero::NonZero::abs	assoc-fn	s	std::num::NonZero<i8>	fn abs(self) -> std::num::NonZero<i8>
 core::num::nonzero::NonZero::bit_width	assoc-fn	s	std::num::NonZero<u8>	fn bit_width(self) -> std::num::NonZero<u32>
 core::num::nonzero::NonZero::cast_signed	assoc-fn	s	std::num::NonZero<u8>	fn cast_signed(self) -> std::num::NonZero<i8>
@@ -3117,9 +3117,9 @@ core::num::nonzero::NonZeroUsize	type	s		std::num::NonZero<usize>
 core::num::nonzero::ZeroablePrimitive	trait	u nonzero_internals - implementation detail which may disappear or be replaced at any time		Sized + Copy
 core::num::nonzero::ZeroablePrimitive::NonZeroInner	assoc-type	u nonzero_internals - implementation detail which may disappear or be replaced at any time	required	type NonZeroInner: Copy
 core::num::saturating::Saturating	struct	s	T
-core::num::saturating::Saturating::BITS	assoc-const	s	
-core::num::saturating::Saturating::MAX	assoc-const	s	
-core::num::saturating::Saturating::MIN	assoc-const	s	
+core::num::saturating::Saturating::BITS	assoc-const	s		const BITS: u32
+core::num::saturating::Saturating::MAX	assoc-const	s		const MAX: std::num::Saturating<usize>
+core::num::saturating::Saturating::MIN	assoc-const	s		const MIN: std::num::Saturating<usize>
 core::num::saturating::Saturating::abs	assoc-fn	s	std::num::Saturating<isize>	fn abs(self) -> std::num::Saturating<isize>
 core::num::saturating::Saturating::count_ones	assoc-fn	s	std::num::Saturating<usize>	fn count_ones(self) -> u32
 core::num::saturating::Saturating::count_zeros	assoc-fn	s	std::num::Saturating<usize>	fn count_zeros(self) -> u32
@@ -3139,9 +3139,9 @@ core::num::saturating::Saturating::to_be	assoc-fn	s	std::num::Saturating<usize>	
 core::num::saturating::Saturating::to_le	assoc-fn	s	std::num::Saturating<usize>	fn to_le(self) -> std::num::Saturating<usize>
 core::num::saturating::Saturating::trailing_zeros	assoc-fn	s	std::num::Saturating<usize>	fn trailing_zeros(self) -> u32
 core::num::wrapping::Wrapping	struct	s	T
-core::num::wrapping::Wrapping::BITS	assoc-const	u wrapping_int_impl 32463 -	
-core::num::wrapping::Wrapping::MAX	assoc-const	u wrapping_int_impl 32463 -	
-core::num::wrapping::Wrapping::MIN	assoc-const	u wrapping_int_impl 32463 -	
+core::num::wrapping::Wrapping::BITS	assoc-const	u wrapping_int_impl 32463 -		const BITS: u32
+core::num::wrapping::Wrapping::MAX	assoc-const	u wrapping_int_impl 32463 -		const MAX: std::num::Wrapping<i128>
+core::num::wrapping::Wrapping::MIN	assoc-const	u wrapping_int_impl 32463 -		const MIN: std::num::Wrapping<i128>
 core::num::wrapping::Wrapping::abs	assoc-fn	u wrapping_int_impl 32463 -	std::num::Wrapping<i128>	fn abs(self) -> std::num::Wrapping<i128>
 core::num::wrapping::Wrapping::count_ones	assoc-fn	u wrapping_int_impl 32463 -	std::num::Wrapping<i128>	fn count_ones(self) -> u32
 core::num::wrapping::Wrapping::count_zeros	assoc-fn	u wrapping_int_impl 32463 -	std::num::Wrapping<i128>	fn count_zeros(self) -> u32
@@ -3815,9 +3815,9 @@ core::str::traits::FromStr::Err	assoc-type	s	required	type Err
 core::str::traits::FromStr::from_str	assoc-fn	s	required	fn from_str(s: &str) -> Result<Self, Self::Err>
 core::str::validations::next_code_point	fn	u str_internals - -	'a I	fn next_code_point<'a, I: Iterator<Item = &'a u8>>(bytes: &mut I) -> Option<u32>
 core::str::validations::utf8_char_width	fn	u str_internals - -		fn utf8_char_width(b: u8) -> usize
-core::sync::atomic::ATOMIC_BOOL_INIT	const	s	
-core::sync::atomic::ATOMIC_ISIZE_INIT	const	s	
-core::sync::atomic::ATOMIC_USIZE_INIT	const	s	
+core::sync::atomic::ATOMIC_BOOL_INIT	const	s		const ATOMIC_BOOL_INIT: std::sync::atomic::Atomic<bool>
+core::sync::atomic::ATOMIC_ISIZE_INIT	const	s		const ATOMIC_ISIZE_INIT: std::sync::atomic::Atomic<isize>
+core::sync::atomic::ATOMIC_USIZE_INIT	const	s		const ATOMIC_USIZE_INIT: std::sync::atomic::Atomic<usize>
 core::sync::atomic::Atomic	struct	u generic_atomic 130539 -	T
 core::sync::atomic::Atomic::as_ptr	assoc-fn	s	std::sync::atomic::Atomic<bool>	fn as_ptr(&self) -> *mut bool
 core::sync::atomic::Atomic::compare_and_swap	assoc-fn	s	std::sync::atomic::Atomic<bool>	fn compare_and_swap(&self, current: bool, new: bool, order: std::sync::atomic::Ordering) -> bool
@@ -3882,8 +3882,8 @@ core::sync::sync_view::SyncView::from_pin_mut	assoc-fn	u exclusive_wrapper 98407
 core::sync::sync_view::SyncView::into_inner	assoc-fn	u exclusive_wrapper 98407 -		fn into_inner(self) -> T
 core::sync::sync_view::SyncView::new	assoc-fn	u exclusive_wrapper 98407 -		fn new(t: T) -> std::sync::SyncView<T>
 core::task::poll::Poll	enum	s	T
-core::task::poll::Poll::FINISHED	assoc-const	u async_gen_internals - -	
-core::task::poll::Poll::PENDING	assoc-const	u async_gen_internals - -	
+core::task::poll::Poll::FINISHED	assoc-const	u async_gen_internals - -		const FINISHED: std::task::Poll<Option<T>>
+core::task::poll::Poll::PENDING	assoc-const	u async_gen_internals - -		const PENDING: std::task::Poll<Option<T>>
 core::task::poll::Poll::Pending	variant	s	
 core::task::poll::Poll::Ready	variant	s	
 core::task::poll::Poll::async_gen_ready	assoc-fn	u async_gen_internals - -	std::task::Poll<Option<T>>	fn async_gen_ready(t: T) -> std::task::Poll<Option<T>>
@@ -3930,12 +3930,12 @@ core::task::wake::Waker::wake	assoc-fn	s		fn wake(self)
 core::task::wake::Waker::wake_by_ref	assoc-fn	s		fn wake_by_ref(&self)
 core::task::wake::Waker::will_wake	assoc-fn	s		fn will_wake(&self, other: &std::task::Waker) -> bool
 core::time::Duration	struct	s	
-core::time::Duration::MAX	assoc-const	s	
-core::time::Duration::MICROSECOND	assoc-const	u duration_constants 57391 -	
-core::time::Duration::MILLISECOND	assoc-const	u duration_constants 57391 -	
-core::time::Duration::NANOSECOND	assoc-const	u duration_constants 57391 -	
-core::time::Duration::SECOND	assoc-const	u duration_constants 57391 -	
-core::time::Duration::ZERO	assoc-const	s	
+core::time::Duration::MAX	assoc-const	s		const MAX: std::time::Duration
+core::time::Duration::MICROSECOND	assoc-const	u duration_constants 57391 -		const MICROSECOND: std::time::Duration
+core::time::Duration::MILLISECOND	assoc-const	u duration_constants 57391 -		const MILLISECOND: std::time::Duration
+core::time::Duration::NANOSECOND	assoc-const	u duration_constants 57391 -		const NANOSECOND: std::time::Duration
+core::time::Duration::SECOND	assoc-const	u duration_constants 57391 -		const SECOND: std::time::Duration
+core::time::Duration::ZERO	assoc-const	s		const ZERO: std::time::Duration
 core::time::Duration::abs_diff	assoc-fn	s		fn abs_diff(self, other: std::time::Duration) -> std::time::Duration
 core::time::Duration::as_micros	assoc-fn	s		fn as_micros(&self) -> u128
 core::time::Duration::as_millis	assoc-fn	s		fn as_millis(&self) -> u128
@@ -3980,8 +3980,8 @@ core::time::Duration::try_from_secs_f32	assoc-fn	s		fn try_from_secs_f32(secs: f
 core::time::Duration::try_from_secs_f64	assoc-fn	s		fn try_from_secs_f64(secs: f64) -> Result<std::time::Duration, std::time::TryFromFloatSecsError>
 core::time::TryFromFloatSecsError	struct	s	
 core::ub_checks::assert_unsafe_precondition	macro	u ub_checks - -	
-core::unicode::UNICODE_VERSION	const	u unicode_internals - -	
-core::unicode::unicode_data::UNICODE_VERSION	const	u unicode_internals - -	
+core::unicode::UNICODE_VERSION	const	u unicode_internals - -		const UNICODE_VERSION: (u8, u8, u8)
+core::unicode::unicode_data::UNICODE_VERSION	const	u unicode_internals - -		const UNICODE_VERSION: (u8, u8, u8)
 core::unicode::unicode_data::alphabetic::lookup	fn	u unicode_internals - -		fn lookup(c: char) -> bool
 core::unicode::unicode_data::case_ignorable::lookup	fn	u unicode_internals - -		fn lookup(c: char) -> bool
 core::unicode::unicode_data::cf::lookup	fn	u unicode_internals - -		fn lookup(c: char) -> bool
@@ -4046,26 +4046,26 @@ core::wtf8::Wtf8::to_string_lossy	assoc-fn	u wtf8_internals - this is internal c
 core::wtf8::Wtf8::try_check_utf8_boundary	assoc-fn	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API		fn try_check_utf8_boundary(&self, index: usize) -> Result<(), core::wtf8::Utf8BoundaryError>
 core::wtf8::Wtf8CodePoints	struct	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	'a
 f128	primitive	s	
-f128::BITS	assoc-const	u float_bits_const 151073 -	
-f128::DIGITS	assoc-const	u f128 116909 -	
-f128::EPSILON	assoc-const	u f128 116909 -	
-f128::EXPONENT_MASK	assoc-const	u float_masks 154064 -	
-f128::INFINITY	assoc-const	u f128 116909 -	
-f128::MANTISSA_DIGITS	assoc-const	u f128 116909 -	
-f128::MANTISSA_MASK	assoc-const	u float_masks 154064 -	
-f128::MAX	assoc-const	u f128 116909 -	
-f128::MAX_10_EXP	assoc-const	u f128 116909 -	
-f128::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f128::MAX_EXP	assoc-const	u f128 116909 -	
-f128::MIN	assoc-const	u f128 116909 -	
-f128::MIN_10_EXP	assoc-const	u f128 116909 -	
-f128::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f128::MIN_EXP	assoc-const	u f128 116909 -	
-f128::MIN_POSITIVE	assoc-const	u f128 116909 -	
-f128::NAN	assoc-const	u f128 116909 -	
-f128::NEG_INFINITY	assoc-const	u f128 116909 -	
-f128::RADIX	assoc-const	u f128 116909 -	
-f128::SIGN_MASK	assoc-const	u float_masks 154064 -	
+f128::BITS	assoc-const	u float_bits_const 151073 -		const BITS: u32
+f128::DIGITS	assoc-const	u f128 116909 -		const DIGITS: u32
+f128::EPSILON	assoc-const	u f128 116909 -		const EPSILON: f128
+f128::EXPONENT_MASK	assoc-const	u float_masks 154064 -		const EXPONENT_MASK: u128
+f128::INFINITY	assoc-const	u f128 116909 -		const INFINITY: f128
+f128::MANTISSA_DIGITS	assoc-const	u f128 116909 -		const MANTISSA_DIGITS: u32
+f128::MANTISSA_MASK	assoc-const	u float_masks 154064 -		const MANTISSA_MASK: u128
+f128::MAX	assoc-const	u f128 116909 -		const MAX: f128
+f128::MAX_10_EXP	assoc-const	u f128 116909 -		const MAX_10_EXP: i32
+f128::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MAX_EXACT_INTEGER: i128
+f128::MAX_EXP	assoc-const	u f128 116909 -		const MAX_EXP: i32
+f128::MIN	assoc-const	u f128 116909 -		const MIN: f128
+f128::MIN_10_EXP	assoc-const	u f128 116909 -		const MIN_10_EXP: i32
+f128::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MIN_EXACT_INTEGER: i128
+f128::MIN_EXP	assoc-const	u f128 116909 -		const MIN_EXP: i32
+f128::MIN_POSITIVE	assoc-const	u f128 116909 -		const MIN_POSITIVE: f128
+f128::NAN	assoc-const	u f128 116909 -		const NAN: f128
+f128::NEG_INFINITY	assoc-const	u f128 116909 -		const NEG_INFINITY: f128
+f128::RADIX	assoc-const	u f128 116909 -		const RADIX: u32
+f128::SIGN_MASK	assoc-const	u float_masks 154064 -		const SIGN_MASK: u128
 f128::abs	assoc-fn	u f128 116909 -		fn abs(self) -> f128
 f128::acos	assoc-fn	u f128 116909 -		fn acos(self) -> f128
 f128::acosh	assoc-fn	u f128 116909 -		fn acosh(self) -> f128
@@ -4145,26 +4145,26 @@ f128::to_radians	assoc-fn	u f128 116909 -		fn to_radians(self) -> f128
 f128::total_cmp	assoc-fn	u f128 116909 -		fn total_cmp(&self, other: &f128) -> std::cmp::Ordering
 f128::trunc	assoc-fn	u f128 116909 -		fn trunc(self) -> f128
 f16	primitive	s	
-f16::BITS	assoc-const	u float_bits_const 151073 -	
-f16::DIGITS	assoc-const	u f16 116909 -	
-f16::EPSILON	assoc-const	u f16 116909 -	
-f16::EXPONENT_MASK	assoc-const	u float_masks 154064 -	
-f16::INFINITY	assoc-const	u f16 116909 -	
-f16::MANTISSA_DIGITS	assoc-const	u f16 116909 -	
-f16::MANTISSA_MASK	assoc-const	u float_masks 154064 -	
-f16::MAX	assoc-const	u f16 116909 -	
-f16::MAX_10_EXP	assoc-const	u f16 116909 -	
-f16::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f16::MAX_EXP	assoc-const	u f16 116909 -	
-f16::MIN	assoc-const	u f16 116909 -	
-f16::MIN_10_EXP	assoc-const	u f16 116909 -	
-f16::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f16::MIN_EXP	assoc-const	u f16 116909 -	
-f16::MIN_POSITIVE	assoc-const	u f16 116909 -	
-f16::NAN	assoc-const	u f16 116909 -	
-f16::NEG_INFINITY	assoc-const	u f16 116909 -	
-f16::RADIX	assoc-const	u f16 116909 -	
-f16::SIGN_MASK	assoc-const	u float_masks 154064 -	
+f16::BITS	assoc-const	u float_bits_const 151073 -		const BITS: u32
+f16::DIGITS	assoc-const	u f16 116909 -		const DIGITS: u32
+f16::EPSILON	assoc-const	u f16 116909 -		const EPSILON: f16
+f16::EXPONENT_MASK	assoc-const	u float_masks 154064 -		const EXPONENT_MASK: u16
+f16::INFINITY	assoc-const	u f16 116909 -		const INFINITY: f16
+f16::MANTISSA_DIGITS	assoc-const	u f16 116909 -		const MANTISSA_DIGITS: u32
+f16::MANTISSA_MASK	assoc-const	u float_masks 154064 -		const MANTISSA_MASK: u16
+f16::MAX	assoc-const	u f16 116909 -		const MAX: f16
+f16::MAX_10_EXP	assoc-const	u f16 116909 -		const MAX_10_EXP: i32
+f16::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MAX_EXACT_INTEGER: i16
+f16::MAX_EXP	assoc-const	u f16 116909 -		const MAX_EXP: i32
+f16::MIN	assoc-const	u f16 116909 -		const MIN: f16
+f16::MIN_10_EXP	assoc-const	u f16 116909 -		const MIN_10_EXP: i32
+f16::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MIN_EXACT_INTEGER: i16
+f16::MIN_EXP	assoc-const	u f16 116909 -		const MIN_EXP: i32
+f16::MIN_POSITIVE	assoc-const	u f16 116909 -		const MIN_POSITIVE: f16
+f16::NAN	assoc-const	u f16 116909 -		const NAN: f16
+f16::NEG_INFINITY	assoc-const	u f16 116909 -		const NEG_INFINITY: f16
+f16::RADIX	assoc-const	u f16 116909 -		const RADIX: u32
+f16::SIGN_MASK	assoc-const	u float_masks 154064 -		const SIGN_MASK: u16
 f16::abs	assoc-fn	u f16 116909 -		fn abs(self) -> f16
 f16::acos	assoc-fn	u f16 116909 -		fn acos(self) -> f16
 f16::acosh	assoc-fn	u f16 116909 -		fn acosh(self) -> f16
@@ -4244,26 +4244,26 @@ f16::to_radians	assoc-fn	u f16 116909 -		fn to_radians(self) -> f16
 f16::total_cmp	assoc-fn	u f16 116909 -		fn total_cmp(&self, other: &f16) -> std::cmp::Ordering
 f16::trunc	assoc-fn	u f16 116909 -		fn trunc(self) -> f16
 f32	primitive	s	
-f32::BITS	assoc-const	u float_bits_const 151073 -	
-f32::DIGITS	assoc-const	s	
-f32::EPSILON	assoc-const	s	
-f32::EXPONENT_MASK	assoc-const	u float_masks 154064 -	
-f32::INFINITY	assoc-const	s	
-f32::MANTISSA_DIGITS	assoc-const	s	
-f32::MANTISSA_MASK	assoc-const	u float_masks 154064 -	
-f32::MAX	assoc-const	s	
-f32::MAX_10_EXP	assoc-const	s	
-f32::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f32::MAX_EXP	assoc-const	s	
-f32::MIN	assoc-const	s	
-f32::MIN_10_EXP	assoc-const	s	
-f32::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f32::MIN_EXP	assoc-const	s	
-f32::MIN_POSITIVE	assoc-const	s	
-f32::NAN	assoc-const	s	
-f32::NEG_INFINITY	assoc-const	s	
-f32::RADIX	assoc-const	s	
-f32::SIGN_MASK	assoc-const	u float_masks 154064 -	
+f32::BITS	assoc-const	u float_bits_const 151073 -		const BITS: u32
+f32::DIGITS	assoc-const	s		const DIGITS: u32
+f32::EPSILON	assoc-const	s		const EPSILON: f32
+f32::EXPONENT_MASK	assoc-const	u float_masks 154064 -		const EXPONENT_MASK: u32
+f32::INFINITY	assoc-const	s		const INFINITY: f32
+f32::MANTISSA_DIGITS	assoc-const	s		const MANTISSA_DIGITS: u32
+f32::MANTISSA_MASK	assoc-const	u float_masks 154064 -		const MANTISSA_MASK: u32
+f32::MAX	assoc-const	s		const MAX: f32
+f32::MAX_10_EXP	assoc-const	s		const MAX_10_EXP: i32
+f32::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MAX_EXACT_INTEGER: i32
+f32::MAX_EXP	assoc-const	s		const MAX_EXP: i32
+f32::MIN	assoc-const	s		const MIN: f32
+f32::MIN_10_EXP	assoc-const	s		const MIN_10_EXP: i32
+f32::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MIN_EXACT_INTEGER: i32
+f32::MIN_EXP	assoc-const	s		const MIN_EXP: i32
+f32::MIN_POSITIVE	assoc-const	s		const MIN_POSITIVE: f32
+f32::NAN	assoc-const	s		const NAN: f32
+f32::NEG_INFINITY	assoc-const	s		const NEG_INFINITY: f32
+f32::RADIX	assoc-const	s		const RADIX: u32
+f32::SIGN_MASK	assoc-const	u float_masks 154064 -		const SIGN_MASK: u32
 f32::abs	assoc-fn	s		fn abs(self) -> f32
 f32::abs_sub	assoc-fn	s		fn abs_sub(self, other: f32) -> f32
 f32::acos	assoc-fn	s		fn acos(self) -> f32
@@ -4344,26 +4344,26 @@ f32::to_radians	assoc-fn	s		fn to_radians(self) -> f32
 f32::total_cmp	assoc-fn	s		fn total_cmp(&self, other: &f32) -> std::cmp::Ordering
 f32::trunc	assoc-fn	s		fn trunc(self) -> f32
 f64	primitive	s	
-f64::BITS	assoc-const	u float_bits_const 151073 -	
-f64::DIGITS	assoc-const	s	
-f64::EPSILON	assoc-const	s	
-f64::EXPONENT_MASK	assoc-const	u float_masks 154064 -	
-f64::INFINITY	assoc-const	s	
-f64::MANTISSA_DIGITS	assoc-const	s	
-f64::MANTISSA_MASK	assoc-const	u float_masks 154064 -	
-f64::MAX	assoc-const	s	
-f64::MAX_10_EXP	assoc-const	s	
-f64::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f64::MAX_EXP	assoc-const	s	
-f64::MIN	assoc-const	s	
-f64::MIN_10_EXP	assoc-const	s	
-f64::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -	
-f64::MIN_EXP	assoc-const	s	
-f64::MIN_POSITIVE	assoc-const	s	
-f64::NAN	assoc-const	s	
-f64::NEG_INFINITY	assoc-const	s	
-f64::RADIX	assoc-const	s	
-f64::SIGN_MASK	assoc-const	u float_masks 154064 -	
+f64::BITS	assoc-const	u float_bits_const 151073 -		const BITS: u32
+f64::DIGITS	assoc-const	s		const DIGITS: u32
+f64::EPSILON	assoc-const	s		const EPSILON: f64
+f64::EXPONENT_MASK	assoc-const	u float_masks 154064 -		const EXPONENT_MASK: u64
+f64::INFINITY	assoc-const	s		const INFINITY: f64
+f64::MANTISSA_DIGITS	assoc-const	s		const MANTISSA_DIGITS: u32
+f64::MANTISSA_MASK	assoc-const	u float_masks 154064 -		const MANTISSA_MASK: u64
+f64::MAX	assoc-const	s		const MAX: f64
+f64::MAX_10_EXP	assoc-const	s		const MAX_10_EXP: i32
+f64::MAX_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MAX_EXACT_INTEGER: i64
+f64::MAX_EXP	assoc-const	s		const MAX_EXP: i32
+f64::MIN	assoc-const	s		const MIN: f64
+f64::MIN_10_EXP	assoc-const	s		const MIN_10_EXP: i32
+f64::MIN_EXACT_INTEGER	assoc-const	u float_exact_integer_constants 152466 -		const MIN_EXACT_INTEGER: i64
+f64::MIN_EXP	assoc-const	s		const MIN_EXP: i32
+f64::MIN_POSITIVE	assoc-const	s		const MIN_POSITIVE: f64
+f64::NAN	assoc-const	s		const NAN: f64
+f64::NEG_INFINITY	assoc-const	s		const NEG_INFINITY: f64
+f64::RADIX	assoc-const	s		const RADIX: u32
+f64::SIGN_MASK	assoc-const	u float_masks 154064 -		const SIGN_MASK: u64
 f64::abs	assoc-fn	s		fn abs(self) -> f64
 f64::abs_sub	assoc-fn	s		fn abs_sub(self, other: f64) -> f64
 f64::acos	assoc-fn	s		fn acos(self) -> f64
@@ -4444,9 +4444,9 @@ f64::to_radians	assoc-fn	s		fn to_radians(self) -> f64
 f64::total_cmp	assoc-fn	s		fn total_cmp(&self, other: &f64) -> std::cmp::Ordering
 f64::trunc	assoc-fn	s		fn trunc(self) -> f64
 i128	primitive	s	
-i128::BITS	assoc-const	s	
-i128::MAX	assoc-const	s	
-i128::MIN	assoc-const	s	
+i128::BITS	assoc-const	s		const BITS: u32
+i128::MAX	assoc-const	s		const MAX: i128
+i128::MIN	assoc-const	s		const MIN: i128
 i128::abs	assoc-fn	s		fn abs(self) -> i128
 i128::abs_diff	assoc-fn	s		fn abs_diff(self, other: i128) -> u128
 i128::borrowing_sub	assoc-fn	u signed_bigint_helpers 151989 -		fn borrowing_sub(self, rhs: i128, borrow: bool) -> (i128, bool)
@@ -4598,9 +4598,9 @@ i128::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> i128
 i128::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: i128) -> i128
 i128::wrapping_sub_unsigned	assoc-fn	s		fn wrapping_sub_unsigned(self, rhs: u128) -> i128
 i16	primitive	s	
-i16::BITS	assoc-const	s	
-i16::MAX	assoc-const	s	
-i16::MIN	assoc-const	s	
+i16::BITS	assoc-const	s		const BITS: u32
+i16::MAX	assoc-const	s		const MAX: i16
+i16::MIN	assoc-const	s		const MIN: i16
 i16::abs	assoc-fn	s		fn abs(self) -> i16
 i16::abs_diff	assoc-fn	s		fn abs_diff(self, other: i16) -> u16
 i16::borrowing_sub	assoc-fn	u signed_bigint_helpers 151989 -		fn borrowing_sub(self, rhs: i16, borrow: bool) -> (i16, bool)
@@ -4753,9 +4753,9 @@ i16::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> i16
 i16::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: i16) -> i16
 i16::wrapping_sub_unsigned	assoc-fn	s		fn wrapping_sub_unsigned(self, rhs: u16) -> i16
 i32	primitive	s	
-i32::BITS	assoc-const	s	
-i32::MAX	assoc-const	s	
-i32::MIN	assoc-const	s	
+i32::BITS	assoc-const	s		const BITS: u32
+i32::MAX	assoc-const	s		const MAX: i32
+i32::MIN	assoc-const	s		const MIN: i32
 i32::abs	assoc-fn	s		fn abs(self) -> i32
 i32::abs_diff	assoc-fn	s		fn abs_diff(self, other: i32) -> u32
 i32::borrowing_sub	assoc-fn	u signed_bigint_helpers 151989 -		fn borrowing_sub(self, rhs: i32, borrow: bool) -> (i32, bool)
@@ -4908,9 +4908,9 @@ i32::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> i32
 i32::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: i32) -> i32
 i32::wrapping_sub_unsigned	assoc-fn	s		fn wrapping_sub_unsigned(self, rhs: u32) -> i32
 i64	primitive	s	
-i64::BITS	assoc-const	s	
-i64::MAX	assoc-const	s	
-i64::MIN	assoc-const	s	
+i64::BITS	assoc-const	s		const BITS: u32
+i64::MAX	assoc-const	s		const MAX: i64
+i64::MIN	assoc-const	s		const MIN: i64
 i64::abs	assoc-fn	s		fn abs(self) -> i64
 i64::abs_diff	assoc-fn	s		fn abs_diff(self, other: i64) -> u64
 i64::borrowing_sub	assoc-fn	u signed_bigint_helpers 151989 -		fn borrowing_sub(self, rhs: i64, borrow: bool) -> (i64, bool)
@@ -5063,9 +5063,9 @@ i64::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> i64
 i64::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: i64) -> i64
 i64::wrapping_sub_unsigned	assoc-fn	s		fn wrapping_sub_unsigned(self, rhs: u64) -> i64
 i8	primitive	s	
-i8::BITS	assoc-const	s	
-i8::MAX	assoc-const	s	
-i8::MIN	assoc-const	s	
+i8::BITS	assoc-const	s		const BITS: u32
+i8::MAX	assoc-const	s		const MAX: i8
+i8::MIN	assoc-const	s		const MIN: i8
 i8::abs	assoc-fn	s		fn abs(self) -> i8
 i8::abs_diff	assoc-fn	s		fn abs_diff(self, other: i8) -> u8
 i8::borrowing_sub	assoc-fn	u signed_bigint_helpers 151989 -		fn borrowing_sub(self, rhs: i8, borrow: bool) -> (i8, bool)
@@ -5218,9 +5218,9 @@ i8::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> i8
 i8::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: i8) -> i8
 i8::wrapping_sub_unsigned	assoc-fn	s		fn wrapping_sub_unsigned(self, rhs: u8) -> i8
 isize	primitive	s	
-isize::BITS	assoc-const	s	
-isize::MAX	assoc-const	s	
-isize::MIN	assoc-const	s	
+isize::BITS	assoc-const	s		const BITS: u32
+isize::MAX	assoc-const	s		const MAX: isize
+isize::MIN	assoc-const	s		const MIN: isize
 isize::abs	assoc-fn	s		fn abs(self) -> isize
 isize::abs_diff	assoc-fn	s		fn abs_diff(self, other: isize) -> usize
 isize::borrowing_sub	assoc-fn	u signed_bigint_helpers 151989 -		fn borrowing_sub(self, rhs: isize, borrow: bool) -> (isize, bool)
@@ -5705,14 +5705,14 @@ std::env::Vars	struct	s
 std::env::VarsOs	struct	s	
 std::env::args	fn	s		fn args() -> std::env::Args
 std::env::args_os	fn	s		fn args_os() -> std::env::ArgsOs
-std::env::consts::ARCH	const	s	
-std::env::consts::DLL_EXTENSION	const	s	
-std::env::consts::DLL_PREFIX	const	s	
-std::env::consts::DLL_SUFFIX	const	s	
-std::env::consts::EXE_EXTENSION	const	s	
-std::env::consts::EXE_SUFFIX	const	s	
-std::env::consts::FAMILY	const	s	
-std::env::consts::OS	const	s	
+std::env::consts::ARCH	const	s		const ARCH: &str
+std::env::consts::DLL_EXTENSION	const	s		const DLL_EXTENSION: &str
+std::env::consts::DLL_PREFIX	const	s		const DLL_PREFIX: &str
+std::env::consts::DLL_SUFFIX	const	s		const DLL_SUFFIX: &str
+std::env::consts::EXE_EXTENSION	const	s		const EXE_EXTENSION: &str
+std::env::consts::EXE_SUFFIX	const	s		const EXE_SUFFIX: &str
+std::env::consts::FAMILY	const	s		const FAMILY: &str
+std::env::consts::OS	const	s		const OS: &str
 std::env::current_dir	fn	s		fn current_dir() -> Result<std::path::PathBuf, std::io::Error>
 std::env::current_exe	fn	s		fn current_exe() -> Result<std::path::PathBuf, std::io::Error>
 std::env::home_dir	fn	s		fn home_dir() -> Option<std::path::PathBuf>
@@ -6083,8 +6083,8 @@ std::path::Components::as_path	assoc-fn	s		fn as_path(&self) -> &'a std::path::P
 std::path::Display	struct	s	'a
 std::path::Iter	struct	s	'a
 std::path::Iter::as_path	assoc-fn	s		fn as_path(&self) -> &'a std::path::Path
-std::path::MAIN_SEPARATOR	const	s	
-std::path::MAIN_SEPARATOR_STR	const	s	
+std::path::MAIN_SEPARATOR	const	s		const MAIN_SEPARATOR: char
+std::path::MAIN_SEPARATOR_STR	const	s		const MAIN_SEPARATOR_STR: &str
 std::path::NormalizeError	struct	u normalize_lexically 134694 -	
 std::path::Path	struct	s	
 std::path::Path::absolute	assoc-fn	u path_absolute_method 153328 -		fn absolute(&self) -> Result<std::path::PathBuf, std::io::Error>
@@ -6167,8 +6167,8 @@ std::path::Prefix::is_verbatim	assoc-fn	s		fn is_verbatim(&self) -> bool
 std::path::PrefixComponent	struct	s	'a
 std::path::PrefixComponent::as_os_str	assoc-fn	s		fn as_os_str(&self) -> &'a std::ffi::OsStr
 std::path::PrefixComponent::kind	assoc-fn	s		fn kind(&self) -> std::path::Prefix<'a>
-std::path::SEPARATORS	const	u const_path_separators 153106 -	
-std::path::SEPARATORS_STR	const	u const_path_separators 153106 -	
+std::path::SEPARATORS	const	u const_path_separators 153106 -		const SEPARATORS: &[char]
+std::path::SEPARATORS_STR	const	u const_path_separators 153106 -		const SEPARATORS_STR: &[&str]
 std::path::StripPrefixError	struct	s	
 std::path::absolute	fn	s	P	fn absolute<P: AsRef<std::path::Path>>(path: P) -> Result<std::path::PathBuf, std::io::Error>
 std::path::is_separator	fn	s		fn is_separator(c: char) -> bool
@@ -6205,8 +6205,8 @@ std::process::Command::stdout	assoc-fn	s		fn stdout<T: Into<std::process::Stdio>
 std::process::CommandArgs	struct	s	'a
 std::process::CommandEnvs	struct	s	'a
 std::process::ExitCode	struct	s	
-std::process::ExitCode::FAILURE	assoc-const	s	
-std::process::ExitCode::SUCCESS	assoc-const	s	
+std::process::ExitCode::FAILURE	assoc-const	s		const FAILURE: std::process::ExitCode
+std::process::ExitCode::SUCCESS	assoc-const	s		const SUCCESS: std::process::ExitCode
 std::process::ExitCode::exit_process	assoc-fn	u exitcode_exit_method 97100 -		fn exit_process(self) -> !
 std::process::ExitCode::to_i32	assoc-fn	u process_exitcode_internals - exposed only for libstd		fn to_i32(self) -> i32
 std::process::ExitStatus	struct	s	
@@ -6362,7 +6362,7 @@ std::sync::nonpoison::rwlock::RwLockWriteGuard	struct	u nonpoison_rwlock 134645 
 std::sync::nonpoison::rwlock::RwLockWriteGuard::downgrade	assoc-fn	u nonpoison_rwlock 134645 -		fn downgrade(s: std::sync::nonpoison::RwLockWriteGuard<'rwlock, T>) -> std::sync::nonpoison::RwLockReadGuard<'rwlock, T>
 std::sync::nonpoison::rwlock::RwLockWriteGuard::filter_map	assoc-fn	u mapped_lock_guards 117108 -		fn filter_map<U: ?Sized, F: FnOnce(&mut T) -> Option<&mut U>>(orig: std::sync::nonpoison::RwLockWriteGuard<'rwlock, T>, f: F) -> Result<std::sync::nonpoison::MappedRwLockWriteGuard<'rwlock, U>, std::sync::nonpoison::RwLockWriteGuard<'rwlock, T>>
 std::sync::nonpoison::rwlock::RwLockWriteGuard::map	assoc-fn	u mapped_lock_guards 117108 -		fn map<U: ?Sized, F: FnOnce(&mut T) -> &mut U>(orig: std::sync::nonpoison::RwLockWriteGuard<'rwlock, T>, f: F) -> std::sync::nonpoison::MappedRwLockWriteGuard<'rwlock, U>
-std::sync::once::ONCE_INIT	const	s	
+std::sync::once::ONCE_INIT	const	s		const ONCE_INIT: std::sync::Once
 std::sync::once::Once	struct	s	
 std::sync::once::Once::call_once	assoc-fn	s		fn call_once<F: FnOnce()>(&self, f: F)
 std::sync::once::Once::call_once_force	assoc-fn	s		fn call_once_force<F: FnOnce(&std::sync::OnceState)>(&self, f: F)
@@ -6543,9 +6543,9 @@ std::time::Instant::elapsed	assoc-fn	s		fn elapsed(&self) -> std::time::Duration
 std::time::Instant::now	assoc-fn	s		fn now() -> std::time::Instant
 std::time::Instant::saturating_duration_since	assoc-fn	s		fn saturating_duration_since(&self, earlier: std::time::Instant) -> std::time::Duration
 std::time::SystemTime	struct	s	
-std::time::SystemTime::MAX	assoc-const	u time_systemtime_limits 149067 -	
-std::time::SystemTime::MIN	assoc-const	u time_systemtime_limits 149067 -	
-std::time::SystemTime::UNIX_EPOCH	assoc-const	s	
+std::time::SystemTime::MAX	assoc-const	u time_systemtime_limits 149067 -		const MAX: std::time::SystemTime
+std::time::SystemTime::MIN	assoc-const	u time_systemtime_limits 149067 -		const MIN: std::time::SystemTime
+std::time::SystemTime::UNIX_EPOCH	assoc-const	s		const UNIX_EPOCH: std::time::SystemTime
 std::time::SystemTime::checked_add	assoc-fn	s		fn checked_add(&self, duration: std::time::Duration) -> Option<std::time::SystemTime>
 std::time::SystemTime::checked_sub	assoc-fn	s		fn checked_sub(&self, duration: std::time::Duration) -> Option<std::time::SystemTime>
 std::time::SystemTime::duration_since	assoc-fn	s		fn duration_since(&self, earlier: std::time::SystemTime) -> Result<std::time::Duration, std::time::SystemTimeError>
@@ -6556,7 +6556,7 @@ std::time::SystemTime::saturating_duration_since	assoc-fn	u time_saturating_syst
 std::time::SystemTime::saturating_sub	assoc-fn	u time_saturating_systemtime 151199 -		fn saturating_sub(&self, duration: std::time::Duration) -> std::time::SystemTime
 std::time::SystemTimeError	struct	s	
 std::time::SystemTimeError::duration	assoc-fn	s		fn duration(&self) -> std::time::Duration
-std::time::UNIX_EPOCH	const	s	
+std::time::UNIX_EPOCH	const	s		const UNIX_EPOCH: std::time::SystemTime
 str	primitive	s	
 str::as_ascii	assoc-fn	u ascii_char 110998 -		fn as_ascii(&self) -> Option<&[std::ascii::Char]>
 str::as_ascii_unchecked	assoc-fn	u ascii_char 110998 -		fn as_ascii_unchecked(&self) -> &[std::ascii::Char]
@@ -6650,9 +6650,9 @@ str::trim_start_matches	assoc-fn	s		fn trim_start_matches<P>(&self, pat: P) -> &
 str::trim_suffix	assoc-fn	u trim_prefix_suffix 142312 -		fn trim_suffix<P>(&self, suffix: P) -> &str
 str::word_to_titlecase	assoc-fn	u titlecase 153892 -		fn word_to_titlecase(&self) -> String
 u128	primitive	s	
-u128::BITS	assoc-const	s	
-u128::MAX	assoc-const	s	
-u128::MIN	assoc-const	s	
+u128::BITS	assoc-const	s		const BITS: u32
+u128::MAX	assoc-const	s		const MAX: u128
+u128::MIN	assoc-const	s		const MIN: u128
 u128::_fmt	assoc-fn	u fmt_internals - specialized method meant to only be used by `SpecToString` implementation		fn _fmt<'a>(self, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> &'a str
 u128::abs_diff	assoc-fn	s		fn abs_diff(self, other: u128) -> u128
 u128::bit_width	assoc-fn	s		fn bit_width(self) -> u32
@@ -6807,9 +6807,9 @@ u128::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> u128
 u128::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: u128) -> u128
 u128::wrapping_sub_signed	assoc-fn	s		fn wrapping_sub_signed(self, rhs: i128) -> u128
 u16	primitive	s	
-u16::BITS	assoc-const	s	
-u16::MAX	assoc-const	s	
-u16::MIN	assoc-const	s	
+u16::BITS	assoc-const	s		const BITS: u32
+u16::MAX	assoc-const	s		const MAX: u16
+u16::MIN	assoc-const	s		const MIN: u16
 u16::_fmt	assoc-fn	u fmt_internals - specialized method meant to only be used by `SpecToString` implementation		fn _fmt<'a>(self, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> &'a str
 u16::abs_diff	assoc-fn	s		fn abs_diff(self, other: u16) -> u16
 u16::bit_width	assoc-fn	s		fn bit_width(self) -> u32
@@ -6967,9 +6967,9 @@ u16::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> u16
 u16::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: u16) -> u16
 u16::wrapping_sub_signed	assoc-fn	s		fn wrapping_sub_signed(self, rhs: i16) -> u16
 u32	primitive	s	
-u32::BITS	assoc-const	s	
-u32::MAX	assoc-const	s	
-u32::MIN	assoc-const	s	
+u32::BITS	assoc-const	s		const BITS: u32
+u32::MAX	assoc-const	s		const MAX: u32
+u32::MIN	assoc-const	s		const MIN: u32
 u32::_fmt	assoc-fn	u fmt_internals - specialized method meant to only be used by `SpecToString` implementation		fn _fmt<'a>(self, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> &'a str
 u32::abs_diff	assoc-fn	s		fn abs_diff(self, other: u32) -> u32
 u32::bit_width	assoc-fn	s		fn bit_width(self) -> u32
@@ -7126,9 +7126,9 @@ u32::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> u32
 u32::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: u32) -> u32
 u32::wrapping_sub_signed	assoc-fn	s		fn wrapping_sub_signed(self, rhs: i32) -> u32
 u64	primitive	s	
-u64::BITS	assoc-const	s	
-u64::MAX	assoc-const	s	
-u64::MIN	assoc-const	s	
+u64::BITS	assoc-const	s		const BITS: u32
+u64::MAX	assoc-const	s		const MAX: u64
+u64::MIN	assoc-const	s		const MIN: u64
 u64::_fmt	assoc-fn	u fmt_internals - specialized method meant to only be used by `SpecToString` implementation		fn _fmt<'a>(self, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> &'a str
 u64::abs_diff	assoc-fn	s		fn abs_diff(self, other: u64) -> u64
 u64::bit_width	assoc-fn	s		fn bit_width(self) -> u32
@@ -7285,9 +7285,9 @@ u64::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> u64
 u64::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: u64) -> u64
 u64::wrapping_sub_signed	assoc-fn	s		fn wrapping_sub_signed(self, rhs: i64) -> u64
 u8	primitive	s	
-u8::BITS	assoc-const	s	
-u8::MAX	assoc-const	s	
-u8::MIN	assoc-const	s	
+u8::BITS	assoc-const	s		const BITS: u32
+u8::MAX	assoc-const	s		const MAX: u8
+u8::MIN	assoc-const	s		const MIN: u8
 u8::_fmt	assoc-fn	u fmt_internals - specialized method meant to only be used by `SpecToString` implementation		fn _fmt<'a>(self, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> &'a str
 u8::abs_diff	assoc-fn	s		fn abs_diff(self, other: u8) -> u8
 u8::as_ascii	assoc-fn	u ascii_char 110998 -		fn as_ascii(&self) -> Option<std::ascii::Char>
@@ -7464,9 +7464,9 @@ u8::wrapping_shr	assoc-fn	s		fn wrapping_shr(self, rhs: u32) -> u8
 u8::wrapping_sub	assoc-fn	s		fn wrapping_sub(self, rhs: u8) -> u8
 u8::wrapping_sub_signed	assoc-fn	s		fn wrapping_sub_signed(self, rhs: i8) -> u8
 usize	primitive	s	
-usize::BITS	assoc-const	s	
-usize::MAX	assoc-const	s	
-usize::MIN	assoc-const	s	
+usize::BITS	assoc-const	s		const BITS: u32
+usize::MAX	assoc-const	s		const MAX: usize
+usize::MIN	assoc-const	s		const MIN: usize
 usize::_fmt	assoc-fn	u fmt_internals - specialized method meant to only be used by `SpecToString` implementation		fn _fmt<'a>(self, buf: &'a mut [std::mem::MaybeUninit<u8>]) -> &'a str
 usize::abs_diff	assoc-fn	s		fn abs_diff(self, other: usize) -> usize
 usize::bit_width	assoc-fn	s		fn bit_width(self) -> u32

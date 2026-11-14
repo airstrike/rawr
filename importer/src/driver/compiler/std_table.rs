@@ -14,9 +14,10 @@
 //!   and each of its members' with its declaration as a program writes it
 //!   (D711 step 2), naming types by their public paths, bare for the
 //!   prelude's. A free function's line ends with its declaration too, and
-//!   a type alias's with the type it names (step 6). A type's inherent
-//!   items include those a later crate of std declares for it, as `std`'s
-//!   `impl io::Error` for core's `io::Error`.
+//!   a type alias's with the type it names (step 6), and a free or
+//!   inherent constant's with its declaration. A type's inherent items
+//!   include those a later crate of std declares for it, as `std`'s `impl
+//!   io::Error` for core's `io::Error`.
 //!
 //! What differs by target (`arch`, `simd`, `os`) is left out, so the table
 //! is the same on every host. `scripts/std-table.sh` regenerates it for
@@ -217,6 +218,9 @@ struct Table<'tcx> {
     /// Each type alias's line, which ends with the type it names (D711
     /// step 6): `Result<T, std::io::Error>` of `std::io::Result`.
     aliases: BTreeMap<String, DefId>,
+    /// Each free or inherent constant's line, which ends with its
+    /// declaration: `const UNIX_EPOCH: std::time::SystemTime`.
+    constants: BTreeMap<String, DefId>,
     /// Whether `ty` writes lifetimes: an inherent function's declaration
     /// does, for its borrow summary.
     lifetimes: std::cell::Cell<bool>,
@@ -247,6 +251,7 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         inherent: BTreeMap::new(),
         functions: BTreeMap::new(),
         aliases: BTreeMap::new(),
+        constants: BTreeMap::new(),
         lifetimes: std::cell::Cell::new(false),
     };
     for (krate, name) in &roots {
@@ -488,6 +493,9 @@ impl<'tcx> Table<'tcx> {
             DefKind::TyAlias => {
                 self.aliases.insert(canonical.to_owned(), def_id);
             }
+            DefKind::Const { .. } => {
+                self.constants.insert(canonical.to_owned(), def_id);
+            }
             _ => {}
         }
     }
@@ -530,10 +538,16 @@ impl<'tcx> Table<'tcx> {
             match self.items.get(&key) {
                 Some(line) if line.split('\t').nth(1) == Some("s") => {}
                 _ => {
-                    if kind == "assoc-fn" {
-                        self.inherent.insert(key.clone(), (*member, implementation));
-                    } else {
-                        self.inherent.remove(&key);
+                    self.inherent.remove(&key);
+                    self.constants.remove(&key);
+                    match kind {
+                        "assoc-fn" => {
+                            self.inherent.insert(key.clone(), (*member, implementation));
+                        }
+                        "assoc-const" => {
+                            self.constants.insert(key.clone(), *member);
+                        }
+                        _ => {}
                     }
                     self.items.insert(key, format!("{kind}\t{stability}\t"));
                 }
@@ -1095,7 +1109,8 @@ impl<'tcx> Table<'tcx> {
     /// Each inherent function's line: the impl's self type when it isn't
     /// the owner's own (`Option<&T>` of `copied`, `[u8]` of `is_ascii`),
     /// then its declaration with its lifetimes (D711 step 4); then each free
-    /// function's declaration and each type alias's type (step 6).
+    /// function's declaration and each type alias's type (step 6), and each
+    /// constant's declaration.
     fn inherent_signatures(&mut self) {
         let tcx = self.tcx;
         self.lifetimes.set(true);
@@ -1149,6 +1164,20 @@ impl<'tcx> Table<'tcx> {
             if let Some(line) = self.items.get_mut(key) {
                 line.push('\t');
                 line.push_str(&clean(&target));
+            }
+        }
+        // A constant's line ends with its declaration, as a free
+        // function's does (#925).
+        let constants = std::mem::take(&mut self.constants);
+        for (key, constant) in &constants {
+            let name = key.rsplit("::").next().unwrap_or_default();
+            let ty = self.ty(tcx
+                .type_of(*constant)
+                .instantiate_identity()
+                .skip_norm_wip());
+            if let Some(line) = self.items.get_mut(key) {
+                line.push('\t');
+                line.push_str(&clean(&format!("const {name}: {ty}")));
             }
         }
     }
