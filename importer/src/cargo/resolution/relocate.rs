@@ -272,6 +272,12 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
     };
     let metadata =
         fs::symlink_metadata(source).map_err(io("inspect shared build output", source))?;
+    if metadata.file_type().is_symlink() && crate::input::split_debuginfo(source) {
+        // The link to packed debug info Cargo puts beside a build script
+        // stays behind: a bundle holds no links, nothing Rawr builds or runs
+        // reads debug info, and Cargo's freshness never looks at it.
+        return Ok(());
+    }
     if fs::symlink_metadata(destination).is_ok() {
         return Ok(());
     }
