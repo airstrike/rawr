@@ -56,6 +56,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it. (#1989)
 - A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing. (#1983)
 - A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit. (#1990)
+- Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one. (#1984)
 
 ## 0.3.213 (2026-11-13)
 

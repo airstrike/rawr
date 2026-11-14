@@ -62,7 +62,8 @@
         {"text":"`&mut` of a crate value made for the call, a `&mut` binding where a crate takes `&dyn Trait`, an `Arc` of a crate value passed as `&dyn Trait`, `for` over a crate type through its IntoIterator, and a public field of a crate struct that implements Drop all work.","issues":[1982]},
         {"text":"rawr mcp's `screenshot` is drawn by the program itself through its own renderer, so it needs no Screen Recording permission and shows the window's current state even while another window covers it.","issues":[1989]},
         {"text":"A new build of rawr recompiles only the runtime crates whose sources changed: builds that agree on toolchain, lockfile, features and seeds share one build directory, and an edit outside the runtime's crates recompiles nothing.","issues":[1983]},
-        {"text":"A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit.","issues":[1990]}
+        {"text":"A window program `rawr run` runs on macOS keeps its own name in the menu bar and gets a `rawr` menu beside its own, with Restart, Take Screenshot, About rawr and Exit.","issues":[1990]},
+        {"text":"Projects that share a target directory no longer reuse each other's runner build scripts, so after rawr changes each runner links the new runtime instead of failing with E0425 on the old one.","issues":[1984]}
       ]
     },
     "releases": [
@@ -4356,7 +4357,7 @@
     {"issue":1981,"title":"A fn item coerced to a native trait object through a crate's blanket impl over Fn (markdown's `&Code::highlight`)","state":"closed","category":"Divergences from rustc"},
     {"issue":1982,"title":"A method whose `&'a self` borrow is kept by a `&mut T<'a>` input a scope frame holds is refused (integration)","state":"closed","category":"No glue (D593)"},
     {"issue":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"closed","category":"Health"},
-    {"issue":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1985,"title":"A program family's blanket RawrOpaque impl in the runner bin crate breaks the orphan rule (E0210, gallery)","state":"open","category":"No glue (D593)"},
     {"issue":1986,"title":"A crate Handle made in an async fn on tokio's thread fails attestation when cloned from a script struct (pokedex)","state":"open","category":"No glue (D593)"},
     {"issue":1987,"title":"A program's impl of a std trait for its own type (From<Language> for String) is missing on the proxy (tour)","state":"open","category":"No glue (D593)"},
@@ -5697,7 +5698,7 @@
             {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"},
             {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"},
             {"number":1965,"title":"expand/ and the resolution cache ignore a configured target directory","state":"open"},
-            {"number":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"open"},
+            {"number":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"closed"},
             {"number":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"closed"},
             {"number":1994,"title":"Runtime entries each hold full copies of the runtime's libraries (about 431 MB at opt-level 3)","state":"open"}
           ]
