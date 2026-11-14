@@ -4171,6 +4171,63 @@ fn a_held_type_s_new_field_runs_and_cargo_builds_beside_rawr() {
     runs(&root);
 }
 
+/// The fingerprint directories of `name`'s units in `build`'s dev profile.
+fn fingerprints(build: &Path, name: &str) -> std::collections::BTreeSet<String> {
+    let prefix = format!("{name}-");
+    fs::read_dir(build.join("debug/.fingerprint"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|entry| {
+            entry
+                .strip_prefix(&prefix)
+                .is_some_and(|hash| hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        })
+        .collect()
+}
+
+/// A member of a workspace whose root is a package, as icedxdy's browser:
+/// the root inherits its edition, which picks resolver 3 (#1911), the lock
+/// pins a libc older than rawr's own crates need (#1912), and the members
+/// name the root through `path = "."` (#1913). rawr's check of the program
+/// uses the units `cargo check -p` made, and its runner build the units
+/// `cargo build -p` made: libc and the root's path dependency gain no
+/// fingerprint, and the runner's lock keeps the project's libc.
+#[test]
+fn a_member_of_a_root_package_s_workspace_reuses_cargo_s_units() {
+    const SOURCE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/islands-root-package"
+    );
+    let project = crate::support::fresh("islands-root-package");
+    copy(Path::new(SOURCE), &project);
+    for command in ["check", "build"] {
+        let built = std::process::Command::new("cargo")
+            .args([command, "-p", "shelf-app"])
+            .current_dir(&project)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+    }
+    let build = project.join("target");
+    let shared = ["libc", "shelf_core"];
+    let cargo = shared.map(|name| fingerprints(&build, name));
+    assert!(cargo.iter().all(|units| !units.is_empty()), "{cargo:?}");
+    runs(&project.join("app"));
+    assert_eq!(shared.map(|name| fingerprints(&build, name)), cargo);
+    let runner =
+        fs::read_to_string(project.join("target/rawr/members/app/runner/Cargo.lock")).unwrap();
+    assert!(
+        runner.contains("name = \"libc\"\nversion = \"0.2.183\""),
+        "{runner}"
+    );
+}
+
 /// The palette fixture: inboard's marked theme over its native child's
 /// `themedef::Theme`, whose colors aren't `Copy`, and a home screen whose
 /// widgets become a crate's elements.

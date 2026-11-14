@@ -1,0 +1,13 @@
+[package]
+name = "shelf_core"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+libc = "0.2"
+
+# Resolver 1 would turn this feature on everywhere; the workspace's resolver
+# turns it on for Windows only.
+[target.'cfg(windows)'.dependencies]
+libc = { version = "0.2", features = ["extra_traits"] }

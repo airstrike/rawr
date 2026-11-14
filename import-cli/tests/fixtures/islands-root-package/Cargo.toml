@@ -1,0 +1,27 @@
+# A workspace whose root is a package, as icedxdy's: its members name it
+# through `[workspace.dependencies]` at path ".", and it inherits its
+# edition, which picks the workspace's resolver.
+[package]
+name = "shelf"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+shelf_core.workspace = true
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
+members = ["core", "app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+shelf = { path = "." }
+shelf_core = { path = "core" }
+
+# The members build at the dev profile's opt-level, every other package at 1.
+[profile.dev.package."*"]
+opt-level = 1
