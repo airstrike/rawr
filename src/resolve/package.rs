@@ -1042,6 +1042,15 @@ impl<'a> Resolver<'a> {
     ) -> Result<kept::Resolved, Failure> {
         let (mut uses, mut types, _occupied) =
             self.resolve_unit_bindings(context, &parsed_items)?;
+        // An expansion's blocks see what its item's blocks bind, as its
+        // module does: serde's `__Visitor` of a body's `struct Entry`,
+        // declared in the expansion's `const _` block, names `Entry`
+        // (#1938).
+        for (name, target) in &entering {
+            if self.tables.declaration(&context.address(name)).is_none() {
+                types.insert(name.clone(), target.clone());
+            }
+        }
         let block_types =
             self.resolve_block_bindings(context, &parsed_items, blocks, &types, &mut uses)?;
         let mut around = Vec::new();
@@ -1055,11 +1064,6 @@ impl<'a> Resolver<'a> {
                 .map(|(name, target)| (name.clone(), target.clone()))
                 .collect();
             around.push((*expansion, names));
-        }
-        for (name, target) in &entering {
-            if self.tables.declaration(&context.address(name)).is_none() {
-                types.insert(name.clone(), target.clone());
-            }
         }
         let root = (context.source == self.entry_source).then(|| types.clone());
         // The host modules this unit's `use`s bind, by name: an imported
