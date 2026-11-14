@@ -260,9 +260,8 @@ fn unmarked(text: &str, entry: &str, program: &str, source: &str) -> String {
     };
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
-        let located = [" --> ", " ::: "].into_iter().find_map(|arrow| {
-            let location = line.strip_prefix(arrow)?.strip_prefix(entry)?;
-            Some((arrow, location.strip_prefix(':')?))
+        let located = rawr_snippet::located(line).and_then(|(arrow, place)| {
+            Some((arrow, place.strip_prefix(entry)?.strip_prefix(':')?))
         });
         if let Some((arrow, location)) = located {
             let location = location
@@ -277,8 +276,8 @@ fn unmarked(text: &str, entry: &str, program: &str, source: &str) -> String {
         } else if let Some((gutter, rest)) = line.split_once(" | ")
             && gutter.trim().parse::<usize>().is_ok()
         {
-            let width = gutter.len() - 1;
-            out.push_str(&format!(" {:>width$} | {rest}", earlier(gutter.trim())));
+            let width = gutter.len();
+            out.push_str(&format!("{:>width$} | {rest}", earlier(gutter.trim())));
         } else {
             out.push_str(line);
         }
@@ -334,16 +333,22 @@ mod tests {
     fn a_compile_error_points_into_the_snippet_as_written() {
         let source = "fn main() {\n    let x = 1;\n    nothing(x);\n}\n";
         let program = super::program(source);
-        let rendered = "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate is not available in this prebuilt runner\n \
-             --> /universe/src/main.rs:4:5-4:12\n \
-             4 |     nothing(x);\n   \
-             |     ^^^^^^^ the runner was not built with this call\n";
+        let rendered = concat!(
+            "error: this use of a crate is not available in this prebuilt runner\n",
+            " --> /universe/src/main.rs:4:5\n",
+            "  |\n",
+            "4 |     nothing(x);\n",
+            "  |     ^^^^^^^ the runner was not built with this call\n",
+        );
         assert_eq!(
             super::unmarked(rendered, "/universe/src/main.rs", &program, source),
-            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate is not available in this prebuilt runner\n \
-             --> play.rs:3:5-3:12\n \
-             3 |     nothing(x);\n   \
-             |     ^^^^^^^ the runner was not built with this call\n"
+            concat!(
+                "error: this use of a crate is not available in this prebuilt runner\n",
+                " --> play.rs:3:5\n",
+                "  |\n",
+                "3 |     nothing(x);\n",
+                "  |     ^^^^^^^ the runner was not built with this call\n",
+            )
         );
     }
 }

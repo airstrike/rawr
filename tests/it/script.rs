@@ -65,9 +65,10 @@ fn a_handle_s_wrong_return_type_is_e0308_naming_the_exported_type() {
     assert_eq!(
         failure(script.func::<(Transaction,), String>("category")),
         "error[E0308]: mismatched types
- --> <script>:3:1-3:47
- 3 | fn category(tx: Transaction) -> Option<String> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `fn(Transaction) -> String`, found `fn(Transaction) -> Option<String>`"
+ --> <script>:3:1
+  |
+3 | fn category(tx: Transaction) -> Option<String> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `fn(Transaction) -> String`, found `fn(Transaction) -> Option<String>`"
     );
 }
 
@@ -171,9 +172,10 @@ fn two_roots_types_of_one_name_are_different_types() {
     assert_eq!(
         failure(script.func::<(Transaction,), f64>("amount")),
         "error[E0308]: mismatched types
- --> <script>:1:1-1:42
- 1 | fn amount(tx: ledger::Transaction) -> f64 { tx.amount }
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `fn(bank::Transaction) -> f64`, found `fn(ledger::Transaction) -> f64`"
+ --> <script>:1:1
+  |
+1 | fn amount(tx: ledger::Transaction) -> f64 { tx.amount }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `fn(bank::Transaction) -> f64`, found `fn(ledger::Transaction) -> f64`"
     );
     let amount = script.func::<(ledger::Transaction,), f64>("amount").unwrap();
     assert_eq!(amount.call(ledger::Transaction { amount: 2.5 }).unwrap(), 2.5);

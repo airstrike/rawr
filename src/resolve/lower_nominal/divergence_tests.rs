@@ -243,7 +243,7 @@ fn language_an_operator_on_a_struct_without_its_trait_is_rustcs_error() {
              fn main() {{\n    let x = {expression};\n}}\nmain();\n"
         ));
         assert!(
-            report.starts_with(&format!("{message}\n --> <script>:10:{column}")),
+            report.starts_with(&format!("{message}\n  --> <script>:10:{column}")),
             "{expression}: {report}"
         );
     }

@@ -1083,7 +1083,7 @@ fn a_tuple_pattern_of_the_wrong_field_count_is_e0023() {
         "{rendered}"
     );
     assert!(
-        rendered.contains("|                          --- tuple variant has 2 fields"),
+        rendered.contains("|                     ---  --- tuple variant has 2 fields"),
         "{rendered}"
     );
     // One field that is a tuple of as many: the help wraps them.
@@ -1210,14 +1210,14 @@ fn a_value_where_a_box_dyn_error_is_expected_is_e0308() {
                  fmt::Display for Oops {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result \
                  {\n        write!(f, \"oops\")\n    }\n}\nimpl Error for Oops {}\nfn take(_: \
                  Box<dyn Error>) {}\n";
-    let boxed = "  = help: store this in the heap by calling `Box::new`\n  = note: for more on \
+    let boxed = "   = help: store this in the heap by calling `Box::new`\n   = note: for more on \
                  the distinction between the stack and the heap, read \
                  https://doc.rust-lang.org/book/ch15-01-box.html, \
                  https://doc.rust-lang.org/rust-by-example/std/box.html, and \
                  https://doc.rust-lang.org/std/boxed/index.html\n";
     let into = |ty: &str| {
         format!(
-            "  = help: call `Into::into` on this expression to convert `{ty}` into `Box<dyn \
+            "   = help: call `Into::into` on this expression to convert `{ty}` into `Box<dyn \
              std::error::Error>`\n"
         )
     };
@@ -1269,10 +1269,16 @@ fn a_value_where_a_box_dyn_error_is_expected_is_e0308() {
         let report = rendered(&source);
         assert!(
             report.starts_with(&format!(
-                "error[E0308]: mismatched types\n --> main.rs:{at}"
+                "error[E0308]: mismatched types\n  --> main.rs:{at}"
             )),
             "{report}"
         );
+        // rustc's gutter closes the snippet before its help and notes.
+        let help = if help.is_empty() {
+            help
+        } else {
+            format!("   |\n{help}")
+        };
         assert!(
             report.contains(&format!("expected `Box<dyn Error>`, found {found}\n{help}")),
             "{report}"

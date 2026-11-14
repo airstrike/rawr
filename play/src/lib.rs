@@ -309,7 +309,7 @@ mod tests {
     fn run_plain_statement_errors_keep_their_positions() {
         let PlayError::Compile(text) = run("let x: i64 = \"s\";", &Limits::default()).unwrap_err();
         assert!(text.contains("play.rs:1:14"), "{text}");
-        assert!(text.contains(" 1 | let x: i64 = \"s\";"), "{text}");
+        assert!(text.contains("\n1 | let x: i64 = \"s\";"), "{text}");
         let PlayError::Compile(text) = run("let a = 1;\na + true", &Limits::default()).unwrap_err();
         assert!(text.contains("play.rs:2:"), "{text}");
     }
@@ -464,7 +464,7 @@ mod tests {
             }
             assert!(text.contains(" --> play.rs:1:"), "{source}: {text}");
             assert!(
-                text.contains(&format!(" 1 | {source}\n")),
+                text.contains(&format!("\n1 | {source}\n")),
                 "{source}: {text}"
             );
         }

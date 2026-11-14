@@ -693,7 +693,7 @@ fn a_call_the_universe_does_not_make_does_not_compile() {
         // `&str` and a `String`.
         (
             "column![text(self.volume as f64), button(\"Up\").on_press(Msg::Up)]",
-            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate is not available in this prebuilt runner",
+            "error: this use of a crate is not available in this prebuilt runner",
         ),
         // A widget it doesn't use is not in its bindings at all, as rustc
         // says of a missing item.
@@ -711,7 +711,7 @@ fn a_call_the_universe_does_not_make_does_not_compile() {
         (
             "column![slider(0.0..=1.0, self.volume, Msg::Volume), \
              slider(0.0..=1.0, self.volume, |volume| Msg::Volume(volume / 2.0))]",
-            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate is not available in this prebuilt runner",
+            "error: this use of a crate is not available in this prebuilt runner",
         ),
     ] {
         let source = format!(

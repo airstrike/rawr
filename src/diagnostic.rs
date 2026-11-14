@@ -13,7 +13,7 @@ pub use crate::types::Rendered;
 #[cfg(any(feature = "sync", feature = "rust-import"))]
 pub(crate) use panic::located;
 pub use panic::{hooked, locate_panics_with, panic, panic_message, panicked, BACKTRACE_NOTE};
-pub use render::render;
+pub use render::{render, render_with, Color};
 pub use report::{
     Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report, Severity,
 };

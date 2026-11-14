@@ -18,15 +18,24 @@ impl Code {
         Self { value, category }
     }
 
-    /// Return the stable printable code: rustc's, as `E0308`, or empty for
-    /// an error rustc reports without one.
+    /// Return the stable printable code: rustc's, as `E0308`, rawr's own,
+    /// as `RAWR-FRAMEWORK-NATIVE`, or empty for an error rustc reports
+    /// without one.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         self.value
     }
 
+    /// The code rustc prints for this error, as `E0308`: `None` for one
+    /// rustc reports without a code and for rawr's own, which only the
+    /// report as data carries.
+    #[must_use]
+    pub fn rustc(self) -> Option<&'static str> {
+        self.value.starts_with('E').then_some(self.value)
+    }
+
     /// The code as rustc prints it after the severity: `[E0308]`, or
-    /// nothing for an error rustc reports without one.
+    /// nothing for an error rustc prints without one ([`Code::rustc`]).
     #[must_use]
     pub const fn tag(self) -> Tag {
         Tag(self)
@@ -51,9 +60,9 @@ pub struct Tag(Code);
 
 impl fmt::Display for Tag {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0.value {
-            "" => Ok(()),
-            value => write!(formatter, "[{value}]"),
+        match self.0.rustc() {
+            Some(value) => write!(formatter, "[{value}]"),
+            None => Ok(()),
         }
     }
 }

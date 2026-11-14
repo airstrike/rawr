@@ -76,6 +76,8 @@ proc-macro2 = { version = "1.0.60", default-features = false, features = ["span-
 
 serde = { version = "1.0.136", default-features = false, features = ["derive", "alloc"], optional = true }
 serde_json = { version = "1.0.45", default-features = false, features = ["alloc"] }
+# Reports render as rustc renders its own, with the crate rustc renders with.
+annotate-snippets = "0.12"
 # A runner keeps each source's lowering on disk for its next start (#1638).
 rmp-serde = { version = "1.3.1", optional = true }
 unicode-xid = { version = "0.2.0", default-features = false, optional = true }

@@ -99,6 +99,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "annotate-snippets"
+version = "0.12.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74fc7650eedcb2fee505aad48491529e408f0e854c2d9f63eb86c1361b9b3f93"
+dependencies = [
+ "anstyle",
+ "memchr",
+ "unicode-width",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2960,6 +2971,7 @@ name = "rawr"
 version = "0.3.213"
 dependencies = [
  "ahash",
+ "annotate-snippets",
  "arbitrary",
  "bitflags 2.13.1",
  "document-features",
@@ -3001,6 +3013,7 @@ dependencies = [
 name = "rawr-cli"
 version = "0.3.213"
 dependencies = [
+ "anstream",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "nix 0.27.1",

@@ -16,18 +16,14 @@ pub fn report(text: &str, program: &str, source: &str) -> String {
     let mut quoted = None;
     let mut moved = false;
     for line in text.lines() {
-        let rewritten = if let Some(location) = line
-            .strip_prefix(" --> ")
-            .or_else(|| line.strip_prefix(" ::: "))
+        let rewritten = if let Some((arrow, location)) = located(line).and_then(|(arrow, rest)| {
             // A crate-root check (an inline `mod`) names the file by its
             // path in the one-file crate, `/play.rs`.
-            .map(|rest| rest.strip_prefix('/').unwrap_or(rest))
-            .and_then(|rest| rest.strip_prefix(SOURCE_NAME))
-            .and_then(|rest| rest.strip_prefix(':'))
-        {
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            Some((arrow, rest.strip_prefix(SOURCE_NAME)?.strip_prefix(':')?))
+        }) {
             quoted = None;
             moved = false;
-            let arrow = &line[..5];
             let location = shift_location(location, &added, last, end);
             format!("{arrow}{SOURCE_NAME}:{location}")
         } else if let Some((number, rest)) = quoted_line(line) {
@@ -65,6 +61,17 @@ pub fn report(text: &str, program: &str, source: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// A report's ` --> path:line:column` or ` ::: path:line:column` line:
+/// the arrow with the gutter's indent before it, and the place after it.
+pub fn located(line: &str) -> Option<(&str, &str)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let rest = &line[indent..];
+    let place = rest
+        .strip_prefix("--> ")
+        .or_else(|| rest.strip_prefix("::: "))?;
+    Some((&line[..indent + 4], place))
 }
 
 /// A panic's text, as `rawr::diagnostic::panic` writes it for the wrapped
