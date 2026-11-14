@@ -504,6 +504,165 @@ pub(crate) fn uses_text(text: &str) -> String {
     uses
 }
 
+/// One name a module's top-level `use` declaration binds: `use
+/// iced::wgpu;` binds `wgpu` to `iced::wgpu`. A glob and a `_` bind no
+/// name and are left out.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Binding {
+    /// The declaration has a visibility (`pub`, `pub(crate)`, ...).
+    pub(crate) visible: bool,
+    /// The path starts at `::`: an extern crate, by its name.
+    pub(crate) global: bool,
+    /// The path's segments, as written.
+    pub(crate) path: Vec<String>,
+    /// The name it binds: the last segment, or its `as` rename.
+    pub(crate) name: String,
+}
+
+impl Binding {
+    /// The binding as its own declaration: `use iced::wgpu as wgpu;`,
+    /// visible to the crate when it was written with a visibility.
+    pub(crate) fn declaration(&self) -> String {
+        format!(
+            "{}use {}{} as {};\n",
+            if self.visible { "pub(crate) " } else { "" },
+            if self.global { "::" } else { "" },
+            self.path.join("::"),
+            self.name,
+        )
+    }
+}
+
+/// The names the top-level `use` declarations of `text`, a module, bind,
+/// under `features`: a declaration whose `#[cfg]` does not hold binds
+/// none.
+pub(crate) fn bindings(text: &str, features: &Enabled) -> Vec<Binding> {
+    let tokens = tokens(text);
+    let mut bindings = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = true;
+    let mut disabled = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        if depth == 0 && start {
+            if tokens[index] == Token::Punct(b'#') {
+                let (attribute, end) = attribute(&tokens, index, features);
+                disabled |= attribute.disabled;
+                index = end;
+                continue;
+            }
+            start = false;
+            if let Some(end) = use_end(&tokens, index) {
+                if !disabled {
+                    let visible = matches!(tokens[index], Token::Ident("pub", _));
+                    let at = (index..end)
+                        .find(|at| matches!(tokens[*at], Token::Ident("use", _)))
+                        .map_or(end, |at| at + 1);
+                    let tree = UseTree {
+                        tokens: &tokens[..end],
+                        visible,
+                    };
+                    tree.read(at, &mut Vec::new(), false, &mut bindings);
+                }
+                disabled = false;
+                index = end + 1;
+                start = true;
+                continue;
+            }
+            disabled = false;
+        }
+        match tokens[index] {
+            Token::Punct(b'{' | b'(' | b'[') => depth += 1,
+            Token::Punct(close @ (b'}' | b')' | b']')) => {
+                depth = depth.saturating_sub(1);
+                start = depth == 0 && close == b'}';
+            }
+            Token::Punct(b';') if depth == 0 => start = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    bindings
+}
+
+/// The tokens of one `use` declaration's tree, up to its `;`.
+struct UseTree<'t, 'a> {
+    tokens: &'t [Token<'a>],
+    visible: bool,
+}
+
+impl UseTree<'_, '_> {
+    fn colons(&self, at: usize) -> bool {
+        self.tokens.get(at) == Some(&Token::Punct(b':'))
+            && self.tokens.get(at + 1) == Some(&Token::Punct(b':'))
+    }
+
+    /// The bindings of the tree at `at` below `prefix`, and the index past
+    /// it.
+    fn read(
+        &self,
+        mut at: usize,
+        prefix: &mut Vec<String>,
+        mut global: bool,
+        bindings: &mut Vec<Binding>,
+    ) -> usize {
+        let outer = prefix.len();
+        if prefix.is_empty() && self.colons(at) {
+            global = true;
+            at += 2;
+        }
+        loop {
+            match self.tokens.get(at) {
+                Some(Token::Ident(segment, _)) => {
+                    prefix.push((*segment).to_owned());
+                    at += 1;
+                    if self.colons(at) {
+                        at += 2;
+                        continue;
+                    }
+                    break;
+                }
+                Some(Token::Punct(b'{')) => {
+                    at += 1;
+                    while at < self.tokens.len() && self.tokens[at] != Token::Punct(b'}') {
+                        at = self.read(at, prefix, global, bindings);
+                        if self.tokens.get(at) == Some(&Token::Punct(b',')) {
+                            at += 1;
+                        }
+                    }
+                    prefix.truncate(outer);
+                    return at + 1;
+                }
+                // A glob binds no name of its own.
+                _ => {
+                    prefix.truncate(outer);
+                    return at + 1;
+                }
+            }
+        }
+        if prefix.last().map(String::as_str) == Some("self") {
+            prefix.pop();
+        }
+        let mut name = prefix.last().cloned().unwrap_or_default();
+        if let (Some(Token::Ident("as", _)), Some(Token::Ident(rename, _))) =
+            (self.tokens.get(at), self.tokens.get(at + 1))
+        {
+            name = (*rename).to_owned();
+            at += 2;
+        }
+        if !name.is_empty() && name != "_" {
+            bindings.push(Binding {
+                visible: self.visible,
+                global,
+                path: prefix.clone(),
+                name,
+            });
+        }
+        prefix.truncate(outer);
+        at
+    }
+}
+
 /// The index of the `;` that ends the `use` declaration whose first token,
 /// past its attributes, is at `index`: `pub use ..;`, `pub(crate) use ..;`
 /// or `use ..;`. `None` for another item.
@@ -556,6 +715,29 @@ pub(crate) fn named_items_public(text: &str, names: &std::collections::BTreeSet<
     let inserts = private_items(&tokens)
         .into_iter()
         .filter(|(_, index)| item_name(&tokens, *index).is_some_and(|name| names.contains(name)))
+        .map(|(at, _)| at)
+        .collect::<Vec<_>>();
+    inserted(text, &inserts, "pub ")
+}
+
+/// `text`, a native module of a crate whose root is marked, with `pub `
+/// before each of its own `mod` items that has no visibility. A marked
+/// module reads a native value's public fields and methods whatever
+/// module its type is declared in, as `custom_shader`'s `Scene` holds a
+/// `Camera` of the private `scene::camera` (#1932); the runner names
+/// the type by its path, so each module on the way is public in rawr's
+/// copy, as D876 widens one for an instance's type. The user's source and
+/// cargo's own build are untouched, so cargo check still reports privacy
+/// errors.
+#[cfg_attr(
+    not(all(feature = "rust-import", not(target_arch = "wasm32"))),
+    allow(dead_code)
+)]
+pub(crate) fn modules_public(text: &str) -> String {
+    let tokens = tokens(text);
+    let inserts = private_items(&tokens)
+        .into_iter()
+        .filter(|(_, index)| matches!(tokens[*index], Token::Ident("mod", _)))
         .map(|(at, _)| at)
         .collect::<Vec<_>>();
     inserted(text, &inserts, "pub ")
@@ -1163,6 +1345,37 @@ mod inline { pub(super) fn kept() {} #[path = "deep.rs"] mod deep; }
             super::uses_text(text),
             " pub use theme:: Theme;\n pub( crate) use theme::{ palette::{ self, Colors}, \
              Kind as K};\n use ui:: Widget;\n"
+        );
+    }
+
+    #[test]
+    fn a_modules_uses_bind_their_names() {
+        let text = "use iced::wgpu;\n#[cfg(feature = \"off\")]\nuse gone::Gone;\n\
+                    pub(crate) use ::serde::{self, de::{Visitor as V, *}, _x as _};\n\
+                    fn f() { use inner::Hidden; }\nuse self::scene::Scene;\n";
+        let bound = super::bindings(text, &features())
+            .into_iter()
+            .map(|binding| binding.declaration())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bound,
+            [
+                "use iced::wgpu as wgpu;\n",
+                "pub(crate) use ::serde as serde;\n",
+                "pub(crate) use ::serde::de::Visitor as V;\n",
+                "use self::scene::Scene as Scene;\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_native_modules_own_modules_are_public() {
+        let text = "mod camera;\npub mod cube;\n#[cfg(test)]\nmod tests { mod inner {} }\n\
+                    pub(super) mod near;\nfn f() { mod local {} }\n";
+        assert_eq!(
+            super::modules_public(text),
+            "pub mod camera;\npub mod cube;\n#[cfg(test)]\npub mod tests { mod inner {} }\n\
+             pub(super) mod near;\nfn f() { mod local {} }\n"
         );
     }
 

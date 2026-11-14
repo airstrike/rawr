@@ -297,6 +297,54 @@ fn native_code_cannot_use_marked_code() {
     );
 }
 
+/// A native module's path through the marked root's `use` of an extern
+/// crate or of a native module is no use of marked code: rustc resolves
+/// `crate::wgpu` to custom_shader's `use iced::wgpu;`, so the app crate
+/// declares that `use` too (#1932). A `use` of a marked item is still
+/// marked code.
+#[test]
+fn native_code_uses_the_marked_roots_reexports() {
+    let sandbox = Sandbox::new("marked-reexports");
+    let root = copy("rs-marker-direction", &sandbox.work());
+    fs::write(
+        root.join("src/money.rs"),
+        "pub fn twice(cents: i64) -> i64 { cents * 2 }\npub struct Cents;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/pricing.rs"),
+        "use crate::collections::BTreeMap;\n\
+         use crate::{doubling, Count};\n\
+         pub fn doubled(cents: i64) -> i64 { doubling(cents) + BTreeMap::<i64, Count>::new().len() as i64 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nmod money;\nmod pricing;\n\
+         use std::collections;\nuse money::twice as doubling;\npub use self::Item as Count;\n\
+         pub struct Item;\n\
+         fn main() { println!(\"{}\", pricing::doubled(2)); }\n",
+    )
+    .unwrap();
+    let error = graph(&root, None).unwrap_err();
+    assert!(
+        error.contains("native module `crate::pricing` cannot use `crate::Count`"),
+        "{error}"
+    );
+
+    let main = root.join("src/main.rs");
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(
+        &main,
+        text.replace(
+            "pub use self::Item as Count;\n",
+            "use money::Cents as Count;\n",
+        ),
+    )
+    .unwrap();
+    graph(&root, None).unwrap();
+}
+
 /// A package with a library and a binary whose marked modules are all in
 /// the library's tree runs from its library (#1107). Rawr reads the
 /// library root's `mod` declarations and the marked files; the binary is

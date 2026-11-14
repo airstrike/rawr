@@ -48,6 +48,33 @@ pub struct Package {
     target: Option<project::cargo::Target>,
     /// The crate root has a frontmatter block: a cargo script.
     script: bool,
+    /// The `use` declarations of marked modules that native modules'
+    /// paths go through, as `crate::wgpu` goes through the marked root's
+    /// `use iced::wgpu;` (#1932): the app crate declares them where the
+    /// marked modules stand.
+    re_exports: Vec<ReExport>,
+}
+
+/// One `use` declaration of a marked module that a native module's path
+/// goes through to an item outside marked code.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReExport {
+    modules: Box<[ImmutableString]>,
+    declaration: String,
+}
+
+impl ReExport {
+    /// The marked module that declares it, by its path from the root.
+    #[must_use]
+    pub fn modules(&self) -> &[ImmutableString] {
+        &self.modules
+    }
+
+    /// The declaration as the app crate writes it.
+    #[must_use]
+    pub fn declaration(&self) -> &str {
+        &self.declaration
+    }
 }
 
 /// One native module of a marked crate: an unmarked `.rs` file in the
@@ -201,6 +228,12 @@ impl Package {
     #[must_use]
     pub fn rust_modules(&self) -> &[RustModule] {
         &self.rust_modules
+    }
+
+    /// The marked modules' `use` declarations native paths go through.
+    #[must_use]
+    pub fn re_exports(&self) -> &[ReExport] {
+        &self.re_exports
     }
 
     /// The crate root when it is native Rust: an unmarked `src/main.rs` (or
@@ -948,6 +981,7 @@ impl<'a> Builder<'a> {
             library,
             target: target.clone(),
             script,
+            re_exports: Vec::new(),
         });
 
         let module_root = request
@@ -1555,22 +1589,44 @@ impl<'a> Builder<'a> {
     /// modules instead (D501), and is not checked.
     fn check_native_direction(&mut self, package: Id) -> Result<(), Error> {
         let name = self.packages[package.0].name.clone();
+        let features = &self.packages[package.0].features;
         let marked = self
             .sources
             .iter()
             .filter(|source| source.package() == name.as_str())
-            .map(|source| (source.modules().to_vec(), source.path().to_path_buf()))
+            .map(|source| Marked {
+                modules: source.modules().to_vec(),
+                path: source.path().to_path_buf(),
+                bindings: super::polyglot::bindings(source.text(), features),
+            })
             .collect::<Vec<_>>();
         let native = self.packages[package.0]
             .rust_modules
             .iter()
             .map(|module| module.modules.to_vec())
             .collect::<Vec<_>>();
+        // The names a path may start at outside the crate: std's crates and
+        // the package's dependencies.
+        let externs = ["std", "core", "alloc"]
+            .into_iter()
+            .map(ImmutableString::from)
+            .chain(
+                self.packages[package.0]
+                    .rust
+                    .iter()
+                    .flat_map(|rust| rust.dependencies.iter())
+                    .map(|dependency| dependency.alias.clone()),
+            )
+            .collect::<Vec<_>>();
+        let tree = Direction {
+            marked: &marked,
+            native: &native,
+            externs: &externs,
+        };
         let mut violation = None;
+        let mut re_exports = Vec::new();
         'modules: for module in &self.packages[package.0].rust_modules {
-            for reference in
-                super::polyglot::references(&module.text, &self.packages[package.0].features)
-            {
+            for reference in super::polyglot::references(&module.text, features) {
                 if reference.disabled {
                     continue;
                 }
@@ -1595,34 +1651,30 @@ impl<'a> Builder<'a> {
                     absolute.extend(reference.segments[supers..].iter().cloned());
                     absolute
                 };
-                // The innermost module the path lands in.
-                let is = |modules: &[ImmutableString], length: usize| {
-                    modules.len() == length
-                        && modules
-                            .iter()
-                            .zip(&absolute)
-                            .all(|(left, right)| left.as_str() == right)
+                let Some((owner, _)) = tree.landing(&absolute) else {
+                    continue;
                 };
-                for length in (0..=absolute.len()).rev() {
-                    if native.iter().any(|modules| is(modules, length)) {
-                        break;
-                    }
-                    if let Some((modules, path)) =
-                        marked.iter().find(|(modules, _)| is(modules, length))
-                    {
-                        violation = Some((
-                            module.modules.clone(),
-                            module.path.clone(),
-                            module.text.clone(),
-                            reference,
-                            modules.clone(),
-                            path.clone(),
-                        ));
-                        break 'modules;
-                    }
+                let mut chain = Vec::new();
+                if tree.re_exported(&absolute, &mut chain) {
+                    re_exports.extend(chain);
+                    continue;
                 }
+                violation = Some((
+                    module.modules.clone(),
+                    module.path.clone(),
+                    module.text.clone(),
+                    reference,
+                    marked[owner].modules.clone(),
+                    marked[owner].path.clone(),
+                ));
+                break 'modules;
             }
         }
+        re_exports.sort_unstable_by(|left: &ReExport, right| {
+            (&left.modules, &left.declaration).cmp(&(&right.modules, &right.declaration))
+        });
+        re_exports.dedup();
+        self.packages[package.0].re_exports = re_exports;
         let Some((modules, path, text, reference, owner, owner_path)) = violation else {
             return Ok(());
         };
@@ -2346,4 +2398,110 @@ fn keep_span(text: &str, span: Span) -> String {
         column += 1;
     }
     kept
+}
+
+/// A marked module of a crate whose root is marked, as the native
+/// direction check reads it: its path, its file and the names its own
+/// `use` declarations bind.
+struct Marked {
+    modules: Vec<ImmutableString>,
+    path: PathBuf,
+    bindings: Vec<super::polyglot::Binding>,
+}
+
+/// A marked root's module tree as native paths see it: where a path from
+/// the root lands, and the `use` declarations of marked modules it goes
+/// through on the way.
+struct Direction<'a> {
+    marked: &'a [Marked],
+    native: &'a [Vec<ImmutableString>],
+    /// The names a path may start at outside the crate.
+    externs: &'a [ImmutableString],
+}
+
+impl Direction<'_> {
+    /// The marked module a path from the root lands in, innermost first,
+    /// as an index of `marked` and how many of the path's segments name
+    /// it: `None` when it lands in a native module first.
+    fn landing(&self, absolute: &[String]) -> Option<(usize, usize)> {
+        let is = |modules: &[ImmutableString], length: usize| {
+            modules.len() == length
+                && modules
+                    .iter()
+                    .zip(absolute)
+                    .all(|(left, right)| left.as_str() == right)
+        };
+        for length in (0..=absolute.len()).rev() {
+            if self.native.iter().any(|modules| is(modules, length)) {
+                return None;
+            }
+            if let Some(owner) = self
+                .marked
+                .iter()
+                .position(|marked| is(&marked.modules, length))
+            {
+                return Some((owner, length));
+            }
+        }
+        None
+    }
+
+    /// Whether a path from the root reaches native code or an extern crate
+    /// through the `use` declarations of the marked modules it lands in,
+    /// as rustc resolves `crate::wgpu` through the root's `use
+    /// iced::wgpu;`. `chain` gets each declaration it goes through.
+    fn re_exported(&self, absolute: &[String], chain: &mut Vec<ReExport>) -> bool {
+        let Some((owner, length)) = self.landing(absolute) else {
+            return true;
+        };
+        let marked = &self.marked[owner];
+        let Some(name) = absolute.get(length) else {
+            return false;
+        };
+        let Some(binding) = marked.bindings.iter().find(|binding| binding.name == *name) else {
+            return false;
+        };
+        let Some(first) = binding.path.first() else {
+            return false;
+        };
+        let re_export = ReExport {
+            modules: marked.modules.clone().into_boxed_slice(),
+            declaration: binding.declaration(),
+        };
+        // A cycle of `use`s resolves to nothing.
+        if chain.contains(&re_export) {
+            return false;
+        }
+        chain.push(re_export);
+        let child = self.native.iter().any(|modules| {
+            modules.len() == marked.modules.len() + 1
+                && modules.starts_with(&marked.modules)
+                && modules.last().is_some_and(|last| last.as_str() == first)
+        });
+        if binding.global || (!child && self.externs.iter().any(|name| name.as_str() == first)) {
+            return true;
+        }
+        let here = || marked.modules.iter().map(ToString::to_string);
+        let mut target = match first.as_str() {
+            "crate" => binding.path[1..].to_vec(),
+            "self" => here().chain(binding.path[1..].iter().cloned()).collect(),
+            "super" => {
+                let supers = binding
+                    .path
+                    .iter()
+                    .take_while(|segment| *segment == "super")
+                    .count();
+                let Some(kept) = marked.modules.len().checked_sub(supers) else {
+                    return false;
+                };
+                here()
+                    .take(kept)
+                    .chain(binding.path[supers..].iter().cloned())
+                    .collect()
+            }
+            _ => here().chain(binding.path.iter().cloned()).collect(),
+        };
+        target.extend(absolute[length + 1..].iter().cloned());
+        self.re_exported(&target, chain)
+    }
 }

@@ -7219,6 +7219,18 @@ fn assemble<B: crate::surface::Runner>(
     }
     let files = files.into_boxed_slice();
     let file_records = file_records.into_boxed_slice();
+    // Which fields have a store reads their types' paths, as the source's
+    // rendering did, so the entries name the adapters it wrote: a field of
+    // a `Vec` of crate values, as custom_shader's `Scene::cubes` (#1932).
+    let facade = key
+        .request
+        .facade_plan()
+        .map(|bytes| {
+            crate::surface::facade::Plan::decode(bytes)
+                .map_err(|_| request::drift("generated profile bindings plan"))
+        })
+        .transpose()?;
+    let _type_paths = TypePaths::install(facade.as_ref());
     let mut entries = Vec::new();
     entries
         .try_reserve_exact(key.request.plans.len())
