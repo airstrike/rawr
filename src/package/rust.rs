@@ -1256,13 +1256,24 @@ mod seed {
         tokens
     }
 
+    /// Rust's keywords that no path segment is: a `::` after one starts a
+    /// path of its own, as `match ::image::load_from_memory(..)` does.
+    /// `crate`, `self`, `super` and `Self` start paths, so they aren't here.
+    const KEYWORDS: &[&str] = &[
+        "as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern",
+        "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
+        "pub", "ref", "return", "static", "struct", "trait", "true", "type", "unsafe", "use",
+        "where", "while", "yield",
+    ];
+
     /// One `a::b::c` run starting at `index`, and the index after it.
     fn path<'a>(tokens: &[Token<'a>], mut index: usize) -> (Vec<&'a str>, usize) {
         let mut segments = Vec::new();
         while let Some(Token::Ident(name)) = tokens.get(index) {
             segments.push(*name);
             index += 1;
-            if tokens.get(index) == Some(&Token::Path)
+            if !KEYWORDS.contains(name)
+                && tokens.get(index) == Some(&Token::Path)
                 && matches!(tokens.get(index + 1), Some(Token::Ident(_)))
             {
                 index += 1;
@@ -1560,6 +1571,23 @@ mod seed {
                     "image::Rgba",
                     "image::open",
                     "image::save_buffer",
+                ]
+            );
+        }
+
+        /// iced's gallery: `match ::image::load_from_memory(..)`, a global
+        /// path after a keyword, which no path continues through (#1935).
+        #[test]
+        fn seed_starts_a_global_path_after_a_keyword() {
+            let text = "use iced::widget::image;\n\
+                fn decode() { let _ = || match ::image::load_from_memory(b) { _ => () }; \
+                return &mut ::image::RgbaImage::new(1, 1); }\n";
+            assert_eq!(
+                joined(text),
+                [
+                    "iced::widget::image",
+                    "image::RgbaImage::new",
+                    "image::load_from_memory",
                 ]
             );
         }
