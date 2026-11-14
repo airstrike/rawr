@@ -168,6 +168,7 @@ impl<'a> Parser<'a> {
             host: None,
             try_from: Some(error.clone()),
             lending: None,
+            try_error: false,
         });
         let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
         rendered.push_text(")");
@@ -405,6 +406,7 @@ impl<'a> Parser<'a> {
             host: None,
             try_from: None,
             lending: None,
+            try_error: false,
         });
         // `placeholder(value))`: the placeholder becomes `helper(`, or
         // `dispatcher(witness, ` for a generic target.
@@ -604,6 +606,7 @@ impl<'a> Parser<'a> {
             }),
             try_from: None,
             lending: None,
+            try_error: false,
         });
         let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
         rendered.push_text(")");
@@ -1283,6 +1286,9 @@ impl<'a> Parser<'a> {
                 self.lending_helper(lending, &conversion)?
             } else if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
+            } else if conversion.try_error && matches!(target, Ty::Infer(_)) {
+                self.unify_type(&target, &conversion.source);
+                String::new()
             } else if matches!(target, Ty::Infer(_)) {
                 let bound = format!("From<{}>", conversion.source.name(&self.models));
                 if let Some(error) = self.unsettled(&target, conversion.span, Some(bound)) {
@@ -1633,6 +1639,9 @@ pub(super) struct PendingConversion {
     /// `.as_ref()` or `.borrow()` of a native value: the std trait whose
     /// impl lends the target (`lending`).
     pub(super) lending: Option<super::lending::Lending>,
+    /// A closure's `?`, whose target is the closure's error: one its body
+    /// never fixes is the operand's own error (#1977).
+    pub(super) try_error: bool,
 }
 
 /// The `into` forms of a facade value's type, and the value's span.
