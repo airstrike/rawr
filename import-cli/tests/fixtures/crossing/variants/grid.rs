@@ -2,9 +2,10 @@
 // image's `ImageBuffer::from_fn(64, 64, |x, y| ..)`: a crate function
 // takes an `FnMut` with no `'static` bound, borrowed for the call, so the
 // closure may change what it captures and the program reads it after (#715).
-// Function pointers take any number of inputs.
+// Function pointers take any number of inputs. A `#[track_caller]`
+// function's location is the program's call (#1560).
 
-use events::grid::{combine, labeled, produce, tagged, Grid};
+use events::grid::{combine, here, labeled, placed, produce, tagged, Grid};
 
 fn add(sum: u32, cell: u8) -> u32 {
     sum + cell as u32
@@ -42,4 +43,5 @@ fn main() {
     println!("{}", labeled(&doubled, describe));
     let target = String::from("events");
     println!("{}", tagged(&(target.as_str(), "grid", 7)));
+    println!("{}", placed(&("located", here())));
 }

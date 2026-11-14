@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 179;
+const CLASSIFIER_VERSION: u32 = 181;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9031,6 +9031,28 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
     }
 
+    /// The held std type a `&'static` shared borrow `ty` lends, when that
+    /// type is `Clone`, as `&'static Location<'static>` lends `Location`.
+    fn static_std_borrow(&self, ty: &model::Type) -> Option<representability::convert::Type> {
+        let model::Type::Reference {
+            lifetime: model::Lifetime::Static,
+            mutability: model::Mutability::Shared,
+            ty: target,
+        } = ty
+        else {
+            return None;
+        };
+        let held = self.convert(target).ok()?;
+        match &held {
+            representability::convert::Type::Nominal { definition, .. }
+                if crate::surface::identity::Definition::std_clone(definition.as_bytes()) =>
+            {
+                Some(held)
+            }
+            _ => None,
+        }
+    }
+
     /// Whether the crate's values of `ty` clone, so a slice of them can
     /// be copied out.
     fn clones(&self, ty: &representability::convert::Type) -> bool {
@@ -10876,6 +10898,16 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         ty: &model::Type,
         rewrite: impl Fn(&model::Type) -> model::Type,
     ) -> Result<representability::convert::Type, Failure> {
+        // A `'static` borrow of one of std's `Clone` values Rawr's std
+        // holds, as log's `loc() -> &'static Location<'static>` gives: a
+        // copy made at the call, as a `&str` is, which a crate borrows for
+        // good again where it takes one (`crossing::Std::lend`, #1560).
+        if let Some(held) = self.static_std_borrow(ty) {
+            return Ok(representability::convert::Type::Borrowed {
+                mutable: false,
+                ty: Box::new(held),
+            });
+        }
         let Some(output) = self.future_type_output(ty) else {
             return self.convert_value(ty);
         };

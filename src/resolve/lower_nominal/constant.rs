@@ -113,10 +113,7 @@ impl<'a> Parser<'a> {
             let text = match name {
                 "line" => at.line().unwrap_or_default().to_string(),
                 "column" => at.position().unwrap_or_default().to_string(),
-                "file" => match self.source_file() {
-                    Some(file) => cargo_env::file_path(&file),
-                    None => self.source_identity(),
-                },
+                "file" => self.file_name(),
                 _ => self.module_path(),
             };
             return Ok((text, end));
@@ -329,6 +326,15 @@ impl<'a> Parser<'a> {
             .resolve(key)
             .map(|source| source.identity().to_owned())
             .unwrap_or_default()
+    }
+
+    /// `file!()` here: the file's path as Cargo passes it to rustc, or
+    /// its name as its source names it when it is no file on disk.
+    pub(super) fn file_name(&self) -> String {
+        match self.source_file() {
+            Some(file) => cargo_env::file_path(&file),
+            None => self.source_identity(),
+        }
     }
 
     /// The program's root file, when it is a file on disk.
