@@ -4,7 +4,13 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A use after a move gives rustc's note on the parameter that took the value and its clone suggestion, and a borrow of a moved local says 'borrow of moved value' over the borrow.","issues":[921]},
+      {"text":"`let x;` follows rustc: a second assignment on any path is E0384, a match arm can assign it, `let (a, b);` works, and a Drop type drops only where it was assigned.","issues":[946]},
+      {"text":"Arithmetic on literals that overflows or divides by zero, and an array index past its length, are refused with rustc's arithmetic_overflow and unconditional_panic errors.","issues":[947]},
+      {"text":"A type mismatch underlines the whole expression, as rustc does.","issues":[1729]},
+      {"text":"A project built with `split-debuginfo = \"packed\"` runs under rawr: the `.dSYM` debug info Cargo names or links beside a build script is no longer read as a build output, a crate rustc can find, or part of the runner's build.","issues":[1923]}
+    ]
   },
   "releases": [
     {

@@ -5,6 +5,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A use after a move gives rustc's note on the parameter that took the value and its clone suggestion, and a borrow of a moved local says 'borrow of moved value' over the borrow. (#921)
+- `let x;` follows rustc: a second assignment on any path is E0384, a match arm can assign it, `let (a, b);` works, and a Drop type drops only where it was assigned. (#946)
+- Arithmetic on literals that overflows or divides by zero, and an array index past its length, are refused with rustc's arithmetic_overflow and unconditional_panic errors. (#947)
+- A type mismatch underlines the whole expression, as rustc does. (#1729)
+- A project built with `split-debuginfo = "packed"` runs under rawr: the `.dSYM` debug info Cargo names or links beside a build script is no longer read as a build output, a crate rustc can find, or part of the runner's build. (#1923)
 
 ## 0.3.213 (2026-11-13)
 
