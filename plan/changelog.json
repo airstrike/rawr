@@ -7,7 +7,8 @@
     "entries": [
       {"text":"The playground runs a snippet that uses iced in the browser: its window is drawn in the output pane and takes clicks and keys, with no server round trip.","issues":[435],"refs":[1395,1384]},
       {"text":"`rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it.","issues":[1753]},
-      {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]}
+      {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]},
+      {"text":"A Rust dependency that declares several crate types, as a library exposing a C ABI does with lib, cdylib and staticlib, no longer stops `rawr run` with an internal error. The runner also builds for crates whose async methods give futures that borrow their receiver; calling one says it isn't supported yet, instead of the native build failing.","issues":[2029],"refs":[2024,2030]}
     ]
   },
   "releases": [

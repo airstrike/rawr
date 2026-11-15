@@ -8,6 +8,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The playground runs a snippet that uses iced in the browser: its window is drawn in the output pane and takes clicks and keys, with no server round trip. (#435; part of #1395, #1384)
 - `rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it. (#1753)
 - The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses. (#2027; part of #1395)
+- A Rust dependency that declares several crate types, as a library exposing a C ABI does with lib, cdylib and staticlib, no longer stops `rawr run` with an internal error. The runner also builds for crates whose async methods give futures that borrow their receiver; calling one says it isn't supported yet, instead of the native build failing. (#2029; part of #2024, #2030)
 
 ## 0.3.214 (2026-11-14)
 

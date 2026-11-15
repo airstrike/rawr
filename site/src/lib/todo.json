@@ -14,7 +14,8 @@
       "entries": [
         {"text":"The playground runs a snippet that uses iced in the browser: its window is drawn in the output pane and takes clicks and keys, with no server round trip.","issues":[435],"refs":[1395,1384]},
         {"text":"`rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it.","issues":[1753]},
-        {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]}
+        {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]},
+        {"text":"A Rust dependency that declares several crate types, as a library exposing a C ABI does with lib, cdylib and staticlib, no longer stops `rawr run` with an internal error. The runner also builds for crates whose async methods give futures that borrow their receiver; calling one says it isn't supported yet, instead of the native build failing.","issues":[2029],"refs":[2024,2030]}
       ]
     },
     "releases": [
@@ -4428,7 +4429,10 @@
     {"issue":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2026,"title":"A save that changes a marked type's fields migrates its live values in place instead of restarting","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":2027,"title":"The browser universe stopped building and covering after #1940, #326 and #1850","state":"closed","category":"Platforms"},
-    {"issue":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2029,"title":"A dependency with several crate types panics with missing-probe-output-join","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":2030,"title":"An async method whose output borrows its receiver isn't supported","state":"open","category":"No glue (D593)"},
+    {"issue":2031,"title":"A hand-written executor is refused: F::Output is an unknown member, and Future isn't found as a bound","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -6138,10 +6142,13 @@
           "name": "A turso data app",
           "start": 64,
           "size": 4,
-          "state": "next",
-          "note": "Declares turso, queries a local database and prints a report; matches cargo and hot-reloads its queries.",
+          "state": "now",
+          "note": "A turso data app matches cargo once it avoids &mut parameters in async fns (#176) and transactions that borrow their connection (#2030). A save restarts without rebuilding; swapping needs calls from main's own frame (#13).",
           "issues": [
-            {"number":2024,"title":"A data app on turso runs under rawr run as under cargo, and its query and report code hot-reloads","state":"open"}
+            {"number":2024,"title":"A data app on turso runs under rawr run as under cargo, and its query and report code hot-reloads","state":"open"},
+            {"number":2029,"title":"A dependency with several crate types panics with missing-probe-output-join","state":"closed"},
+            {"number":2030,"title":"An async method whose output borrows its receiver isn't supported","state":"open"},
+            {"number":2031,"title":"A hand-written executor is refused: F::Output is an unknown member, and Future isn't found as a bound","state":"open"}
           ]
         },
         {

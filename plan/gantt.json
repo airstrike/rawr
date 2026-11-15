@@ -161,7 +161,7 @@
       "subtitle": "Data apps on turso and polars, to see if rawr helps outside iced",
       "open": true,
       "rows": [
-        {"id":"turso-app","name":"A turso data app","start":64,"size":4,"state":"next","note":"Declares turso, queries a local database and prints a report; matches cargo and hot-reloads its queries.","issues":[2024]},
+        {"id":"turso-app","name":"A turso data app","start":64,"size":4,"state":"now","note":"A turso data app matches cargo once it avoids &mut parameters in async fns (#176) and transactions that borrow their connection (#2030). A save restarts without rebuilding; swapping needs calls from main's own frame (#13).","issues":[2024,2029,2030,2031]},
         {"id":"polars-app","name":"A polars data app","start":64,"size":6,"state":"next","note":"Declares polars, runs lazy queries over a CSV; matches cargo and hot-reloads its queries.","issues":[2025]}
       ]
     },
