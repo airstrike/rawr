@@ -57,6 +57,33 @@ fn a_package_built_for_wasm32_is_read_for_wasm32() {
     );
 }
 
+/// `run` of a package built for wasm32 builds its runner and exits 0
+/// without starting it: this machine can't run it (#1753).
+#[test]
+fn a_runner_built_for_wasm32_is_built_and_not_started() {
+    let home = crate::support::scratch().join("rawr-home");
+    let root = WASM.lease(&[]);
+    let ran = crate::support::rawr_import()
+        .arg("run")
+        .current_dir(&root)
+        .env("RAWR_HOME", &home)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = text(&ran.stderr);
+    assert!(ran.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains(
+            "the runner is built for `wasm32-unknown-unknown`, which this machine can't run"
+        ),
+        "{stderr}"
+    );
+    assert!(!text(&ran.stdout).contains("built for"), "it never started");
+}
+
 /// A crate whose build script runs on the host, with a build dependency
 /// that has a dependency only the host builds (#1454): Cargo builds it for
 /// the host, and rawr reads it with the rest of the build.

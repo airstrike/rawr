@@ -176,6 +176,15 @@ impl<B> Manifest<Built, B> {
         self.phase.read_set = Some(read_set);
     }
 
+    /// The target Cargo built this runner for when it isn't the host's, as
+    /// for a browser's wasm32: a runner this machine can't start.
+    #[must_use]
+    pub fn foreign_target(&self) -> Option<&str> {
+        let chain = self.chain.as_ref().or_else(|| self.profile.node_chain())?;
+        let target = chain.context().target();
+        (target != crate::cargo::toolchain::HOST).then_some(target)
+    }
+
     /// Borrow the independently hashed final executable proof.
     #[must_use]
     pub const fn artifact(&self) -> &artifact::BuiltArtifactProof {
