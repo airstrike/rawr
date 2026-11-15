@@ -3564,3 +3564,43 @@ fn the_state_a_native_run_holds_keeps_its_count_as_its_fields_change() {
         format!("title crossing::Counter\n{EVENTS}")
     );
 }
+
+/// A save that first names a crate's module through a `use` that binds a
+/// function of the same name, as `use iced::widget::button;` binds both
+/// and `.style(button::success)` names the module's item, in a view whose
+/// `impl Widget` output is revealed from its body, takes effect as a fresh
+/// start of the same text runs it: the running build never asked for the
+/// module, so the path is a miss against native code (#2004).
+#[test]
+fn a_save_that_first_names_a_module_beside_a_function_of_its_name_takes_effect() {
+    let text = CROSSING.read("variants/counter.rs");
+    let pressed = "button(\"Increment\").on_press(Message::Increment)";
+    assert!(text.contains(pressed), "{text}");
+    let root = CROSSING.lease(&[("src/main.rs", &text)]);
+    let main = root.join("src/main.rs");
+    // A save that fails says so in the events, which ends the wait.
+    let mut run = start(
+        &root,
+        &[
+            ("EVENTS_COUNT", PathBuf::from("3000")),
+            ("EVENTS_STOP", root.join("stop")),
+            ("RAWR_MCP_EVENTS", root.join("events.jsonl")),
+        ],
+    );
+    run.until(|line| line.starts_with("2 view "));
+
+    let idle = format!("{pressed}.pressing(button::idle)");
+    fs::write(&main, text.replace(pressed, &idle)).unwrap();
+    // The button takes no more presses: two views in a row show the same.
+    let previous = std::cell::RefCell::new(None::<String>);
+    run.until(|line| {
+        let Some((_, shown)) = line.split_once(" view ") else {
+            return false;
+        };
+        previous.replace(Some(shown.to_owned())).as_deref() == Some(shown)
+    });
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}
