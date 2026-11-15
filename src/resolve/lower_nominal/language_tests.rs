@@ -1735,7 +1735,7 @@ fn language_result_question_mark() {
         }
         pub fn run() -> i64 {
             let plus = |n: i64| -> Result<i64, String> { Ok(half(n)? + 1) };
-            let inferred = |n: i64| { let h = half(n)?; Ok(h * 2) };
+            let inferred = |n: i64| { let h = half(n)?; Ok::<_, String>(h * 2) };
             length(12) * 10 + length(6)
                 + plus(8).unwrap() * 100 + plus(3).unwrap_or(0)
                 + inferred(4).unwrap() * 1000
@@ -1743,8 +1743,17 @@ fn language_result_question_mark() {
         run()
     "#);
     assert_eq!(value, 30 - 8 + 500 + 4000);
-    // `?` on a `Result` needs a body returning `Result` with the same error:
-    // Rawr has no `From` conversion.
+    // A closure's `?` converts into the error its tail gives; a tail that
+    // names none leaves rustc no `From` impl to pick (E0282).
+    let unfixed = rejected(
+        "fn half(n: i64) -> Result<i64, String> { Ok(n) } \
+         pub fn run() -> i64 { let f = |n: i64| { let h = half(n)?; Ok(h) }; f(2).unwrap() } run()",
+    );
+    assert!(
+        unfixed.to_lowercase().contains("type annotations needed"),
+        "{unfixed}"
+    );
+    // `?` on a `Result` needs a body returning a `Result`.
     let mixed = rejected(
         "fn half(n: i64) -> Result<i64, String> { Ok(n) } \
          fn f() -> Option<i64> { Some(half(2)?) } pub fn run() -> i64 { 0 } run()",
@@ -14027,8 +14036,8 @@ fn language_std_items_rawr_cannot_run_fail_at_their_use() {
     run("use std::sync::mpsc::sync_channel;\nuse std::sync::RwLock;\npub fn run() -> i64 { 1 } run()");
     for (source, path) in [
         (
-            "use std::sync::mpsc::sync_channel;\npub fn run() -> i64 { let (a, b) = sync_channel::<i64>(1); 0 } run()",
-            "std::sync::mpsc::sync_channel",
+            "use std::sync::Condvar;\npub fn run() -> i64 { let c = Condvar::new(); 0 } run()",
+            "std::sync::Condvar::new",
         ),
         (
             "use std::sync::RwLock;\nfn take(m: RwLock<i64>) {}\npub fn run() -> i64 { 0 } run()",

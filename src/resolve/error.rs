@@ -630,7 +630,8 @@ pub enum Error {
         /// Only a part of the value moved: rustc's "partially moved".
         partial: bool,
         /// Why the value moves, where the lowering knows the local's type.
-        cause: Option<MoveCause>,
+        /// Boxed: it is the largest part of any error, and most carry none.
+        cause: Option<Box<MoveCause>>,
         /// The move is in a loop's body, which goes on to its next
         /// iteration and moves the value again: rustc's "value moved here,
         /// in previous iteration of loop". `moved` and `reference` are both

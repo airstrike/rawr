@@ -1309,12 +1309,18 @@ impl<'a> Parser<'a> {
         // `Debug`, as in Rust.
         let debug = |this: &Self, ty: &Ty| {
             // A `parse` whose target is still open: each error it can have
-            // is `Debug`.
-            let parse_error = matches!(this.inference.resolve(ty), Ty::Infer(_))
-                && this.pending_parses.iter().any(|(_, error, ..)| {
-                    this.inference.resolve(error) == this.inference.resolve(ty)
-                });
-            if parse_error || this.type_provides(ty, capability::Kind::Debug) {
+            // is `Debug`. A closure's error its `?` converts into is settled
+            // when the body ends, and is rustc's E0282 if nothing fixes it.
+            let open = this.inference.resolve(ty);
+            let pending = matches!(open, Ty::Infer(_))
+                && (this
+                    .pending_parses
+                    .iter()
+                    .any(|(_, error, ..)| this.inference.resolve(error) == open)
+                    || this.pending_conversions.iter().any(|conversion| {
+                        conversion.try_error && this.inference.resolve(&conversion.target) == open
+                    }));
+            if pending || this.type_provides(ty, capability::Kind::Debug) {
                 Ok(())
             } else {
                 Err(Error::MissingCapability {

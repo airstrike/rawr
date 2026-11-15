@@ -81,7 +81,7 @@ fn main() {
         "{report}"
     );
     // At the operator, as rustc reports it.
-    assert!(report.contains("<script>:4:22-4:24"), "{report}");
+    assert!(report.contains(" --> <script>:4:22\n"), "{report}");
     assert!(
         report.contains("no implementation for `String == {integer}`"),
         "{report}"

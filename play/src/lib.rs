@@ -388,7 +388,7 @@ mod tests {
             error.contains("cannot find function `nonexistent`"),
             "{error}"
         );
-        assert!(error.contains("play.rs:1:1-1:12"), "{error}");
+        assert!(error.contains(" --> play.rs:1:1\n"), "{error}");
     }
 
     // Discord feedback: snippets as users posted them, with no `fn main`.
