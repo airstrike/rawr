@@ -201,6 +201,8 @@ pub mod universe;
 pub use self_cell;
 #[cfg(feature = "serde")]
 pub mod serde;
+#[cfg(all(feature = "rust-import", not(feature = "serde")))]
+mod serde;
 /// Canonical callable signature fingerprints.
 pub mod signature;
 /// Source text retained by parsed compilation units.
