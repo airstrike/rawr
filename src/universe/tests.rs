@@ -84,6 +84,29 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     assert_eq!(outcomes.try_recv(), Ok(Outcome::Queued));
     assert_eq!(outcomes.try_recv(), Ok(Outcome::Swapped));
 
+    // Outside every call from native code into script code, as a page's
+    // handler of an edit runs, a text that compiles is taken at once, and
+    // the outcome is what taking it did. Inside one, the next outermost
+    // entry takes it.
+    let summed = PROGRAM.replace("a + b", "a + b + 1");
+    assert_eq!(program.replace_now(summed.as_str()), Outcome::Swapped);
+    assert_eq!(total(&program, 2, 3), 6);
+    let Outcome::Failed { message } = program.replace_now(PROGRAM.replace("a + b", "a +")) else {
+        panic!("a syntax error fails");
+    };
+    assert!(message.contains("error"), "{message}");
+    assert_eq!(total(&program, 2, 3), 6);
+    {
+        let _entry = future::entry();
+        assert_eq!(program.replace_now(doubled.as_str()), Outcome::Queued);
+    }
+    assert_eq!(total(&program, 2, 3), 6);
+    let said = outcomes.try_iter().collect::<Vec<_>>();
+    assert!(
+        said.ends_with(&[Outcome::Queued, Outcome::Swapped]),
+        "{said:?}"
+    );
+
     // A compile error keeps the last good text, and the same text again
     // doesn't compile again.
     let wrong = PROGRAM.replace("a + b", "\"no\"");
@@ -148,6 +171,7 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     // (#1746).
     a_value_made_after_a_save_compiled_refuses_it_where_it_would_be_admitted(&universe);
     a_kept_callable_that_makes_the_old_type_refuses_a_save_where_it_would_be_admitted(&universe);
+    a_save_taken_at_once_says_its_admission_refused_it(&universe);
     a_save_that_changes_a_type_nothing_holds_or_makes_swaps_in(&universe);
 
     // A save rewrites the live values of the types whose fields it changed
@@ -274,6 +298,24 @@ fn a_kept_callable_that_makes_the_old_type_refuses_a_save_where_it_would_be_admi
             }
         ]
     );
+    drop(maker);
+}
+
+/// A save taken at once gives what its admission said: here a callable
+/// native code holds that still makes the old type restarts the program.
+fn a_save_taken_at_once_says_its_admission_refused_it(universe: &Universe) {
+    let entry = PathBuf::from("/universe-gauge-now/src/main.rs");
+    let program = universe.program(entry, GAUGE, Vec::new()).unwrap();
+    let maker = kept_maker();
+    assert_eq!(
+        program.replace_now(grown_gauge()),
+        Outcome::Restarting {
+            reason: "`Gauge` changed its fields, but a closure native code holds can still \
+                     make the old one"
+                .to_owned()
+        }
+    );
+    assert_eq!(total(&program, 2, 3), 5);
     drop(maker);
 }
 

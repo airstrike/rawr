@@ -14,7 +14,10 @@
 // runs in the browser's universe (universe.ts), in a frame of its own in
 // place of its output, and stays interactive there. Its output before Run
 // is the frame the server drew, as the build wrote it. The server runs it
-// when the universe doesn't load.
+// when the universe doesn't load. Once its program runs, an edit reloads it
+// in its frame with its state kept (#1455): a compile error shows after the
+// frame while the program runs its last good code, and an edit that can't
+// reload there runs in a fresh frame.
 //
 // On the server, the site's own text goes to POST /play/run, which accepts
 // only the exact sources on the site's pages and caches their results. Edited
@@ -45,6 +48,7 @@ export interface Web {
 export interface Universe {
   frame(parent: Element): Promise<Frame>;
   run(frame: Frame, code: string): Promise<any>;
+  replace(frame: Frame, code: string): any;
 }
 
 /** What the script touches, so a test can hand it a stand-in DOM. */
@@ -286,7 +290,14 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
     // again after each run is cleared, so a Run only compiles and runs.
     let ready: Promise<Frame> | null = null;
     const nextFrame = () => (ready ??= universe!.frame(out));
+    // The frame whose program runs, which an edit reloads in place with its
+    // state kept (#1455), the edit it refused last, and the pause after
+    // typing before the reload.
+    let live: Frame | null = null;
+    let refused: string | null = null;
+    let typing: number | undefined;
     const clear = () => {
+      live = null;
       out.replaceChildren(...staticOut.map((node) => node.cloneNode(true)));
       out.className = staticClass;
       out.classList.add("pending");
@@ -294,10 +305,16 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
       if (inUniverse && universe && warm) nextFrame().catch(() => {});
     };
 
+    // An edit to a program that runs in a frame reloads it after a pause.
+    const edit = () => {
+      window.clearTimeout(typing);
+      typing = window.setTimeout(reload, 500);
+    };
     source.addEventListener("input", () => {
       highlighted = false;
       reset.hidden = !edited();
-      if (state === "done") setState("idle");
+      if (live) edit();
+      else if (state === "done") setState("idle");
     });
     source.addEventListener("blur", highlight);
     source.addEventListener("keydown", (e) => {
@@ -308,7 +325,8 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
     });
     reset.addEventListener("click", () => {
       restore();
-      if (state === "done") setState("idle");
+      if (live) edit();
+      else if (state === "done") setState("idle");
       source.focus();
     });
 
@@ -338,15 +356,46 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
         show(outputHtml(result));
         return;
       }
-      if ((result.output ?? []).length > 0 || result.status !== 0) {
-        const live = document.createElement("span");
-        live.className = "live";
-        live.innerHTML = outputHtml({ ...result, frame: undefined });
-        out.append(live);
+      live = frame;
+      refused = null;
+      if ((result.output ?? []).length > 0 || result.status !== 0) append(outputHtml({ ...result, frame: undefined }));
+    };
+    /** `html` after the frame, as what the program printed; `error` marks an edit's compile error. */
+    const append = (html: string, error = false) => {
+      const span = document.createElement("span");
+      span.className = error ? "live refused" : "live";
+      span.innerHTML = html;
+      out.append(span);
+    };
+    const unrefuse = () => out.querySelector(":scope > .refused")?.remove();
+
+    // Reload the program the frame runs with the edited code. A compile
+    // error shows after the frame while the program runs its last good
+    // code; an edit that can't reload there runs in a fresh frame.
+    const reload = () => {
+      if (!live || state === "running") return;
+      const code = text();
+      const answer = universe!.replace(live, code);
+      switch (answer.kind) {
+        case "restart":
+          run();
+          return;
+        case "unchanged":
+          if (code !== refused) unrefuse();
+          return;
+        case "error":
+          refused = code;
+          unrefuse();
+          append(outputHtml({ kind: "error", text: answer.text }), true);
+          return;
+        default:
+          unrefuse();
+          if ((answer.output ?? []).length > 0) append(outputHtml({ kind: "text", status: 0, output: answer.output }));
       }
     };
 
     const run = async () => {
+      live = null;
       setState("running");
       // In a compare slider the output is on the right-hand file, so show it.
       button.closest(".compare")?.querySelector<HTMLButtonElement>('.tabs button[data-to="0"]')?.click();
