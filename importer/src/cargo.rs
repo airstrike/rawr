@@ -2962,6 +2962,13 @@ impl Authority {
                     })
                 }
             };
+            // Cargo follows a symlinked lock; rawr reads and records the
+            // file it names, as it does the manifest.
+            let lock = if present {
+                resolved_file("Cargo authority lock", &lock)?
+            } else {
+                lock
+            };
             lock_input = Some(Input {
                 path: lock.clone(),
                 digest: None,
@@ -2969,7 +2976,6 @@ impl Authority {
                 rawr: false,
             });
             if present {
-                let lock = canonical_file("Cargo authority lock", &lock)?;
                 let bytes = read_bounded("Cargo authority lock", &lock, Role::Lock.bytes())?;
                 if let Some(input) = lock_input.as_mut() {
                     input.digest = Some(digest(&bytes));
@@ -4272,13 +4278,7 @@ fn canonical_authority(path: &Path) -> Result<PathBuf> {
     } else {
         path.to_path_buf()
     };
-    // Cargo follows symlinks to the manifest; rawr reads the file they name.
-    let manifest = fs::canonicalize(&manifest).map_err(|source| Error::Io {
-        operation: "canonicalize file",
-        path: manifest,
-        source,
-    })?;
-    canonical_file("Cargo authority manifest", &manifest)
+    resolved_file("Cargo authority manifest", &manifest)
 }
 
 fn authority_inputs(
@@ -4293,7 +4293,7 @@ fn authority_inputs(
     for dependency in dependencies {
         if let config::Source::Path(path) = dependency.source() {
             let candidate = path.join("Cargo.toml");
-            let manifest = canonical_file("dependency manifest", &candidate)?;
+            let manifest = resolved_file("dependency manifest", &candidate)?;
             if dependency.alias() == config::INTERNAL_ALIAS {
                 rawr = Some(manifest.clone());
             }
@@ -4439,7 +4439,7 @@ fn absolutize_policy_paths(item: &mut Item, authority_root: &Path) -> Result<()>
         Item::Value(Value::InlineTable(table)) => {
             if let Some(path) = table.get("path").and_then(Value::as_str) {
                 let candidate = authority_root.join(path);
-                let canonical = canonical_directory("Cargo authority patch path", &candidate)?;
+                let canonical = resolved_directory("Cargo authority patch path", &candidate)?;
                 table.insert(
                     "path",
                     Value::from(path_string("Cargo authority patch path", &canonical)?),
@@ -4457,7 +4457,7 @@ fn absolutize_path_item(item: &mut Item, authority_root: &Path) -> Result<()> {
         reason: "`path` must be a string".into(),
     })?;
     let candidate = authority_root.join(path);
-    let canonical = canonical_directory("Cargo authority patch path", &candidate)?;
+    let canonical = resolved_directory("Cargo authority patch path", &candidate)?;
     let canonical = path_string("Cargo authority patch path", &canonical)?;
     *item = value(canonical);
     Ok(())
@@ -4593,6 +4593,8 @@ fn read_bounded(resource: &'static str, path: &Path, limit: usize) -> Result<Vec
     Ok(bytes)
 }
 
+/// The directory at `path` when no symlink leads to it: for the directories
+/// rawr itself creates, which a symlink must never redirect.
 pub(crate) fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf> {
     let normalized = normalized_absolute(field, path)?;
     let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
@@ -4617,8 +4619,9 @@ pub(crate) fn canonical_directory(field: &'static str, path: &Path) -> Result<Pa
     Ok(canonical)
 }
 
-/// The directory a user-given path names, its symlinks resolved as Cargo
-/// follows them. Rawr then works only in canonical paths below it.
+/// The directory a user-given or Cargo-given path names, its symlinks
+/// resolved as Cargo follows them. Rawr then works only in canonical paths
+/// below it.
 pub(crate) fn resolved_directory(field: &'static str, path: &Path) -> Result<PathBuf> {
     let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
         operation: "canonicalize directory",
@@ -4635,6 +4638,26 @@ pub(crate) fn resolved_directory(field: &'static str, path: &Path) -> Result<Pat
     Ok(canonical)
 }
 
+/// The file a user-given or Cargo-given path names, its symlinks resolved as
+/// Cargo follows them.
+pub(crate) fn resolved_file(field: &'static str, path: &Path) -> Result<PathBuf> {
+    let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
+        operation: "canonicalize file",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !canonical.is_file() {
+        return Err(Error::Path {
+            field,
+            path: canonical,
+            reason: "is not a file".into(),
+        });
+    }
+    Ok(canonical)
+}
+
+/// The file at `path` when no symlink leads to it: for the files rawr itself
+/// writes, which a symlink must never redirect.
 pub(crate) fn canonical_file(field: &'static str, path: &Path) -> Result<PathBuf> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect file",
@@ -4811,6 +4834,69 @@ mod universe_placement_tests {
             assert_eq!(request.project_root, project.0);
             assert_eq!(request.cache_root, project.cache());
         }
+        drop(fs::remove_file(&link));
+    }
+
+    /// Cargo builds a path dependency, and a `[patch]` path, whose sibling
+    /// directory is a symlink; rawr resolves each to the directory it names.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_path_dependency_resolves_to_the_directory_it_names() {
+        crate::store::isolate_for_tests();
+        let project = Project::new("symlinked-dependency");
+        let dependency = fs::canonicalize(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/catalog-api"),
+        )
+        .expect("catalog fixture canonicalizes");
+        let link = project.0.with_extension("catalog");
+        std::os::unix::fs::symlink(&dependency, &link).expect("dependency symlink exists");
+        let sibling = format!(
+            "../{}",
+            link.file_name()
+                .and_then(|name| name.to_str())
+                .expect("the symlink's name is UTF-8")
+        );
+        let manifest = project.0.join("Cargo.toml");
+        fs::write(
+            &manifest,
+            format!(
+                "[package]\nname = \"symlinked\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                 [dependencies]\ncatalog = {{ package = \"catalog-api\", path = \"{sibling}\" }}\n\n\
+                 [patch.crates-io]\ncatalog-api = {{ path = \"{sibling}\" }}\n\n[workspace]\n"
+            ),
+        )
+        .expect("project manifest is written");
+        let limits = Limits::standard();
+        let request = Request::builder(&project.0, &project.cache(), &limits)
+            .expect("request builder seals")
+            .environment(config::Environment::capture().expect("environment captures"))
+            .policy(crate::extract::Policy::manifest().seal())
+            .cargo_authority(&manifest)
+            .dependency(
+                config::Dependency::path("catalog", &project.0.join(&sibling))
+                    .and_then(|dependency| dependency.package("catalog-api"))
+                    .expect("catalog dependency seals"),
+            )
+            .build()
+            .expect("a symlinked path dependency seals");
+        let catalog = request
+            .dependencies
+            .iter()
+            .find(|selected| selected.alias() == "catalog")
+            .expect("the catalog dependency is selected");
+        assert!(
+            matches!(catalog.source(), config::Source::Path(path) if *path == dependency),
+            "the dependency is the directory its symlink names"
+        );
+        let patched = request
+            .authority
+            .retained
+            .get("patch")
+            .and_then(|patch| patch.get("crates-io"))
+            .and_then(|registry| registry.get("catalog-api"))
+            .and_then(|entry| entry.get("path"))
+            .and_then(Item::as_str);
+        assert_eq!(patched, dependency.to_str());
         drop(fs::remove_file(&link));
     }
 

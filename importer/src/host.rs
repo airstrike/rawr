@@ -83,14 +83,24 @@ pub fn root() -> crate::Result<PathBuf> {
 /// apart from the host, so its harness names the host itself.
 pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
     static ROOT: std::sync::OnceLock<Option<Lease>> = std::sync::OnceLock::new();
+    // A lease file is one per process, so two threads taking it at once
+    // would each find the other's lock; the first taker leases for both.
+    static TAKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let reuse = |leased: &Option<Lease>| match leased {
+        Some(lease) => {
+            touch(&lease.root);
+            Ok(lease.root.clone())
+        }
+        None => root(),
+    };
     if let Some(leased) = ROOT.get() {
-        return match leased {
-            Some(lease) => {
-                touch(&lease.root);
-                Ok(lease.root.clone())
-            }
-            None => root(),
-        };
+        return reuse(leased);
+    }
+    let _taking = TAKING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(leased) = ROOT.get() {
+        return reuse(leased);
     }
     let host = root()?;
     let view = View::of(&host_manifest(&host)?).ok_or_else(|| crate::Error::Request {
