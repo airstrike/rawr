@@ -20,6 +20,9 @@ impl<E: Policy> crate::scope::Family for ReadOnly<E> {
 struct Source<E> {
     nonce: crate::scope::Nonce,
     mutable: bool,
+    /// Native code keeps the shared slice borrowed as long as the result
+    /// of the call it lent it to ([`borrow_kept`]).
+    kept: bool,
     policy: PhantomData<fn() -> E>,
 }
 
@@ -89,9 +92,35 @@ impl<E: Policy> Storage for Source<E> {
         }))
     }
 
+    fn kept(&self) -> Option<crate::scope::Lent> {
+        if !self.kept || self.mutable {
+            return None;
+        }
+        let shared: crate::scope::Accessor = const { &(kept_reach::<E> as KeptReach<E::Value>) };
+        Some(
+            crate::scope::Lent::new(
+                self.nonce,
+                std::any::type_name::<[E::Value]>(),
+                None,
+                Some(shared),
+            )
+            .kept(),
+        )
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// How a kept lend of a slice reaches it, as [`crate::scope::kept_slice`]
+/// proves its place a `&[T]` by.
+type KeptReach<T> = fn(u64, &mut dyn FnMut(&[T])) -> Result<(), u8>;
+
+/// The slice a [`borrow_kept`] lend lends, to `visit`.
+fn kept_reach<E: Policy>(nonce: u64, visit: &mut dyn FnMut(&[E::Value])) -> Result<(), u8> {
+    crate::scope::with_ref::<ReadOnly<E>, _>(crate::scope::nonce(nonce), |value| visit(value))
+        .map_err(crate::scope::Error::code)
 }
 
 /// Run `operation` on the slice, or on the element `path` names below it,
@@ -575,7 +604,12 @@ fn out_of_bounds() -> Box<crate::EvalAltResult> {
     failure("native slice index out of bounds")
 }
 
-fn checked<E: Policy>(nonce: crate::scope::Nonce, mutable: bool, witness: &Witness) -> RawrResult {
+fn checked<E: Policy>(
+    nonce: crate::scope::Nonce,
+    mutable: bool,
+    kept: bool,
+    witness: &Witness,
+) -> RawrResult {
     if !witness
         .sequence_element()
         .is_some_and(|element| E::accepts(&element))
@@ -588,6 +622,7 @@ fn checked<E: Policy>(nonce: crate::scope::Nonce, mutable: bool, witness: &Witne
         storage: Shared::new(Source::<E> {
             nonce,
             mutable,
+            kept,
             policy: PhantomData,
         }),
     }))
@@ -600,7 +635,7 @@ pub fn lend<E: Policy>(
     rest: &mut crate::scope::Rest<'_>,
 ) -> RawrResult {
     crate::scope::lend::<Mutable<E>, _>(&mut value, |nonce| {
-        rest(checked::<E>(nonce, true, witness)?)
+        rest(checked::<E>(nonce, true, false, witness)?)
     })
 }
 
@@ -611,7 +646,7 @@ pub fn lend_ref<E: Policy>(
     rest: &mut crate::scope::Rest<'_>,
 ) -> RawrResult {
     crate::scope::lend_ref::<ReadOnly<E>, _>(&value, |nonce| {
-        rest(checked::<E>(nonce, false, witness)?)
+        rest(checked::<E>(nonce, false, false, witness)?)
     })
 }
 
@@ -624,8 +659,31 @@ pub fn borrow_ref<E: Policy, R>(
     rest: impl FnOnce(Dynamic) -> R,
 ) -> RawrResultOf<R> {
     crate::scope::lend_ref::<ReadOnly<E>, _>(&value, |nonce| {
-        Ok(rest(checked::<E>(nonce, false, witness)?))
+        Ok(rest(checked::<E>(nonce, false, false, witness)?))
     })
+}
+
+/// [`borrow_ref`] of a slice native code keeps borrowed as long as the
+/// result of the call it lends it to, as a script function whose output
+/// borrows what native code lent it takes a `&'a [T]`: a crate call in it
+/// whose output keeps the slice reaches it past one operation ([`kept`]).
+pub fn borrow_kept<E: Policy, R>(
+    value: &[E::Value],
+    witness: &Witness,
+    rest: impl FnOnce(Dynamic) -> R,
+) -> RawrResultOf<R> {
+    crate::scope::lend_ref::<ReadOnly<E>, _>(&value, |nonce| {
+        Ok(rest(checked::<E>(nonce, false, true, witness)?))
+    })
+}
+
+/// The lend of the slice `place` is, when native code keeps it borrowed as
+/// long as the result of the call it lent it to ([`borrow_kept`]): what a
+/// crate call whose output keeps the slice borrows it by
+/// ([`crate::scope::kept_slice`]). `None` for another place.
+#[must_use]
+pub fn kept(place: &Place) -> Option<crate::scope::Lent> {
+    place.storage.kept()
 }
 
 /// Reach either a native vector or an already lent slice as a slice, without

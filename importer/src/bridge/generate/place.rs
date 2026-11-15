@@ -128,18 +128,23 @@ pub(super) fn around(
 
 /// `call` inside a lend of each `&[T]` of `slices` (its input's position
 /// and its element's descriptor), as the place `place_{position}` the call
-/// reads: the slice itself, for as long as the call runs.
+/// reads: the slice itself, for as long as the call runs. Each is `kept`
+/// where the call's output borrows what native code lent it, so a crate
+/// call whose output keeps the slice borrows it past one operation
+/// (`place::slice::borrow_kept`).
 pub(super) fn around_slices(
     slices: &[(usize, String)],
+    kept: bool,
     witnesses: &str,
     mut call: String,
 ) -> String {
     if slices.is_empty() {
         return call;
     }
+    let borrow = if kept { "borrow_kept" } else { "borrow_ref" };
     for (position, element) in slices.iter().rev() {
         call = format!(
-            "__rawr_internal::place::slice::borrow_ref::<{element}, _>(input_{position}, slice_witnesses.get({position}).and_then(Option::as_ref).expect(\"checked native slice parameter witness\"), |place_{position}| {{ {call} }}).unwrap_or_else(|error| panic!(\"rawr: native place: {{error}}\"))"
+            "__rawr_internal::place::slice::{borrow}::<{element}, _>(input_{position}, slice_witnesses.get({position}).and_then(Option::as_ref).expect(\"checked native slice parameter witness\"), |place_{position}| {{ {call} }}).unwrap_or_else(|error| panic!(\"rawr: native place: {{error}}\"))"
         );
     }
     format!("let slice_witnesses = {witnesses};\n        {call}")

@@ -387,6 +387,13 @@ trait Storage: Any + crate::func::SendSync {
         None
     }
 
+    /// The lend of the storage's slice, when native code keeps it borrowed
+    /// as long as the result of the call it lent it to (`slice::kept`);
+    /// `None` for storage that isn't one.
+    fn kept(&self) -> Option<crate::scope::Lent> {
+        None
+    }
+
     fn as_any(&self) -> &dyn Any;
 }
 

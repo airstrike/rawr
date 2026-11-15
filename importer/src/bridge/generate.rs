@@ -3562,10 +3562,11 @@ impl<T: 'static> ViewedArgument<T> {
 
 /// A slice of crate values a call's output keeps borrowed (D568): the
 /// values moved out of their slots into one slice, a slice native code
-/// lent a marked function, which keeps it as long as the anchored call's
-/// result (#1292, #1413), or a native slice place that can be borrowed
-/// past one operation, as a slice a crate method lends from a receiver in
-/// its slot is, by sharing that receiver (`place::slice::held`).
+/// lent a marked function or a script impl's function, which keeps it as
+/// long as the anchored call's result (#1292, #1413, #2022), or a native
+/// slice place that can be borrowed past one operation, as a slice a crate
+/// method lends from a receiver in its slot is, by sharing that receiver
+/// (`place::slice::held`).
 #[allow(dead_code)]
 pub enum ViewedSlice<T: 'static> {
     Shared(SliceLent<T>),
@@ -3582,6 +3583,9 @@ impl<T: 'static> ViewedSlice<T> {
             return Ok(Self::Lent(lent));
         }
         if let Some(place) = __rawr_internal::place::get(&value) {
+            if let Some(lent) = __rawr_internal::place::slice::kept(&place) {
+                return Ok(Self::Lent(lent));
+            }
             let arena: &mut dyn Any = arena;
             return match __rawr_internal::place::slice::held::<T>(&place, arena) {
                 Some(held) => held.map(Self::Held).map_err(|error| Error::Value(error.to_string())),
@@ -3598,7 +3602,9 @@ impl<T: 'static> ViewedSlice<T> {
     }
 
     /// The slice borrowed as long as `pins`, as [`ViewedArgument::reach`]
-    /// reaches a value.
+    /// reaches a value. A lent one outside `lender` is reached for an
+    /// output the arena holds, while the anchored call it was lent to runs
+    /// (`scope::kept_slice`).
     pub fn reach<'p>(
         self,
         pins: &'p __rawr_internal::scope::Pins,
@@ -3606,10 +3612,11 @@ impl<T: 'static> ViewedSlice<T> {
     ) -> Result<&'p [T], Error> {
         match self {
             Self::Shared(slice) => Ok(&pins.hold(std::rc::Rc::new(slice))[..]),
-            Self::Lent(lent) => lender
-                .ok_or(__rawr_internal::scope::Error::Mismatch)
-                .and_then(|region| region.lent_slice::<T>(lent))
-                .map_err(|error| Error::Lent(lent.name(), error)),
+            Self::Lent(lent) => match lender {
+                Some(region) => region.lent_slice::<T>(lent),
+                None => __rawr_internal::scope::kept_slice::<T>(lent),
+            }
+            .map_err(|error| Error::Lent(lent.name(), error)),
             Self::Held(held) => held.reach(pins).ok_or(Error::TypeMismatch),
         }
     }
@@ -26269,7 +26276,7 @@ fn render_impl_function(
         );
         let (items, call) = lent_around(&lends, held_around(&held, call));
         let call = place::around(&places, "member.witnesses()", call);
-        let call = place::around_slices(&slices, "member.witnesses()", call);
+        let call = place::around_slices(&slices, false, "member.witnesses()", call);
         return Ok(format!(
             "    fn {}{}({}) -> {rust} {{
 {items}        let _arena = CallArena::enter();
@@ -26282,6 +26289,10 @@ fn render_impl_function(
             parameters.join(", ")
         ));
     }
+    // An output that borrows may keep a `&[T]` native code lent the
+    // function, as a crate call in its body that keeps the slice gives it
+    // (`place::around_slices`).
+    let kept = family.is_some();
     let (lifetime, rust, mut call) = match family {
         Some(family) => {
             (
@@ -26353,7 +26364,7 @@ fn render_impl_function(
     let (items, wrapped) = lent_around(&lends, held_around(&held, call));
     call = wrapped;
     call = place::around(&places, "member.witnesses()", call);
-    call = place::around_slices(&slices, "member.witnesses()", call);
+    call = place::around_slices(&slices, kept, "member.witnesses()", call);
     Ok(format!(
         "    fn {}{lifetime}({}) -> {rust} {{
 {items}        let _arena = CallArena::enter();
