@@ -4418,7 +4418,8 @@
     {"issue":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2024,"title":"A data app on turso runs under rawr run as under cargo, and its query and report code hot-reloads","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2026,"title":"A save that changes a marked type's fields migrates its live values in place instead of restarting","state":"open","category":"Hot reload of a marked `main` (D555)"}
   ],
   "groups": [
     {
@@ -5866,7 +5867,8 @@
             {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"},
             {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"},
             {"number":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"open"},
-            {"number":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open"}
+            {"number":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open"},
+            {"number":2026,"title":"A save that changes a marked type's fields migrates its live values in place instead of restarting","state":"open"}
           ]
         }
       ]
