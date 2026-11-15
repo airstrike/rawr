@@ -10,6 +10,13 @@
 // runs a snippet when the module did not load. Share goes through POST
 // /play/share.
 //
+// A snippet that names a crate the browser's universe declares (iced,
+// tokio, ratatui: universe.toml) runs on the universe instead
+// (scripts/universe.ts), in a frame of its own in the output pane: the
+// program draws there and takes clicks and keys there. Each run gets a
+// fresh frame, and the next one is made ahead, so a run only compiles and
+// runs. The server runs it when the universe doesn't load.
+//
 // The address keeps the page's state: `#<slug>` names the example loaded,
 // and `?run=server` the server when the visitor chose it (the browser, the
 // default, has no parameter). Both are written with history.replaceState.
@@ -18,6 +25,8 @@
 // Share's link keeps ?run=server and never has a hash.
 //
 // The theme is the page's (theme.ts): Turnstile's widget draws in it.
+
+import { crates, usesCrate, type Frame } from "../scripts/universe.ts";
 
 /** rawr-web's module: web/build.sh's output, which the release puts in the Worker's /web. */
 export const WEB_MODULE = "/web/rawr_web.js";
@@ -70,6 +79,8 @@ export type Output =
   | { kind: "note" }
   /** A program's output, with its status, and the image an iced program drew, as a data URL. */
   | { kind: "term"; chunks: Chunk[]; status: number; note?: string; image?: string }
+  /** A program that runs in a universe frame, shown in the frame host, and what it printed. */
+  | { kind: "frame"; chunks: Chunk[]; status: number }
   | { kind: "error"; text: string };
 
 export interface State {
@@ -89,6 +100,13 @@ export interface Web {
   run_text(code: string): string;
 }
 
+/** The browser's universe (scripts/universe.ts), as the playground uses it. */
+export interface Universe {
+  manifest(): Promise<string>;
+  frame(parent: Element): Promise<Frame>;
+  run(frame: Frame, code: string): Promise<any>;
+}
+
 interface Widget {
   render(target: string | HTMLElement, options: Record<string, unknown>): string;
   reset(id: string): void;
@@ -103,6 +121,10 @@ export interface Deps {
   storage: { getItem(key: string): string | null; setItem(key: string, value: string): void } | null;
   /** Imports WEB_MODULE and initializes it: a fresh copy on each call. */
   loadWeb(): Promise<Web>;
+  /** The browser's universe, for snippets that use crates. Without it they run in rawr-web. */
+  universe?: Universe;
+  /** Where a universe frame goes: the output pane's host for it. */
+  frameHost?(): Element | null;
   now(): number;
   clipboard(text: string): Promise<void>;
   turnstile(): Widget | undefined;
@@ -132,6 +154,10 @@ export class Session {
   private token: string | null = null;
   private web: Promise<Web> | null = null;
   private loaded = false;
+  private declared: Promise<string[]> | null = null;
+  /** The universe frame shown, and the next one, made ahead. */
+  private frame: Frame | null = null;
+  private next: Promise<Frame> | null = null;
   private runs = 0;
   private typing: unknown = null;
   private saving: unknown = null;
@@ -279,7 +305,12 @@ export class Session {
     });
   }
 
+  /** Any other output than a frame's ends the frame shown. */
   private show(output: Output) {
+    if (output.kind !== "frame") {
+      this.frame?.element.remove();
+      this.frame = null;
+    }
     this.set({ output });
   }
 
@@ -378,10 +409,63 @@ export class Session {
     this.set({ status: this.state.status + " · on the server: " + reason });
   }
 
+  /** The crates the universe declares, or none when it has no manifest. */
+  private crates(): Promise<string[]> {
+    if (!this.deps.universe) return Promise.resolve([]);
+    this.declared ??= this.deps.universe.manifest().then(crates, () => ((this.declared = null), []));
+    return this.declared;
+  }
+
+  /** The next universe frame in `host`, made ahead of its run. */
+  private nextFrame(host: Element): Promise<Frame> {
+    return (this.next ??= this.deps.universe!.frame(host).catch((error) => {
+      this.next = null;
+      throw error;
+    }));
+  }
+
+  /**
+   * Run `code`, which uses crates, in a universe frame of its own in place
+   * of the output: the program draws there and takes input there. What it
+   * prints shows under it, and a compile error in its place.
+   */
+  private async framed(mine: number, code: string): Promise<void> {
+    const host = this.deps.frameHost?.();
+    if (!host) return this.server("the page has no place for the program's window");
+    if (!this.next) this.set({ status: "loading…" });
+    let frame: Frame;
+    try {
+      frame = await this.nextFrame(host);
+    } catch {
+      return this.server("the universe did not load");
+    }
+    // A newer run takes this frame.
+    if (mine !== this.runs) return;
+    this.next = null;
+    this.frame?.element.remove();
+    this.frame = frame;
+    const start = this.deps.now();
+    const result = await this.deps.universe!.run(frame, code);
+    if (mine !== this.runs) return;
+    const took = Math.round(this.deps.now() - start) + " ms in the browser";
+    if (result.kind === "error") this.result(result, took);
+    else {
+      this.show({ kind: "frame", chunks: result.output ?? [], status: result.status });
+      this.set({ status: took + (result.status !== 0 ? " · exit " + result.status : "") });
+    }
+    // The next run only compiles and runs.
+    this.nextFrame(host).catch(() => {});
+  }
+
   /** "Run in browser", the default. A run that a later one replaced shows nothing. */
   async browser(): Promise<void> {
     this.save();
     const mine = ++this.runs;
+    const code = this.state.code;
+    if (this.deps.universe && usesCrate(code, await this.crates())) {
+      if (mine !== this.runs) return;
+      return this.framed(mine, code);
+    }
     if (!this.loaded) this.set({ status: "loading…" });
     let m: Web;
     try {
@@ -424,6 +508,14 @@ export class Session {
    */
   preload() {
     if (this.state.where !== "browser") return;
+    // Code that uses crates warms a universe frame, so its first Run
+    // only compiles and runs.
+    const host = this.deps.frameHost?.();
+    if (this.deps.universe && host) {
+      this.crates().then((names) => {
+        if (usesCrate(this.state.code, names)) this.nextFrame(host).catch(() => {});
+      });
+    }
     this.load().then(() => {
       if (this.restored && this.state.where === "browser" && this.runs === 0) this.browser();
     }, () => {});

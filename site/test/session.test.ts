@@ -3,7 +3,8 @@
 // goes, what it shows, the address and the theme.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Session, WEB_MODULE, type Example, type PlayData, type Web } from "../src/play/session.ts";
+import { Session, WEB_MODULE, type Example, type PlayData, type Universe, type Web } from "../src/play/session.ts";
+import type { Frame } from "../src/scripts/universe.ts";
 
 const EXAMPLES: Example[] = [
   { name: "Word count", code: "word count code", group: "Rust", slug: "word-count" },
@@ -22,11 +23,12 @@ interface Options {
   theme?: "dark" | "light";
   /** Whether #ts is in the page yet. */
   container?: boolean;
+  universe?: Universe;
 }
 
 /** A Session on stand-ins, with what it did. */
 function standIn(options: Options = {}) {
-  const { code = "", web = null, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark", container = true } = options;
+  const { code = "", web = null, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark", container = true, universe } = options;
   const data: PlayData = { snippet: { code }, examples, sitekey, pass, shared };
   const parsed = new URL(url);
   const loads: string[] = [];
@@ -59,6 +61,8 @@ function standIn(options: Options = {}) {
       hasContainer: () => container,
       setTimeout: (f) => (timers.push(f), timers.length),
       clearTimeout: () => {},
+      universe,
+      frameHost: () => ({}) as Element,
     },
     theme,
   );
@@ -257,4 +261,76 @@ test("Turnstile waits for its container instead of throwing before the island re
   assert.deepEqual(early.widgets, [], "no render while #ts is missing");
   early.tick();
   assert.deepEqual(early.widgets, [], "still waiting");
+});
+
+/** A universe stand-in whose frames record their removal, and the runs it was given. */
+function universeStandIn(answer: (code: string) => any, manifest = '[dependencies]\niced = "0.14"\nrust-decimal = "1"\n') {
+  const frames: { removed: boolean }[] = [];
+  const runs: string[] = [];
+  const universe: Universe = {
+    manifest: async () => manifest,
+    frame: async () => {
+      const record = { removed: false };
+      frames.push(record);
+      return { element: { remove: () => void (record.removed = true) }, instance: {} } as unknown as Frame;
+    },
+    run: async (_frame, code) => (runs.push(code), answer(code)),
+  };
+  return { universe, frames, runs };
+}
+
+test("Run in browser runs a snippet that uses a crate the universe declares in a frame, and a plain one in rawr-web", async () => {
+  const { universe, frames, runs } = universeStandIn(() => ({ kind: "text", status: 0, output: [{ stream: "stdout", text: "drawn\n" }] }));
+  const web = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "plain\n" }] }) };
+  const page = standIn({ code: "use iced::widget::button;\nfn main() {}", web, universe });
+  await page.session.go();
+  assert.deepEqual(runs, ["use iced::widget::button;\nfn main() {}"]);
+  assert.deepEqual(page.loads, [], "rawr-web is not loaded for it");
+  assert.deepEqual(page.session.state.output, { kind: "frame", chunks: [{ stream: "stdout", text: "drawn\n" }], status: 0 });
+  assert.match(page.session.state.status, /in the browser$/);
+  assert.equal(frames.length, 2, "the next frame is made ahead");
+  // A crate's name with `-` is a path with `_`.
+  page.session.setCode("let d = rust_decimal::Decimal::ZERO;");
+  await page.session.go();
+  assert.equal(runs.length, 2);
+  assert.equal(frames[0].removed, true, "a new run's frame replaces the last one");
+  // A plain program goes to rawr-web, and its output ends the frame.
+  page.session.setCode('println!("plain")');
+  await page.session.go();
+  assert.equal(runs.length, 2);
+  assert.deepEqual(page.loads, [WEB_MODULE]);
+  assert.equal(frames[1].removed, true);
+  assert.equal(page.session.state.output.kind, "term");
+});
+
+test("a universe snippet that does not compile shows its report in place of its frame", async () => {
+  const { universe, frames } = universeStandIn(() => ({ kind: "error", text: "error[E0425]: cannot find value `x`" }));
+  const page = standIn({ code: "iced::run(x)", universe });
+  await page.session.go();
+  assert.deepEqual(page.session.state.output, { kind: "error", text: "error[E0425]: cannot find value `x`" });
+  assert.equal(frames[0].removed, true);
+});
+
+test("a universe that does not load runs the snippet on the server", async () => {
+  const { universe } = universeStandIn(() => null);
+  universe.frame = async () => {
+    throw new Error("404");
+  };
+  const page = standIn({ code: "iced::run(x)", universe });
+  await page.session.go();
+  assert.deepEqual(page.fetched.map((f) => f.url), ["/play/render"]);
+  assert.match(page.session.state.status, /on the server: the universe did not load$/);
+  assert.equal(page.session.state.where, "browser", "the next run tries the browser again");
+});
+
+test("a universe snippet is one that names a crate of the manifest's dependency tables", async () => {
+  const { crates, usesCrate } = await import("../src/scripts/universe.ts");
+  const names = crates(`[package]\nname = "play"\n[target.'cfg(target_arch = "wasm32")'.dependencies]\niced = { git = "x" }\n[dependencies]\nserde-json = "1"\n[dev-dependencies]\ntest-only = "1"\n[profile.dev.package.gif]\nopt-level = 3\n`);
+  assert.deepEqual(names, ["iced", "serde_json"]);
+  assert.ok(usesCrate("use iced::widget;", names));
+  assert.ok(usesCrate("fn main() { ::serde_json::to_string(&1); }", names));
+  assert.ok(usesCrate("extern crate iced;", names));
+  assert.ok(!usesCrate('let iced = 1; println!("{iced}");', names));
+  assert.ok(!usesCrate("use my::iced::thing;", names));
+  assert.ok(!usesCrate("let x = opt_level;", names));
 });
