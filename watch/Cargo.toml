@@ -1,6 +1,6 @@
 [package]
 name = "rawr-watch"
-version = "0.3.214"
+version = "0.3.215"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false

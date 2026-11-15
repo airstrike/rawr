@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.215 (2026-11-15)
+
 - The playground runs a snippet that uses iced in the browser: its window is drawn in the output pane and takes clicks and keys, with no server round trip. (#435; part of #1395, #1384)
 - `rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it. (#1753)
 - The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses. (#2027; part of #1395)
