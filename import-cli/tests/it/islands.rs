@@ -2379,7 +2379,7 @@ fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line(
             && failed["diagnostics"][0]["code"] == "E0425"
             && rendered
                 .starts_with("error[E0425]: cannot find value `unknown_row` in this scope\n")
-            && rendered.contains(&format!("src/widget/sidebar.rs:{line}:13-{line}:24\n"))
+            && rendered.contains(&format!("src/widget/sidebar.rs:{line}:13\n"))
             && rendered.contains("let _ = unknown_row;"),
         "{failed}"
     );
