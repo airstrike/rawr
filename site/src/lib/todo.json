@@ -5,7 +5,7 @@
   "examples": {
     "running": 55,
     "total": 56,
-    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 55 of 56 behave as cargo does. Left: markdown, whose view now stops at a slice native code lent its Viewer impl (#2022). system_information runs as cargo; its hot-reload save fails (#2004)."
+    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: 55 of 56 behave as cargo does. markdown renders, edits, hovers, switches theme and scrolls as cargo does since #2022; turning on its stream panics (#2023). system_information runs as cargo; its hot-reload save fails (#2004)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -4412,7 +4412,8 @@
     {"issue":2019,"title":"A closure can compare parameters whose types its later calls fix, and keyed_column takes (key…","state":"closed","category":"No glue (D593)"},
     {"issue":2020,"title":"A crate call whose &[T] argument is a slice a crate method lent fails with TypeMismatch when the output keeps the lend","state":"closed","category":"No glue (D593)"},
     {"issue":2021,"title":"An arena-held opaque value that borrows can't join a region value in one call (hover(code_block(..), ..))","state":"closed","category":"No glue (D593)"},
-    {"issue":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed","category":"No glue (D593)"}
+    {"issue":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed","category":"No glue (D593)"},
+    {"issue":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -4898,7 +4899,7 @@
           "name": "Per-example gaps",
           "start": 47,
           "size": 6,
-          "state": "next",
+          "state": "now",
           "note": "2026-11-14: fixes merged for changelog, color_palette, custom_shader, delineate, download_progress, editor, game_of_life, loading_spinners, screenshot, scrollable, websocket and ferris; each starts under rawr but isn't driven against cargo yet. Left: gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), integration (#1991, #1992), markdown (#83), exit's redraw (#1946), the stale runner build script after a reinstall (#1984).",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"retired"},
@@ -5085,7 +5086,8 @@
             {"number":2016,"title":"A carried future or Send closure can't reach its values while the main store is lent, or under a Send-implying bound","state":"open"},
             {"number":2018,"title":"A region's (key, element) tuple inside an Option is not taken in its region","state":"open"},
             {"number":2020,"title":"A crate call whose &[T] argument is a slice a crate method lent fails with TypeMismatch when the output keeps the lend","state":"closed"},
-            {"number":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed"}
+            {"number":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed"},
+            {"number":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"open"}
           ],
           "milestone": "0.3"
         },
