@@ -17,7 +17,7 @@ use super::*;
 
 /// The generated function that drops a value: its own `drop`, then its
 /// parts.
-pub(super) const GLUE: &str = "__rawr_drop_glue";
+pub(crate) const GLUE: &str = "__rawr_drop_glue";
 
 /// A local whose value may drop at the end of its scope.
 #[derive(Clone)]

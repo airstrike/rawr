@@ -21,12 +21,32 @@
 <p><code>rawr run</code> watches the files it runs. A save of a marked file reaches the app at its next call into marked code.</p>
 <ul>
   <li>An edit to a function body or a private item swaps in place with the app&rsquo;s state kept.</li>
-  <li>A struct or enum with new fields or variants restarts the app because native code may hold a value of the old shape.</li>
+  <li>A change to a struct&rsquo;s private fields or an enum&rsquo;s variants swaps in place too. Each live value of the type takes its new fields where it is, so the app keeps its state. <a href="#fields">A field change</a> says how.</li>
+  <li>A change to fields native code reads, such as <code>pub</code> fields, restarts the app.</li>
   <li>An edit to <code>main</code>, a native file or <code>Cargo.toml</code> restarts the app.</li>
   <li>A save that fails the check prints its error. The last good version keeps running.</li>
 </ul>
 <p>A restart prints one line on stderr that says why:</p>
 <div class="block"><pre><code>rawr: `physics::Ball` changed its fields; restarting the program</code></pre></div>
+<h3 id="fields">A field change</h3>
+<p>A save that changes a type&rsquo;s fields rewrites each live value of it in place. Fields match by name.</p>
+<ul>
+  <li>A field with the same name and type keeps its value. A new order of the fields keeps every value.</li>
+  <li>A new field takes its type&rsquo;s <code>Default</code>. A field whose type changed takes the new type&rsquo;s <code>Default</code>.</li>
+  <li>A removed field is dropped.</li>
+  <li>A field of another marked type keeps its value, and that value takes its own type&rsquo;s new fields.</li>
+  <li>Enum variants match by name. A new variant changes no live value.</li>
+</ul>
+<p>One line on stderr says what changed:</p>
+<div class="block"><pre><code>rawr: `tally::Tally` gained `best` (default), dropped `old`; state kept</code></pre></div>
+<p>The save restarts the app instead, with one line that says why, in these cases:</p>
+<ul>
+  <li>A new field&rsquo;s type has no <code>Default</code>.</li>
+  <li>A live value is in a variant the save removed, or in a variant whose fields changed.</li>
+  <li>A removed field&rsquo;s type may have a <code>Drop</code> of the program&rsquo;s. rawr can&rsquo;t run that drop in a running program yet.</li>
+  <li>A live value is where rawr can&rsquo;t reach it yet, such as inside an <code>Rc</code>, a <code>RefCell</code> or another crate&rsquo;s type.</li>
+  <li>The type itself was removed while a live value holds it.</li>
+</ul>
 <p>When the edit shows depends on the loop. A loop that runs every frame shows it at the next frame. A library that redraws only after an event shows it at the next event.</p>
 <p><code>rawr run</code> runs <code>cargo check</code> beside the app. <a href="/docs/run#swap">A running marked main</a> describes how saves reach a running app. <a href="/docs/run#check">Checking</a> explains when check errors are printed. <a href="/docs/run#reload">Reload</a> covers programs that use neither shape.</p>
 
@@ -106,7 +126,7 @@ impl Counter {
 <ul>
   <li>A save applies at the next message with the state kept.</li>
   <li>iced builds the view again when a message arrives. Until then, the window shows the last view. <a href="#iced-generations">Show a view edit at once</a> turns each save into a message.</li>
-  <li>A struct or enum with new fields or variants restarts the app because iced may hold a value of the old shape.</li>
+  <li>A struct or enum with new fields or variants keeps the app running. The state iced holds takes the new fields in place, as <a href="#fields">a field change</a> says.</li>
   <li>An edit to <code>main</code> restarts the app because <code>main</code> runs only once.</li>
   <li>An edit to a native file or <code>Cargo.toml</code> rebuilds it with Cargo and restarts the app.</li>
 </ul>

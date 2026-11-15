@@ -1,6 +1,7 @@
 //! Runtime values for resolved Rawr structs and enums.
 
 pub(crate) mod census;
+pub(crate) mod roots;
 pub(crate) mod variant;
 
 use crate::resolve::type_ref;
@@ -76,6 +77,12 @@ impl Struct {
         &mut self.fields
     }
 
+    /// Its fields, as a save that changed its type's fields takes them to
+    /// make the new value from (#2026).
+    pub(crate) fn into_fields(self) -> Box<[Dynamic]> {
+        self.fields
+    }
+
     fn identity_name(&self) -> IdentityName<'_> {
         IdentityName(&self.identity)
     }
@@ -136,6 +143,12 @@ impl Enum {
 
     pub(crate) fn payload_mut(&mut self) -> &mut [Dynamic] {
         &mut self.payload
+    }
+
+    /// Its variant and payload, as a save that changed its type's variants
+    /// takes them to make the new value from (#2026).
+    pub(crate) fn into_variant(self) -> (variant::Id, Box<[Dynamic]>) {
+        (self.variant, self.payload)
     }
 
     fn identity_name(&self) -> IdentityName<'_> {

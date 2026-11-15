@@ -61,6 +61,36 @@ struct Definition {
     opaque: bool,
 }
 
+/// One field of a struct's schema, or one variant of an enum's: its name
+/// and the parts of its type, or of its payload's types (#2026).
+#[cfg(feature = "sync")]
+pub(crate) struct Member<'schema> {
+    name: &'schema ImmutableString,
+    parts: &'schema [Part],
+}
+
+#[cfg(feature = "sync")]
+impl Member<'_> {
+    pub(crate) fn name(&self) -> &str {
+        self.name
+    }
+
+    /// Whether `other` has this member's type, or its payload's types: a
+    /// script type is the same type whatever its fields are now.
+    pub(crate) fn same_type(&self, other: &Member<'_>) -> bool {
+        self.parts == other.parts
+    }
+
+    /// Whether its type names no script or crate type, so dropping its
+    /// value runs no `Drop` of the program's.
+    pub(crate) fn plain(&self) -> bool {
+        !self
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::Identity(_)))
+    }
+}
+
 impl fmt::Debug for Fingerprint {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Fingerprint(<private>)")
@@ -95,6 +125,31 @@ impl Fingerprint {
     #[must_use]
     pub fn same_representation(&self, other: &Self) -> bool {
         crate::Shared::ptr_eq(&self.0, &other.0) || self.representation() == other.representation()
+    }
+
+    /// A struct's fields or an enum's variants, in declaration order, each
+    /// by its name with its type or payload (#2026).
+    #[cfg(feature = "sync")]
+    pub(crate) fn members(&self) -> Box<[Member<'_>]> {
+        let (_, rest) = self.representation();
+        let mut members = Vec::new();
+        // After the `Fields` or `Variants` marker and their count, each
+        // member starts at its own marker, which no type's parts hold.
+        let mut parts = rest.get(2..).unwrap_or_default();
+        while let [Part::Marker(Marker::Field | Marker::Variant), Part::Text(name), tail @ ..] =
+            parts
+        {
+            let end = tail
+                .iter()
+                .position(|part| matches!(part, Part::Marker(Marker::Field | Marker::Variant)))
+                .unwrap_or(tail.len());
+            members.push(Member {
+                name,
+                parts: &tail[..end],
+            });
+            parts = &tail[end..];
+        }
+        members.into_boxed_slice()
     }
 
     /// This schema's parts without its capabilities.

@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "rust-import")]
 pub(crate) mod island;
+#[cfg(feature = "sync")]
+pub(crate) mod migration;
 
 type EnumConstruction = (
     type_def::Identity,
