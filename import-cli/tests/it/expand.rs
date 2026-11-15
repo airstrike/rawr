@@ -29,11 +29,13 @@ fn copy(from: &Path, to: &Path) {
 
 #[test]
 fn a_crates_derive_expands_through_the_pinned_nightly() {
-    let root = crate::support::fresh("plain-derives-expand");
+    // The child expands in the copy its parent made: a fresh directory
+    // there would be empty.
     if std::env::var_os(CHILD).is_some() {
-        expand_in(&root);
+        expand_in(&crate::support::scratch().join("plain-derives-expand"));
         return;
     }
+    let root = crate::support::fresh("plain-derives-expand");
     copy(Path::new(DERIVES), &root);
     let output = Command::new(std::env::current_exe().unwrap())
         .args([

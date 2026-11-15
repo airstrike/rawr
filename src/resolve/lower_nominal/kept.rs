@@ -207,6 +207,10 @@ pub(super) struct Kept {
     pub(super) dependencies: BTreeSet<host::facade::Dependency>,
     /// Each adapter its ops call, a witnessed op's among them (#1734).
     adapters: Box<[host::structural::Definition]>,
+    /// Each proof-backed application its ops call. Its identity covers
+    /// the crates the proof reads, so an edit to one of them names
+    /// another, which the next runner admits in its place.
+    applications: Box<[[u8; 32]]>,
     pub(super) outside: Outside,
     /// What the compile parsed of the part's text (#1877). A runner's
     /// file holds none: its first compile parses the text again.
@@ -215,11 +219,16 @@ pub(super) struct Kept {
 }
 
 impl Kept {
-    /// Whether `registry`'s runner admitted each adapter the kept ops call.
+    /// Whether `registry`'s runner admitted each adapter and application
+    /// the kept ops call.
     fn admitted(&self, registry: &host::Registry) -> bool {
         self.adapters
             .iter()
             .all(|adapter| registry.admits_structural(adapter))
+            && self
+                .applications
+                .iter()
+                .all(|application| registry.admits_application(application))
     }
 }
 
@@ -776,6 +785,7 @@ impl<'e> Session<'e> {
             uses: uses.to_vec().into_boxed_slice(),
             dependencies: dependencies.clone(),
             adapters: adapters(lowered),
+            applications: applications(lowered),
             outside,
             parsed: None,
         };
@@ -966,6 +976,14 @@ fn adapters(lowered: &[Lowered]) -> Box<[host::structural::Definition]> {
     adapters.into_iter().cloned().collect()
 }
 
+fn applications(lowered: &[Lowered]) -> Box<[[u8; 32]]> {
+    let mut applications = BTreeSet::new();
+    for op in lowered.iter().flat_map(|lowered| &lowered.ops) {
+        op.applications(&mut applications);
+    }
+    applications.into_iter().copied().collect()
+}
+
 impl Lowered {
     /// This kept lowering for a new generation of the program: what an op
     /// or a pattern holds of the generation it was made in made again.
@@ -1091,6 +1109,16 @@ impl ExecutableOp {
                 adapters.insert(proof.definition());
             }
             Self::Witnessed(op) => op.template.adapters(adapters),
+            _ => {}
+        }
+    }
+
+    /// Each proof-backed application the op calls into `applications`:
+    /// its own, or a witnessed op's template's.
+    fn applications<'o>(&'o self, applications: &mut BTreeSet<&'o [u8; 32]>) {
+        match self {
+            Self::Intrinsic { proof } => applications.extend(proof.application()),
+            Self::Witnessed(op) => op.template.applications(applications),
             _ => {}
         }
     }
@@ -1284,7 +1312,7 @@ impl Models {
 
 #[cfg(test)]
 mod tests {
-    use super::{adapters, Kept, Outside};
+    use super::{adapters, applications, Kept, Outside};
     use crate::host::{self, facade, structural};
     use crate::resolve::lower_nominal::entry::Lowered;
     use crate::resolve::lower_nominal::op::{ExecutableOp, WitnessedOp};
@@ -1315,6 +1343,7 @@ mod tests {
         Kept {
             key: [0; 32],
             adapters: adapters(&lowered),
+            applications: applications(&lowered),
             lowered: lowered.into(),
             uses: Box::default(),
             dependencies: BTreeSet::new(),

@@ -99,7 +99,10 @@ default = ["std", "ahash/runtime-rng"] # ahash/runtime-rng trumps ahash/compile-
 ## Without the default features, hashing uses a compile-time random number.
 std = []
 ## Enable Rawr manifest transformation into a zero-touch Cargo importer request.
-rust-import = ["dep:rawr_import", "dep:thiserror", "dep:rmp-serde", "serde", "serde/std", "serde/rc"]
+## It takes serde for the lowerings a runner keeps, but not the `serde` feature,
+## which turns on serde in smallvec, smartstring and thin-vec: a runner links
+## those beside the project's own, which a feature added here would split.
+rust-import = ["dep:rawr_import", "dep:thiserror", "dep:rmp-serde", "dep:serde", "serde?/std", "serde?/rc"]
 ## Build exact real-extraction integration tests with the pinned importer driver.
 rust-import-driver-tests = ["rust-import", "rawr_import/rustc-driver"]
 ## Enable the pinned compiler metadata probe used by Phase 1 extraction.

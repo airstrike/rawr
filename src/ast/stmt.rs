@@ -353,6 +353,7 @@ pub(crate) enum NominalPayloadType {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct NominalEnumPattern {
+    #[cfg_attr(feature = "rust-import", serde(with = "crate::stored::identifier"))]
     pub enum_name: Identifier,
     pub identity: type_def::Identity,
     pub schema: program::schema::Fingerprint,

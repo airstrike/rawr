@@ -96,6 +96,12 @@ impl Proof {
         self
     }
 
+    /// The proof-backed application the call reaches, when it is one.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn application(&self) -> Option<&[u8; 32]> {
+        self.item.application()
+    }
+
     pub(super) const fn operands(&self) -> &[Operand] {
         &self.operands
     }

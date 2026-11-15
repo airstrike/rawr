@@ -170,6 +170,26 @@ impl From<ImmutableString> for Box<str> {
     }
 }
 
+/// A string serializes as its text: for the `serde` feature, and for the
+/// lowerings a runner keeps on disk, which `rust-import` keeps without the
+/// `serde` feature's features of the crates a project shares with it.
+#[cfg(any(feature = "serde", feature = "rust-import"))]
+impl serde::Serialize for ImmutableString {
+    #[inline(always)]
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(self)
+    }
+}
+
+#[cfg(any(feature = "serde", feature = "rust-import"))]
+impl<'de> serde::Deserialize<'de> for ImmutableString {
+    #[inline(always)]
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text: String = serde::Deserialize::deserialize(deserializer)?;
+        Ok(text.into())
+    }
+}
+
 impl FromStr for ImmutableString {
     type Err = ();
 

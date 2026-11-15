@@ -366,8 +366,22 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
     // A later run of the project reads every entry back.
     run(&first, "11 true 41 51\n");
     assert_eq!(published(&first), shared, "a later run reuses every entry");
-    let helpers =
-        fs::read_to_string(first.join("target/rawr/runner/src/rawr_applications.rs")).unwrap();
+    // Each crate of the runner holds the helpers of its adapters in its own
+    // `rawr_applications.rs`; the binary's holds the encoded applications.
+    fn helpers_in(path: &Path, helpers: &mut String) {
+        for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                helpers_in(&path, helpers);
+            } else if entry.file_name() == "rawr_applications.rs" {
+                helpers.push_str(&fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let runner = first.join("target/rawr/runner");
+    let mut helpers = String::new();
+    helpers_in(&runner.join("rawr-crates"), &mut helpers);
+    helpers_in(&runner.join("src/__rawr_program"), &mut helpers);
     for expected in [
         "#[no_implicit_prelude]",
         "use ::facts_c::Left as _;",
@@ -946,15 +960,21 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
 
     check(second);
     // The second project probed its own crate, and replayed semver's table
-    // as the home had it. A table the probe extracted, even in part, is
-    // recorded again beside it with what it served.
+    // as the home had it, read in place where the importer names it, with
+    // no copy in the project (#1355). A table the probe extracted, even in
+    // part, is recorded again beside it with what it served.
     let tables = kept(second, Kept::Extraction);
-    let replayed = fs::read(tables.join(key)).unwrap();
-    assert_eq!(
-        String::from_utf8(replayed).unwrap(),
-        table,
-        "semver's table replays unchanged"
-    );
+    let keys = fs::read_to_string(tables.join("keys.json")).unwrap();
+    let keys = serde_json::from_str::<serde_json::Value>(&keys).unwrap();
+    let named = keys
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|shared| shared["key"] == key.to_str().unwrap())
+        .unwrap_or_else(|| panic!("the importer names semver's key: {keys}"));
+    let replayed = fs::read_to_string(named["table"].as_str().unwrap()).unwrap();
+    assert_eq!(replayed, table, "semver's table replays unchanged");
+    assert!(!tables.join(key).exists(), "semver's table is copied");
     let mut served = key.clone();
     served.push(".served");
     assert!(
@@ -1161,7 +1181,9 @@ fn main() {
     for project in &projects {
         fs::create_dir_all(project.join("src")).unwrap();
         fs::write(project.join("Cargo.toml"), format!("[package]\nname='binding-input-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nbinding-input-fixture={{git='file://{}',rev='{}'}}\n[workspace]\n", dependency.display(), revision.trim())).unwrap();
-        fs::write(project.join("src/main.rs"), "// rawr\nuse binding_input_fixture::only_when_narrow;\nfn main() { println!(\"{}\", only_when_narrow()); }\n").unwrap();
+        // It calls `width` too, which the live program below calls: a
+        // shared table holds what its programs demanded of the crate.
+        fs::write(project.join("src/main.rs"), "// rawr\nuse binding_input_fixture::{only_when_narrow, width};\nfn main() { println!(\"{}\", only_when_narrow().min(width())); }\n").unwrap();
     }
     let run = |project: &Path, action: &str, mode: &str| {
         crate::support::rawr_import()
@@ -1277,7 +1299,9 @@ fn main() {
 }
 
 /// A real adapter build reports the selected crate when its nightly API
-/// differs from the API that the project's stable compiler provides.
+/// differs from the API that the project's stable compiler provides. The
+/// program prints the value, which either API's type can, so the project's
+/// `cargo check` passes and only the adapter the nightly's API shaped fails.
 #[test]
 fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     let root = crate::support::fresh("shared-adapter-drift");
@@ -1343,7 +1367,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     .unwrap();
     fs::write(
         project.join("src/main.rs"),
-        "// rawr\nuse adapter_drift_fixture::value;\nfn main() { let result: u32 = value(); println!(\"{result}\"); }\n",
+        "// rawr\nuse adapter_drift_fixture::value;\nfn main() { println!(\"{}\", value()); }\n",
     )
     .unwrap();
     let home = crate::support::scratch().join("rawr-home");
@@ -1362,16 +1386,20 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     let diagnostic = text(&output.stderr);
     assert!(!output.status.success(), "{}", text(&output.stdout));
     assert!(
-        diagnostic.contains("the API of `adapter_drift_fixture` differs between the extraction nightly and the project's toolchain"),
+        diagnostic.contains("the API of `adapter_drift_fixture` differs between the extraction nightly and the project's build"),
         "{diagnostic}"
     );
-    assert!(diagnostic.contains("mismatched types"), "{diagnostic}");
+    assert!(
+        diagnostic
+            .contains("could not compile `rawr-generated-runner-adapters-adapter_drift_fixture`"),
+        "{diagnostic}"
+    );
     // The first failure may be a stale run in the shared nightly directory:
     // it runs again once, and the same difference after that is drift
     // (D742), reported once.
     assert_eq!(
         diagnostic
-            .matches("differs from this project's build: running it again")
+            .matches("): running it again in rawr's nightly build")
             .count(),
         1,
         "{diagnostic}"
@@ -1482,7 +1510,7 @@ fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_diffe
     };
     let reruns = |output: &Output| {
         text(&output.stderr)
-            .matches("differs from this project's build: running it again")
+            .matches("): running it again in rawr's nightly build")
             .count()
     };
     let first = run(&projects[0], "run", "1");

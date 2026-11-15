@@ -5,6 +5,7 @@
 
 pub(crate) mod carrier;
 pub(crate) mod fingerprint;
+pub(crate) mod identifier;
 pub(crate) mod text;
 pub(crate) mod type_id;
 

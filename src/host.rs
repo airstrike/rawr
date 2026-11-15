@@ -1264,6 +1264,15 @@ impl Registry {
             .map(|applied| (&applied.key, &applied.item))
     }
 
+    /// Whether the runner admitted the proof-backed application
+    /// `identity`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn admits_application(&self, identity: &[u8; 32]) -> bool {
+        self.applied
+            .iter()
+            .any(|applied| applied.item.application() == Some(identity))
+    }
+
     /// The proof-backed application answering the source call `key`.
     #[cfg(feature = "rust-import")]
     pub(crate) fn applied(

@@ -1,7 +1,7 @@
 //! Implementations of [`serde::Serialize`].
 
 use crate::types::dynamic::Union;
-use crate::{Dynamic, ImmutableString, Scope};
+use crate::{Dynamic, Scope};
 use serde::{ser::SerializeSeq, Serialize, Serializer};
 use std::iter::once;
 
@@ -35,7 +35,8 @@ impl Serialize for Dynamic {
             Union::Blob(ref a, ..) => ser.serialize_bytes(a),
             Union::Map(ref m, ..) => {
                 let mut map = ser.serialize_map(Some(m.len()))?;
-                m.iter().try_for_each(|(k, v)| map.serialize_entry(k, v))?;
+                m.iter()
+                    .try_for_each(|(k, v)| map.serialize_entry(k.as_str(), v))?;
                 map.end()
             }
             Union::FnPtr(ref f, ..) if f.is_curried() => {
@@ -58,13 +59,6 @@ impl Serialize for Dynamic {
             #[cfg(feature = "sync")]
             Union::Shared(ref cell, ..) => cell.read().unwrap().serialize(ser),
         }
-    }
-}
-
-impl Serialize for ImmutableString {
-    #[inline(always)]
-    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        ser.serialize_str(self)
     }
 }
 
