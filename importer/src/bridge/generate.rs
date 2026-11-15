@@ -3925,6 +3925,29 @@ impl<U: ?Sized + 'static> YokeEnd<U> {
         let mut yoke = yoked.yoke.try_borrow_mut().map_err(|_| Error::Leased)?;
         yoke.target().map(body).ok_or_else(ended)
     }
+
+    /// The handle of the value the guard borrows, while the guard lasts
+    /// and targets that value itself, as `fn enable(&mut self) -> &mut
+    /// Self` gives its receiver back: the target's place is the value's
+    /// own, so a read reaches the value where it is, not a copy.
+    pub fn owner(&self, arena: &Arena) -> Option<NativeHandle> {
+        let yoked = arena
+            .homed(&self.handle)
+            .and_then(|homed| homed.as_any().downcast_ref::<Yoked<U>>())
+            .filter(|yoked| yoked.id == self.id)?;
+        let mut yoke = yoked.yoke.try_borrow_mut().ok()?;
+        yoke.targets_owner().then(|| self.handle.clone())
+    }
+
+    /// Whether `value` is the handle of the value the guard borrows, as a
+    /// call through [`Self::owner`]'s handle stores it back.
+    pub fn holds(&self, value: &Dynamic) -> bool {
+        value.read_lock::<NativeHandle>().is_some_and(|handle| {
+            handle.epoch == self.handle.epoch
+                && handle.slot == self.handle.slot
+                && handle.generation == self.handle.generation
+        })
+    }
 }
 
 impl<U: ?Sized + 'static> Drop for YokeEnd<U> {
@@ -17320,6 +17343,7 @@ fn render_scoped_guard(
                         "end.with(|guard| {body}).map_err(|error| Error::Lent(scoped.name(), error))"
                     )
                 },
+                None,
                 output,
             )?;
             output.write_all(b"    }\n").map_err(encoding)
@@ -17345,13 +17369,17 @@ fn yoked_guard(call: &str, optional: bool) -> String {
 /// update (`op=`, D554.7(f)) reads, has the script change the copy and
 /// stores the result. An `optional` guard gives `None` when the method
 /// gave none, and `Some` of the place otherwise. It returns from the
-/// adapter.
+/// adapter. `arena` is the arena expression of a yoke the arena keeps
+/// (`YokeEnd`): a target that is the borrowed value itself, which can't be
+/// copied or whose guard a later reborrow ended, is read as the value's own
+/// handle, and that handle stored back is the value already there (#2061).
 fn render_yoked_place(
     target: &convert::Type,
     optional: bool,
     inputs: usize,
     held: &str,
     with: &dyn Fn(&str) -> String,
+    arena: Option<&str>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
@@ -17390,9 +17418,22 @@ fn render_yoked_place(
     };
     let read = with(&format!("{copy}!(&*guard)"));
     let store = with(&format!("*guard = argument_{inputs}"));
+    // Whether the guard targets the borrowed value itself is known where
+    // the method gives it: a later reborrow of the value ends this guard,
+    // and the value is still the place's target.
+    let (owner, owned, kept) = match arena {
+        Some(arena) => (
+            format!("\n    let owner = end.owner({arena});"),
+            "\n                    if let Some(owner) = &owner && !matches!(output, Ok(Ok(_))) {\n                        return Ok(Dynamic::from(owner.clone()));\n                    }"
+                .to_owned(),
+            "\n                    if end.holds(&*arguments.values[0]) {\n                        return Ok(Dynamic::UNIT);\n                    }"
+                .to_owned(),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
     writeln!(
         output,
-        "    let witness = {witness};
+        "    let witness = {witness};{owner}
     let place = __rawr_internal::island::place::Place::new(move |access: __rawr_internal::island::place::Access<'_>| {{
         use __rawr_internal::island::place::Access;
         let reach = |mut stored: Option<Dynamic>| {{
@@ -17400,9 +17441,10 @@ fn render_yoked_place(
                 let mut values: Vec<&mut Dynamic> = stored.iter_mut().collect();
                 let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
                 if arguments.values.is_empty() {{
-                    let output = {read}??;
+                    let output = {read};{owned}
+                    let output = output??;
                     {give}
-                }} else {{
+                }} else {{{kept}
 {take}
                     {store}?;
                     Ok(Dynamic::UNIT)
@@ -17777,6 +17819,7 @@ fn render_guard(
                 inputs,
                 "end.held(&*arguments.arena)",
                 &|body| format!("end.with(&*arguments.arena, |guard| {body})"),
+                Some("&*arguments.arena"),
                 output,
             )
         }
@@ -21646,7 +21689,7 @@ fn render_take(
             // A Rawr `Option` of the converted `T`, a Rawr `Result` of the
             // converted `T` and `E`, or a float range.
             let mut converted = String::new();
-            render_from_dynamic(ty, "value", 0, &mut converted)?;
+            render_member_from_dynamic(ty, "value", 0, &mut converted)?;
             return writeln!(
                 output,
                 "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
@@ -22094,7 +22137,7 @@ fn render_from_dynamic(
         convert::Type::Option(element) => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
-            render_from_dynamic(element, &inner, depth + 1, &mut converted)?;
+            render_member_from_dynamic(element, &inner, depth + 1, &mut converted)?;
             write!(
                 output,
                 "{{ let mut {value} = {value}; match __rawr_internal::option::take(&mut {value}).ok_or(Error::TypeMismatch)? {{ None => Ok(None), Some({inner}) => ({converted}).map(Some) }} }}"
@@ -22126,9 +22169,9 @@ fn render_from_dynamic(
         convert::Type::Result(ok, err) => {
             let inner = format!("inner_{depth}");
             let mut ok_converted = String::new();
-            render_from_dynamic(ok, &inner, depth + 1, &mut ok_converted)?;
+            render_member_from_dynamic(ok, &inner, depth + 1, &mut ok_converted)?;
             let mut err_converted = String::new();
-            render_from_dynamic(err, &inner, depth + 1, &mut err_converted)?;
+            render_member_from_dynamic(err, &inner, depth + 1, &mut err_converted)?;
             write!(
                 output,
                 "{{ let mut {value} = {value}; match __rawr_internal::result::take(&mut {value}).ok_or(Error::TypeMismatch)? {{ Ok({inner}) => ({ok_converted}).map(Ok), Err({inner}) => ({err_converted}).map(Err) }} }}"
@@ -22193,7 +22236,7 @@ fn render_from_dynamic(
             for (member, ty) in members.iter().enumerate() {
                 let inner = format!("inner_{depth}_{member}");
                 let mut converted = String::new();
-                render_from_dynamic(ty, &inner, depth + 1, &mut converted)?;
+                render_member_from_dynamic(ty, &inner, depth + 1, &mut converted)?;
                 write!(
                     output,
                     "{{ let {inner} = {items}.next().ok_or(Error::TypeMismatch)?; ({converted})? }}, "
@@ -22209,7 +22252,7 @@ fn render_from_dynamic(
         } => {
             let inner = format!("inner_{depth}");
             let mut converted = String::new();
-            render_from_dynamic(element, &inner, depth + 1, &mut converted)?;
+            render_member_from_dynamic(element, &inner, depth + 1, &mut converted)?;
             let fixed = match length {
                 Some(length) => format!(
                     ".and_then(|items| <[_; {length}]>::try_from(items).map_err(|_| Error::TypeMismatch))"
@@ -22226,6 +22269,33 @@ fn render_from_dynamic(
         }
     }
     .map_err(request::unwritable)
+}
+
+/// [`render_from_dynamic`] of a value `ty` a crate type holds by value, as
+/// an element, a field or an input: a `[T]` there is a crate's
+/// `Cow<'_, [T]>`, as `fonts: Vec<Cow<'static, [u8]>>` holds (#2063), whose
+/// value is the owned elements. A `[T]` behind a reference is decoded by
+/// the reference's own arm.
+fn render_member_from_dynamic(
+    ty: &convert::Type,
+    value: &str,
+    depth: usize,
+    output: &mut String,
+) -> Result<(), request::Error> {
+    if !matches!(
+        ty,
+        convert::Type::Sequence {
+            owned: false,
+            length: None,
+            ..
+        }
+    ) {
+        return render_from_dynamic(ty, value, depth, output);
+    }
+    let mut converted = String::new();
+    render_from_dynamic(ty, value, depth, &mut converted)?;
+    use std::fmt::Write as _;
+    write!(output, "({converted}).map(::std::borrow::Cow::Owned)").map_err(request::unwritable)
 }
 
 /// A generated `Result<Dynamic, Error>` expression converting the Rust value

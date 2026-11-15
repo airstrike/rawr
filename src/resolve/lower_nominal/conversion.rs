@@ -1311,6 +1311,12 @@ impl<'a> Parser<'a> {
             } else if self.unifies(&target, &conversion.source) {
                 self.unify_type(&target, &conversion.source);
                 String::new()
+            } else if let Some(element) = self.slice_cow_conversion(&target, &conversion.source) {
+                // A crate's `Cow<'_, [T]>` is its elements, so std's `From`
+                // of `&[T]`, `&[T; N]`, `&Vec<T>` or `Vec<T>` is the value
+                // itself.
+                self.unify_type(&target, &element);
+                String::new()
             } else if let Some(host) = &conversion.host {
                 let source = self.inference.resolve(&conversion.source);
                 match self.host_into_helper(host, &source, &target, conversion.span)? {
@@ -1661,6 +1667,46 @@ pub(super) struct HostInto {
     pub(super) receiver: Span,
     /// The placeholder before text lent at `'static` (`TextInto::lent`).
     pub(super) lent: Option<String>,
+}
+
+impl Parser<'_> {
+    /// The `[T]` a conversion from `source` makes when `target` is a bare
+    /// `[T]`, the form a crate's `Cow<'_, [T]>` takes in a body, as a
+    /// crate struct's `fonts: Vec<Cow<'static, [u8]>>` field has it (#2063):
+    /// std's `From<&'a [T]>`, `From<&'a [T; N]>`, `From<&'a Vec<T>>` and
+    /// `From<Vec<T>>` for `Cow<'a, [T]>`, whose runtime form is the
+    /// elements, as each source's is. `None` for another target or
+    /// source.
+    fn slice_cow_conversion(&mut self, target: &Ty, source: &Ty) -> Option<Ty> {
+        let Ty::Array {
+            element: wanted,
+            kind: sequence::Kind::Slice,
+        } = self.inference.resolve(target)
+        else {
+            return None;
+        };
+        let element = match self.inference.resolve(source) {
+            Ty::Reference {
+                mutable: false,
+                target,
+            } => match self.inference.resolve(&target) {
+                Ty::Array {
+                    element,
+                    kind: sequence::Kind::Slice | sequence::Kind::Array(_) | sequence::Kind::Vec,
+                } => element,
+                _ => return None,
+            },
+            Ty::Array {
+                element,
+                kind: sequence::Kind::Vec,
+            } => element,
+            _ => return None,
+        };
+        self.unifies(&wanted, &element).then(|| Ty::Array {
+            element,
+            kind: sequence::Kind::Slice,
+        })
+    }
 }
 
 /// Whether `ty` is a std type Rawr's std holds (`std_facade::held_forms`),

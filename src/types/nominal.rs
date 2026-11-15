@@ -210,6 +210,11 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
     if ty.weak_element().is_some() {
         return crate::resolve::lower_nominal::counted::is_weak(value);
     }
+    // A `Cow` is its variant and payload, whose type was checked where it
+    // was made.
+    if ty.cow_element().is_some() {
+        return value.is::<crate::resolve::lower_nominal::cow::Value>();
+    }
 
     // A trait object is any value of a type implementing the trait, which
     // was checked where it was made.

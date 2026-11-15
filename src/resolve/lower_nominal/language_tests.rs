@@ -14812,6 +14812,25 @@ fn a_cow_of_a_slice_indexes_and_comes_from_a_vec() {
 }
 
 #[test]
+fn a_slice_into_a_cow_field_takes_the_from_of_the_field() {
+    // `impl<'a, T: Clone> From<&'a [T]> for Cow<'a, [T]>`, picked by the
+    // field's type (#2063).
+    let value = run(r#"
+        use std::borrow::Cow;
+        struct Settings { fonts: Vec<Cow<'static, [u8]>>, first: Cow<'static, [u8]> }
+        const FONT: &'static [u8] = &[1, 2, 3];
+        pub fn run() -> i64 {
+            let settings = Settings { fonts: vec![FONT.into()], first: FONT.into() };
+            let borrowed = matches!(settings.first, Cow::Borrowed(_));
+            (settings.fonts[0].len() + settings.first.len()) as i64 * 10
+                + if borrowed { 1 } else { 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 61);
+}
+
+#[test]
 fn a_try_into_annotated_with_an_open_error_takes_its_impls() {
     // rustlings' conversions4: `Result<Color, _>` is the impl's error.
     let value = run(r#"

@@ -8,7 +8,7 @@
 //! it as they do a borrow of a cell, so `*state.write() += 1` and `let mut
 //! value = state.write();` lower as they do for a cell.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::ops::DerefMut;
 use std::ptr::NonNull;
 
@@ -85,6 +85,8 @@ pub struct Yoke<U: ?Sized + 'static> {
     guard: Option<Box<dyn DerefMut<Target = U>>>,
     /// The value, as `Box::leak` made it.
     owner: NonNull<dyn Any>,
+    /// The value's type.
+    owner_type: TypeId,
 }
 
 impl<U: ?Sized + 'static> Yoke<U> {
@@ -101,6 +103,7 @@ impl<U: ?Sized + 'static> Yoke<U> {
         let mut yoke = Self {
             guard: None,
             owner: value,
+            owner_type: TypeId::of::<T>(),
         };
         // SAFETY: the pointer came from a box, so it is valid, aligned and
         // unique, and nothing else reaches the value while the guard lasts.
@@ -122,6 +125,17 @@ impl<U: ?Sized + 'static> Yoke<U> {
     /// The guard's target, while the guard lasts.
     pub fn target(&mut self) -> Option<&mut U> {
         self.guard.as_mut().map(|guard| &mut ***guard)
+    }
+
+    /// Whether the guard lasts and its target is the value itself, as a
+    /// method `fn enable(&mut self) -> &mut Self` gives back the receiver
+    /// it borrows: the target's place is then the value's own.
+    pub fn targets_owner(&mut self) -> bool {
+        let owner = self.owner.as_ptr();
+        self.owner_type == TypeId::of::<U>()
+            && self
+                .target()
+                .is_some_and(|target| std::ptr::addr_eq(target as *mut U, owner))
     }
 
     /// The value, the guard ended first.
@@ -175,6 +189,22 @@ mod tests {
         assert!(yoke.target().is_none());
         let owner = yoke.into_owner().downcast::<Vec<u8>>().unwrap();
         assert_eq!(*owner, [1, 8, 3, 4]);
+    }
+
+    /// A guard of the value itself targets its owner; a guard of a part
+    /// of it, or one that ended, does not.
+    #[test]
+    fn a_yoke_knows_a_guard_of_its_own_value() {
+        let mut whole = Yoke::<Vec<u8>>::new(Box::new(vec![1_u8]), |pixels: &mut Vec<u8>| {
+            Some(Box::new(pixels))
+        });
+        assert!(whole.targets_owner());
+        let _ = whole.owner();
+        assert!(!whole.targets_owner());
+        let mut part = Yoke::<u8>::new(Box::new(vec![1_u8]), |pixels: &mut Vec<u8>| {
+            Some(Box::new(&mut pixels[0]))
+        });
+        assert!(!part.targets_owner());
     }
 
     /// A method that lends nothing leaves a yoke that has ended, whose

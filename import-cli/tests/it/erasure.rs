@@ -477,6 +477,50 @@ fn main() {
     );
 }
 
+/// A crate builder with no `Clone` whose `&mut self -> &mut Self` setters
+/// give back the receiver they borrow (#2061): a setter's discarded
+/// output, a chain on a local and a chain on a temporary each reach the
+/// builder where it is, as rustc reborrows it, and the next call takes it
+/// by that reborrow.
+#[test]
+fn a_setter_giving_back_its_receiver_reaches_the_receiver_itself() {
+    runs(
+        "
+use natives::*;
+
+fn main() {
+    let mut local = Setup::new();
+    local.enable_time();
+    println!(\"{:?}\", local.build());
+    let mut chained = Setup::new();
+    println!(\"{:?}\", chained.enable_io().enable_time().build());
+    println!(\"{:?}\", Setup::new().enable_time().build());
+}
+",
+        "Ok(\"time true io false\")\nOk(\"time true io true\")\nOk(\"time true io false\")\n",
+    );
+}
+
+/// A crate field of std's `Cow<'static, [u8]>` takes `.into()` of a
+/// `&'static [u8]` and of a `Vec<u8>` by the `From` impl the field's type
+/// picks, as rustc selects `From<&'a [T]> for Cow<'a, [T]>` (#2063).
+#[test]
+fn a_slice_into_a_crate_cow_field_takes_the_from_of_the_field() {
+    runs(
+        "
+use natives::*;
+
+const FONT: &'static [u8] = &[1, 2, 3];
+
+fn main() {
+    let fonts = Fonts { fonts: vec![FONT.into(), vec![4_u8, 5].into()], ..Fonts::default() };
+    println!(\"{} {}\", fonts.bytes(), fonts.size);
+}
+",
+        "5 0\n",
+    );
+}
+
 /// Freya's crate-doc builder chain: methods that take `impl Into<T>` of a
 /// native `T`, as default methods through a blanket implementation
 /// (`width`, `height`) or an empty one (`padding`, and `background` on a
