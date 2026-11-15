@@ -2465,3 +2465,50 @@ pub mod surfaces {
         }
     }
 }
+
+pub mod streams {
+    /// A stream of items whose provided `chain` gives a type that holds
+    /// `Self`, as rayon's `ParallelIterator::chain` does.
+    pub trait Stream: Sized {
+        type Item;
+
+        fn pull(&mut self) -> Option<Self::Item>;
+
+        fn chain<C: Stream<Item = Self::Item>>(self, other: C) -> Chained<Self, C> {
+            Chained(self, other)
+        }
+    }
+
+    pub struct Chained<A, B>(A, B);
+
+    impl<A: Stream, B: Stream<Item = A::Item>> Stream for Chained<A, B> {
+        type Item = A::Item;
+
+        fn pull(&mut self) -> Option<A::Item> {
+            self.0.pull().or_else(|| self.1.pull())
+        }
+    }
+
+    struct Each<'a>(std::slice::Iter<'a, String>);
+
+    impl<'a> Stream for Each<'a> {
+        type Item = Option<&'a str>;
+
+        fn pull(&mut self) -> Option<Self::Item> {
+            self.0.next().map(|name| Some(name.as_str()))
+        }
+    }
+
+    pub struct Names(pub Vec<String>);
+
+    impl Names {
+        pub fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        /// An opaque stream whose `Item` borrows the receiver.
+        pub fn items(&self) -> impl Stream<Item = Option<&str>> + '_ {
+            Each(self.0.iter())
+        }
+    }
+}
