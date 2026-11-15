@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The playground runs a snippet that uses iced in the browser: its window is drawn in the output pane and takes clicks and keys, with no server round trip.","issues":[435],"refs":[1395,1384]},
+        {"text":"`rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it.","issues":[1753]},
+        {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.214",
@@ -2829,7 +2836,7 @@
     {"issue":432,"title":"`?play` and the browser playground run plain Rust programs","state":"closed","category":"No glue (D593)","release":"0.3.32"},
     {"issue":433,"title":"rawr preview on the plain runner","state":"open","category":"No glue (D593)"},
     {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"closed","category":"No glue (D593)","release":"0.3.50"},
-    {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
+    {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"closed","category":"No glue (D593)"},
     {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"closed","category":"No glue (D593)","release":"0.3.36"},
     {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.34"},
     {"issue":438,"title":"custom_widget and pick_list stop at 'dependency aliases must be unique'","state":"closed","category":"No glue (D593)","release":"0.3.38"},
@@ -4147,7 +4154,7 @@
     {"issue":1750,"title":"A second run at a project whose path crate was edited before fails its first start (stale read-set, E0432)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
     {"issue":1751,"title":"The islands module's wall time grew from 276 s to 484 s in one day","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.188"},
-    {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1754,"title":"A shared extraction table settled under another CARGO_HOME setting makes every demand round run a nightly build","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
     {"issue":1755,"title":"A restart that needs no native build takes 16 s on inboard; the goal is under 3 s","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1756,"title":"The driver records what native code uses, and a change rebuilds native code only where it reaches a use","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.189"},
@@ -4419,7 +4426,9 @@
     {"issue":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2024,"title":"A data app on turso runs under rawr run as under cargo, and its query and report code hot-reloads","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2026,"title":"A save that changes a marked type's fields migrates its live values in place instead of restarting","state":"open","category":"Hot reload of a marked `main` (D555)"}
+    {"issue":2026,"title":"A save that changes a marked type's fields migrates its live values in place instead of restarting","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":2027,"title":"The browser universe stopped building and covering after #1940, #326 and #1850","state":"closed","category":"Platforms"},
+    {"issue":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -6037,10 +6046,10 @@
           "name": "rawr on wasm with declared packages",
           "start": 58,
           "size": 6,
-          "state": "next",
-          "note": "?play's universe builds for wasm32 and runs in the browser (#1448). The playground, the landing page and an embedding site get iced, ratatui and any declared crate. elevato.rs is live on rawr's universe (2026-11-09). A runner builds each binding on first lookup, so Chrome's prepare went from about 0.65 s to 27 ms (#1518). A new engine reads std's declarations once (#1526). Next: in-place reload in the browser (#1455).",
+          "state": "now",
+          "note": "?play's universe builds for wasm32 and runs in the browser (#1448). elevato.rs runs on it. The playground runs iced snippets in the browser, drawn in the output pane and taking clicks (#435). A runner for wasm32 builds without starting (#1753). Next: in-place reload in the browser (#1455), then ratatui on the landing page (#1384).",
           "issues": [
-            {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"},
+            {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"closed"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
             {"number":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open"},
             {"number":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"closed"},
@@ -6072,7 +6081,9 @@
             {"number":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"closed"},
             {"number":1529,"title":"A new engine still finishes the generated std facade and binds its callbacks at every start","state":"open"},
             {"number":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed"},
-            {"number":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"open"}
+            {"number":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"closed"},
+            {"number":2027,"title":"The browser universe stopped building and covering after #1940, #326 and #1850","state":"closed"},
+            {"number":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open"}
           ]
         },
         {

@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"The playground runs a snippet that uses iced in the browser: its window is drawn in the output pane and takes clicks and keys, with no server round trip.","issues":[435],"refs":[1395,1384]},
+      {"text":"`rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it.","issues":[1753]},
+      {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]}
+    ]
   },
   "releases": [
     {
