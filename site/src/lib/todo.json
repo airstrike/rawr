@@ -25,7 +25,8 @@
         {"text":"After an edit to a crate that a trait-method call's proof reads, the next run lowers that call again instead of failing with \"missing runtime binding\".","issues":[2042]},
         {"text":"A crate method that returns a borrow guard such as `Ref` builds and is read through its guard, as `*meter.borrow()` is. Before, only a method returning a plain `&T` built.","issues":[2047]},
         {"text":"`&Some(..)` of a string or number passed as a `&dyn Debug` or `&dyn Display` reaches the crate, as `both(\"count\", &count, &Some(\"two\"))` does.","issues":[2048]},
-        {"text":"A boxed region value whose type is invariant in its own lifetime takes another value of its region again, as a pane's `title_bar(container)` does.","issues":[2049]}
+        {"text":"A boxed region value whose type is invariant in its own lifetime takes another value of its region again, as a pane's `title_bar(container)` does.","issues":[2049]},
+        {"text":"A call made in a view's region that takes a crate value holding an opaque type, such as `hover(scrollable(preview), right(..))`, takes that value at the region's lifetime. iced's markdown example starts again; it panicked with \"a value reached an adapter as a type its signature doesn't take\". A method that ties the value's own lifetime to a region value, as a pane's `title_bar` does, compiles there too.","issues":[2050]}
       ]
     },
     "releases": [
@@ -4461,7 +4462,11 @@
     {"issue":2047,"title":"A crate method that returns a borrow guard such as Ref builds and is read through its guard","state":"open","category":"Borrow guards (D554)"},
     {"issue":2048,"title":"&Some(..) of a string or number passed as &dyn Debug or &dyn Display reaches the crate","state":"open","category":"No glue (D593)"},
     {"issue":2049,"title":"A boxed region value whose type is invariant in its lifetime takes another value of its region","state":"open","category":"No glue (D593)"},
-    {"issue":2050,"title":"An arena value at a type invariant in its own lifetime has no region path in its opaque table entry","state":"open","category":"No glue (D593)"}
+    {"issue":2050,"title":"An arena value at a type invariant in its own lifetime has no region path in its opaque table entry","state":"closed","category":"No glue (D593)"},
+    {"issue":2051,"title":"rawr-import's own integration suite failed 14 of 71 tests on main","state":"closed","category":"Health"},
+    {"issue":2052,"title":"Retire the fixed-path runner build: the cache entry, its pins and the no-chain path in Manifest::build","state":"open","category":"Health"},
+    {"issue":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open","category":"Health"},
+    {"issue":2054,"title":"Crossing test: an arena-made value holding an opaque type joins a region value through a call that ties their lifetimes","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5204,7 +5209,8 @@
             {"number":2002,"title":"A borrowing result in the one-value forwarding cell can't run a program method returning another value of its type","state":"open"},
             {"number":2013,"title":"A script impl function whose revealed output holds a crate's opaque type (markdown's code_block) can't be named","state":"closed"},
             {"number":2021,"title":"An arena-held opaque value that borrows can't join a region value in one call (hover(code_block(..), ..))","state":"closed"},
-            {"number":2050,"title":"An arena value at a type invariant in its own lifetime has no region path in its opaque table entry","state":"open"}
+            {"number":2050,"title":"An arena value at a type invariant in its own lifetime has no region path in its opaque table entry","state":"closed"},
+            {"number":2054,"title":"Crossing test: an arena-made value holding an opaque type joins a region value through a call that ties their lifetimes","state":"open"}
           ]
         }
       ]
@@ -5922,7 +5928,10 @@
             {"number":2043,"title":"The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open"},
             {"number":2044,"title":"rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open"},
             {"number":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"closed"},
-            {"number":2046,"title":"A rawr home keeps every superseded runtime build, about 1.1 GB per rawr change","state":"open"}
+            {"number":2046,"title":"A rawr home keeps every superseded runtime build, about 1.1 GB per rawr change","state":"open"},
+            {"number":2051,"title":"rawr-import's own integration suite failed 14 of 71 tests on main","state":"closed"},
+            {"number":2052,"title":"Retire the fixed-path runner build: the cache entry, its pins and the no-chain path in Manifest::build","state":"open"},
+            {"number":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open"}
           ]
         }
       ]

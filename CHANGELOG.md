@@ -19,6 +19,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A crate method that returns a borrow guard such as `Ref` builds and is read through its guard, as `*meter.borrow()` is. Before, only a method returning a plain `&T` built. (#2047)
 - `&Some(..)` of a string or number passed as a `&dyn Debug` or `&dyn Display` reaches the crate, as `both("count", &count, &Some("two"))` does. (#2048)
 - A boxed region value whose type is invariant in its own lifetime takes another value of its region again, as a pane's `title_bar(container)` does. (#2049)
+- A call made in a view's region that takes a crate value holding an opaque type, such as `hover(scrollable(preview), right(..))`, takes that value at the region's lifetime. iced's markdown example starts again; it panicked with "a value reached an adapter as a type its signature doesn't take". A method that ties the value's own lifetime to a region value, as a pane's `title_bar` does, compiles there too. (#2050)
 
 ## 0.3.214 (2026-11-14)
 
