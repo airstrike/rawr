@@ -6,7 +6,7 @@ use super::dispatch::{
     write_trait_dispatchers, Naming,
 };
 #[cfg(feature = "rust-import")]
-use super::imported::{native_impls, ImportedOutput};
+use super::imported::{native_impls, ImportedOutput, Programs};
 use super::location::{resolve_locations, retain_locations, Location};
 use super::models::Models;
 use super::naming::{
@@ -70,7 +70,8 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
-    let impls = native_impls(program, &models)?.into_boxed_slice();
+    let programs = Programs::of(program);
+    let impls = native_impls(program, &models, &programs)?.into_boxed_slice();
     let lowered = lower_with_context(
         engine,
         program,
@@ -97,6 +98,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         ImportedOutput {
             uses: uses.into_boxed_slice(),
             impls,
+            programs,
         },
     ))
 }

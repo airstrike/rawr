@@ -198,7 +198,7 @@ use imported::instance_names;
 #[cfg(feature = "rust-import")]
 use imported::UseArguments;
 #[cfg(feature = "rust-import")]
-pub(crate) use imported::{reveal, ImportedOutput};
+pub(crate) use imported::{reveal, ImportedOutput, NativeImpl};
 use imported::{ImplArguments, ImplUse};
 #[cfg(test)]
 use inference::{inference_metrics, reset_inference_metrics};
