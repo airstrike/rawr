@@ -453,6 +453,9 @@ pub(crate) struct Prepared {
     context: crate::context::Context,
     proof: ReadSetProof,
     retention: Option<Retention>,
+    /// The build target whose generation this closure is once it binds as
+    /// Live and LastGood.
+    target: crate::store::Target,
     pins: std::sync::Mutex<Pins>,
 }
 
@@ -959,8 +962,14 @@ impl Prepared {
             context,
             proof,
             retention: None,
+            target: crate::store::Target::UNNAMED,
             pins: std::sync::Mutex::new(Pins::default()),
         })
+    }
+
+    /// Bind this closure to the build target it is a generation of.
+    pub(crate) fn bind_target(&mut self, target: crate::store::Target) {
+        self.target = target;
     }
 
     pub(crate) fn with_retention(mut self, retention: Retention) -> Result<Self, Error> {
@@ -1189,7 +1198,7 @@ impl Prepared {
                 retention.require_proof(&self.proof)?;
             }
             let store = self.context.open_store()?;
-            let [live, last_good] = store.bind_live_last_good_held(&self.proof)?;
+            let [live, last_good] = store.bind_live_last_good_held(&self.proof, self.target)?;
             pins.live = Some(live);
             pins.last_good = Some(last_good);
             return Ok(());
@@ -1225,10 +1234,13 @@ impl Prepared {
         }
         let store = self.context.open_store()?;
         let result = match &self.retention {
-            Some(retention) => {
-                store.with_live_last_good_retained(&self.proof, retention, operation)?
-            }
-            None => store.with_live_last_good(&self.proof, operation)?,
+            Some(retention) => store.with_live_last_good_retained(
+                &self.proof,
+                retention,
+                self.target,
+                operation,
+            )?,
+            None => store.with_live_last_good(&self.proof, self.target, operation)?,
         };
         match result {
             Ok((value, [live, last_good])) => {

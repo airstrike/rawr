@@ -118,6 +118,14 @@ impl<B> Lane<B> {
         })
     }
 
+    /// Name the build target this lane's runners are generations of, so the
+    /// store keeps each target's current generation (#1407).
+    #[must_use]
+    pub fn with_target(mut self, target: rawr_import::store::Target) -> Self {
+        self.process = self.process.with_target(target);
+        self
+    }
+
     /// Allocate the next exact compilation revision from this lane's sole
     /// supervisor authority.
     pub fn revision(&mut self) -> Result<rawr_import::supervisor::Revision, Error> {
