@@ -12959,14 +12959,24 @@ fn opaque_table_source(
 ",
                     ),
                 };
-                writeln!(body, "{open}").map_err(request::unwritable)?;
+                let mut region_body = Vec::new();
                 {
                     let _region = InRegion::enter();
                     let _arguments = RegionArguments::enter();
-                    render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
+                    render_adapter_body(consumer, cohort, profile, facade, &mut region_body)?;
                 }
-                body.write_all(close.as_bytes())
-                    .map_err(request::unwritable)?;
+                let region_body = String::from_utf8(region_body).map_err(request::unwritable)?;
+                // A region boxes the output of an arena value at `'static`
+                // only where the call needn't shorten a lifetime of the
+                // operand's own type: one the call ties to the region's
+                // value is the arena path's to refuse.
+                if !(boxed && holding && takes_at_own_lifetime(&region_body, position)) {
+                    writeln!(body, "{open}").map_err(request::unwritable)?;
+                    body.write_all(region_body.as_bytes())
+                        .map_err(request::unwritable)?;
+                    body.write_all(close.as_bytes())
+                        .map_err(request::unwritable)?;
+                }
             }
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
@@ -13061,24 +13071,9 @@ fn opaque_table_source(
 /// `lent_copy!` match (#1797).
 fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
     let take = format!("take_like(arguments, {position}, _w)?");
-    let whole = format!(" = {take};");
-    let lent = format!(" = match lent_copy!(arguments, {position}, ");
-    let unlent = format!(" None => {take} }};");
     let mut shaped = String::with_capacity(body.len());
     for line in body.split_inclusive('\n') {
-        let held = line
-            .trim_start()
-            .strip_prefix("let ")
-            .and_then(|rest| rest.split_once(": "))
-            .and_then(|(_, rest)| {
-                rest.split_once(&whole).or_else(|| {
-                    rest.split_once(&lent)
-                        .filter(|_| line.trim_end().ends_with(&unlent))
-                })
-            })
-            .map(|(ty, _)| ty)
-            .filter(|ty| *ty != "_");
-        let Some(ty) = held else {
+        let Some(ty) = taken_type(line, position, &take) else {
             shaped.push_str(line);
             continue;
         };
@@ -13105,6 +13100,40 @@ fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
         ));
     }
     shaped
+}
+
+/// The type `line` declares for the operand at `position` that `take`
+/// takes, `let name: Type = take;`, or through a copy of a lent value,
+/// `let name: Type = match lent_copy!(arguments, position, ..) { ..
+/// None => take };`. None where the line takes no such operand, or leaves
+/// its type to inference.
+fn taken_type<'l>(line: &'l str, position: usize, take: &str) -> Option<&'l str> {
+    let whole = format!(" = {take};");
+    let lent = format!(" = match lent_copy!(arguments, {position}, ");
+    let unlent = format!(" None => {take} }};");
+    line.trim_start()
+        .strip_prefix("let ")
+        .and_then(|rest| rest.split_once(": "))
+        .and_then(|(_, rest)| {
+            rest.split_once(&whole).or_else(|| {
+                rest.split_once(&lent)
+                    .filter(|_| line.trim_end().ends_with(&unlent))
+            })
+        })
+        .map(|(ty, _)| ty)
+        .filter(|ty| *ty != "_")
+}
+
+/// Whether `body` takes the arena's operand at `position` at a type that
+/// holds an opaque type inside a type with a lifetime of its own, as
+/// `Pane<'_, (), _>` of a receiver: the arena holds it at `'static`, which
+/// a call that ties that lifetime to a region's value can't shorten where
+/// the type is invariant in it.
+fn takes_at_own_lifetime(body: &str, position: usize) -> bool {
+    let take = format!("take_native(arguments, {position})?");
+    body.lines()
+        .filter_map(|line| taken_type(line, position, &take))
+        .any(|ty| !opaque_holes(ty).is_empty() && !named_lifetimes(ty).1.is_empty())
 }
 
 /// Whether each type `ty` leaves Rust to infer, as `concrete_type` writes
@@ -17458,10 +17487,12 @@ fn render_guard(
     // `__CALLSITE.metadata()` gives `&'static Metadata<'static>` (#1602).
     // One of std's held types is no such place: rawr holds its value, and
     // its borrowed form may be unsized, as `ProjectDirs::data_dir(&self)
-    // -> &Path` gives (#1942).
+    // -> &Path` gives (#1942). Nor is a guard type's target, which lives
+    // only while the guard does: its value is read through the guard.
     let shared = matches!(guard, Guard::Shared)
         && matches!(receiver, Receiver::Shared)
         && signature.inputs().is_empty()
+        && signature.lent_output()
         && std_value(&target).is_none();
     if shared {
         let mut container = Vec::new();
@@ -22921,9 +22952,15 @@ fn is_copied(ty: &convert::Type) -> bool {
 }
 
 /// Whether a `&` input of `ty` lends a Rust value the bridge makes from
-/// Rawr's array, tuple or string for the call: `&[T]`, `&Vec<T>`, `&(A,
-/// B)` or `&String`.
+/// Rawr's array, tuple, string or option for the call: `&[T]`, `&Vec<T>`,
+/// `&(A, B)`, `&String`, or `&Option<T>` of a `T` made so or a `&str`, as
+/// `&Some("two")` fills a `&dyn Debug`.
 fn is_made_for_call(ty: &convert::Type) -> bool {
+    if let convert::Type::Option(element) = ty {
+        return is_made_for_call(element)
+            || matches!(&**element, convert::Type::Borrowed { mutable: false, ty }
+                if **ty == convert::Type::Builtin(convert::Builtin::Str));
+    }
     // A slice of trait objects lends what native code makes of its values
     // (`object::lent_slice_element`).
     if let convert::Type::Sequence { element, .. } = ty

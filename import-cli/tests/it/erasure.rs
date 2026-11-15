@@ -220,7 +220,9 @@ fn main() {
 ",
         "resource 7\nresource 3\nresource 2\n",
     );
-    // A function whose hidden type is its own has none, as rustc says.
+    // A function whose hidden type is its own has none but the never
+    // type's fallback, `()`, which rustc finds doesn't implement the
+    // trait: rustc's error is the one shown.
     refused(
         "
 use natives::Labelled;
@@ -233,7 +235,7 @@ fn main() {
     println!(\"wrong {}\", endless().label());
 }
 ",
-        "impl natives::Labelled",
+        "error[E0277]: the trait bound `(): Labelled` is not satisfied",
     );
 }
 
@@ -377,10 +379,11 @@ fn main() {
         "pressed\npressed\nrect 0 false [Hi]; rect 0 false [Hi]\nrect 0 false [count 0]; rect 0 false [count 1]; rect 0 false [count 2]\nfinal 3\n",
     );
     // The runner's runtime tests, which only a generated runner compiles:
-    // a handle the protocol gave out stays alive (review 5), and a lent
-    // value given back on a thread without the arena, or while a native
-    // call holds it, returns to its slot (review 6, 7), and a lent value
-    // reached at another type is a rawr bug (#1528).
+    // a handle the protocol gave out stays alive (review 5), one it took
+    // back is the program's alone (#1852), a lent value given back on a
+    // thread without the arena, or while a native call holds it, returns
+    // to its slot (review 6, 7), and a lent value reached at another type
+    // is a rawr bug (#1528).
     let test = Command::new("cargo")
         .current_dir(&root)
         .args([
@@ -398,7 +401,7 @@ fn main() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&test.stdout);
     assert!(
-        test.status.success() && stdout.contains("6 passed"),
+        test.status.success() && stdout.contains("7 passed"),
         "stdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&test.stderr)
     );

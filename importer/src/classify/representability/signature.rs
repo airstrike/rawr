@@ -120,6 +120,12 @@ pub struct Signature {
     /// guard lives inside it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guard: Option<Guard>,
+    /// A method with a `guard` whose Rust output is the reference it lends
+    /// from its receiver, `&T`, rather than a guard type that dereferences
+    /// to `T`, as `RefCell::borrow`'s `Ref` does: a receiver that lives as
+    /// long as the runner lends its `&T` for as long.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lent_output: bool,
     /// An item whose output borrows what the call takes, which it runs in
     /// a native scope frame (D558 tier 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -920,6 +926,7 @@ impl Signature {
             regional: Box::new([]),
             keep_receiver: Box::new([]),
             lends_receiver: false,
+            lent_output: false,
             lasting_receiver: false,
             detached_future: false,
             assigns: false,
@@ -1052,6 +1059,18 @@ impl Signature {
     #[must_use]
     pub const fn lends_receiver(&self) -> bool {
         self.lends_receiver
+    }
+
+    pub(crate) fn with_lent_output(mut self, lent: bool) -> Self {
+        self.lent_output = lent;
+        self
+    }
+
+    /// Whether the method's guard output is the reference it lends, `&T`,
+    /// not a guard type.
+    #[must_use]
+    pub const fn lent_output(&self) -> bool {
+        self.lent_output
     }
 
     pub(crate) fn with_lasting_receiver(mut self, lasting: bool) -> Self {
