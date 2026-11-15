@@ -1902,6 +1902,48 @@ fn an_opaque_iterator_fills_an_iterable_parameter() {
     );
 }
 
+/// iced's `tooltip(button(..), label, ..)` in a view the program calls
+/// itself, out of any slot (#2057): the button carries a lifetime and the
+/// `&str` fills a type parameter the output keeps, so both join at
+/// `'static`, the string pinned for the runner's life. The output is
+/// `cargo run`'s.
+#[test]
+fn a_lifetime_carrying_widget_and_a_str_join_out_of_any_region() {
+    let (rawr, cargo) = both_printed("hinted.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.starts_with("never true\n")
+            && rawr.ends_with("never false\nsimulated [Captured, Ignored]\npresses 2"),
+        "{rawr}"
+    );
+}
+
+/// A simulator of the program's own widget whose message is a crate type
+/// (#2058): its type names no script type, yet its `&mut self` methods
+/// call the program's `labels` and `press` back, so each lends the arena
+/// while it runs. The output is `cargo run`'s.
+#[test]
+fn a_method_of_a_value_holding_a_script_widget_erased_calls_it_back() {
+    let (rawr, cargo) = both_printed("simulated_widget.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("found true\nsimulated [Captured, Ignored]\nmessage Pressed"),
+        "{rawr}"
+    );
+}
+
+/// A view the program calls itself borrows the state's crate value, out
+/// of any slot, in pins that live as long as the runner (#2059): once the
+/// simulator that holds the view drops, `update`'s `&mut` of the value
+/// lets them go, as rustc ends the borrow, and changes the value in
+/// place. The output is `cargo run`'s.
+#[test]
+fn a_mut_of_a_value_a_dropped_view_borrowed_out_of_any_slot_lets_it_go() {
+    let (rawr, cargo) = both_printed("qr_simulated.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.ends_with("grown true"), "{rawr}");
+}
+
 /// iced_test's `simulator(counter.view())` beside iced (#1680): `tester`
 /// takes any `parts` widget, and no impl its facade can name fixes the
 /// theme and renderer of the widget `events` makes. The view's `impl

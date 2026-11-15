@@ -221,6 +221,9 @@ pub trait Homed: Any {
     fn lend(&self) -> Option<(std::rc::Rc<dyn Any>, *const dyn Any)> {
         None
     }
+    /// Lets go of the holds a `&mut` of the value ends, before it is
+    /// taken so: those of the pins that live as long as the runner.
+    fn release(&self) {}
 }
 
 /// A native value native code borrows where it is, as a stand-in's `fn
@@ -308,6 +311,13 @@ impl<T: 'static> Homed for Viewed<T> {
         let keeper: std::rc::Rc<dyn Any> = self.0.clone();
         let pointer: *const dyn Any = std::rc::Rc::as_ptr(&keeper);
         Some((keeper, pointer))
+    }
+
+    /// A view the program calls itself, out of any slot, shares the value
+    /// with the runner's own pins (`static_pins`), which no slot's next
+    /// `&mut` clears: the value's own `&mut` lets them go.
+    fn release(&self) {
+        static_pins().release(std::rc::Rc::as_ptr(&self.0).addr());
     }
 }
 
@@ -2377,6 +2387,15 @@ impl Arena {
         }
     }
 
+    /// [`Arena::settle`] for a `&mut` of the value, which first ends the
+    /// holds of it a `&mut` ends ([`Homed::release`]).
+    pub fn settle_mutable(&mut self, handle: &NativeHandle) {
+        if let Some(homed) = self.homed(handle) {
+            homed.release();
+        }
+        self.settle(handle);
+    }
+
     /// Give the slot of `handle` its value back from its home once nothing
     /// borrows it there.
     pub fn settle(&mut self, handle: &NativeHandle) {
@@ -2813,7 +2832,7 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut T) -> R,
     ) -> Result<R, Error> {
-        self.settle(&handle);
+        self.settle_mutable(&handle);
         if let Some(homed) = self.homed(&handle) {
             let mut call = Some(call);
             let mut output = None;
@@ -2844,7 +2863,7 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut Self, &mut T) -> R,
     ) -> Result<R, Error> {
-        self.settle(&handle);
+        self.settle_mutable(&handle);
         // A homed value is in the home, so the arena is free to lend.
         if let Some(index) = self.homed(&handle).map(|_| handle.slot as usize) {
             let homed = self.slots[index].homed.take().ok_or(Error::StaleHandle)?;
@@ -2925,7 +2944,7 @@ impl Arena {
         reach: impl for<'a> FnOnce(&'a mut T) -> Option<Box<dyn std::ops::DerefMut<Target = U> + 'a>>,
     ) -> Result<YokeEnd<U>, Error> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        self.settle(handle);
+        self.settle_mutable(handle);
         let index = self.index::<T>(handle)?;
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
@@ -14914,11 +14933,12 @@ fn render_anchored_opening(
         .map_err(encoding)
         .map(|()| Ending::Falls);
     }
-    // Out of any region, such an input is at `'static`, which a string
-    // pinned at the slot's lifetime can't join.
-    if lifetime_inputs(signature, substitutions)? {
-        return Ok(Ending::Falls);
-    }
+    // Out of any region, such an input is an arena value at `'static`,
+    // which a string pinned at a frame's lifetime can't join when its type
+    // is invariant in it. It joins a string pinned for the runner's life,
+    // below, as in a view the program calls itself a button and a `&str`
+    // label join in the widget that keeps both.
+    let lifetimes = lifetime_inputs(signature, substitutions)?;
     // A call that would open a frame is made in the region of the frame
     // whose scope it is in, when no slot's region is open: a second `let`
     // joins the first's, so a call takes both at one lifetime, as rustc
@@ -14928,9 +14948,10 @@ fn render_anchored_opening(
     } else {
         "anchor"
     };
-    writeln!(
-        output,
-        "    if let Some(anchor) = __rawr_internal::scope::{anchor}() {{
+    if !lifetimes {
+        writeln!(
+            output,
+            "    if let Some(anchor) = __rawr_internal::scope::{anchor}() {{
 {taken}        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
             let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;{pinned}
             let made = {call};
@@ -14938,8 +14959,9 @@ fn render_anchored_opening(
         }})
         .map_err(|error| Error::Lent(\"a slot's region\", error))?;
     }}"
-    )
-    .map_err(encoding)?;
+        )
+        .map_err(encoding)?;
+    }
     // Out of any region, as in a closure a widget calls while it lays out,
     // a type parameter a `&str` fills is a `&'static str`, as rustc types
     // the literal `button("Delete")` takes: the string is pinned for the
@@ -16974,33 +16996,22 @@ fn render_borrowed_receiver(
         )
         .map_err(encoding);
     }
-    // A method that calls a script closure back, as `Frame::with_save(&mut
-    // self, f: impl FnOnce(&mut Frame) -> R)` does, holds its receiver out
-    // of its slot and lends the arena while it runs, as a function does
-    // (D551.6), so the closure's own native calls reach the arena. So does
-    // a method of a value generic over a script type, which may call a
-    // script function it keeps, as a generic `Engine<P, M>::frame`
-    // calls the program's `update` (#1432). A `&self` method holds it
-    // shared, so a value a view still borrows stays readable, as
-    // `state.len()` beside `PaneGrid::new(&state, ..)`.
-    let calls_back = signature.inputs().iter().any(|ty| {
-        callable_parameter(ty, signature)
-            || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature))
-    }) || substitutions.iter().any(names_script);
+    // A method may call script code back, as `Frame::with_save(&mut self,
+    // f: impl FnOnce(&mut Frame) -> R)` calls its closure, as a generic
+    // `Engine<P, M>::frame` calls the program's `update` (#1432), or as a
+    // value whose type names no script type calls a script widget or
+    // closure it holds erased, behind a trait object a program's `impl`
+    // made. Its type can't say which, so every such method holds its
+    // receiver out of its slot and lends the arena while it runs, as a
+    // function does (D551.6), and the code it calls back reaches the
+    // arena. A `&self` method holds it shared, so a value a view still
+    // borrows stays readable, as `state.len()` beside `PaneGrid::new(
+    // &state, ..)`.
     let held = if mutable { "held" } else { "held_shared" };
-    let (arena_call, lent_call) = if calls_back {
-        (
-            format!(
-                "arguments.arena.{held}::<{container}, _>(receiver, |arena, receiver| lend(arena, || {call}))?"
-            ),
-            format!("lend(arguments.arena, || {call})"),
-        )
-    } else {
-        (
-            format!("arguments.arena.{access}::<{container}, _>(receiver, |receiver| {call})?"),
-            call.clone(),
-        )
-    };
+    let arena_call = format!(
+        "arguments.arena.{held}::<{container}, _>(receiver, |arena, receiver| lend(arena, || {call}))?"
+    );
+    let lent_call = format!("lend(arguments.arena, || {call})");
     let mut taken = Vec::new();
     argument_list(signature.inputs().len(), 1, &mut taken)?;
     let taken = String::from_utf8(taken).map_err(request::unwritable)?;
@@ -22592,35 +22603,6 @@ fn holds_script(ty: &convert::Type) -> bool {
         }
         convert::Type::Result(ok, err) => holds_script(ok) || holds_script(err),
         _ => false,
-    }
-}
-
-/// Whether `ty` names a script type anywhere, as `Engine<State,
-/// Message>` does: native code that holds a value of it may call script
-/// code back.
-fn names_script(ty: &convert::Type) -> bool {
-    match ty {
-        convert::Type::Script { .. } => true,
-        convert::Type::Nominal { arguments, .. } => arguments.iter().any(names_script),
-        convert::Type::Tuple(members) => members.iter().any(names_script),
-        convert::Type::Option(element)
-        | convert::Type::Sequence { element, .. }
-        | convert::Type::ConstArray { element, .. }
-        | convert::Type::Borrowed { ty: element, .. }
-        | convert::Type::Range(element)
-        | convert::Type::ProfileMessage {
-            payload: element, ..
-        } => names_script(element),
-        convert::Type::Result(ok, err) => names_script(ok) || names_script(err),
-        convert::Type::FunctionItem { input, output } => {
-            names_script(input) || names_script(output)
-        }
-        convert::Type::Object(object) => object.types().any(names_script),
-        convert::Type::Unit
-        | convert::Type::Never
-        | convert::Type::Builtin(_)
-        | convert::Type::Parameter(_)
-        | convert::Type::Inferred => false,
     }
 }
 

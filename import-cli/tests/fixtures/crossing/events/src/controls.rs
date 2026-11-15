@@ -185,6 +185,34 @@ impl<Message, Theme: Default, Renderer> Widget<Message, Theme, Renderer> for Box
     }
 }
 
+/// A widget with a hint beside it, as iced's `tooltip(content, "hint",
+/// position)` gives: it keeps both as the types they fill, so a button
+/// keeps the lifetime it carries and a `&str` hint its borrow.
+pub struct Hinted<W, H> {
+    content: W,
+    hint: H,
+}
+
+/// `content` with `hint` beside it.
+pub fn hinted<W, H>(content: W, hint: H) -> Hinted<W, H> {
+    Hinted { content, hint }
+}
+
+impl<Message, Theme, Renderer, W, H> Widget<Message, Theme, Renderer> for Hinted<W, H>
+where
+    W: Widget<Message, Theme, Renderer>,
+    H: std::fmt::Display,
+{
+    fn labels(&self, labels: &mut Vec<String>) {
+        self.content.labels(labels);
+        labels.push(format!("hint {}", self.hint));
+    }
+
+    fn press(&self, label: &str) -> Option<Message> {
+        self.content.press(label)
+    }
+}
+
 /// A widget whose type no Rust code can write, as iced's `iced(..)` gives.
 pub fn logo<'a, Message, Theme, Renderer>(
     size: impl Into<f32>,

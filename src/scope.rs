@@ -1774,7 +1774,9 @@ impl Pins {
         // SAFETY: the value lives in the `Rc`'s allocation, which a `Kept`
         // in these pins keeps alive until `clear` takes `&mut self` or the
         // pins drop, and neither can happen while `&self` is borrowed; a
-        // `Kept` dropped on another thread leaks it. Moving a `Kept` within
+        // `Kept` dropped on another thread leaks it. `release` lets it go
+        // only where the program takes the value `&mut`, past the last use
+        // of every borrow of it, on the terms `release` gives. Moving a `Kept` within
         // the map doesn't move the allocation. Nothing writes the value
         // while the pins share it: `Rc::get_mut` and `Rc::try_unwrap` fail
         // while they hold a count, and a `&T` allows only what `T`'s own
@@ -1829,6 +1831,21 @@ impl Pins {
         let slice: &'static [&'static str] = Box::leak(pinned.into_boxed_slice());
         slices.insert(slice);
         slice
+    }
+
+    /// Lets go of the native value at `address` that [`Pins::hold`] keeps,
+    /// as a `&mut` of that value lets go of every borrow of it: rustc
+    /// checked the program, so where it takes the value `&mut` nothing it
+    /// made of a shared borrow of the value is used again. Pins that live
+    /// as long as the runner hold such a value for a view the program
+    /// calls itself, out of any slot whose pins its next `&mut` clears.
+    pub fn release(&self, address: usize) {
+        let released = self
+            .values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&address);
+        drop(released);
     }
 
     /// Let everything pinned go.
