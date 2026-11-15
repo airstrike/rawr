@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A view a program or test calls itself, outside the application, builds a widget that joins a button and a `&str` label, such as a tooltip, instead of panicking as a rawr bug.","issues":[2057]},
+      {"text":"A crate method that calls the program's own widgets back through an erased element, such as a test simulator's snapshot of a custom widget, reaches the program's values instead of panicking with `Stale`.","issues":[2058]},
+      {"text":"Changing state that a view called outside the application borrowed, once that view is dropped, no longer fails with a false E0502.","issues":[2059]}
+    ]
   },
   "releases": [
     {

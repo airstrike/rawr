@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A view a program or test calls itself, outside the application, builds a widget that joins a button and a `&str` label, such as a tooltip, instead of panicking as a rawr bug.","issues":[2057]},
+        {"text":"A crate method that calls the program's own widgets back through an erased element, such as a test simulator's snapshot of a custom widget, reaches the program's values instead of panicking with `Stale`.","issues":[2058]},
+        {"text":"Changing state that a view called outside the application borrowed, once that view is dropped, no longer fails with a false E0502.","issues":[2059]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.215",
@@ -4472,9 +4479,9 @@
     {"issue":2054,"title":"Crossing test: an arena-made value holding an opaque type joins a region value through a call that ties their lifetimes","state":"open","category":"No glue (D593)"},
     {"issue":2055,"title":"A path dependency or patch path reached through a symlink is refused as 'reached through a symlink'","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.215"},
     {"issue":2056,"title":"A project whose target/ is a symlink is refused as a Rawr-owned cache path","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"open","category":"No glue (D593)"},
-    {"issue":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"open","category":"No glue (D593)"},
-    {"issue":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"open","category":"No glue (D593)"},
+    {"issue":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"closed","category":"No glue (D593)"},
+    {"issue":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed","category":"No glue (D593)"},
+    {"issue":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed","category":"No glue (D593)"},
     {"issue":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"open","category":"No glue (D593)"},
     {"issue":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"open","category":"Divergences from rustc"},
     {"issue":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open","category":"Divergences from rustc"},
@@ -4484,7 +4491,8 @@
     {"issue":2066,"title":"Associated-type projections of an imported trait are unknown member, and << after a generic argument lexes as a shift","state":"open","category":"Divergences from rustc"},
     {"issue":2067,"title":"An imported trait path call with Self inferred resolves to an unrelated default; <T as Trait>::f() is unsupported","state":"open","category":"Divergences from rustc"},
     {"issue":2068,"title":"macro_rules hygiene renames fields named like a body let; tail temporaries use pre-2024 drop order (E0597)","state":"open","category":"Divergences from rustc"},
-    {"issue":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed","category":"No glue (D593)"}
+    {"issue":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed","category":"No glue (D593)"},
+    {"issue":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5159,9 +5167,9 @@
             {"number":2020,"title":"A crate call whose &[T] argument is a slice a crate method lent fails with TypeMismatch when the output keeps the lend","state":"closed"},
             {"number":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed"},
             {"number":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"closed"},
-            {"number":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"open"},
-            {"number":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"open"},
-            {"number":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"open"},
+            {"number":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"closed"},
+            {"number":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed"},
+            {"number":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed"},
             {"number":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"open"},
             {"number":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"open"},
             {"number":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open"},
@@ -5171,7 +5179,8 @@
             {"number":2066,"title":"Associated-type projections of an imported trait are unknown member, and << after a generic argument lexes as a shift","state":"open"},
             {"number":2067,"title":"An imported trait path call with Self inferred resolves to an unrelated default; <T as Trait>::f() is unsupported","state":"open"},
             {"number":2068,"title":"macro_rules hygiene renames fields named like a body let; tail temporaries use pre-2024 drop order (E0597)","state":"open"},
-            {"number":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed"}
+            {"number":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed"},
+            {"number":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open"}
           ],
           "milestone": "0.3"
         },

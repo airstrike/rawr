@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A view a program or test calls itself, outside the application, builds a widget that joins a button and a `&str` label, such as a tooltip, instead of panicking as a rawr bug. (#2057)
+- A crate method that calls the program's own widgets back through an erased element, such as a test simulator's snapshot of a custom widget, reaches the program's values instead of panicking with `Stale`. (#2058)
+- Changing state that a view called outside the application borrowed, once that view is dropped, no longer fails with a false E0502. (#2059)
 
 ## 0.3.215 (2026-11-15)
 
