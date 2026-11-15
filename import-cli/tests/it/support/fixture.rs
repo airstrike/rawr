@@ -100,12 +100,9 @@ impl Fixture {
                     break root;
                 }
                 if lanes.live < limit() {
+                    // A lane an earlier run left stays warm: its files are
+                    // settled below, and Cargo and rawr keep its builds.
                     let lanes_of_fixture = scratch.join("lanes").join(self.name);
-                    // Each run of the suite makes its lanes anew.
-                    if lanes.next == 0 {
-                        crate::support::held::clear(&lanes_of_fixture);
-                        crate::support::held::until_the_run_ends(lanes_of_fixture.clone());
-                    }
                     lanes.next += 1;
                     lanes.live += 1;
                     break lanes_of_fixture.join(lanes.next.to_string());
@@ -158,8 +155,8 @@ impl Drop for Lease {
     fn drop(&mut self) {
         let mut lanes = self.fixture.lanes();
         if crate::support::held::failure_kept() {
+            // Left as the failure left it, out of the pool.
             lanes.live -= 1;
-            crate::support::held::keep(std::mem::take(&mut self.root));
         } else {
             lanes.free.push(std::mem::take(&mut self.root));
         }

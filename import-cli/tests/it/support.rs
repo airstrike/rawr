@@ -260,9 +260,7 @@ impl AsRef<std::ffi::OsStr> for Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if held::failure_kept() {
-            held::keep(std::mem::take(&mut self.path));
-        } else {
+        if !held::failure_kept() {
             let _ = fs::remove_dir_all(&self.path);
         }
     }

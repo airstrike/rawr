@@ -46,10 +46,7 @@ pub fn home() -> PathBuf {
     HOME.get_or_init(|| {
         let home = super::scratch().join("rawr-home");
         let warmup = super::scratch().join("runtime-warmup");
-        super::held::clear(&home);
-        super::held::clear(&warmup);
-        super::held::shared_until_the_run_ends(home.clone());
-        super::held::shared_until_the_run_ends(warmup.clone());
+        // Both stay between runs: a warm runtime costs its cached run.
         warm(&warmup, &home);
         home
     })

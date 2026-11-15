@@ -8,14 +8,15 @@
 //! test. Rawr keys a project's builds by its path, so a slot's state
 //! serves that slot alone.
 //!
-//! No slot comes from an earlier run of the suite (#1712). A test waits
-//! for a slot when every one is held and no more can be made. A test that
-//! fails gives its slot up, and the next test makes another. Its slot stays
-//! as it left it, to be looked at, only when the failure is kept; the
-//! fixture's slots go when the run ends ([`super::held`]). A test that
-//! runs [`super::alone`] does so before it takes a slot: once it holds one,
-//! a test waiting for that slot would never end, and neither would its wait
-//! to run alone.
+//! A slot stays between runs of the suite while its stamp matches: the
+//! fixture's sources and the `rawr-import` and driver that ran it. One
+//! whose stamp differs is stale, and is made again in its place (#1712).
+//! A test waits for a slot when every one is held and no more can be made.
+//! A test that fails gives its slot up, and the next test makes another.
+//! Its slot stays as it left it, to be looked at, only when the failure is
+//! kept ([`super::held`]). A test that runs [`super::alone`] does so before
+//! it takes a slot: once it holds one, a test waiting for that slot would
+//! never end, and neither would its wait to run alone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,11 +93,6 @@ impl Started {
                     break Taken::Kept(slot);
                 }
                 if slots.live < SLOTS {
-                    // Each run of the suite makes its slots anew.
-                    if slots.next == 0 {
-                        crate::support::held::clear(&fixtures);
-                        crate::support::held::until_the_run_ends(fixtures.clone());
-                    }
                     slots.next += 1;
                     slots.live += 1;
                     break Taken::New(fixtures.join(slots.next.to_string()));
@@ -116,9 +112,21 @@ impl Started {
                 project
             }
             Taken::New(slot) => {
-                let project = self.held(slot);
-                self.make(&project.root);
-                clone(&project.root, &project.slot.join("kept"));
+                // A slot an earlier run made serves while its stamp
+                // matches; one that doesn't is stale and made again.
+                let stamp = self.stamp();
+                let mut project = self.held(slot);
+                let recorded = project.slot.join("stamp");
+                if fs::read(&recorded).is_ok_and(|held| held == stamp)
+                    && project.slot.join("kept").is_dir()
+                {
+                    project.again();
+                } else {
+                    crate::support::held::clear(&project.slot);
+                    self.make(&project.root);
+                    clone(&project.root, &project.slot.join("kept"));
+                    fs::write(&recorded, stamp).unwrap();
+                }
                 project
             }
         }
@@ -130,6 +138,46 @@ impl Started {
             root: slot.join("project"),
             slot,
         }
+    }
+
+    /// What a slot's run depends on: every file of the fixture, and the
+    /// `rawr-import` and driver that ran it, each by size and modification
+    /// time. A slot made with another stamp is stale.
+    fn stamp(&self) -> Vec<u8> {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(self.name);
+        let mut pending = vec![source.clone()];
+        let mut files = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        for file in files {
+            file.strip_prefix(&source).unwrap().hash(&mut hasher);
+            fs::read(&file).unwrap().hash(&mut hasher);
+        }
+        let import = Path::new(env!("CARGO_BIN_EXE_rawr-import"));
+        let driver = import.with_file_name(format!(
+            "rawr-import-driver{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        for program in [import, driver.as_path()] {
+            let metadata = fs::metadata(program).unwrap();
+            metadata.len().hash(&mut hasher);
+            metadata.modified().unwrap().hash(&mut hasher);
+        }
+        format!("{:016x}\n", hasher.finish()).into_bytes()
     }
 
     /// Copy the fixture to `root` and run it there once.
@@ -198,9 +246,7 @@ impl Drop for Project {
         let mut slots = self.fixture.slots();
         if std::thread::panicking() {
             slots.live -= 1;
-            if crate::support::held::failure_kept() {
-                crate::support::held::keep(std::mem::take(&mut self.slot));
-            } else {
+            if !crate::support::held::failure_kept() {
                 let _ = fs::remove_dir_all(&self.slot);
             }
         } else {
