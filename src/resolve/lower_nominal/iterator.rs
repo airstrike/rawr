@@ -334,7 +334,7 @@ impl Parser<'_> {
             body,
             span: value.span,
             header: value.span,
-            held: false,
+            held: origin::Fragment::default(),
         });
         let mut prelude = std::mem::take(&mut value.prelude);
         prelude.push(code);

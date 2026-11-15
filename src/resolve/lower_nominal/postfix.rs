@@ -1784,6 +1784,9 @@ impl<'a> Parser<'a> {
                 let method = method_name(&definition);
                 let places =
                     self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
+                let lent = method_lent(&definition);
+                self.mutable_arguments(&args, lent.iter().copied())?;
+                self.lend_mutable(&mut args, &lent)?;
                 let mut source =
                     origin::Fragment::plain(format!("{}.{method}(", places::RECEIVER_PLACE));
                 source.push(arguments);
@@ -1828,14 +1831,48 @@ impl<'a> Parser<'a> {
                     Some(Writeback::Owned)
                 }
             };
+            // An async `&mut self` method's future holds its receiver after
+            // the call returns: the receiver's place is lent (`KEYWORD_LEND`),
+            // its shared handle the method's `self`, so the future changes
+            // the place itself.
+            let writeback = match writeback {
+                Some(Writeback::Place(place))
+                    if definition.asynchronous() && matches!(mode, receiver::Mode::Mutable) =>
+                {
+                    if inline.is_some() {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "a `&mut` borrow of this place, held by an async \
+                                        method's future: not supported in Rawr yet"
+                                .into(),
+                            source: value.span,
+                        });
+                    }
+                    Some(Writeback::Place(origin::Fragment::call(
+                        crate::engine::KEYWORD_LEND,
+                        [place],
+                    )))
+                }
+                Some(Writeback::Direct)
+                    if definition.asynchronous() && matches!(mode, receiver::Mode::Mutable) =>
+                {
+                    Some(Writeback::Place(origin::Fragment::call(
+                        crate::engine::KEYWORD_LEND,
+                        [value.rendered_source()],
+                    )))
+                }
+                writeback => writeback,
+            };
             let witnesses = self.witness_arguments(
                 definition.generics(),
                 &substitution,
                 span(member_span.start(), end),
             );
             let copied = method_copied(&definition, &self.models);
+            let lent = method_lent(&definition);
             let places = self.mutable_arguments(&args, copied.iter().copied())?;
+            self.mutable_arguments(&args, lent.iter().copied())?;
             self.move_copied_in(&mut args, &copied);
+            self.lend_mutable(&mut args, &lent)?;
             let arguments = origin::Fragment::join(
                 args.iter()
                     .map(ParsedExpr::rendered_source)

@@ -321,6 +321,39 @@ impl Parser<'_> {
         }
     }
 
+    /// The `&mut` arguments at `lent`, which an async function's future
+    /// holds for its life (`lent_parameters`): each place is lent
+    /// (`KEYWORD_LEND`), so the future changes it where it is and nothing
+    /// is copied back. A place reached through copies of the fields on the
+    /// way (`nested_parts`) or a range of elements has no place of its own
+    /// to lend.
+    pub(super) fn lend_mutable(
+        &self,
+        arguments: &mut [ParsedExpr],
+        lent: &[usize],
+    ) -> Result<(), Error> {
+        for &index in lent {
+            let Some(argument) = arguments.get_mut(index) else {
+                continue;
+            };
+            match &argument.lvalue {
+                Some(Lvalue::Binding { .. } | Lvalue::Field(_) | Lvalue::Place { .. }) => {
+                    argument.source =
+                        origin::Fragment::call(KEYWORD_LEND, [argument.source.clone()]);
+                }
+                _ => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a `&mut` borrow of this place, held by an async function's \
+                                    future: not supported in Rawr yet"
+                            .into(),
+                        source: argument.span,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The `&mut` arguments at `copied`, which the call copies in and back
     /// out (`copied_call`): each that is a local of this body, or a chain
     /// of fields below one, moves in, since what the call gives back is

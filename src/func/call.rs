@@ -1526,7 +1526,9 @@ impl Engine {
     /// `__rawr_lend(x)` (`KEYWORD_LEND`): the local `x`, `this`, or a field
     /// below one (`x[0][1]`), made shared where it is, and its shared
     /// handle. A local is lent without a lock, so one a call already holds
-    /// is lent too; a field below a held shared local is copied instead.
+    /// is lent too; a field below a held shared local is copied instead. A
+    /// place a closure reaches (`KEYWORD_HELD`) is lent below the handle it
+    /// captured.
     fn lend(
         &self,
         global: &mut GlobalRuntimeState,
@@ -1535,6 +1537,12 @@ impl Engine {
         mut this_ptr: Option<&mut Dynamic>,
         arg: &Expr,
     ) -> RawrResult {
+        if let Expr::Variable(v, ..) = arg
+            && let Some(holder) = v.1.strip_prefix(crate::engine::KEYWORD_HELD)
+            && let Some(handle) = lend_held(scope, holder)
+        {
+            return Ok(handle);
+        }
         if let Some((root, slots)) = lent_place(arg)
             && let Some(place) = root_place(scope, this_ptr.as_deref_mut(), root)
             && let Some(handle) = share_part(place, &slots)
@@ -2071,6 +2079,19 @@ fn lent_place(expr: &Expr) -> Option<(&Expr, crate::StaticVec<usize>)> {
         Expr::Variable(v, ..) if v.2.is_empty() => Some((root, slots)),
         _ => None,
     }
+}
+
+/// The place a closure reaches through the handle `holder` it captured and
+/// the path `holder` followed by `HELD_STEPS` holds (`KEYWORD_HELD`), made
+/// shared where it is, and its shared handle.
+fn lend_held(scope: &mut Scope, holder: &str) -> Option<Dynamic> {
+    let mut at = crate::SmartString::new_const();
+    at.push_str(holder);
+    at.push_str(crate::engine::HELD_STEPS);
+    let path = scope.search(&at)?;
+    let (_, steps) = Engine::held_path(scope.get_mut_by_index(path))?;
+    let index = scope.search(holder)?;
+    share_part(scope.get_mut_by_index(index), &steps)
 }
 
 /// The value `root` (a local or `this`) holds, itself.

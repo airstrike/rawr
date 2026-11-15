@@ -853,6 +853,7 @@ pub(super) fn write_function(
         &definition.parameters,
         receiver,
         definition.formatter.as_ref(),
+        definition.body.asynchronous,
     )
     .into_iter()
     .map(|index| definition.parameters[index].name.text.as_str())
@@ -1021,6 +1022,12 @@ pub(super) fn inherit_block_names<V: Clone>(
 }
 
 pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
+    // An async function's future holds its `&mut` parameters after the call
+    // returns, so each is lent by the caller (`lent_parameters`), none the
+    // call's own receiver.
+    if definition.body.asynchronous {
+        return None;
+    }
     definition.parameters.iter().position(|parameter| {
         matches!(
             parameter.ty,
@@ -1034,8 +1041,39 @@ pub(crate) fn this_parameter(definition: &item::Function) -> Option<usize> {
 /// function's after its receiver (`this_parameter`), an inherent method's
 /// or associated function's all. Rust's borrow rules keep them apart, so
 /// the copies change the caller's places as the references would. Not the
-/// `formatter`, whose text the body gives back (`wrap_formatter`).
+/// `formatter`, whose text the body gives back (`wrap_formatter`). An
+/// async function's are lent instead (`lent_parameters`).
 pub(super) fn copied_parameters(
+    parameters: &[item::Parameter],
+    receiver: Option<usize>,
+    formatter: Option<&ImmutableString>,
+    asynchronous: bool,
+) -> Vec<usize> {
+    if asynchronous {
+        return Vec::new();
+    }
+    further_mutable(parameters, receiver, formatter)
+}
+
+/// The `&mut` parameters an async function's call lends, the ones another
+/// function's copies in and back out (`copied_parameters`). Its future
+/// changes them after the call returns, for as long as it lives, so each
+/// argument is the caller's place itself (`KEYWORD_LEND`), as Rust's
+/// future holds the borrow.
+pub(super) fn lent_parameters(
+    parameters: &[item::Parameter],
+    receiver: Option<usize>,
+    formatter: Option<&ImmutableString>,
+    asynchronous: bool,
+) -> Vec<usize> {
+    if !asynchronous {
+        return Vec::new();
+    }
+    further_mutable(parameters, receiver, formatter)
+}
+
+/// The `&mut` parameters other than the receiver and the formatter.
+fn further_mutable(
     parameters: &[item::Parameter],
     receiver: Option<usize>,
     formatter: Option<&ImmutableString>,
@@ -1067,5 +1105,20 @@ pub(super) fn method_copied(definition: &method::Definition, _models: &Models) -
     {
         return Vec::new();
     }
-    copied_parameters(definition.parameters(), None, definition.formatter())
+    copied_parameters(
+        definition.parameters(),
+        None,
+        definition.formatter(),
+        definition.asynchronous(),
+    )
+}
+
+/// `lent_parameters` of a method: an async method's `&mut` parameters.
+pub(super) fn method_lent(definition: &method::Definition) -> Vec<usize> {
+    lent_parameters(
+        definition.parameters(),
+        None,
+        definition.formatter(),
+        definition.asynchronous(),
+    )
 }

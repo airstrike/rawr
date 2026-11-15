@@ -62,7 +62,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A <code>&amp;mut</code> chosen by a branch, as in <code>r = if c { &amp;mut a } else { &amp;mut b };</code>. Assign it in each branch instead.</li>
   <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
   <li>A <code>&amp;mut</code> pattern binding of a slice pattern&rsquo;s rest, as in <code>[first, rest @ ..] = &amp;mut v[..]</code>, or of a whole range of elements.</li>
-  <li>A closure that uses a <code>&amp;mut</code> borrow declared outside it inside an async block, or a borrow of a range of elements or of a place behind a <code>RefCell</code> borrow. Such a closure can&rsquo;t be passed to a native function either.</li>
+  <li>A closure that uses a <code>&amp;mut</code> borrow of a range of elements or of a place behind a <code>RefCell</code> borrow.</li>
+  <li>A <code>&amp;mut</code> argument of an <code>async fn</code> or an async <code>&amp;mut self</code> method that is a place below a field, as in <code>run(&amp;mut s.a.b)</code> or <code>run(&amp;mut s.cells[i])</code>. A local, an element of a local or a field of a local works.</li>
   <li>A closure that returns a future, passed to a crate function, as in sipper&rsquo;s <code>sipper(|sender| async move { .. })</code>. The error names the function and says it takes a closure that returns a future.</li>
   <li>A <code>&amp;mut</code> borrow in a struct literal&rsquo;s field, as in <code>W { v: &amp;mut v }</code>.</li>
   <li>A trait object of a std trait, as in <code>&amp;dyn Display</code> or <code>Box&lt;dyn Debug&gt;</code>. <code>Box&lt;dyn Error&gt;</code> works in a program that implements <code>Error</code> for a type of its own. A trait object of your own trait works, as <code>&amp;dyn Shape</code> or <code>Box&lt;dyn Shape&gt;</code>.</li>

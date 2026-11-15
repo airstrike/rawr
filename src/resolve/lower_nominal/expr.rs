@@ -2054,6 +2054,7 @@ impl<'a> Parser<'a> {
                     &function.definition.parameters,
                     None,
                     function.definition.formatter.as_ref(),
+                    function.definition.body.asynchronous,
                 )
                 .is_empty()
             {

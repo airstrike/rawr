@@ -282,7 +282,8 @@ impl Parser<'_> {
         name: &ImmutableString,
         mutation: Span,
     ) -> Result<(), Error> {
-        let Some(binding) = self.bindings.get(name) else {
+        // A closure's `self` is the method's own (`mutation_binding`).
+        let Some(binding) = self.mutation_binding(name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
         if binding.mutable {
