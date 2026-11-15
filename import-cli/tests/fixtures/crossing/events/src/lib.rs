@@ -952,6 +952,28 @@ pub mod widgets {
         }
     }
 
+    impl<Message, W, Theme: Default> Button<'_, Message, W, Theme> {
+        /// The button pressed only when `pressing` says so for the theme,
+        /// as iced's `.style(button::success)` takes a function of the
+        /// module beside the `button` function.
+        pub fn pressing(mut self, pressing: impl Fn(&Theme) -> bool) -> Self {
+            if !pressing(&Theme::default()) {
+                self.on_press = None;
+            }
+            self
+        }
+    }
+
+    /// What a button does by the theme, as iced's `button` module holds
+    /// the styles of the widget its `button` function makes: the module
+    /// and the function share the name, each in its own namespace.
+    pub mod button {
+        /// A button that takes no presses.
+        pub fn idle(_theme: &crate::Theme) -> bool {
+            false
+        }
+    }
+
     impl<Message: Clone, W: Display, Theme, Renderer> Widget<Message, Theme, Renderer>
         for Button<'_, Message, W, Theme>
     {
