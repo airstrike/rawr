@@ -1287,8 +1287,12 @@ impl<'a> Parser<'a> {
             } else if let Some(error) = &conversion.try_from {
                 self.try_from_helper(&target, &conversion.source, error, conversion.span)?
             } else if conversion.try_error && matches!(target, Ty::Infer(_)) {
-                self.unify_type(&target, &conversion.source);
-                String::new()
+                // Nothing in the body fixes the closure's error: rustc can't
+                // pick the `From` impl the `?` converts through (E0282).
+                return Err(Error::TypeAnnotationsNeeded {
+                    parameter: "E".into(),
+                    reference: conversion.span,
+                });
             } else if matches!(target, Ty::Infer(_)) {
                 let bound = format!("From<{}>", conversion.source.name(&self.models));
                 if let Some(error) = self.unsettled(&target, conversion.span, Some(bound)) {
@@ -1639,8 +1643,8 @@ pub(super) struct PendingConversion {
     /// `.as_ref()` or `.borrow()` of a native value: the std trait whose
     /// impl lends the target (`lending`).
     pub(super) lending: Option<super::lending::Lending>,
-    /// A closure's `?`, whose target is the closure's error: one its body
-    /// never fixes is the operand's own error (#1977).
+    /// A closure's `?`, whose target is the closure's error: one the body
+    /// never fixes is rustc's E0282 (#1977).
     pub(super) try_error: bool,
 }
 
