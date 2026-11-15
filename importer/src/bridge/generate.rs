@@ -5367,7 +5367,9 @@ mod native_arena_tests {
         assert_ne!(next.slot, handle.slot);
     }
 
-    /// A value in the owner's arena, and that handle.
+    /// A value in the owner's arena, and that handle. Tests run on parallel
+    /// threads and share the restore queue, which an arena drains by its
+    /// epoch, so each test that lends installs an epoch of its own.
     fn installed(epoch: u8, value: i64) -> NativeHandle {
         install_arena([epoch; 32]);
         with_arena(|arena| arena.insert(NonClone { value })).expect("insert")
@@ -5428,7 +5430,7 @@ mod native_arena_tests {
 
     #[test]
     fn a_lent_value_given_back_while_the_arena_is_borrowed_returns_after() {
-        let handle = installed(23, 5);
+        let handle = installed(24, 5);
         let held = with_arena(|arena| arena.lease::<NonClone>(handle.clone())).expect("lease");
         // A native call that drops the future holds the arena (review 7).
         with_arena(|_| {
