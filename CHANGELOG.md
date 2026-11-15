@@ -10,6 +10,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Changing state that a view called outside the application borrowed, once that view is dropped, no longer fails with a false E0502. (#2059)
 - A project's rawr build keeps only each target's current generation. A new run or test run retires the runner and resolution builds it supersedes, and their parts, so a project's store no longer grows by hundreds of MB per change. Switching between `rawr run` and `rawr test` still reuses both runners. (#1407)
 - Compiling rawr's runtime for a new rawr removes the runtime builds it replaces on the same compiler, unless an installed rawr still links them, so the rawr home no longer grows about 1.1 GB per rawr change. (#2046)
+- The site is readable by coding agents: every page has a Markdown copy at its address plus `.md` (such as /docs/run.md, /play.md, /todo.md and /changelog.md), /llms.txt is an index of them with the essentials, and /llms-full.txt holds every docs page in one file. (#2072)
+- A crate whose method gives an opaque `impl Trait + '_` with a borrowing associated type, as polars' `par_iter` gives `impl ParallelIterator<Item = Option<&str>> + '_`, imports. Its trait's members, such as `chain`, wrote the type with an argument its declaration didn't have, and the import panicked before the program started. (#2073)
 
 ## 0.3.215 (2026-11-15)
 

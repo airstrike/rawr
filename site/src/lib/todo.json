@@ -16,7 +16,9 @@
         {"text":"A crate method that calls the program's own widgets back through an erased element, such as a test simulator's snapshot of a custom widget, reaches the program's values instead of panicking with `Stale`.","issues":[2058]},
         {"text":"Changing state that a view called outside the application borrowed, once that view is dropped, no longer fails with a false E0502.","issues":[2059]},
         {"text":"A project's rawr build keeps only each target's current generation. A new run or test run retires the runner and resolution builds it supersedes, and their parts, so a project's store no longer grows by hundreds of MB per change. Switching between `rawr run` and `rawr test` still reuses both runners.","issues":[1407]},
-        {"text":"Compiling rawr's runtime for a new rawr removes the runtime builds it replaces on the same compiler, unless an installed rawr still links them, so the rawr home no longer grows about 1.1 GB per rawr change.","issues":[2046]}
+        {"text":"Compiling rawr's runtime for a new rawr removes the runtime builds it replaces on the same compiler, unless an installed rawr still links them, so the rawr home no longer grows about 1.1 GB per rawr change.","issues":[2046]},
+        {"text":"The site is readable by coding agents: every page has a Markdown copy at its address plus `.md` (such as /docs/run.md, /play.md, /todo.md and /changelog.md), /llms.txt is an index of them with the essentials, and /llms-full.txt holds every docs page in one file.","issues":[2072]},
+        {"text":"A crate whose method gives an opaque `impl Trait + '_` with a borrowing associated type, as polars' `par_iter` gives `impl ParallelIterator<Item = Option<&str>> + '_`, imports. Its trait's members, such as `chain`, wrote the type with an argument its declaration didn't have, and the import panicked before the program started.","issues":[2073]}
       ]
     },
     "releases": [
@@ -4495,7 +4497,9 @@
     {"issue":2068,"title":"macro_rules hygiene renames fields named like a body let; tail temporaries use pre-2024 drop order (E0597)","state":"open","category":"Divergences from rustc"},
     {"issue":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed","category":"No glue (D593)"},
     {"issue":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open","category":"No glue (D593)"},
-    {"issue":2071,"title":"The rawr home's formats/<N>/inventories and bindings are pruned only by idle age (5.2 GB and 3.0 GB here)","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2071,"title":"The rawr home's formats/<N>/inventories and bindings are pruned only by idle age (5.2 GB and 3.0 GB here)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2072,"title":"The site serves a Markdown copy of every page, a generated llms.txt index and llms-full.txt for agents","state":"open","category":"Health"},
+    {"issue":2073,"title":"A member of an opaque type writes it with more associated-type arguments than the facade declares (import panics)","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
