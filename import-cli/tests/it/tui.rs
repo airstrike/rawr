@@ -162,11 +162,10 @@ fn a_lent_list_state_goes_to_render_stateful_widget_as_cargo_run_does() {
     assert!(expected.contains("|│> delta       │|"), "{expected}");
     assert!(expected.contains("selected Some(4) offset 2"), "{expected}");
 
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -321,7 +320,6 @@ impl Terminal {
         };
         let pty = nix::pty::openpty(&size, None).unwrap();
         let slave = nix::unistd::ttyname(pty.slave.as_raw_fd()).unwrap();
-        let directory = crate::support::scratch();
         let events = root.with_extension("events");
         let _ = fs::remove_file(&events);
         let tty = || Stdio::from(pty.slave.try_clone().unwrap());
@@ -329,7 +327,7 @@ impl Terminal {
         command
             .arg("run")
             .arg(root)
-            .env("RAWR_HOME", directory.join("rawr-home"))
+            .env("RAWR_HOME", crate::support::runtime_home())
             .env("TERM", "xterm-256color")
             .env("RAWR_MCP_EVENTS", &events)
             .env_remove("CARGO_TARGET_DIR")

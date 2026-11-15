@@ -62,11 +62,10 @@ fn std_path_and_io_error_are_the_crates_own_types() {
         "{expected}"
     );
 
-    let directory = crate::support::scratch();
     let rawr = run(crate::support::rawr_import()
         .arg("run")
         .arg(&root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("RAWR_VERBOSE"));
     assert!(
         rawr.status.success(),

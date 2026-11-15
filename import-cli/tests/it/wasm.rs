@@ -32,7 +32,7 @@ fn check(root: &Path, home: &Path) -> Output {
 
 #[test]
 fn a_package_built_for_wasm32_is_read_for_wasm32() {
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
 
     let root = WASM.lease(&[]);
     let checked = check(&root, &home);
@@ -61,7 +61,7 @@ fn a_package_built_for_wasm32_is_read_for_wasm32() {
 /// without starting it: this machine can't run it (#1753).
 #[test]
 fn a_runner_built_for_wasm32_is_built_and_not_started() {
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let root = WASM.lease(&[]);
     let ran = crate::support::rawr_import()
         .arg("run")
@@ -89,7 +89,7 @@ fn a_runner_built_for_wasm32_is_built_and_not_started() {
 /// the host, and rawr reads it with the rest of the build.
 #[test]
 fn a_build_dependency_with_host_only_dependencies_is_read_for_wasm32() {
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let root = BUILD_DEPENDENCY.lease(&[]);
     let checked = check(&root, &home);
     assert!(

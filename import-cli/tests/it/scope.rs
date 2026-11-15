@@ -24,11 +24,10 @@ const MODULES: [&str; 5] = [
 ];
 
 fn rawr_import(root: &Path) -> Output {
-    let directory = crate::support::scratch();
     crate::support::rawr_import()
         .arg("run")
         .arg(root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")

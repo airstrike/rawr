@@ -1,13 +1,15 @@
 //! A fixture project that several tests run programs in, prepared in a few
 //! lanes that the tests borrow one at a time. A lane is a copy of the
-//! fixture that keeps Cargo's build units between tests and between suite
-//! runs, so the fixture's crates and its runner's dependencies compile once
-//! per lane, and a test compiles only what its own program changes. Rawr's
+//! fixture that keeps Cargo's build units between the run's tests, so the
+//! fixture's crates and its runner's dependencies compile once per lane in
+//! a run, and a test compiles only what its own program changes. Rawr's
 //! own products for the project, `target/rawr`, stay too, as they do for a
 //! user who replaces one program with another in a project: each test's
 //! program runs as it would fresh whichever programs ran in the lane before
 //! (#893). Lanes are made as tests ask for them, up to one per test thread,
-//! so tests of one fixture run in parallel.
+//! so tests of one fixture run in parallel. Each run makes its lanes anew,
+//! and they go when it ends ([`super::held`]); a lane a failing test kept is not lent
+//! again, and another is made in its place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -25,9 +27,13 @@ pub struct Fixture {
     returned: Condvar,
 }
 
-/// The lanes made so far and those no test holds.
+/// The lanes made so far in this run and those no test holds.
 struct Lanes {
-    made: usize,
+    /// The number the next lane takes.
+    next: usize,
+    /// The lanes that serve tests: those no test holds, and those held by
+    /// a test that has not kept its failure.
+    live: usize,
     free: Vec<PathBuf>,
 }
 
@@ -52,7 +58,8 @@ impl Fixture {
             name,
             extra,
             lanes: Mutex::new(Lanes {
-                made: 0,
+                next: 0,
+                live: 0,
                 free: Vec::new(),
             }),
             returned: Condvar::new(),
@@ -92,12 +99,16 @@ impl Fixture {
                 if let Some(root) = lanes.free.pop() {
                     break root;
                 }
-                if lanes.made < limit() {
-                    lanes.made += 1;
-                    break scratch
-                        .join("lanes")
-                        .join(self.name)
-                        .join(lanes.made.to_string());
+                if lanes.live < limit() {
+                    let lanes_of_fixture = scratch.join("lanes").join(self.name);
+                    // Each run of the suite makes its lanes anew.
+                    if lanes.next == 0 {
+                        crate::support::held::clear(&lanes_of_fixture);
+                        crate::support::held::until_the_run_ends(lanes_of_fixture.clone());
+                    }
+                    lanes.next += 1;
+                    lanes.live += 1;
+                    break lanes_of_fixture.join(lanes.next.to_string());
                 }
                 lanes = self
                     .returned
@@ -145,7 +156,14 @@ impl AsRef<Path> for Lease {
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.fixture.lanes().free.push(self.root.clone());
+        let mut lanes = self.fixture.lanes();
+        if crate::support::held::failure_kept() {
+            lanes.live -= 1;
+            crate::support::held::keep(std::mem::take(&mut self.root));
+        } else {
+            lanes.free.push(std::mem::take(&mut self.root));
+        }
+        drop(lanes);
         self.fixture.returned.notify_one();
     }
 }

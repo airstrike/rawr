@@ -4,6 +4,8 @@
 //! `rawr-import run` with its output read as it comes. The suite runs its
 //! tests in parallel; a test that needs a project or a home no other test
 //! touches makes its own with [`fresh`], by a name no other test uses.
+//! [`held`] says when each of them goes: a run removes all it made, and
+//! `RAWR_KEEP_TEST_SCRATCH=1` keeps what a failing test held.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -15,6 +17,7 @@ use std::time::{Duration, Instant};
 pub mod alone;
 mod events;
 pub mod fixture;
+pub mod held;
 pub mod runtime;
 pub mod started;
 
@@ -208,6 +211,12 @@ pub fn cargo_s_report(stderr: &str) -> &str {
 /// beside others from then on, unless it runs [`alone`].
 pub fn scratch() -> PathBuf {
     alone::share();
+    scratch_directory()
+}
+
+/// The directory [`scratch`] names, with no turn taken: what the run's
+/// exit handlers read, after the test threads are gone.
+fn scratch_directory() -> PathBuf {
     std::env::var_os("RAWR_TEST_TMPDIR")
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
@@ -215,21 +224,16 @@ pub fn scratch() -> PathBuf {
 /// A directory of one test's own under [`scratch`], by a name no other test
 /// uses: a project or a home. It starts empty, whatever an earlier run left
 /// there, so no test reuses a build of older sources (#1712). It goes when
-/// the test passes and stays when the test fails, to be looked at (#1731).
+/// the test ends, passed or failed, unless [`held::failure_kept`] (#2045).
 pub struct Scratch {
     path: PathBuf,
 }
 
 /// The empty directory `name` under [`scratch`], removed when the test
-/// passes.
+/// ends.
 pub fn fresh(name: impl AsRef<Path>) -> Scratch {
     let path = scratch().join(name);
-    match fs::remove_dir_all(&path) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            panic!("{} did not go: {error}", path.display())
-        }
-        _ => {}
-    }
+    held::clear(&path);
     fs::create_dir_all(&path).unwrap();
     Scratch { path }
 }
@@ -256,7 +260,9 @@ impl AsRef<std::ffi::OsStr> for Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
+        if held::failure_kept() {
+            held::keep(std::mem::take(&mut self.path));
+        } else {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
@@ -266,8 +272,10 @@ impl Drop for Scratch {
 /// rawr's runtime already compiled in it ([`runtime::home`]): a test with a
 /// home of its own still starts cold, but for rawr's host sources and
 /// compiled runtime, which no such test is about and which would otherwise
-/// compile again for each such home.
+/// compile again for each such home. A test that asks for it runs beside
+/// others, as one that asks for [`scratch`] does.
 pub fn runtime_home() -> PathBuf {
+    alone::share();
     runtime::home()
 }
 
