@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Checks that iced's examples behave the same under `cargo test` and `rawr test`.
 //
-// Usage: node scripts/iced-parity.mjs [--jobs N] [--rawr-emulator] [example ...]
+// Usage: node scripts/iced-parity.mjs [--jobs N] [--rawr-emulator] [--drop-rawr-builds] [example ...]
 //        node scripts/iced-parity.mjs --strip [example ...]
 //
 // The examples are the standalone crates scripts/iced-examples.sh makes under
@@ -17,6 +17,10 @@
 //   feature.
 //
 // `--strip` removes all three, and the example's target/iced-parity directory.
+// `--drop-rawr-builds` deletes each rawr project build this run made, once it has
+// run (rawr 0.3.214 keeps a few hundred MB per build in its store, about
+// 0.5 to 2 GB per example), for a full run on a disk that can't keep all 56
+// warm; the next run of that example is then cold for rawr.
 //
 // The parity module holds these tests:
 //
@@ -29,18 +33,22 @@
 //   script through iced_test's Emulator, which runs the whole program (tasks,
 //   subscriptions) from the `iced::application(..)` chain in `main`, as
 //   `iced_test::run` does, and hashes its final screenshot.
-// - <name>.rs, when present, is appended: hand-written tests for what the
+// - <name>.rs, when present, is appended: hand-written tests (a `sim_<name>`
+//   there replaces the generated one) for what the
 //   script can't express, or a `program()` the chain can't give.
 //
 // Both draw headless with tiny-skia (ICED_TEST_BACKEND), so no window opens and
-// no GPU is used. cargo runs every test twice with the emulator feature. rawr
-// runs them without it; with `--rawr-emulator` it first tries them with it,
-// and falls back when that half doesn't build. (rawr 0.3.214 can't build the
-// emulator half: its generated adapters name the program type as
-// `iced::Application<_>`. Trying costs about 5 s per warm example, so it is
-// opt-in until that's fixed.) A hash counts only when both
-// cargo runs agree on it, so frames that show the clock or a random seed don't
-// count as mismatches.
+// no GPU is used. cargo runs every test once with the emulator feature, for the
+// emulator's own results. rawr runs the tests without it, and cargo runs that
+// same set twice to compare with: tests in one process share iced's font
+// system, so the emulator's loading the example's fonts changes what a
+// simulator test beside it draws. With `--rawr-emulator`, rawr first tries the
+// set with the feature, compared with cargo's, and falls back when that half
+// doesn't build. (rawr 0.3.214 can't build the emulator half: its generated
+// adapters name the program type as `iced::Application<_>`. Trying costs about
+// 5 s per warm example, so it is opt-in until that's fixed.) A hash counts only
+// when both cargo runs agree on it, so frames that show the clock or a random
+// seed don't count as mismatches.
 //
 // Examples run `--jobs` at a time (default 4); cargo's lock on the shared
 // target serializes their builds, not their tests. The tests run with HOME and
@@ -75,22 +83,25 @@ const include = '#[cfg(test)] #[path = "parity.rs"] mod parity;';
 const cargoHome = process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo");
 const rustupHome = process.env.RUSTUP_HOME ?? path.join(os.homedir(), ".rustup");
 
-const options = { jobs: 4, strip: false, rawrEmulator: false, names: [] };
+const options = { jobs: 4, strip: false, rawrEmulator: false, dropRawrBuilds: false, names: [] };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === "--jobs") options.jobs = Number(argv[++i]);
   else if (argv[i] === "--strip") options.strip = true;
   else if (argv[i] === "--rawr-emulator") options.rawrEmulator = true;
+  else if (argv[i] === "--drop-rawr-builds") options.dropRawrBuilds = true;
   else options.names.push(argv[i]);
 }
 const examples = options.names.length > 0 ? options.names : allExamples();
+const rawrProjectsDir = path.join(source, "_target", "rawr", "projects");
+const projectsBefore = new Set(rawrProjects());
 
 if (options.strip) {
   for (const name of examples) strip(name);
   process.exit(0);
 }
 
-console.log(row(["example", "cargo", "rawr", "verdict", "warm s (cargo, again, rawr, rawr sim)"]));
+console.log(row(["example", "cargo", "rawr", "verdict", "s: cargo, cargo warm, rawr, rawr warm"]));
 console.log(row(["---", "---", "---", "---", "---"]));
 const rows = [];
 let next = 0;
@@ -162,7 +173,9 @@ function install(name) {
     "use super::*;\n\n";
   parity += fs.readFileSync(path.join(scripts, "simulator.rs"), "utf8");
   const parts = expression === null ? null : applicationParts(expression, mainText);
-  if (ice !== null && parts !== null) {
+  // <name>.rs may write the simulator test by hand, as `fn sim_<name>`.
+  const ownSimulator = new RegExp(`\\bfn sim_${name}\\(\\)`).test(extra);
+  if (ice !== null && parts !== null && !ownSimulator) {
     parity += simulatorTest(`sim_${name}`, ice, parts);
   }
   if (extra !== "") {
@@ -436,12 +449,18 @@ async function runTests(dir, label, command, args) {
     `$ ${command} ${full.join(" ")}\nexit ${status} after ${seconds.toFixed(1)} s\n${output}`,
   );
 
-  // With `--nocapture` a test's own line can land between libtest's
-  // `test name ... ` and its status, so the status is read with it removed.
+  // With `--nocapture` a test's own output can land between libtest's
+  // `test name ... ` and its status, so a test's status comes from the
+  // summary's `failures:` list and from `... ignored`, not from that line.
   const statuses = output.replace(/iced-parity [^\n]*\n/g, "");
+  const failures = new Set();
+  for (const block of statuses.matchAll(/^failures:\n((?: {4}\S+\n)+)/gm)) {
+    for (const name of block[1].trim().split(/\s+/)) failures.add(name.replace(/^.*::/, ""));
+  }
   const tests = {};
-  for (const match of statuses.matchAll(/^test (\S+) \.\.\. (ok|FAILED|ignored)\b/gm)) {
-    tests[match[1].replace(/^.*::/, "")] = match[2];
+  for (const match of statuses.matchAll(/^test (\S+) \.\.\. (ignored)?/gm)) {
+    const test = match[1].replace(/^.*::/, "");
+    tests[test] = match[2] ?? (failures.has(test) ? "FAILED" : "ok");
   }
   const details = {};
   for (const match of output.matchAll(/iced-parity (\S+) ((?:passed|failed)\b.*)$/gm)) {
@@ -454,7 +473,17 @@ async function runTests(dir, label, command, args) {
       details[test] = `${details[test] ?? "passed"} ${hash}`;
     }
   }
-  const ran = /test result: /.test(output);
+  // A runner that dies mid-run prints no summary; the tests it had started
+  // without a status crashed with it, and its panic message says why.
+  const began = /^running \d+ tests?$/m.test(output);
+  const ran = began || /test result: /.test(output);
+  if (began && !/test result: /.test(output)) {
+    for (const match of statuses.matchAll(/^test (\S+) \.\.\. ?$/gm)) {
+      const test = match[1].replace(/^.*::/, "");
+      tests[test] = "crashed";
+      details[test] = `crashed: ${/^thread .* panicked at [^\n]*\n([^\n]*)/m.exec(output)?.[1] ?? `exit ${status}`}`;
+    }
+  }
   return { ran, status, tests, details, error: ran ? null : firstError(output), seconds };
 }
 
@@ -476,32 +505,44 @@ function describe(run, filter = () => true) {
   if (!run.ran) {
     return "build fails";
   }
-  const counts = { ok: 0, FAILED: 0, ignored: 0 };
+  const counts = { ok: 0, FAILED: 0, ignored: 0, crashed: 0 };
   for (const [test, status] of Object.entries(run.tests)) {
     if (filter(test)) counts[status] += 1;
   }
   let text = `${counts.ok} ok`;
   if (counts.FAILED > 0) text += `, ${counts.FAILED} failed`;
+  if (counts.crashed > 0) text += `, ${counts.crashed} crashed`;
   if (counts.ignored > 0) text += `, ${counts.ignored} ignored`;
   return text;
 }
 
 async function check(name) {
   const dir = install(name);
-  const cargoArgs = ["test", "-q", "--features", feature];
-  const cargo = await runTests(dir, "cargo", "cargo", cargoArgs);
-  const again = await runTests(dir, "cargo-again", "cargo", cargoArgs);
+  // Each rawr run is compared with cargo runs of the same tests: tests in one
+  // process share iced's font system, so the emulator's loading the example's
+  // fonts changes what a simulator test in the same run draws.
+  const emulatorArgs = ["test", "-q", "--features", feature];
+  const emulator = await runTests(dir, "cargo-emulator", "cargo", emulatorArgs);
   const emulated = options.rawrEmulator
     ? await runTests(dir, "rawr", "rawr", ["test", "--features", feature])
     : null;
-  const rawr = emulated?.ran ? emulated : await runTests(dir, "rawr-simulator", "rawr", ["test"]);
-  const compared = emulated?.ran ? () => true : (test) => !test.startsWith("ice_");
-  const seconds = [cargo.seconds, again.seconds, emulated?.seconds ?? null, emulated?.ran ? null : rawr.seconds];
+  const withEmulator = emulated?.ran === true;
+  const cargoArgs = withEmulator ? emulatorArgs : ["test", "-q"];
+  const cargo = withEmulator ? emulator : await runTests(dir, "cargo", "cargo", cargoArgs);
+  const again = await runTests(dir, "cargo-again", "cargo", cargoArgs);
+  const rawrArgs = withEmulator ? ["test", "--features", feature] : ["test"];
+  const rawr = withEmulator ? emulated : await runTests(dir, "rawr-simulator", "rawr", rawrArgs);
+  // The second rawr run is the warm one; it's timed, not compared.
+  const warm = await runTests(dir, "rawr-again", "rawr", rawrArgs);
+  const seconds = [cargo.seconds, again.seconds, rawr.seconds, warm.seconds];
+  if (options.dropRawrBuilds) {
+    dropRawrBuild(name);
+  }
 
-  if (!cargo.ran) {
+  if (!cargo.ran || !emulator.ran) {
     // The parity module must build under cargo; a failure there is the
     // harness's fault, not a difference between the runners.
-    const verdict = `HARNESS: ${cargo.error}`;
+    const verdict = `HARNESS: ${(cargo.ran ? emulator : cargo).error}`;
     return { name, cargo: "build fails", rawr: "-", verdict, agrees: false, seconds };
   }
   const differences = [];
@@ -513,7 +554,7 @@ async function check(name) {
   }
   const unstable = [];
   const names = new Set([...Object.keys(cargo.tests), ...Object.keys(rawr.tests)]);
-  for (const test of [...names].filter(compared).sort()) {
+  for (const test of [...names].sort()) {
     if (!rawr.ran) break;
     const ours = cargo.tests[test];
     const theirs = rawr.tests[test];
@@ -532,16 +573,16 @@ async function check(name) {
 
   const notes = [];
   if (unstable.length > 0) notes.push(`frame varies between cargo runs: ${unstable.join(", ")}`);
-  const failing = Object.entries(cargo.tests).filter(([, status]) => status === "FAILED");
+  const failing = Object.entries(emulator.tests).filter(([, status]) => status === "FAILED");
   if (failing.length > 0) notes.push(`fails under cargo too: ${failing.map(([t]) => t).join(", ")}`);
   const verdict = differences.length === 0 ? "same" : `MISMATCH: ${differences.join("; ")}`;
   const rawrText =
     emulated === null || emulated.ran
-      ? describe(rawr, compared)
-      : `${describe(rawr, compared)} (emulator half: build fails)`;
+      ? describe(rawr)
+      : `${describe(rawr)} (emulator half: build fails)`;
   return {
     name,
-    cargo: describe(cargo),
+    cargo: describe(emulator),
     rawr: rawrText,
     verdict: notes.length > 0 ? `${verdict} (${notes.join("; ")})` : verdict,
     agrees: differences.length === 0,
@@ -550,6 +591,21 @@ async function check(name) {
     rawrDetails: rawr.details,
     seconds,
   };
+}
+
+// Deletes the example's rawr project build under the shared target, whose
+// store keeps every build's execution (a few hundred MB each), when this run
+// made it; a build that was there before the run stays.
+function dropRawrBuild(name) {
+  for (const entry of rawrProjects()) {
+    if (!projectsBefore.has(entry) && /^(.+)-[0-9a-f]{16}$/.exec(entry)?.[1] === name) {
+      fs.rmSync(path.join(rawrProjectsDir, entry), { recursive: true, force: true });
+    }
+  }
+}
+
+function rawrProjects() {
+  return fs.existsSync(rawrProjectsDir) ? fs.readdirSync(rawrProjectsDir) : [];
 }
 
 function freeGb() {

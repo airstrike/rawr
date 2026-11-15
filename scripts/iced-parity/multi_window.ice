@@ -1,5 +1,5 @@
 viewport: 1024x768
-mode: Immediate
+mode: Zen
 -----
 expect "Window scale factor:"
 expect "Window title:"
