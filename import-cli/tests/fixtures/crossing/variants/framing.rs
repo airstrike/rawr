@@ -16,6 +16,15 @@ impl<'a> Gallery<'a> for Wall<'a> {
         let shape = framing::traced(label);
         framing::framed(shape, framing::caption(label))
     }
+
+    fn lines(&self, parts: &'a [framing::Part]) -> impl Shape<u32> + 'a {
+        let shape = framing::lined(self, parts, tagged);
+        framing::framed(shape, framing::caption(self.label))
+    }
+}
+
+fn tagged(name: String) -> String {
+    format!("#{name}")
 }
 
 fn main() {

@@ -103,6 +103,10 @@ pub trait Gallery<'a, T = u32> {
     /// The shape labelled `label`, which it borrows for what it gives, as
     /// iced markdown's `Viewer::code_block(.., code: &'a str, ..)` is.
     fn outline(&self, label: &'a str) -> impl Shape<T> + 'a;
+
+    /// The shape of `parts`, which it borrows for what it gives, as iced
+    /// markdown's `Viewer::code_block(.., lines: &'a [Text])` is.
+    fn lines(&self, parts: &'a [Part]) -> impl Shape<T> + 'a;
 }
 
 /// A part of a plan.
@@ -159,12 +163,55 @@ pub fn traced(label: &str) -> impl Shape<u32> + '_ {
     Traced { label }
 }
 
+/// A shape lined with the names of borrowed parts, each tagged.
+struct Lined<'a, F> {
+    parts: &'a [Part],
+    tag: F,
+    base: u32,
+}
+
+impl<F: Fn(String) -> String> Named for Lined<'_, F> {
+    fn name(&self) -> String {
+        let tags = self
+            .parts
+            .iter()
+            .map(|part| (self.tag)(part.name.clone()))
+            .collect::<Vec<_>>();
+        format!("lined {}", tags.join(" "))
+    }
+}
+
+impl<F: Fn(String) -> String> Shape<u32> for Lined<'_, F> {
+    fn area(&self) -> u32 {
+        self.base + self.parts.len() as u32
+    }
+
+    fn grow(&mut self, _by: u32) {}
+
+    fn parts<'b>(&'b self) -> Vec<&'b str> {
+        self.parts.iter().map(|part| part.name.as_str()).collect()
+    }
+}
+
+/// A shape of `gallery` lined with `parts`, which it keeps borrowed, each
+/// tagged by `tag`, as iced markdown's `code_block(viewer, settings, lines,
+/// on_link_click)` keeps `lines` and takes a function.
+pub fn lined<'a>(
+    gallery: &impl Gallery<'a>,
+    parts: &'a [Part],
+    tag: impl Fn(String) -> String + Clone + 'a,
+) -> impl Shape<u32> + 'a {
+    let base = gallery.shape(1).area();
+    Lined { parts, tag, base }
+}
+
 /// What a gallery shows of a plan, borrowed from the plan's parts, as
 /// iced markdown's `view_with(items, settings, viewer)` gives an
 /// `Element<'a, ..>`.
 pub struct Listing<'a> {
     parts: &'a [Part],
     shape: Box<dyn Shape<u32> + 'a>,
+    lines: Box<dyn Shape<u32> + 'a>,
 }
 
 impl Listing<'_> {
@@ -176,10 +223,13 @@ impl Listing<'_> {
             .map(|part| part.name.as_str())
             .collect::<Vec<_>>();
         format!(
-            "{names:?}: {} {} {:?}",
+            "{names:?}: {} {} {:?}; {} {} {:?}",
             self.shape.name(),
             self.shape.area(),
-            self.shape.parts()
+            self.shape.parts(),
+            self.lines.name(),
+            self.lines.area(),
+            self.lines.parts()
         )
     }
 }
@@ -189,6 +239,7 @@ pub fn listing<'a>(parts: &'a [Part], gallery: &impl Gallery<'a>) -> Listing<'a>
     Listing {
         parts,
         shape: Box::new(gallery.outline("plan")),
+        lines: Box::new(gallery.lines(parts)),
     }
 }
 
