@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 230;
+const CLASSIFIER_VERSION: u32 = 231;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10387,6 +10387,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         .with_keep_receiver(kept_receiver(signature))
         .with_lends_receiver(
             scope.is_none() && guard.is_none() && self.opaque_keeps_receiver(signature),
+        )
+        .with_lent_output(
+            guard.is_some() && matches!(signature.output(), model::Type::Reference { .. }),
         )
         .with_lasting_receiver(matches!(
             signature.receiver(),
