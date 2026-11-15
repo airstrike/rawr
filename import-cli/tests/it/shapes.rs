@@ -15,11 +15,10 @@ use crate::support::Fixture;
 static SHAPES: Fixture = Fixture::new("native-shapes");
 
 fn rawr_import(command: &str, root: &Path) -> Output {
-    let directory = crate::support::scratch();
     crate::support::rawr_import()
         .arg(command)
         .arg(root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")

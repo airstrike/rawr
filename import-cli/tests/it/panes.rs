@@ -42,11 +42,10 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
         "{expected}"
     );
 
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -77,11 +76,10 @@ fn a_lent_str_keeps_its_value_borrowed() {
         "// rawr\nuse natives::label::Label;\n\nfn main() {\n    let mut label = Label::new(\"left\");\n    println!(\"start\");\n    let text = label.text();\n    label.set(\"right\");\n    println!(\"{text}\");\n}\n",
     )
     .unwrap();
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")

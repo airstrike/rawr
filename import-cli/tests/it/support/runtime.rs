@@ -5,6 +5,14 @@
 //! runner build first, it counted against that run's limit, while the
 //! others waited on its lock against theirs (#1049). The first test to ask
 //! compiles it here, and every other test waits for that and reuses it.
+//!
+//! The home is the one part the run's tests all share. It holds what rawr
+//! keeps for the run's projects, the runtime built for each toolchain they
+//! name among them. It starts empty and goes with its warm-up project when
+//! the run ends ([`super::held`]), so it never holds more than one run's
+//! builds. Every test takes it from [`home`], which no test uses before it
+//! is made. A child of the suite's binary takes its parent's from
+//! `RAWR_HOME` instead, and leaves it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,7 +45,12 @@ pub fn home() -> PathBuf {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
         let home = super::scratch().join("rawr-home");
-        warm(&super::scratch().join("runtime-warmup"), &home);
+        let warmup = super::scratch().join("runtime-warmup");
+        super::held::clear(&home);
+        super::held::clear(&warmup);
+        super::held::shared_until_the_run_ends(home.clone());
+        super::held::shared_until_the_run_ends(warmup.clone());
+        warm(&warmup, &home);
         home
     })
     .clone()

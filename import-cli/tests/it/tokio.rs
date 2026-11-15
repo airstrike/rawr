@@ -26,11 +26,10 @@ fn job(line: &str) -> Option<(u64, u64)> {
 #[test]
 fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocking() {
     let root = ASYNC.lease(&[]);
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -75,11 +74,10 @@ fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocki
 #[test]
 fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
     let root = BORROWED.lease(&[]);
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -112,11 +110,10 @@ fn a_module_function_names_another_crates_type() {
         "// rawr\nmod label;\n\nfn main() {\n    let font = shelf::font(String::from(\"Georgia\"), 3);\n    println!(\"{}\", label::describe(&font));\n    let made = label::make(\"Inter\");\n    println!(\"{}\", label::describe(&made));\n    println!(\"{}\", label::owned(made));\n}\n",
     )
     .unwrap();
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -137,7 +134,6 @@ fn a_module_function_names_another_crates_type() {
 fn an_async_fn_leases_every_borrow_its_inputs_hold() {
     let store = BORROWED.read("variants/store.rs");
     let root = BORROWED.lease(&[("src/main.rs", &store)]);
-    let directory = crate::support::scratch();
     let output = |command: &mut Command| {
         let run = command
             .current_dir(&root)
@@ -155,7 +151,7 @@ fn an_async_fn_leases_every_borrow_its_inputs_hold() {
         crate::support::rawr_import()
             .arg("run")
             .arg(&*root)
-            .env("RAWR_HOME", directory.join("rawr-home")),
+            .env("RAWR_HOME", crate::support::runtime_home()),
     );
     let cargo = output(Command::new("cargo").args(["run", "-q"]));
     assert_eq!(rawr, cargo);
@@ -174,7 +170,6 @@ fn an_async_fn_leases_every_borrow_its_inputs_hold() {
 fn an_async_fn_holds_its_mut_parameters_across_its_awaits() {
     let mutable = BORROWED.read("variants/mutable.rs");
     let root = BORROWED.lease(&[("src/main.rs", &mutable)]);
-    let directory = crate::support::scratch();
     let output = |command: &mut Command| {
         let run = command
             .current_dir(&root)
@@ -192,7 +187,7 @@ fn an_async_fn_holds_its_mut_parameters_across_its_awaits() {
         crate::support::rawr_import()
             .arg("run")
             .arg(&*root)
-            .env("RAWR_HOME", directory.join("rawr-home")),
+            .env("RAWR_HOME", crate::support::runtime_home()),
     );
     let cargo = output(Command::new("cargo").args(["run", "-q"]));
     assert_eq!(rawr, cargo);
@@ -237,11 +232,10 @@ fn spawned(attribute: &str) -> String {
         .read("src/main.rs")
         .replace("#[tokio::main]", attribute);
     let root = SPAWN.lease(&[("src/main.rs", &main)]);
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -282,11 +276,10 @@ fn a_spawned_script_future_runs_unawaited_and_its_handle_gives_its_value() {
 #[test]
 fn a_crate_decodes_program_structs_on_a_worker_thread() {
     let root = DERIVES.lease(&[]);
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -330,11 +323,10 @@ fn futures_try_join_takes_script_futures_through_its_blanket_trait() {
         "Ok(\"BULBASAUR 4\")\n\
          Err(\"invalid type: integer `1`, expected a string at line 1 column 1\")\n"
     );
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -380,11 +372,10 @@ fn pokedex_searches_on_a_worker_thread_as_cargo_runs_it() {
          PokemonFound(Err(APIError))\n\
          Whoops! - Pokédex\n"
     );
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -405,11 +396,10 @@ fn pokedex_searches_on_a_worker_thread_as_cargo_runs_it() {
 fn an_unnamed_crate_type_from_a_future_has_its_debug() {
     let program = DERIVES.read("unnamed.rs");
     let root = DERIVES.lease(&[("src/main.rs", &program)]);
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")

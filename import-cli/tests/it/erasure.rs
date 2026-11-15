@@ -22,7 +22,7 @@ fn run(main: &str) -> (Lease, bool, String, String) {
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", crate::support::scratch().join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")

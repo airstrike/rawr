@@ -10,10 +10,12 @@
 //!
 //! No slot comes from an earlier run of the suite (#1712). A test waits
 //! for a slot when every one is held and no more can be made. A test that
-//! fails leaves its slot as it left it, to be looked at, and the next test
-//! makes another. A test that runs [`super::alone`] does so before it
-//! takes a slot: once it holds one, a test waiting for that slot would
-//! never end, and neither would its wait to run alone.
+//! fails gives its slot up, and the next test makes another. Its slot stays
+//! as it left it, to be looked at, only when the failure is kept; the
+//! fixture's slots go when the run ends ([`super::held`]). A test that
+//! runs [`super::alone`] does so before it takes a slot: once it holds one,
+//! a test waiting for that slot would never end, and neither would its wait
+//! to run alone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,7 +94,8 @@ impl Started {
                 if slots.live < SLOTS {
                     // Each run of the suite makes its slots anew.
                     if slots.next == 0 {
-                        remove(&fixtures);
+                        crate::support::held::clear(&fixtures);
+                        crate::support::held::until_the_run_ends(fixtures.clone());
                     }
                     slots.next += 1;
                     slots.live += 1;
@@ -165,7 +168,7 @@ impl Project {
     /// Put the slot back as its run left it, at the same path: each file
     /// the test changed has its bytes and time from before.
     pub fn again(&mut self) {
-        remove(&self.root);
+        crate::support::held::clear(&self.root);
         clone(&self.slot.join("kept"), &self.root);
     }
 }
@@ -195,21 +198,16 @@ impl Drop for Project {
         let mut slots = self.fixture.slots();
         if std::thread::panicking() {
             slots.live -= 1;
+            if crate::support::held::failure_kept() {
+                crate::support::held::keep(std::mem::take(&mut self.slot));
+            } else {
+                let _ = fs::remove_dir_all(&self.slot);
+            }
         } else {
             slots.free.push(std::mem::take(&mut self.slot));
         }
         drop(slots);
         self.fixture.returned.notify_one();
-    }
-}
-
-/// Remove `path` and all under it, if it is there.
-fn remove(path: &Path) {
-    match fs::remove_dir_all(path) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            panic!("{} did not go: {error}", path.display())
-        }
-        _ => {}
     }
 }
 

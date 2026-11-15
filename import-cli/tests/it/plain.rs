@@ -30,7 +30,7 @@ fn copy(from: &Path, to: &Path) {
 }
 
 fn rawr_import(root: &Path, arguments: &[&str]) -> Output {
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     rawr_import_with_home(root, arguments, &home)
 }
 
@@ -162,7 +162,7 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
 #[test]
 fn a_concrete_blanket_application_keeps_its_trait_arguments() {
     let root = crate::support::fresh("concrete-trait-arguments");
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     for (path, source) in [
         (
             "Cargo.toml",
@@ -1370,7 +1370,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         "// rawr\nuse adapter_drift_fixture::value;\nfn main() { println!(\"{}\", value()); }\n",
     )
     .unwrap();
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let output = crate::support::rawr_import()
         .arg("run")
         .arg(&project)
@@ -2209,7 +2209,7 @@ fn a_table_grows_for_a_later_macros_crate_root() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
     let root = crate::support::fresh("whole-macro-roots");
     copy(Path::new(MACROS), &root);
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
         let run = rawr_import_with_home(&root, &["run"], &home);
@@ -2260,7 +2260,7 @@ fn a_table_answers_the_selected_crates_own_macro() {
         root.join("rust-toolchain.toml"),
     )
     .unwrap();
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
         let run = rawr_import_with_home(&root, &["run"], &home);
@@ -2338,7 +2338,7 @@ fn a_project_dependency_the_runner_also_needs_coexists() {
         "// rawr\nfn main() {\n    println!(\"{}\", semver::Version::new(1, 2, 3));\n}\n",
     )
     .unwrap();
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let run = rawr_import_with_home(&root, &["run"], &home);
     assert!(
         run.status.success(),
@@ -2386,7 +2386,7 @@ fn a_save_the_path_dependencys_tables_hold_replays_them() {
         root.join("rust-toolchain.toml"),
     )
     .unwrap();
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
         let run = rawr_import_with_home(&root, &["run"], &home);
@@ -2521,7 +2521,7 @@ fn a_script_with_a_dependency_runs_from_its_frontmatter() {
         .collect::<Vec<_>>();
     beside.sort();
     assert_eq!(beside, ["major.rs", "parse.rs"]);
-    let area = crate::support::scratch().join("rawr-home/scripts");
+    let area = crate::support::runtime_home().join("scripts");
     for stem in ["parse", "major"] {
         let own = fs::read_dir(&area)
             .unwrap()
@@ -2646,7 +2646,7 @@ fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
         ("src/main.rs", PATCHED_MAIN),
     ]);
     project(&root, &files);
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     assert_runs_and_checks(&root, &home);
 }
 
@@ -2683,7 +2683,7 @@ fn a_crate_types_from_of_itself_gives_the_value_back() {
             ),
         ],
     );
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     assert_runs_and_checks(&root, &home);
 }
 
@@ -2725,7 +2725,7 @@ fn a_literal_of_a_crates_struct_builds_its_value() {
             ),
         ],
     );
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     assert_eq!(
         run_ok(&root, &home),
         "1 2 3 sum 6\nSwatch { name: \"sea\", color: Color { r: 10, g: 20, b: 30 } } true\n"
@@ -2754,7 +2754,7 @@ fn a_workspace_member_resolves_with_the_roots_patch() {
         ("app/src/main.rs", PATCHED_MAIN),
     ]);
     project(&root, &files);
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     assert_runs_and_checks(&root.join("app"), &home);
 }
 
@@ -2793,7 +2793,7 @@ fn each_workspace_members_runner_builds_its_own_units() {
             .map(|(path, text)| (path.as_str(), text.as_str())),
     );
     project(&root, &files);
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
 
     for name in ["left", "right"] {
         assert_eq!(run_ok(&root.join(name), &home), format!("{name}: 6\n"));
@@ -2936,7 +2936,7 @@ fn identical_closures_share_a_home_and_read_no_stale_results() {
 #[test]
 fn a_runner_has_adapters_per_crate_and_runs_a_new_call_into_one() {
     let root = crate::support::fresh("runner-members");
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let main = |sum: &str| format!("// rawr\nfn main() {{\n    println!(\"{{}}\", {sum});\n}}\n");
     project(
         &root,

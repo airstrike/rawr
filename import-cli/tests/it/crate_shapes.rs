@@ -34,11 +34,10 @@ fn lane_runs_as_cargo_does(root: &std::path::Path, expected: &str) {
     assert!(native.status.success(), "{}", text(&native.stderr));
     assert_eq!(text(&native.stdout), expected);
 
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -406,11 +405,10 @@ fn a_widget_lent_a_programs_string_drops_before_its_pins() {
 fn a_formats_borrow_lasts_as_long_as_its_output() {
     let program = "// rawr\nuse natives::lifetimes::Clock;\n\nfn main() {\n    let clock = Clock::new(9, 5);\n    let mut format = String::from(\"%H\");\n    println!(\"start\");\n    let shown = clock.strftime(&format);\n    format.push_str(\"x\");\n    println!(\"{shown}\");\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
-    let directory = crate::support::scratch();
     let run = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -484,11 +482,10 @@ fn a_value_bound_out_of_a_crate_variant_moves() {
 fn a_receiver_an_opaque_output_captures_stays_borrowed() {
     let program = "// rawr\nuse natives::panels::{Panel, Show};\n\nfn main() {\n    let mut panel = Panel::new(\"sky\");\n    println!(\"start\");\n    let shown = panel.view();\n    panel.rename(\"sea\");\n    println!(\"{}\", shown.show());\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
-    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -545,11 +542,10 @@ fn a_field_of_a_dropped_struct_is_read_in_place() {
 fn a_receiver_lent_into_a_mut_input_stays_borrowed() {
     let program = "// rawr\nuse natives::passes::{Encoder, Layer, Target};\n\nfn main() {\n    let target = Target::new(\"frame\");\n    let mut layer = Layer::new(\"sky\");\n    let mut encoder = Encoder::new();\n    println!(\"start\");\n    let mut pass = Target::clear(&target, &mut encoder, 7);\n    layer.draw(&mut pass);\n    layer.rename(\"sea\");\n    pass.draw(1);\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
-    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -613,11 +609,10 @@ fn a_programs_join_handle_fills_a_crates_type_parameter() {
 fn a_crate_with_no_usable_item_says_why_its_item_cant_be_used() {
     let program = "// rawr\n\nfn main() {\n    let _ = opener::number_of(opener::read_in_background(1));\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
-    let directory = crate::support::scratch();
     let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -694,11 +689,10 @@ fn a_forwarding_impls_parameters_are_its_own() {
     runs_as_cargo_does("forwarding", "1\n2\n");
     let program = SHAPES.read("mains/forwarding.rs");
     let root = SHAPES.lease(&[("src/main.rs", &program)]);
-    let directory = crate::support::scratch();
     let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env("RAWR_VERBOSE", "1")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -789,11 +783,10 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
                    slots![compose::text_like::<Theme>(\"near\")];\n    \
                    println!(\"{}\", row.draw());\n}\n";
     let root = SHAPES.lease(&[("src/main.rs", program)]);
-    let directory = crate::support::scratch();
     let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -820,7 +813,7 @@ fn a_qualified_into_picks_the_crates_from_impl_for_its_argument() {
     let check = crate::support::rawr_import()
         .arg("check")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -906,12 +899,11 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
     assert!(native.status.success(), "{}", text(&native.stderr));
     assert_eq!(text(&native.stdout), expected);
 
-    let directory = crate::support::scratch();
-    let out = directory.join("universe");
+    let out = crate::support::fresh("crate-shapes-universe");
     let built = crate::support::rawr_import()
         .arg("run")
         .arg(&*root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env("RAWR_HOME", crate::support::runtime_home())
         .env("RAWR_UNIVERSE_RUNNER", "1")
         .env("RAWR_UNIVERSE_OUT", &out)
         .env_remove("CARGO_TARGET_DIR")

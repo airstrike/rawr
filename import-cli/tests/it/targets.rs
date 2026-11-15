@@ -37,7 +37,7 @@ fn rawr(root: &Path, home: &Path, arguments: &[&str]) -> Output {
 #[test]
 fn a_packages_binaries_run_with_its_host_dependencies_and_profile() {
     let root = TARGETS.lease(&[]);
-    let home = crate::support::scratch().join("rawr-home");
+    let home = crate::support::runtime_home();
     let built = Command::new("cargo")
         .args(["build", "--quiet", "--bins"])
         .current_dir(&root)
