@@ -14,6 +14,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error. (#176; part of #2024)
 - A save that first names a crate module's item through a `use` that also binds a function of the same name, as `.style(button::success)` after `use iced::widget::button`, in a view that returns `impl Widget`, now rebuilds and runs, as a fresh start does, instead of failing with E0599. (#2004)
 - A closure whose `?` converts into an error type nothing in the body names is rustc's E0282 "type annotations needed", as rustc reports it; `unwrap` on its result no longer says "`_` doesn't implement `Debug`". (#2039)
+- A project that uses smallvec, smartstring or thin-vec without serde keeps its one copy of the crate: the runner no longer turns on serde in them. (#2041)
+- After an edit to a crate that a trait-method call's proof reads, the next run lowers that call again instead of failing with "missing runtime binding". (#2042)
 
 ## 0.3.214 (2026-11-14)
 

@@ -20,7 +20,9 @@
         {"text":"A save that adds, removes or reorders a marked type's private fields keeps the program running: each live value takes the new fields in place, a new field at its type's `Default`, and one line says what changed (\"`App` gained `filter` (default); state kept\"). A native loop that passes its state as `&mut` keeps it too, with no native build.","issues":[2026]},
         {"text":"An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error.","issues":[176],"refs":[2024]},
         {"text":"A save that first names a crate module's item through a `use` that also binds a function of the same name, as `.style(button::success)` after `use iced::widget::button`, in a view that returns `impl Widget`, now rebuilds and runs, as a fresh start does, instead of failing with E0599.","issues":[2004]},
-        {"text":"A closure whose `?` converts into an error type nothing in the body names is rustc's E0282 \"type annotations needed\", as rustc reports it; `unwrap` on its result no longer says \"`_` doesn't implement `Debug`\".","issues":[2039]}
+        {"text":"A closure whose `?` converts into an error type nothing in the body names is rustc's E0282 \"type annotations needed\", as rustc reports it; `unwrap` on its result no longer says \"`_` doesn't implement `Debug`\".","issues":[2039]},
+        {"text":"A project that uses smallvec, smartstring or thin-vec without serde keeps its one copy of the crate: the runner no longer turns on serde in them.","issues":[2041]},
+        {"text":"After an edit to a crate that a trait-method call's proof reads, the next run lowers that call again instead of failing with \"missing runtime binding\".","issues":[2042]}
       ]
     },
     "releases": [
@@ -4446,7 +4448,12 @@
     {"issue":2037,"title":"A &mut argument that is a place below a field can't be held by an async fn's future","state":"open","category":"Borrow checker (D572)"},
     {"issue":2038,"title":"Native code calling a program's async fn that takes &mut parameters misreads its result","state":"open","category":"No glue (D593)"},
     {"issue":2039,"title":"Four rawr lib tests fail on main: check_struct_sizes, result_question_mark, std items, comparison E0277","state":"closed","category":"Health"},
-    {"issue":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open","category":"Divergences from rustc"}
+    {"issue":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open","category":"Divergences from rustc"},
+    {"issue":2041,"title":"A project that uses smallvec, smartstring or thin-vec without serde keeps its one copy of the…","state":"open","category":"Importer"},
+    {"issue":2042,"title":"After an edit to a crate that a trait-method call's proof reads, the next run lowers that call…","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":2043,"title":"The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open","category":"Importer"},
+    {"issue":2044,"title":"rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open","category":"Importer"},
+    {"issue":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5902,7 +5909,10 @@
             {"number":2035,"title":"An enum's struct-like variant migrates its fields by name","state":"open"},
             {"number":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"closed"},
             {"number":2039,"title":"Four rawr lib tests fail on main: check_struct_sizes, result_question_mark, std items, comparison E0277","state":"closed"},
-            {"number":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open"}
+            {"number":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open"},
+            {"number":2043,"title":"The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open"},
+            {"number":2044,"title":"rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open"},
+            {"number":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"open"}
           ]
         }
       ]
