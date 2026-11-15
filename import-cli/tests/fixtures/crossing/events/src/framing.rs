@@ -99,6 +99,97 @@ impl<S: Shape<u32>> Shape<u32> for Framed<'_, S> {
 pub trait Gallery<'a, T = u32> {
     /// The shape of `side`.
     fn shape(&self, side: T) -> impl Shape<T> + 'a;
+
+    /// The shape labelled `label`, which it borrows for what it gives, as
+    /// iced markdown's `Viewer::code_block(.., code: &'a str, ..)` is.
+    fn outline(&self, label: &'a str) -> impl Shape<T> + 'a;
+}
+
+/// A part of a plan.
+#[derive(Clone, Debug)]
+pub struct Part {
+    name: String,
+}
+
+/// A plan of parts, as iced markdown's `Content` holds its items.
+pub struct Plan {
+    parts: Vec<Part>,
+}
+
+impl Plan {
+    /// A plan of a part for each of `names`.
+    pub fn new(names: Vec<String>) -> Self {
+        Self {
+            parts: names.into_iter().map(|name| Part { name }).collect(),
+        }
+    }
+
+    /// Its parts, lent, as `Content::items(&self) -> &[Item]` lends them.
+    pub fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+}
+
+/// A shape traced along a borrowed label.
+struct Traced<'a> {
+    label: &'a str,
+}
+
+impl Named for Traced<'_> {
+    fn name(&self) -> String {
+        "trace".to_owned()
+    }
+}
+
+impl Shape<u32> for Traced<'_> {
+    fn area(&self) -> u32 {
+        self.label.len() as u32
+    }
+
+    fn grow(&mut self, _by: u32) {}
+
+    fn parts<'b>(&'b self) -> Vec<&'b str> {
+        vec![self.label]
+    }
+}
+
+/// A shape traced along `label`, which it borrows, as iced markdown's
+/// `code_block(viewer, settings, lines, on_link)` borrows its inputs.
+pub fn traced(label: &str) -> impl Shape<u32> + '_ {
+    Traced { label }
+}
+
+/// What a gallery shows of a plan, borrowed from the plan's parts, as
+/// iced markdown's `view_with(items, settings, viewer)` gives an
+/// `Element<'a, ..>`.
+pub struct Listing<'a> {
+    parts: &'a [Part],
+    shape: Box<dyn Shape<u32> + 'a>,
+}
+
+impl Listing<'_> {
+    /// What it shows.
+    pub fn render(&self) -> String {
+        let names = self
+            .parts
+            .iter()
+            .map(|part| part.name.as_str())
+            .collect::<Vec<_>>();
+        format!(
+            "{names:?}: {} {} {:?}",
+            self.shape.name(),
+            self.shape.area(),
+            self.shape.parts()
+        )
+    }
+}
+
+/// The gallery's listing of `parts`, which it keeps borrowed.
+pub fn listing<'a>(parts: &'a [Part], gallery: &impl Gallery<'a>) -> Listing<'a> {
+    Listing {
+        parts,
+        shape: Box::new(gallery.outline("plan")),
+    }
 }
 
 /// The gallery's shape of `side`, grown by one, said.

@@ -2760,13 +2760,19 @@ fn a_script_impl_gives_native_code_a_reference_to_a_crate_value_it_holds() {
 /// Widget, ..>`. The runner's impl gives the box the value is held in,
 /// which implements `Shape<u32>` and its supertrait through the boxed
 /// value, the trait's argument by its default. The output is `cargo run`'s.
+///
+/// #2020, #2021: as markdown's `view_with(content.items(), ..)` and its
+/// `Viewer::code_block`, a crate call whose output keeps a slice a crate
+/// method lent takes that slice where it is, and the impl's crate value
+/// that borrows what it was given (`traced(label)`) joins a region's value
+/// (`caption(label)`) in one call.
 #[test]
 fn a_script_impl_gives_a_crate_type_holding_an_opaque_type_as_its_trait_s_opaque_output() {
     let (rawr, cargo) = both_printed("framing.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
-        "square framed 10 [\"side\", \"oak\"]\nsquare framed 26 [\"side\", \"oak\"]"
+        "square framed 10 [\"side\", \"oak\"]\nsquare framed 26 [\"side\", \"oak\"]\n[\"beam\", \"post\"]: trace framed 5 [\"plan\", \"plan\"]"
     );
 }
 

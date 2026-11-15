@@ -171,6 +171,49 @@ type Lend<T> = dyn Fn(&mut dyn FnMut(&[T]) -> RawrResult) -> RawrResult;
 /// gives the same slice. No element is copied.
 struct Lending<E: Policy> {
     lend: Box<Lend<E::Value>>,
+    /// How the slice is borrowed past one operation, when the receiver can
+    /// be shared from where it is ([`held`]).
+    hold: Option<Box<Hold<E::Value>>>,
+}
+
+/// How a slice a native method lends from its receiver is borrowed past
+/// one operation, as a call's output that keeps the slice borrowed needs
+/// it: the receiver shared from where it is, in the runner's arena (the
+/// `dyn Any` it takes), which the method lends the slice from
+/// ([`SliceHold`]).
+#[cfg(feature = "sync")]
+type Hold<T> = dyn Fn(&mut dyn Any) -> RawrResultOf<SliceHold<T>> + Send + Sync;
+#[cfg(not(feature = "sync"))]
+type Hold<T> = dyn Fn(&mut dyn Any) -> RawrResultOf<SliceHold<T>>;
+
+/// A receiver shared from where it is, and the method that lends a slice
+/// of it ([`Hold`]): the slice is borrowed for as long as the pins that
+/// hold the receiver ([`SliceHold::reach`]). No element is copied.
+pub struct SliceHold<T: 'static> {
+    receiver: std::rc::Rc<dyn Any>,
+    slice: fn(&dyn Any) -> Option<&[T]>,
+}
+
+impl<T: 'static> SliceHold<T> {
+    /// `receiver`, whose slice `slice` lends.
+    #[must_use]
+    pub fn new(receiver: std::rc::Rc<dyn Any>, slice: fn(&dyn Any) -> Option<&[T]>) -> Self {
+        Self { receiver, slice }
+    }
+
+    /// The slice, borrowed for as long as `pins`, which hold the receiver;
+    /// `None` when the receiver is of another type.
+    #[must_use]
+    pub fn reach(self, pins: &crate::scope::Pins) -> Option<&[T]> {
+        let receiver: &std::rc::Rc<dyn Any> = pins.hold(std::rc::Rc::new(self.receiver));
+        (self.slice)(&**receiver)
+    }
+
+    /// The slice, borrowed for as long as this hold.
+    #[must_use]
+    pub fn get(&self) -> Option<&[T]> {
+        (self.slice)(&*self.receiver)
+    }
 }
 
 impl<E: Policy> Lending<E> {
@@ -244,6 +287,10 @@ impl<E: Policy> Storage for Lending<E> {
                 .ok_or_else(|| failure("a native slice has another concrete type"))?
                 .access(false, visit)
         }))
+    }
+
+    fn held(&self) -> Option<&dyn Any> {
+        self.hold.as_ref().map(|hold| hold as &dyn Any)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -389,6 +436,7 @@ fn window<E: Policy>(
                 visit(value.get(range.clone()).ok_or_else(out_of_bounds)?)
             })
         }),
+        None,
     )
 }
 
@@ -410,6 +458,7 @@ fn window<E: Policy>(
                 visit(value.get(range.clone()).ok_or_else(out_of_bounds)?)
             })
         }),
+        None,
     )
 }
 
@@ -421,7 +470,7 @@ pub fn lent_by<E: Policy>(
     witness: &Witness,
     lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + Send + Sync + 'static,
 ) -> RawrResult {
-    lending::<E>(witness, Box::new(lend))
+    lending::<E>(witness, Box::new(lend), None)
 }
 
 /// The shared slice a native method lends from its receiver (#687), reached
@@ -432,10 +481,83 @@ pub fn lent_by<E: Policy>(
     witness: &Witness,
     lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
 ) -> RawrResult {
-    lending::<E>(witness, Box::new(lend))
+    lending::<E>(witness, Box::new(lend), None)
 }
 
-fn lending<E: Policy>(witness: &Witness, lend: Box<Lend<E::Value>>) -> RawrResult {
+/// [`lent_by`], whose slice `hold` also borrows past one operation
+/// ([`held`]): it shares the receiver from where it is in the runner's
+/// arena, which it takes as a `dyn Any`.
+#[cfg(feature = "sync")]
+pub fn lent_by_holding<E: Policy>(
+    witness: &Witness,
+    lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + Send + Sync + 'static,
+    hold: impl Fn(&mut dyn Any) -> RawrResultOf<SliceHold<E::Value>> + Send + Sync + 'static,
+) -> RawrResult {
+    lending::<E>(witness, Box::new(lend), Some(Box::new(hold)))
+}
+
+/// [`lent_by`], whose slice `hold` also borrows past one operation
+/// ([`held`]): it shares the receiver from where it is in the runner's
+/// arena, which it takes as a `dyn Any`.
+#[cfg(not(feature = "sync"))]
+pub fn lent_by_holding<E: Policy>(
+    witness: &Witness,
+    lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
+    hold: impl Fn(&mut dyn Any) -> RawrResultOf<SliceHold<E::Value>> + 'static,
+) -> RawrResult {
+    lending::<E>(witness, Box::new(lend), Some(Box::new(hold)))
+}
+
+/// The slice `place` is, borrowed past one operation: one that lives as
+/// long as the program ([`lasting`]), or one a native method lends from a
+/// receiver it shares from `arena`, the runner's ([`lent_by_holding`]).
+/// `None` for another place, whose slice is reached for one operation
+/// alone.
+pub fn held<T: 'static>(place: &Place, arena: &mut dyn Any) -> Option<RawrResultOf<Held<T>>> {
+    if let Some(lasting) = place.storage.lasting() {
+        return lasting
+            .downcast::<&'static [T]>()
+            .ok()
+            .map(|slice| Ok(Held::Lasting(*slice)));
+    }
+    let hold = place.storage.held()?.downcast_ref::<Box<Hold<T>>>()?;
+    Some(hold(arena).map(Held::Shared))
+}
+
+/// A slice borrowed past one operation ([`held`]).
+pub enum Held<T: 'static> {
+    /// One that lives as long as the program.
+    Lasting(&'static [T]),
+    /// One a receiver shared from where it is lends.
+    Shared(SliceHold<T>),
+}
+
+impl<T: 'static> Held<T> {
+    /// The slice, borrowed for as long as `pins`; `None` when a shared
+    /// receiver is of another type.
+    #[must_use]
+    pub fn reach(self, pins: &crate::scope::Pins) -> Option<&[T]> {
+        match self {
+            Self::Lasting(slice) => Some(slice),
+            Self::Shared(hold) => hold.reach(pins),
+        }
+    }
+
+    /// The slice, borrowed for as long as this hold.
+    #[must_use]
+    pub fn get(&self) -> Option<&[T]> {
+        match self {
+            Self::Lasting(slice) => Some(slice),
+            Self::Shared(hold) => hold.get(),
+        }
+    }
+}
+
+fn lending<E: Policy>(
+    witness: &Witness,
+    lend: Box<Lend<E::Value>>,
+    hold: Option<Box<Hold<E::Value>>>,
+) -> RawrResult {
     if !witness
         .sequence_element()
         .is_some_and(|element| E::accepts(&element))
@@ -445,7 +567,7 @@ fn lending<E: Policy>(witness: &Witness, lend: Box<Lend<E::Value>>) -> RawrResul
     Ok(Dynamic::from(Place {
         witness: witness.clone(),
         mutable: false,
-        storage: Shared::new(Lending::<E> { lend }),
+        storage: Shared::new(Lending::<E> { lend, hold }),
     }))
 }
 
