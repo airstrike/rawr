@@ -610,7 +610,9 @@ fn session(
     );
     rawr_import::progress::finish(initial.is_ok());
     start.tell();
-    let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
+    let Some((mut lane, adapter, mut manifests, mut native_baseline)) = initial? else {
+        return Ok(Ended::Exit(0));
+    };
     rawr_cli::events::running();
 
     let mut marked = marked(program.is_some(), &manifests);
@@ -1341,34 +1343,8 @@ pub fn initial(
 }
 
 /// [`initial`], started and registered with a watcher over its inputs.
-#[allow(clippy::type_complexity)]
-pub fn initial_watched(
-    target: &rawr::project::Target,
-    graph: Option<rawr::package::Graph>,
-    target_path: &Path,
-    lifecycle: rawr_import::process::Lifecycle,
-    profile: &dyn crate::Profile,
-) -> Result<
-    (
-        Lane,
-        rawr_watch::Adapter,
-        resident::Manifests,
-        rawr_watch::native::Baseline,
-    ),
-    diagnostic::Report,
-> {
-    initial_watched_program(
-        target,
-        Origin::graph(graph),
-        target_path,
-        lifecycle,
-        profile,
-        None,
-        None,
-    )
-    .map_err(Unchecked::into_report)
-}
-
+/// `None` when Cargo built the runner for a target this machine can't run,
+/// as for a browser: the build is the whole run, and nothing starts.
 #[allow(clippy::type_complexity)]
 fn initial_watched_program(
     target: &rawr::project::Target,
@@ -1379,12 +1355,12 @@ fn initial_watched_program(
     program: Option<&rawr_import::process::Arguments>,
     mut kept: Option<&mut crate::Kept>,
 ) -> Result<
-    (
+    Option<(
         Lane,
         rawr_watch::Adapter,
         resident::Manifests,
         rawr_watch::native::Baseline,
-    ),
+    )>,
     Unchecked,
 > {
     let source = fallback(target)?;
@@ -1397,6 +1373,14 @@ fn initial_watched_program(
         &source,
         kept.as_deref_mut(),
     )?;
+    if let Some(foreign) = initial.built.foreign_target() {
+        rawr_import::process::say(format_args!(
+            "rawr: the runner is built for `{foreign}`, which this machine can't run, so it \
+             doesn't start"
+        ));
+        drop(lane.shutdown());
+        return Ok(None);
+    }
     let adapter = match rawr_watch::Adapter::open_inputs(initial.inputs.clone(), DEBOUNCE) {
         Ok(adapter) => adapter,
         Err(error) => {
@@ -1444,7 +1428,7 @@ fn initial_watched_program(
                         color::label(color::Level::Warning)
                     ));
                 }
-                return Ok((lane, adapter, initial.manifests, native_baseline));
+                return Ok(Some((lane, adapter, initial.manifests, native_baseline)));
             }
             Ok(crate::native::Watched::Obsolete) => {
                 drop(staged);

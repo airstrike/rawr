@@ -38,16 +38,9 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly-2026-07-11}" \
 # can be found there.
 runner="$RAWR_UNIVERSE_OUT/runner"
 rm -f "$runner"
-log="$copy/target/web.log"
-mkdir -p "$copy/target"
-status=0
-# `run` builds the runner and then starts it, which a wasm32 module can't
-# be here: once the runner is built, that start is the one failure left.
-"$import" run "$copy" 2> "$log" || status=$?
-cat "$log" >&2
-if [ "$status" -ne 0 ] && ! grep -q "runner exited before connecting its protocol socket" "$log"; then
-  exit "$status"
-fi
+# `run` of a runner built for a target this machine can't run builds it,
+# writes it out and exits 0 without starting it (#1753).
+"$import" run "$copy"
 if [ ! -f "$runner" ]; then
   echo "web.sh: $import wrote no runner to $RAWR_UNIVERSE_OUT" >&2
   exit 1
