@@ -71,7 +71,8 @@
       {"text":"A future polled on another thread brings back the crate values it made, inside an Option or a Result too, so pokedex's images and todos' saved task ids survive.","issues":[1986,1957]},
       {"text":"A widget made inside a view and passed in an Option, as gallery's `stack![content, viewer]` does, reaches the call that boxes it, so gallery's image viewer opens.","issues":[2015]},
       {"text":"A closure can compare parameters whose types its later calls fix, and keyed_column takes (key, element) pairs made inside a view, so iced's todos adds, checks, filters, deletes and saves its tasks.","issues":[2019],"refs":[249]},
-      {"text":"A program's impl of a crate trait whose `impl Trait` function returns a crate type holding another crate function's opaque output compiles: the runner gives the boxed value, which implements the trait and its supertraits.","issues":[2013],"refs":[83]}
+      {"text":"A program's impl of a crate trait whose `impl Trait` function returns a crate type holding another crate function's opaque output compiles: the runner gives the boxed value, which implements the trait and its supertraits.","issues":[2013],"refs":[83]},
+      {"text":"A crate call whose result keeps a slice a crate method lent, as `view_with(content.items(), ..)`, borrows it where it is, and a crate value that borrows its inputs can join a value made in a view's region in one call, as `hover(code_block(..), right(..))`.","issues":[2020,2021],"refs":[83]}
     ]
   },
   "releases": [
