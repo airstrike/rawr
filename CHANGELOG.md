@@ -12,6 +12,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - In the playground's browser mode, an edit to a running iced snippet reloads it in place and keeps its state. A compile error shows under the window while the program keeps running, and an edit that can't reload starts it over and says why. (#1455; part of #1395)
 - A save that adds, removes or reorders a marked type's private fields keeps the program running: each live value takes the new fields in place, a new field at its type's `Default`, and one line says what changed ("`App` gained `filter` (default); state kept"). A native loop that passes its state as `&mut` keeps it too, with no native build. (#2026)
 - An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error. (#176; part of #2024)
+- A save that first names a crate module's item through a `use` that also binds a function of the same name, as `.style(button::success)` after `use iced::widget::button`, in a view that returns `impl Widget`, now rebuilds and runs, as a fresh start does, instead of failing with E0599. (#2004)
+- A closure whose `?` converts into an error type nothing in the body names is rustc's E0282 "type annotations needed", as rustc reports it; `unwrap` on its result no longer says "`_` doesn't implement `Debug`". (#2039)
 
 ## 0.3.214 (2026-11-14)
 

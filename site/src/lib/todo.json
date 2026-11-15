@@ -18,7 +18,9 @@
         {"text":"A Rust dependency that declares several crate types, as a library exposing a C ABI does with lib, cdylib and staticlib, no longer stops `rawr run` with an internal error. The runner also builds for crates whose async methods give futures that borrow their receiver; calling one says it isn't supported yet, instead of the native build failing.","issues":[2029],"refs":[2024,2030]},
         {"text":"In the playground's browser mode, an edit to a running iced snippet reloads it in place and keeps its state. A compile error shows under the window while the program keeps running, and an edit that can't reload starts it over and says why.","issues":[1455],"refs":[1395]},
         {"text":"A save that adds, removes or reorders a marked type's private fields keeps the program running: each live value takes the new fields in place, a new field at its type's `Default`, and one line says what changed (\"`App` gained `filter` (default); state kept\"). A native loop that passes its state as `&mut` keeps it too, with no native build.","issues":[2026]},
-        {"text":"An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error.","issues":[176],"refs":[2024]}
+        {"text":"An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error.","issues":[176],"refs":[2024]},
+        {"text":"A save that first names a crate module's item through a `use` that also binds a function of the same name, as `.style(button::success)` after `use iced::widget::button`, in a view that returns `impl Widget`, now rebuilds and runs, as a fresh start does, instead of failing with E0599.","issues":[2004]},
+        {"text":"A closure whose `?` converts into an error type nothing in the body names is rustc's E0282 \"type annotations needed\", as rustc reports it; `unwrap` on its result no longer says \"`_` doesn't implement `Debug`\".","issues":[2039]}
       ]
     },
     "releases": [
@@ -4408,7 +4410,7 @@
     {"issue":2001,"title":"A script impl of a crate trait returning a borrow of a crate value (markdown's fn theme -> &Theme) panics the generator","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2002,"title":"A borrowing result in the one-value forwarding cell can't run a program method returning another value of its type","state":"open","category":"No glue (D593)"},
     {"issue":2003,"title":"An if or match that picks one of several crate fn items always yields the first arm (table, toast)","state":"closed","category":"No glue (D593)","release":"0.3.214"},
-    {"issue":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"open","category":"Divergences from rustc"},
+    {"issue":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"closed","category":"Divergences from rustc"},
     {"issue":2005,"title":"text_editor's script key_binding closure panics E0499 on the first key press (editor)","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2006,"title":"A struct-update literal over a derived-Default struct with FxHashSet fields has no constructor (game_of_life)","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2007,"title":"A widget operation run from on_scroll sees the layout from before that scroll (delineate)","state":"retired","category":"No glue (D593)"},
@@ -4440,10 +4442,11 @@
     {"issue":2033,"title":"A field change runs the dropped field's Drop instead of restarting","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":2034,"title":"A removed type whose live values sit only in dropped fields migrates instead of restarting","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":2035,"title":"An enum's struct-like variant migrates its fields by name","state":"open","category":"Hot reload of a marked `main` (D555)"},
-    {"issue":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"open","category":"Health"},
+    {"issue":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"closed","category":"Health"},
     {"issue":2037,"title":"A &mut argument that is a place below a field can't be held by an async fn's future","state":"open","category":"Borrow checker (D572)"},
     {"issue":2038,"title":"Native code calling a program's async fn that takes &mut parameters misreads its result","state":"open","category":"No glue (D593)"},
-    {"issue":2039,"title":"Four rawr lib tests fail on main: check_struct_sizes, result_question_mark, std items, comparison E0277","state":"open","category":"Health"}
+    {"issue":2039,"title":"Four rawr lib tests fail on main: check_struct_sizes, result_question_mark, std items, comparison E0277","state":"closed","category":"Health"},
+    {"issue":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5890,15 +5893,16 @@
             {"number":1758,"title":"Preparations replayed from shared bindings carry no native-use record and fall back to the shape rule","state":"open"},
             {"number":1800,"title":"A clean program exit should end rawr run instead of waiting for a save","state":"closed"},
             {"number":1918,"title":"inboard's first text frame after a swap or a restart draws the right layout with the wrong glyphs","state":"retired"},
-            {"number":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"open"},
+            {"number":2004,"title":"A save that first names a module sharing a function's name (button::success) fails E0599; a fresh start runs it","state":"closed"},
             {"number":2008,"title":"An unchanged iced app's view-only edit waits for its next message, and the stale widgets handle that input","state":"open"},
             {"number":2026,"title":"A save that changes a marked type's fields migrates its live values in place instead of restarting","state":"closed"},
             {"number":2032,"title":"A field change migrates live values inside Rc, Arc, RefCell, Cell, closure captures and crate generics","state":"open"},
             {"number":2033,"title":"A field change runs the dropped field's Drop instead of restarting","state":"open"},
             {"number":2034,"title":"A removed type whose live values sit only in dropped fields migrates instead of restarting","state":"open"},
             {"number":2035,"title":"An enum's struct-like variant migrates its fields by name","state":"open"},
-            {"number":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"open"},
-            {"number":2039,"title":"Four rawr lib tests fail on main: check_struct_sizes, result_question_mark, std items, comparison E0277","state":"open"}
+            {"number":2036,"title":"islands::saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line fails on main","state":"closed"},
+            {"number":2039,"title":"Four rawr lib tests fail on main: check_struct_sizes, result_question_mark, std items, comparison E0277","state":"closed"},
+            {"number":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open"}
           ]
         }
       ]
