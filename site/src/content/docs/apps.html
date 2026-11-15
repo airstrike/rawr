@@ -157,8 +157,6 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
 <p>A library that is not async takes a callback instead. <code>rawr_hot::on_generation(|generation| ..)</code> calls it on the main thread after each save. Under <code>cargo run</code> it is never called. A winit app can send itself an event from the callback through its <code>EventLoopProxy</code>.</p>
 
 <h3 id="iced-limits">Limits</h3>
-<p>The examples in iced master&rsquo;s <code>examples/</code> run under <code>rawr run</code> unchanged but for the <code>// rawr</code> line. The repository&rsquo;s <code>scripts/iced-parity.mjs</code> checks them headlessly: it replays each example&rsquo;s interactions under <code>cargo test</code> and under <code>rawr test</code> with iced_test, and compares what they draw.</p>
-<p><code>iced::application(..).subscription(App::subscription)</code> takes your method, and iced calls it with your state. <code>update</code> can return iced&rsquo;s <code>Task</code>s, such as <code>Task::none()</code> or <code>window::latest().and_then(window::close)</code>. A function of iced&rsquo;s that returns an <code>impl Widget</code> or an <code>impl Program</code>, such as <code>iced::widget::iced(..)</code> or <code>iced::application(..)</code>, gives a value that marked code passes on to iced.</p>
 <ul>
   <li>A program of your own that uses an <a href="/docs/imports#gaps">item the generated bindings do not reach</a> stops at that item.</li>
   <li><a href="/docs/previews">Previews</a> do not render yet.</li>
