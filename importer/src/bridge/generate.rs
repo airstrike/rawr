@@ -16005,6 +16005,7 @@ fn render_scoped_receiver(
         Some(family) if ops && family.named().is_some() => Some((call.clone(), family)),
         _ => None,
     };
+    let by_family = made.is_some();
     // What the call changed of a `&mut` array it took goes back after its
     // value, as the arena's call gives it (#913), once the call's borrow of
     // it has ended (#1369).
@@ -16029,6 +16030,15 @@ fn render_scoped_receiver(
     // `Element<'a, M>::map(f)` maps its message (#1473), or one the receiver
     // holds, as a `&self` method calls the style closure it was given.
     let call = format!("lend(arguments.arena, || {call})");
+    // An output only a parameter of the call's names, as `collect<C>(self)
+    // -> C` gives, is spelled as the arena's call spells it, when it holds
+    // no borrow of the region: rustc reads the parameter from it.
+    let call = match concrete_type(&returned) {
+        Some(ty) if !by_family && !carries_lifetime(&returned) && !names_inferred(&ty) => {
+            format!("{{ let output: {ty} = {call}; output }}")
+        }
+        _ => call,
+    };
     // A `&str` the call lends the receiver, as `label(impl IntoFragment<'a>)`
     // takes one, is pinned in the region the receiver is in, at its
     // lifetime, as a slot's region pins its strings. It is pinned before
@@ -25172,7 +25182,7 @@ fn spelled_scoped(ty: &convert::Type, opaque: &mut Option<OpaqueSpelling<'_>>) -
                 .map(|ty| spelled_scoped(ty, opaque))
                 .collect::<Option<Vec<_>>>()?;
             Some(format!(
-                "Box<dyn Fn({}) -> {}>",
+                "Box<dyn Fn({}) -> {} + Send + Sync>",
                 inputs.join(", "),
                 spelled_scoped(output, opaque)?
             ))
@@ -27523,7 +27533,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 .map(concrete_type)
                 .collect::<Option<Vec<_>>>()?;
             format!(
-                "Box<dyn Fn({}) -> {}>",
+                "Box<dyn Fn({}) -> {} + Send + Sync>",
                 inputs.join(", "),
                 concrete_type(output)?
             )

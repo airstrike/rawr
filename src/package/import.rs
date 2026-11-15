@@ -4656,7 +4656,9 @@ fn converted_pattern(
                 .map(|member| converted_pattern(member, parameters))
                 .collect::<Option<_>>()?,
         ),
-        Type::Nominal { .. } | Type::Sequence { .. } if !names_impl_parameter(ty) => {
+        Type::Nominal { .. } | Type::Sequence { .. } | Type::Result(..)
+            if !names_impl_parameter(ty) =>
+        {
             if undeclared_parameter(ty, parameters).is_some() {
                 return None;
             }
@@ -4664,8 +4666,8 @@ fn converted_pattern(
         }
         // A crate type that names the impl's own parameters, as `Text<'a,
         // Theme, Renderer>` of `From<Text<..>> for Element<..>`: each is
-        // named as the case's variable.
-        Type::Nominal { .. } | Type::Sequence { .. } => {
+        // named as the case's variable, as is a `Result` of them.
+        Type::Nominal { .. } | Type::Sequence { .. } | Type::Result(..) => {
             let mut indices = Vec::new();
             impl_parameters(ty, &mut indices);
             let mut named = parameters.to_vec();

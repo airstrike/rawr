@@ -2540,6 +2540,19 @@ pub mod spread {
         }
     }
 
+    /// A check of a shade that failed, as iced_test's `Error` is.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Mismatch(pub Shade);
+
+    /// Whether `shade` is one of [`Shade::ALL`].
+    pub fn check(shade: &Shade) -> Result<(), Mismatch> {
+        if Shade::ALL.contains(shade) {
+            Ok(())
+        } else {
+            Err(Mismatch(*shade))
+        }
+    }
+
     pub trait Spread: Sized + Send {
         type Item: Send;
 
@@ -2641,7 +2654,7 @@ pub mod spread {
         F: Fn(I::Item) -> R + Sync + Send,
         R: Send,
     {
-        type Item = R;
+        type Item = F::Output;
 
         fn drive(self) -> Vec<R> {
             self.0.drive().into_iter().map(self.1).collect()

@@ -127,7 +127,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // `impl AddAssign<Turn> for f32` (#987). `driver.rs`,
 // `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
 // move with it.
-const PROTOCOL_SCHEMA: u32 = 75;
+const PROTOCOL_SCHEMA: u32 = 76;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3176,6 +3176,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             return Err("associated obligation item does not belong to its trait".to_owned());
         }
         self.select_effective_trait_item(trait_item, implementors, selected)?;
+        // A provided function that projects the trait's `Self`, as
+        // `map<F: Fn(Self::Item) -> R>`, names the associated types the
+        // implementation gives, which a member of it reads them as.
+        if item.is_fn() && !implementors.contains_key(&trait_item) {
+            for associated in self.projected_on_self(trait_id, trait_item) {
+                if let Some(given) = implementors.get(&associated) {
+                    self.select_associated_definition(*given, selected)?;
+                }
+            }
+        }
         if item.is_fn() {
             let linked = self
                 .tcx
@@ -3192,6 +3202,52 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             return Err("associated obligation target is not a trait implementation".to_owned());
         }
         Ok(())
+    }
+
+    /// The associated types of `trait_id` that its function `function`
+    /// projects on the trait's `Self` in its signature or its own where
+    /// clauses.
+    fn projected_on_self(&self, trait_id: DefId, function: DefId) -> Vec<DefId> {
+        let signature = self
+            .tcx
+            .fn_sig(function)
+            .instantiate_identity()
+            .skip_norm_wip()
+            .skip_binder();
+        let mut arguments = signature
+            .inputs_and_output
+            .iter()
+            .map(ty::GenericArg::from)
+            .collect::<Vec<_>>();
+        for (clause, _) in crate::compat::own_clauses(self.tcx, function) {
+            match clause.kind().skip_binder() {
+                ty::ClauseKind::Trait(predicate) => {
+                    arguments.extend(predicate.trait_ref.args.iter());
+                }
+                ty::ClauseKind::Projection(predicate) => {
+                    arguments.extend(predicate.projection_term.args.iter());
+                    arguments.extend(predicate.term.as_type().map(ty::GenericArg::from));
+                }
+                _ => {}
+            }
+        }
+        let mut projected = arguments
+            .into_iter()
+            .flat_map(ty::GenericArg::walk)
+            .filter_map(|argument| match argument.as_type()?.kind() {
+                ty::Alias(_, alias)
+                    if let ty::AliasTyKind::Projection { def_id } = alias.kind
+                        && self.tcx.parent(def_id) == trait_id
+                        && matches!(alias.self_ty().kind(), ty::Param(parameter) if parameter.index == 0) =>
+                {
+                    Some(def_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        projected.sort_unstable_by_key(|id| self.tcx.def_path_hash(*id).0.to_le_bytes());
+        projected.dedup();
+        projected
     }
 
     fn select_effective_trait_item(

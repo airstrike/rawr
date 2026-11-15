@@ -1185,6 +1185,11 @@ impl<'a> Parser<'a> {
     /// locations stay exact).
     pub(super) fn finish_conversions(&mut self) -> Result<(), Error> {
         self.fall_back_diverging();
+        // A bound waiting on a type the body has fixed by now, as the
+        // closure's error a `collect` into a `Result` fixes, fixes what it
+        // ties before a conversion reads it.
+        #[cfg(feature = "rust-import")]
+        self.finish_projections();
         for (target, item, collect) in std::mem::take(&mut self.pending_collects) {
             self.collected_into(&target, &item, collect)?;
         }

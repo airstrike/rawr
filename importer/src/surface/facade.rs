@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 66;
+const SCHEMA: u32 = 67;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -4521,6 +4521,18 @@ fn relations(
             representability::convert::Type::Option(element) => {
                 Type::Option(Box::new(pattern(element, parameters)?))
             }
+            // A `Result` or `Vec` of them, as `impl<C, T, E> FromSpread<
+            // Result<T, E>> for Result<C, E>` and `impl<T> FromSpread<T> for
+            // Vec<T>` are for.
+            representability::convert::Type::Result(ok, err) => Type::Result(
+                Box::new(pattern(ok, parameters)?),
+                Box::new(pattern(err, parameters)?),
+            ),
+            representability::convert::Type::Sequence {
+                element,
+                owned: true,
+                length: None,
+            } => Type::Array(Box::new(pattern(element, parameters)?)),
             // A `&str` an implementation is for, as iced_test's `impl
             // Selector for &str` is: the string the program lends (#1678).
             representability::convert::Type::Builtin(

@@ -878,6 +878,17 @@ fn a_provided_methods_parameter_named_as_its_impls_is_its_own() {
     runs_as_cargo_does("spread", "[Light, Dark]\n[\"light\", \"dark\"]\n");
 }
 
+/// A trait's provided `map<F: Fn(Self::Item) -> R>` on an impl whose
+/// `Item` is its own parameter takes a script closure of that item, and
+/// `collect<C: FromSpread<Self::Item>>` on the `Map` it gives, whose `Item`
+/// is `F::Output`, fixes the closure's error from the `Result` it collects
+/// into, as rustc selects `FromSpread<Result<T, E>> for Result<C, E>`
+/// (#2080, #2064).
+#[test]
+fn a_provided_map_takes_the_impls_item_and_collects_into_a_result() {
+    runs_as_cargo_does("spread_mapped", "[\"light\", \"dark\"]\nOk(())\n");
+}
+
 /// A crate trait's generic impl for another crate's generic type, as
 /// ratzilla's `impl<B: Backend + ..> WebRenderer for Terminal<B>` is, gives
 /// `Terminal<DomBackend>` its methods: a `&mut self` one and a `self` one,
