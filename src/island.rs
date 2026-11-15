@@ -1689,15 +1689,15 @@ fn main_text(text: &str) -> Option<String> {
 /// (D553.6), in one line for `rawr run` to restart with. `None` when it
 /// swaps in: a body edit, or a new function or type.
 ///
-/// - A script type whose fields or variants changed, or that was removed,
-///   while a live value of it is held: the running program's state, a
-///   value native code holds as a handle, a pending task or a captured
-///   closure (#1746). A static of a script type holds none: each read is
-///   its initializer (D862). One nothing holds swaps in, and its derives
-///   aren't its representation: a new derive swaps in. [`admit`] checks
-///   again where the generation is admitted, with the callables native
-///   code holds. A type native code names rebuilds by the island's shape
-///   instead (D932).
+/// - A script type that was removed while a live value of it is held:
+///   the running program's state, a value native code holds as a handle,
+///   a pending task or a captured closure (#1746). A static of a script
+///   type holds none: each read is its initializer (D862). One whose
+///   fields or variants changed is left to [`admit`], which rewrites its
+///   live values in place or says why it can't (#2026), and checks again
+///   with the callables native code holds. Its derives aren't its
+///   representation: a new derive swaps in. A type native code names
+///   rebuilds by the island's shape instead (D932).
 /// - A callable a marked `main`'s own frame gave native code, which no
 ///   longer rebinds: `main` never runs again to give a new one.
 /// - A program that never called from native code into script code: no
@@ -1708,9 +1708,16 @@ pub fn refusal(
     current: &crate::reload::Generation,
     candidate: &crate::reload::Candidate,
 ) -> Option<String> {
-    if let Some(reason) = departure(current.schemas(), candidate.schemas(), |identity, _| {
-        crate::types::nominal::census::holds(identity).then_some(Hold::Value)
-    }) {
+    // A type a live value holds that the save changed the fields of is
+    // left to the admission, which rewrites the value (#2026).
+    if let Some(reason) = departure(
+        current.schemas(),
+        candidate.schemas(),
+        |identity, schema| {
+            (schema.is_none() && crate::types::nominal::census::holds(identity))
+                .then_some(Hold::Value)
+        },
+    ) {
         return Some(reason);
     }
     if !crate::future::called_from_native() {
@@ -1771,7 +1778,7 @@ enum Hold {
 fn departure(
     current: &program::schema::Manifest,
     next: &program::schema::Manifest,
-    hold: impl Fn(&type_def::Identity, Option<&program::schema::Fingerprint>) -> Option<Hold>,
+    mut hold: impl FnMut(&type_def::Identity, Option<&program::schema::Fingerprint>) -> Option<Hold>,
 ) -> Option<String> {
     let path = |key: &type_def::Key| {
         key.modules()
@@ -1828,43 +1835,150 @@ fn departure(
 /// the new code (#1746).
 pub const REFUSED: i32 = 75;
 
+/// What [`admit`] did with a generation committed beside the running one.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+pub enum Admission {
+    /// It runs now. `Some` says how the live values of the types it
+    /// changed took their new fields, in one line (#2026).
+    Admitted(Option<String>),
+    /// It can't replace the running generation, which stays, for this
+    /// reason.
+    Refused(String),
+}
+
 /// Admit `bootstrap`, a generation committed beside the running one, at
 /// the outermost entry from native code on the thread that owns the
 /// program (D553.3), where no call of the running generation is under
 /// way on it. A type the save removed or changed the fields of is checked
 /// again here, as values made since its compile may hold it (#1746): no
-/// value of it may live, and no callable native code holds that won't
-/// rebind in `bootstrap` may run code that makes it. `Some` says why it
-/// can't, and the running generation stays.
+/// value of a removed one may live, and no callable native code holds
+/// that won't rebind in `bootstrap` may run code that makes either. Each
+/// live value of a type whose fields changed is rewritten in place to the
+/// new fields (#2026), or the generation is refused when one can't be.
 #[cfg(feature = "sync")]
-#[must_use]
-pub fn admit(bootstrap: Bootstrap) -> Option<String> {
+pub fn admit(bootstrap: Bootstrap) -> Admission {
     let next = Current::new(bootstrap);
+    let mut migrated = None;
     if let Some(running) = CURRENT.with(|slot| slot.borrow().clone()) {
         let kept = crate::future::kept();
+        let mut changed = Vec::new();
+        let old = running.bootstrap.generation().schemas();
         let reason = departure(
-            running.bootstrap.generation().schemas(),
+            old,
             next.bootstrap.generation().schemas(),
             |identity, schema| {
-                if crate::types::nominal::census::holds(identity) {
+                let makes = kept.iter().any(|(function, program)| {
+                    !crate::future::Remote::rebinds(&*next.shared, function, program.as_ref())
+                        && program.makes(identity).is_some_and(|made| {
+                            schema.is_none_or(|schema| !made.same_representation(schema))
+                        })
+                });
+                if !crate::types::nominal::census::holds(identity) {
+                    return makes.then_some(Hold::Code);
+                }
+                // Old code could make the old shape again after a rewrite.
+                if schema.is_none() || makes {
                     return Some(Hold::Value);
                 }
-                kept.iter()
-                    .any(|(function, program)| {
-                        !crate::future::Remote::rebinds(&*next.shared, function, program.as_ref())
-                            && program.makes(identity).is_some_and(|made| {
-                                schema.is_none_or(|schema| !made.same_representation(schema))
-                            })
-                    })
-                    .then_some(Hold::Code)
+                changed.push(identity.clone());
+                None
             },
         );
-        if reason.is_some() {
-            return reason;
+        if let Some(reason) = reason {
+            return Admission::Refused(reason);
+        }
+        if !changed.is_empty() {
+            match migrate(&running, &next, &changed) {
+                Ok(report) => migrated = report,
+                Err(reason) => return Admission::Refused(reason),
+            }
         }
     }
     install(next);
-    None
+    Admission::Admitted(migrated)
+}
+
+/// Rewrite each live value of `changed`, the script types `next` changed
+/// the fields or variants of, to `next`'s types (#2026): the values native
+/// code holds by their handle and those in the cells a runner's proxies
+/// hold, every one the census counts. `Ok` says what it did, `Err` why it
+/// can't, and nothing is rewritten then.
+#[cfg(feature = "sync")]
+fn migrate(
+    running: &Current,
+    next: &Current,
+    changed: &[type_def::Identity],
+) -> Result<Option<String>, String> {
+    let old = running.bootstrap.generation().schemas();
+    let model = next.shared.authority.model();
+    let migration = model.migration(
+        changed
+            .iter()
+            .filter_map(|identity| Some((identity, old.get(identity)?))),
+    );
+    if migration.is_empty() {
+        return Ok(None);
+    }
+    // The program's `Drop`, when it has one, runs from its drop glue, which
+    // a field the save drops doesn't run here.
+    let drops = running
+        .bootstrap
+        .catalog()
+        .authority()
+        .items()
+        .any(|item| item.key().name() == crate::resolve::lower_nominal::GLUE);
+    // The values native code holds by their handle, taken from the table
+    // while the walk runs, so a `Default` the program makes, or a value
+    // that drops, finds it free.
+    let mut handles = Vec::new();
+    let mut roots = kept(|kept| {
+        kept.values
+            .iter_mut()
+            .filter_map(|(handle, held)| {
+                let value = held.value.take()?;
+                handles.push(*handle);
+                Some(value)
+            })
+            .collect::<Vec<_>>()
+    });
+    let held = roots.len();
+    roots.extend(crate::types::nominal::roots::alive());
+    let path_of = |identity: &type_def::Identity| {
+        let type_def::Identity::Script(key) = identity else {
+            return None;
+        };
+        let path = key
+            .modules()
+            .iter()
+            .map(ImmutableString::as_str)
+            .chain([key.name()])
+            .collect::<Vec<_>>()
+            .join("::");
+        Some(model.crossing_path(&path))
+    };
+    let made = |identity: &type_def::Identity| {
+        let path = path_of(identity)?;
+        let made = crate::future::Remote::default_of(&*next.shared, &path)?;
+        Some(made.map_err(|error| crate::future::message(&error)))
+    };
+    let rewritten = migration
+        .survey(&mut roots, drops)
+        .and_then(|survey| migration.defaults(&survey, &made))
+        .and_then(|defaults| migration.rewrite(&mut roots, defaults))
+        .map_err(|refusal| refusal.to_string());
+    roots.truncate(held);
+    kept(|kept| {
+        for (handle, value) in handles.into_iter().zip(roots) {
+            if let Some(held) = kept.values.get_mut(&handle) {
+                held.value = Some(value);
+            }
+        }
+    });
+    let rewritten = rewritten?;
+    // The dropped fields go once the table is free again.
+    drop(rewritten.dropped);
+    Ok(Some(rewritten.report))
 }
 
 /// The published program as any thread may use it (D490): calls with an
@@ -2212,7 +2326,8 @@ impl Calls {
         let inputs = self.inputs.get(&key);
         let mut values = Vec::with_capacity(count);
         // A stand-in's receiver is its program value, taken for the call
-        // (#1264).
+        // (#1264), and so is a `&mut` argument of a struct native code
+        // holds by its handle (#2026).
         let mut held = Vec::new();
         let mut texts = Vec::new();
         // Native code's own texts the result may borrow, for the call.
@@ -2222,7 +2337,7 @@ impl Calls {
                 reader.byte().map_err(malformed)?;
                 let handle = u64::from_le_bytes(reader.array().map_err(malformed)?);
                 let borrow = match item.receiver() {
-                    Some(crate::receiver::Mode::Shared) => Borrow::Shared,
+                    Some(crate::receiver::Mode::Shared) if index == 0 => Borrow::Shared,
                     _ => Borrow::Mutable,
                 };
                 let value = match take_kept(handle, borrow) {
@@ -2366,9 +2481,13 @@ impl Calls {
         let path = call.path;
         let model = call.model;
         let invoked = (call.invoke)(item, &mut values);
-        // The receiver changed in place, as a method's is, goes back.
-        restore(&held, &mut values);
-        let mut result = invoked.map_err(|error| format!("rawr: `{path}` failed: {error}"))?;
+        let mut result = match invoked {
+            Ok(result) => result,
+            Err(error) => {
+                restore(&held, &mut values);
+                return Err(format!("rawr: `{path}` failed: {error}"));
+            }
+        };
         let copied = match item.kind() {
             item::Kind::Function => references.get(1..).unwrap_or_default(),
             item::Kind::Method => references
@@ -2381,16 +2500,23 @@ impl Calls {
             let returned = result
                 .into_array()
                 .ok()
-                .filter(|returned| returned.len() == copied.len() + 1)
-                .ok_or_else(|| {
-                    format!("rawr: `{path}` gave back no copies of its `&mut` arguments")
-                })?;
+                .filter(|returned| returned.len() == copied.len() + 1);
+            let Some(returned) = returned else {
+                restore(&held, &mut values);
+                return Err(format!(
+                    "rawr: `{path}` gave back no copies of its `&mut` arguments"
+                ));
+            };
             let mut returned = returned.into_iter();
             result = returned.next().unwrap_or(Dynamic::UNIT);
             for (index, value) in copied.iter().zip(returned) {
                 values[*index] = value;
             }
         }
+        // Each value native code holds by its handle that the call had, its
+        // receiver or a `&mut` argument, goes back changed, in place or as
+        // its copy.
+        restore(&held, &mut values);
         let mut reply = vec![0];
         let unsent = |error: String| {
             format!("rawr: `{path}` gave back a value native code can't take: {error}")
@@ -2475,6 +2601,10 @@ impl Calls {
         // lent one, and else the value `*place = value` gave it, which moves
         // to native code (#1139).
         for index in &references {
+            // Native code holds it by its handle, which reaches it changed.
+            if held.iter().any(|(at, ..)| at == index) {
+                continue;
+            }
             let value = &values[*index];
             let copied = *index < 64 && mutable & (1 << index) != 0;
             if !copied && value.read_lock::<crate::scope::Lent>().is_some() {

@@ -342,7 +342,10 @@ fn bind(
 fn swap(engine: &Shared<Engine>, candidate: reload::Candidate) -> Result<Option<String>, Error> {
     let bootstrap = bind(engine, candidate, None)?;
     bootstrap.evaluate_top_level().map_err(Error::Evaluate)?;
-    Ok(island::admit(bootstrap))
+    Ok(match island::admit(bootstrap) {
+        island::Admission::Admitted(_) => None,
+        island::Admission::Refused(reason) => Some(reason),
+    })
 }
 
 /// Run the published program's `main` to its status, as a generated runner
