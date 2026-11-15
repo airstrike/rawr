@@ -366,8 +366,22 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
     // A later run of the project reads every entry back.
     run(&first, "11 true 41 51\n");
     assert_eq!(published(&first), shared, "a later run reuses every entry");
-    let helpers =
-        fs::read_to_string(first.join("target/rawr/runner/src/rawr_applications.rs")).unwrap();
+    // Each crate of the runner holds the helpers of its adapters in its own
+    // `rawr_applications.rs`; the binary's holds the encoded applications.
+    fn helpers_in(path: &Path, helpers: &mut String) {
+        for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                helpers_in(&path, helpers);
+            } else if entry.file_name() == "rawr_applications.rs" {
+                helpers.push_str(&fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let runner = first.join("target/rawr/runner");
+    let mut helpers = String::new();
+    helpers_in(&runner.join("rawr-crates"), &mut helpers);
+    helpers_in(&runner.join("src/__rawr_program"), &mut helpers);
     for expected in [
         "#[no_implicit_prelude]",
         "use ::facts_c::Left as _;",

@@ -892,6 +892,12 @@ impl Definition {
 }
 
 impl Fingerprint {
+    /// The proof-backed application the item stands for, when it is one.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn application(&self) -> Option<&[u8; 32]> {
+        self.application.as_deref()
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         let signature = self
