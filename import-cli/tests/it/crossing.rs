@@ -167,6 +167,23 @@ fn generic_functions_over_crate_types_run_once_per_instantiation() {
     );
 }
 
+/// A function's `Wrapper<impl SomeTrait>`, which a generic `pipe_for(&w)`
+/// gives a pipe of signals of, and a generic driver takes the pipe and the
+/// wrapper: each call that takes a value of a type holding the opaque type
+/// beside the wrapper's own, as `Driver::new(pipe, &stepper)` takes a pipe
+/// of `Signal<Wrapper<impl SomeTrait>>`, is compiled where rustc knows the
+/// wrapper's type, and reaches each operand at its own type (#2060). The
+/// output is `cargo run`'s.
+#[test]
+fn a_generic_driver_of_an_opaque_types_wrapper_takes_its_pipe() {
+    let (rawr, cargo) = both_printed("piped.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("told ready, took 3, failed stay, moved 3\ncount 3"),
+        "{rawr}"
+    );
+}
+
 /// iced's text, system_information and multi_window: `new` gives the
 /// state and its first task, `(Self, Task<Message>)`, which
 /// `application(..)` takes through `BootFn` and the tuple's `IntoBoot`.

@@ -869,6 +869,15 @@ fn array_types_cross_as_rustc_has_them() {
     );
 }
 
+/// A trait's provided method generic over a parameter named as its impl's
+/// is, `fn cloned<'a, T>` of the trait `impl<'data, T> Spread for
+/// Iter<'data, T>` implements, keeps the two apart: the iterator a crate
+/// function gives clones its items (#2064).
+#[test]
+fn a_provided_methods_parameter_named_as_its_impls_is_its_own() {
+    runs_as_cargo_does("spread", "[Light, Dark]\n[\"light\", \"dark\"]\n");
+}
+
 /// A crate trait's generic impl for another crate's generic type, as
 /// ratzilla's `impl<B: Backend + ..> WebRenderer for Terminal<B>` is, gives
 /// `Terminal<DomBackend>` its methods: a `&mut self` one and a `self` one,

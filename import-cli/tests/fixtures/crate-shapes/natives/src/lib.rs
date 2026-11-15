@@ -2512,3 +2512,188 @@ pub mod streams {
         }
     }
 }
+
+/// A prelude of traits whose by-reference method comes from a blanket impl
+/// bounded on `&I`, and a slice impl of the trait that bound names, so a
+/// `&'static [T]` gets the method only through the glob.
+pub mod spread {
+    pub mod prelude {
+        pub use super::{FromSpread, IntoSpread, IntoSpreadRef, Spread};
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Shade {
+        Light,
+        Dark,
+    }
+
+    impl Shade {
+        pub const ALL: &'static [Self] = &[Self::Light, Self::Dark];
+    }
+
+    impl std::fmt::Display for Shade {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(match self {
+                Shade::Light => "light",
+                Shade::Dark => "dark",
+            })
+        }
+    }
+
+    pub trait Spread: Sized + Send {
+        type Item: Send;
+
+        fn drive(self) -> Vec<Self::Item>;
+
+        fn cloned<'a, T>(self) -> Cloned<Self>
+        where
+            T: 'a + Clone + Send,
+            Self: Spread<Item = &'a T>,
+        {
+            Cloned(self)
+        }
+
+        fn map<F, R>(self, map: F) -> Map<Self, F>
+        where
+            F: Fn(Self::Item) -> R + Sync + Send,
+            R: Send,
+        {
+            Map(self, map)
+        }
+
+        fn collect<C>(self) -> C
+        where
+            C: FromSpread<Self::Item>,
+        {
+            C::from_spread(self)
+        }
+    }
+
+    pub trait IntoSpread {
+        type Iter: Spread<Item = Self::Item>;
+        type Item: Send;
+
+        fn into_spread(self) -> Self::Iter;
+    }
+
+    pub trait IntoSpreadRef<'data> {
+        type Iter: Spread<Item = Self::Item>;
+        type Item: Send + 'data;
+
+        fn spread_iter(&'data self) -> Self::Iter;
+    }
+
+    impl<'data, I: 'data + ?Sized> IntoSpreadRef<'data> for I
+    where
+        &'data I: IntoSpread,
+    {
+        type Iter = <&'data I as IntoSpread>::Iter;
+        type Item = <&'data I as IntoSpread>::Item;
+
+        fn spread_iter(&'data self) -> Self::Iter {
+            self.into_spread()
+        }
+    }
+
+    pub struct Iter<'data, T>(&'data [T]);
+
+    /// Every shade's spread, as `Shade::ALL.spread_iter()` gives it.
+    pub fn shades() -> Iter<'static, Shade> {
+        Iter(Shade::ALL)
+    }
+
+    impl<'data, T: Sync + 'data> IntoSpread for &'data [T] {
+        type Iter = Iter<'data, T>;
+        type Item = &'data T;
+
+        fn into_spread(self) -> Iter<'data, T> {
+            Iter(self)
+        }
+    }
+
+    impl<'data, T: Sync> Spread for Iter<'data, T> {
+        type Item = &'data T;
+
+        fn drive(self) -> Vec<&'data T> {
+            self.0.iter().collect()
+        }
+    }
+
+    pub struct Cloned<I>(I);
+
+    impl<'a, T, I> Spread for Cloned<I>
+    where
+        I: Spread<Item = &'a T>,
+        T: 'a + Clone + Send + Sync,
+    {
+        type Item = T;
+
+        fn drive(self) -> Vec<T> {
+            self.0.drive().into_iter().cloned().collect()
+        }
+    }
+
+    pub struct Map<I, F>(I, F);
+
+    impl<I, F, R> Spread for Map<I, F>
+    where
+        I: Spread,
+        F: Fn(I::Item) -> R + Sync + Send,
+        R: Send,
+    {
+        type Item = R;
+
+        fn drive(self) -> Vec<R> {
+            self.0.drive().into_iter().map(self.1).collect()
+        }
+    }
+
+    pub trait FromSpread<T: Send> {
+        fn from_spread<I>(spread: I) -> Self
+        where
+            I: Spread<Item = T>;
+    }
+
+    impl<T: Send> FromSpread<T> for Vec<T> {
+        fn from_spread<I>(spread: I) -> Self
+        where
+            I: Spread<Item = T>,
+        {
+            spread.drive()
+        }
+    }
+
+    impl FromSpread<()> for () {
+        fn from_spread<I>(spread: I) -> Self
+        where
+            I: Spread<Item = ()>,
+        {
+            spread.drive();
+        }
+    }
+
+    impl<C, T, E> FromSpread<Result<T, E>> for Result<C, E>
+    where
+        C: FromSpread<T>,
+        T: Send,
+        E: Send,
+    {
+        fn from_spread<I>(spread: I) -> Self
+        where
+            I: Spread<Item = Result<T, E>>,
+        {
+            let items: Result<Vec<T>, E> = spread.drive().into_iter().collect();
+            Ok(C::from_spread(Gathered(items?)))
+        }
+    }
+
+    struct Gathered<T>(Vec<T>);
+
+    impl<T: Send> Spread for Gathered<T> {
+        type Item = T;
+
+        fn drive(self) -> Vec<T> {
+            self.0
+        }
+    }
+}

@@ -479,12 +479,27 @@ fn member_span(error: &resolve::Error) -> Span {
     }
 }
 
-/// A type as rustc names one the script imported: its last segment.
-fn short(owner: &str) -> &str {
-    if owner.contains('<') {
-        return owner;
+/// A type as rustc names one the script imported: each path's last
+/// segment, so a slice or a borrow of an imported type keeps its `[`,
+/// `]` and `&` around the name (`&[Theme]`).
+fn short(owner: &str) -> std::borrow::Cow<'_, str> {
+    if owner.contains('<') || !owner.contains("::") {
+        return owner.into();
     }
-    owner.rsplit("::").next().unwrap_or(owner)
+    let mut shortened = String::with_capacity(owner.len());
+    let mut path = 0;
+    for (at, character) in owner.char_indices() {
+        if character.is_alphanumeric() || character == '_' || character == ':' {
+            continue;
+        }
+        let segment = &owner[path..at];
+        shortened.push_str(segment.rsplit("::").next().unwrap_or(segment));
+        shortened.push(character);
+        path = at + character.len_utf8();
+    }
+    let segment = &owner[path..];
+    shortened.push_str(segment.rsplit("::").next().unwrap_or(segment));
+    shortened.into()
 }
 
 /// How source names a member: `value.member()`, `value.member` or
@@ -1385,6 +1400,16 @@ mod tests {
     use super::Report;
     use crate::diagnostic::{code, Source};
     use crate::{resolve, ParseError, ParseErrorType, Position, Span};
+
+    /// A slice or a borrow of an imported type keeps its brackets and its
+    /// `&` around the type's last segment (#2064).
+    #[test]
+    fn a_missing_members_owner_keeps_its_slice_brackets() {
+        assert_eq!(super::short("&[styling::Theme]"), "&[Theme]");
+        assert_eq!(super::short("[iced::Theme]"), "[Theme]");
+        assert_eq!(super::short("iced::Theme"), "Theme");
+        assert_eq!(super::short("(a::B, c::D)"), "(B, D)");
+    }
 
     #[test]
     fn translated_resolution_uses_only_proven_primary_evidence() {
