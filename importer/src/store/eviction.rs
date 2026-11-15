@@ -422,9 +422,10 @@ fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool,
 }
 
 /// How many unrooted units of each kind a project keeps, newest first, when
-/// no pin holds them: the current one and a few an undo or redo returns to.
-/// Every edit can publish a resolution, and every generated change a runner
-/// or an extraction build. Nothing else retires them, and each execution
+/// no pin holds them, between the binds that retire what a new generation
+/// supersedes ([`retire_superseded`]): builds that never bind, such as one
+/// that failed or a check. Every edit can publish a resolution, and every
+/// generated change a runner or an extraction build, and each execution
 /// holds the build outputs it relocated or the executable it built (#577).
 /// A retired runner takes its generation with it (`generation`), so the
 /// other kinds are kept as long as a kept runner's generation is (#1358).
@@ -433,6 +434,49 @@ pub(super) const KEPT: [(Kind, usize); 3] = [
     (Kind::Runner, 4),
     (Kind::NativeProduct, 4),
 ];
+
+/// The executed kinds with none kept unrooted: what [`retire_superseded`]
+/// retires once a project's Live and LastGood roles name a new generation.
+const SUPERSEDED: [(Kind, usize); 3] = [
+    (Kind::Resolution, 0),
+    (Kind::Runner, 0),
+    (Kind::NativeProduct, 0),
+];
+
+/// Retire what a project's newly bound Live and LastGood generation, the
+/// closure of `bound`, supersedes: each of the project's executions
+/// (resolution, runner, native product) published before the generation's
+/// newest unit that no pin root and no running program holds, with its
+/// bundle, its content, and the older units only a retired runner's
+/// generation reached (`generation`). What stays is what the project's
+/// Live, LastGood, Prepared and InFlight roots reach, what a running
+/// program pins, and what was published after the generation, which a
+/// build still under way may bind next. A generation a program still runs
+/// goes at the first bind after the program lets it go. Another project's
+/// units are never retired here.
+pub(super) fn retire_superseded(
+    store: &Path,
+    project: Digest,
+    bound: &[crate::node::read_set::Entry],
+) -> Result<(), Error> {
+    let bound = accounting::references(store, bound)?;
+    let Some(newest) = accounting::registered(store)?
+        .iter()
+        .filter(|registered| bound.binary_search(&registered.reference()).is_ok())
+        .map(|registered| registered.sequence())
+        .max()
+    else {
+        return Ok(());
+    };
+    while recover_excess(
+        store,
+        project,
+        &SUPERSEDED,
+        newest,
+        &mut recovery::Budget::new(),
+    )? {}
+    Ok(())
+}
 
 /// Every kind with none kept: what a collected project published goes whole.
 const NONE_KEPT: [(Kind, usize); 11] = [
@@ -498,7 +542,13 @@ pub(super) fn recover_idle(store: &Path, requesting: Digest) -> Result<usize, Er
         if !released {
             continue;
         }
-        while recover_excess(store, project, &NONE_KEPT, &mut recovery::Budget::new())? {}
+        while recover_excess(
+            store,
+            project,
+            &NONE_KEPT,
+            u64::MAX,
+            &mut recovery::Budget::new(),
+        )? {}
         lease.retire();
         collected += 1;
     }
@@ -507,21 +557,22 @@ pub(super) fn recover_idle(store: &Path, requesting: Digest) -> Result<usize, Er
 
 /// Retire the requesting project's oldest unrooted unit (action, its bundle,
 /// its content when nothing else names it) of the first kind it has more of
-/// than `kept` allows.
+/// than `kept` allows, among those published before the sequence `before`.
 pub(super) fn recover_excess(
     store: &Path,
     requesting: Digest,
     kept: &[(Kind, usize)],
+    before: u64,
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
-    let settled = Settled::of(store, requesting, kept)?;
+    let settled = Settled::of(store, requesting, kept, before)?;
     if cfg!(unix) && SETTLED.with_borrow(|last| last.as_ref() == Some(&settled)) {
         return Ok(false);
     }
     let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        excess(store, &snapshot, &registrations, requesting, kept)
+        excess(store, &snapshot, &registrations, requesting, kept, before)
     })?;
     let Some(selected) = selected else {
         SETTLED.set(Some(settled));
@@ -540,7 +591,7 @@ pub(super) fn recover_excess(
     lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        if excess(store, &snapshot, &registrations, requesting, kept)?.as_deref()
+        if excess(store, &snapshot, &registrations, requesting, kept, before)?.as_deref()
             != Some(selected.as_ref())
         {
             return Ok(false);
@@ -558,17 +609,18 @@ pub(super) fn recover_excess(
 }
 
 /// What a project's kept kinds were when this thread last found none of
-/// them in excess: each kind's count of the project's actions with its
-/// newest seal, the project's pin ledger and the pin roots recorded. Only
-/// an action of a kept kind published or retired, or a pin bound, released
-/// or retired, can put one in excess, so a reservation that finds the same
-/// reads no pin (#1843). Off Unix nothing is the same, and every
-/// reservation looks.
+/// them in excess: each kind's bound, its count of the project's actions
+/// with its newest seal, the sequence the units considered precede, the
+/// project's pin ledger and the pin roots recorded. Only an action of a
+/// kept kind published or retired, or a pin bound, released or retired, can
+/// put one in excess, so a reservation that finds the same reads no pin
+/// (#1843). Off Unix nothing is the same, and every reservation looks.
 #[derive(PartialEq)]
 struct Settled {
     store: PathBuf,
     project: Digest,
-    kinds: Vec<(Kind, usize, u64)>,
+    kinds: Vec<(Kind, usize, usize, u64)>,
+    before: u64,
     pins: Option<crate::file_digest::Identity>,
     roots: [Option<(i64, i64)>; 4],
 }
@@ -578,11 +630,16 @@ thread_local! {
 }
 
 impl Settled {
-    fn of(store: &Path, project: Digest, kept: &[(Kind, usize)]) -> Result<Self, Error> {
+    fn of(
+        store: &Path,
+        project: Digest,
+        kept: &[(Kind, usize)],
+        before: u64,
+    ) -> Result<Self, Error> {
         let registrations = accounting::registered(store)?;
         let kinds = kept
             .iter()
-            .map(|(kind, _)| {
+            .map(|(kind, keep)| {
                 registrations
                     .iter()
                     .filter(|registered| {
@@ -590,15 +647,19 @@ impl Settled {
                             && registered.allocation().kind == *kind
                             && registered.publisher() == project
                     })
-                    .fold((*kind, 0, 0), |(kind, count, newest), registered| {
-                        (kind, count + 1, newest.max(registered.sequence()))
-                    })
+                    .fold(
+                        (*kind, *keep, 0, 0),
+                        |(kind, keep, count, newest), registered| {
+                            (kind, keep, count + 1, newest.max(registered.sequence()))
+                        },
+                    )
             })
             .collect();
         Ok(Self {
             store: store.to_path_buf(),
             project,
             kinds,
+            before,
             pins: pins::ledger_identity(store, project),
             roots: ["live", "last-good", "prepared", "in-flight"]
                 .map(|role| changed(&store.join("pins").join(role))),
@@ -629,12 +690,19 @@ fn excess(
     registrations: &[Registered],
     requesting: Digest,
     kept: &[(Kind, usize)],
+    before: u64,
 ) -> Result<Option<Box<[Registered]>>, Error> {
     let rooted = rooted(snapshot);
     for (kind, keep) in kept.iter().copied() {
-        if let Some(selected) =
-            kind_excess(store, &rooted, registrations, requesting, kept, kind, keep)?
-        {
+        if let Some(selected) = kind_excess(
+            store,
+            &rooted,
+            registrations,
+            requesting,
+            kept,
+            (kind, keep),
+            before,
+        )? {
             return Ok(Some(selected));
         }
     }
@@ -661,8 +729,8 @@ fn kind_excess(
     registrations: &[Registered],
     requesting: Digest,
     kept: &[(Kind, usize)],
-    kind: Kind,
-    keep: usize,
+    (kind, keep): (Kind, usize),
+    before: u64,
 ) -> Result<Option<Box<[Registered]>>, Error> {
     let mut actions = registrations
         .iter()
@@ -671,6 +739,7 @@ fn kind_excess(
             registered.allocation().class == Class::Action
                 && registered.allocation().kind == kind
                 && registered.publisher() == requesting
+                && registered.sequence() < before
                 && !rooted.contains(&registered.reference())
         })
         .collect::<Vec<_>>();

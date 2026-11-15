@@ -13,11 +13,16 @@
 //! commit and host target, the runtime's manifest with its features and
 //! profile, the opt-level setting, and the hashing seed rawr's build script
 //! reads. A key that misses compiles a new entry, so a runner never links a
-//! copy compiled for another key. Entries go by last use (D608.7). An entry
-//! holds only copies of the libraries a runner links: every entry whose key
-//! agrees but for rawr's sources compiles in one shared cargo build
-//! directory (`build`), so a new build of rawr recompiles only the crates
-//! whose sources changed (#1983).
+//! copy compiled for another key. An entry holds only copies of the
+//! libraries a runner links: every entry whose key agrees but for rawr's
+//! sources compiles in one shared cargo build directory (`build`), so a new
+//! build of rawr recompiles only the crates whose sources changed (#1983).
+//!
+//! An entry records its compiler's lineage (`toolchain`, a digest of its
+//! `rustc -vV`). Compiling a new entry replaces the entries of its lineage:
+//! each one that no build leases and no installed rawr links goes then,
+//! with the build directory only it named (#2046). Entries of other
+//! compilers stay for the projects that pin them.
 //!
 //! A project that can't link the shared copy compiles rawr in its own build
 //! directory, as before, and says why:
@@ -33,7 +38,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
@@ -60,9 +65,9 @@ const DEFAULT_OPT_LEVEL: &str = "3";
 /// In `<target>/rawr`: the runner this project could not link to the
 /// shared runtime, and why.
 const LOCAL: &str = "runtime-local";
-/// How long an entry no installed rawr links stays after its last use: a
-/// rebuild of rawr from unchanged sources asks for it again within it.
-const RECENT: Duration = Duration::from_secs(60 * 60);
+/// In an entry: the digest of the compiler that compiled it, the lineage a
+/// new entry replaces.
+const LINEAGE: &str = "toolchain";
 /// In the runner's directory: the pruned lockfile's digest, then the lock
 /// cargo settled it to.
 const SETTLED: &str = "rawr-settled-lock";
@@ -234,17 +239,11 @@ fn shared(
     let runtimes = runtimes()?;
     let entry = runtimes.join(&key[..16]);
     let (runtime, compiled) = ensure(&entry, &key, &build, toolchain, environment)?;
-    // A new entry is what replaces older ones, so cleanup runs when one is
+    // A new entry is what replaces older ones, so they go when one is
     // compiled, never on a build that reuses one.
     if compiled {
-        let keep = entry.clone();
-        let directory = build.directory().to_path_buf();
-        let _ = std::thread::Builder::new()
-            .name("rawr-runtime-cleanup".into())
-            .spawn(move || {
-                prune(&runtimes, &[keep.as_path()], RECENT);
-                build::prune(&runtimes, &[directory.as_path()]);
-            });
+        replace(&runtimes, &entry, &lineage(toolchain));
+        build::prune(&runtimes, &[build.directory()]);
     }
     Ok((runtime, compiled))
 }
@@ -924,8 +923,6 @@ fn ensure(
     lock.unlock().map_err(io("unlock rawr's runtime", &lease))?;
     lock.lock_shared()
         .map_err(io("lease rawr's runtime", &lease))?;
-    // The last use, which cleanup orders entries by.
-    let _ = File::open(entry).and_then(|directory| directory.set_modified(SystemTime::now()));
     Ok((
         Runtime {
             lib,
@@ -956,6 +953,61 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(text, "{byte:02x}");
         text
     })
+}
+
+/// The lineage `toolchain` compiles: a digest of its `rustc -vV`.
+fn lineage(toolchain: &Toolchain) -> String {
+    hex(&Sha256::digest(toolchain.version.as_bytes()))
+}
+
+/// Best effort: remove the entries `current` replaces, those of `lineage`
+/// that no installed rawr links (the entry's [`users`]). An entry that
+/// records no lineage was compiled before entries recorded one, and goes
+/// too. A leased entry is skipped, and nothing here waits for a lock.
+fn replace(runtimes: &Path, current: &Path, lineage: &str) {
+    let Ok(entries) = fs::read_dir(runtimes) else {
+        return;
+    };
+    let unreached = |path: &Path| {
+        fs::read_to_string(path.join(LINEAGE)).map_or(true, |recorded| recorded == lineage)
+            && !users::Users::of(path).any_installed()
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if name.starts_with(".retired-") {
+            let _ = fs::remove_dir_all(&path);
+            continue;
+        }
+        if name.starts_with('.')
+            || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+            || path == current
+            || !unreached(&path)
+        {
+            continue;
+        }
+        retire(runtimes, &path, &name, unreached);
+    }
+}
+
+/// Remove the entry at `path` if `unreached` still holds once its lock is
+/// taken. It goes by being renamed aside first, so a partial removal is
+/// never taken for an entry and is finished by a later cleanup. A held lock
+/// skips it.
+fn retire(runtimes: &Path, path: &Path, name: &str, unreached: impl Fn(&Path) -> bool) {
+    let Ok(lock) = File::open(path.join(".lock")) else {
+        return;
+    };
+    // A use that finished between the first look and the lock shows now.
+    if lock.try_lock().is_err() || !unreached(path) {
+        return;
+    }
+    let retired = runtimes.join(format!(".retired-{name}-{}", std::process::id()));
+    let renamed = fs::rename(path, &retired).is_ok();
+    drop(lock);
+    if renamed {
+        let _ = fs::remove_dir_all(&retired);
+    }
 }
 
 /// `rawr cache clean`: remove the runtimes no installed rawr links.
@@ -998,19 +1050,7 @@ pub(crate) fn prune(runtimes: &Path, keep: &[&Path], recent: Duration) {
         if !unreached(&path) {
             continue;
         }
-        let Ok(lock) = File::open(path.join(".lock")) else {
-            continue;
-        };
-        // A use that finished between the first look and the lock shows now.
-        if lock.try_lock().is_err() || !unreached(&path) {
-            continue;
-        }
-        let retired = runtimes.join(format!(".retired-{name}-{}", std::process::id()));
-        let renamed = fs::rename(&path, &retired).is_ok();
-        drop(lock);
-        if renamed {
-            let _ = fs::remove_dir_all(&retired);
-        }
+        retire(runtimes, &path, &name, unreached);
     }
 }
 
@@ -1018,7 +1058,6 @@ pub(crate) fn prune(runtimes: &Path, keep: &[&Path], recent: Duration) {
 pub(crate) mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::time::SystemTime;
 
     const LOCK: &str = r#"version = 4
 
@@ -1288,9 +1327,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         assert!(super::opt_level(&environment("fast")).is_err());
     }
 
+    /// The entries under `runtimes`, sorted.
+    fn entries(runtimes: &std::path::Path) -> Vec<String> {
+        let mut left = fs::read_dir(runtimes)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        left.sort();
+        left
+    }
+
+    /// Compiling a new entry replaces the entries of its compiler's lineage
+    /// that no build leases and no installed rawr links, and an entry that
+    /// records no lineage. Another compiler's entries stay, and a build that
+    /// reuses the new entry removes nothing (#2046).
     #[test]
-    fn cleanup_keeps_entries_an_installed_rawr_links_and_removes_the_rest() {
-        let root = scratch("prune");
+    fn a_new_entry_replaces_its_lineage_and_keeps_what_is_held() {
+        let root = scratch("replace");
         let _ = fs::remove_dir_all(&root);
         let runtimes = root.join("runtime");
         let installed = root.join("bin/rawr");
@@ -1299,27 +1352,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         fs::create_dir_all(replaced.parent().unwrap()).unwrap();
         fs::write(&installed, b"installed").unwrap();
         fs::write(&replaced, b"old").unwrap();
-        let now = SystemTime::now();
-        // Each entry's users, and whether it was used within the hour.
-        let entries = [
-            ("current", None, false),
-            ("installed", Some(&installed), false),
-            ("replaced", Some(&replaced), false),
-            ("unrecorded", None, false),
-            ("recent", None, true),
-            ("leased", None, false),
+        let lineage = "1".repeat(64);
+        let other = "2".repeat(64);
+        // Each entry's lineage and users.
+        let fixtures = [
+            ("current", Some(&lineage), None),
+            ("superseded", Some(&lineage), None),
+            ("installed", Some(&lineage), Some(&installed)),
+            ("replaced", Some(&lineage), Some(&replaced)),
+            ("unrecorded", None, None),
+            ("other", Some(&other), None),
+            ("leased", Some(&lineage), None),
         ];
-        for (name, user, recent) in entries {
+        for (name, recorded, user) in fixtures {
             let entry = runtimes.join(name);
             fs::create_dir_all(entry.join("lib")).unwrap();
+            fs::write(entry.join("lib/librawr-0.rlib"), [0; 4096]).unwrap();
             fs::write(entry.join(".lock"), b"").unwrap();
+            if let Some(recorded) = recorded {
+                fs::write(entry.join(super::LINEAGE), recorded).unwrap();
+            }
             if let Some(user) = user {
                 super::users::Users::of(&entry).enroll(user);
             }
-            let used = if recent { now } else { now - 2 * super::RECENT };
-            fs::File::open(&entry)
-                .and_then(|dir| dir.set_modified(used))
-                .unwrap();
         }
         // A reinstall replaces the old executable.
         fs::remove_file(&replaced).unwrap();
@@ -1327,21 +1382,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         let leased = fs::File::open(runtimes.join("leased/.lock")).unwrap();
         leased.lock_shared().unwrap();
         let current = runtimes.join("current");
-        super::prune(&runtimes, &[current.as_path()], super::RECENT);
-        let mut left = fs::read_dir(&runtimes)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect::<Vec<_>>();
-        left.sort();
-        assert_eq!(left, ["current", "installed", "leased", "recent"]);
+        super::replace(&runtimes, &current, &lineage);
+        let kept = ["current", "installed", "leased", "other"];
+        assert_eq!(entries(&runtimes), kept);
+        // A build that reuses the current entry compiles nothing, and an
+        // identical replacement finds nothing more to remove.
+        super::replace(&runtimes, &current, &lineage);
+        assert_eq!(entries(&runtimes), kept);
         drop(leased);
-        // `rawr cache clean` has no recent window and keeps no entry by name.
+        // `rawr cache clean` keeps only what an installed rawr links.
         super::prune(&runtimes, &[], std::time::Duration::ZERO);
-        let left = fs::read_dir(&runtimes)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(left, ["installed"]);
+        assert_eq!(entries(&runtimes), ["installed"]);
         fs::remove_dir_all(root).unwrap();
     }
 }

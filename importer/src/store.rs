@@ -470,6 +470,7 @@ impl Store {
             &self.root,
             self.project,
             &[(kind, keep)],
+            u64::MAX,
             &mut recovery::Budget::new(),
         )? {
             retired += 1;
@@ -486,6 +487,7 @@ impl Store {
             &self.root,
             self.project,
             &eviction::KEPT,
+            u64::MAX,
             &mut recovery::Budget::new(),
         )? {
             retired += 1;
@@ -1204,6 +1206,7 @@ impl Store {
             &self.root,
             self.project,
             &eviction::KEPT,
+            u64::MAX,
             &mut recovery::Budget::new(),
         )? {}
         loop {
@@ -1529,6 +1532,7 @@ impl Store {
                 )?
                 .finish(|| Ok(()), || Ok::<(), std::convert::Infallible>(()))
             })
+            .and_then(|result| self.retire_superseded(proof, result))
         })?;
         match result {
             Ok(((), guards)) => Ok(guards),
@@ -1552,6 +1556,11 @@ impl Store {
             crate::node::read_set::Scope::Complete,
             operation,
         )
+        .and_then(|admitted| {
+            lease::with_project(&self.root, self.project, || {
+                self.retire_superseded(proof, admitted)
+            })
+        })
     }
 
     fn with_retained_pin_roles<T, E, const N: usize>(
@@ -1621,7 +1630,24 @@ impl Store {
                 crate::node::read_set::Scope::Complete,
                 operation,
             )
+            .and_then(|admitted| self.retire_superseded(proof, admitted))
         })
+    }
+
+    /// Once the Live and LastGood roles name `proof`'s generation, retire
+    /// the executions it supersedes: those published before it that no pin
+    /// root or running program holds any more (#1407). A rejected
+    /// admission bound nothing new and retires nothing. Runs under the
+    /// project lease, outside any publication.
+    fn retire_superseded<T, E, const N: usize>(
+        &self,
+        proof: &crate::node::ReadSetProof,
+        admitted: transaction::Admitted<T, E, N>,
+    ) -> Result<transaction::Admitted<T, E, N>, Error> {
+        if admitted.is_ok() {
+            eviction::retire_superseded(&self.root, self.project, proof.entries())?;
+        }
+        Ok(admitted)
     }
 
     fn with_pin_roles<T, E, const N: usize>(

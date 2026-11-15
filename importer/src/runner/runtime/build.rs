@@ -152,6 +152,10 @@ impl Build {
         // the entries from here on keeps it.
         fs::write(entry.join(BASE), &self.key)
             .map_err(io("record the build of rawr's runtime", entry.join(BASE)))?;
+        fs::write(entry.join(super::LINEAGE), super::lineage(toolchain)).map_err(io(
+            "record the compiler of rawr's runtime",
+            entry.join(super::LINEAGE),
+        ))?;
         let _lock = self.lock()?;
         crate::progress::note(
             "runtime-compile",
