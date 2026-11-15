@@ -6,7 +6,7 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use super::config;
 use super::unit;
-use super::{canonical_directory, formatted, read_bounded, Selection};
+use super::{formatted, read_bounded, resolved_directory, Selection};
 use crate::{Error, Result};
 
 /// The `opt-level` of the `rawr` crate in a project's runner. `Some(3)`
@@ -45,7 +45,7 @@ pub(crate) struct Recipe {
 
 impl Seed {
     pub(crate) fn transform(root: &Path) -> Result<Self> {
-        let root = canonical_directory("internal Rawr root", root)?;
+        let root = resolved_directory("internal Rawr root", root)?;
         let manifest = root.join("Cargo.toml");
         // The file read is bounded by the physical tail constant.
         let bytes = read_bounded(

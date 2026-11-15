@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 use super::config::{self, Selected, Source};
-use super::{canonical_file, digest, Digest, Limits, Selection};
+use super::{digest, resolved_file, Digest, Limits, Selection};
 use crate::{Error, Result};
 
 #[cfg(feature = "rustc-driver")]
@@ -2146,7 +2146,7 @@ fn prepare_owned_graph(
                         field: "selected target normal-library unit",
                     });
                 }
-                let target = canonical_file(
+                let target = resolved_file(
                     "Build target source",
                     Path::new(unit.target.src_path.as_str()),
                 )?;
@@ -2909,7 +2909,7 @@ fn parse_package_budgeted(
     ] {
         allocation.retained_string("Cargo metadata retained string bytes", bytes)?;
     }
-    let manifest = canonical_file("Cargo metadata package manifest", Path::new(manifest_value))?;
+    let manifest = resolved_file("Cargo metadata package manifest", Path::new(manifest_value))?;
     let root = manifest
         .parent()
         .ok_or_else(|| {
@@ -3317,7 +3317,7 @@ fn validate_declaration(
                         command: "metadata",
                         field: "path dependency source",
                     })?;
-            let declared = super::canonical_directory("metadata dependency", Path::new(declared))?;
+            let declared = super::resolved_directory("metadata dependency", Path::new(declared))?;
             if &declared != path {
                 return Err(Error::ResolutionDrift {
                     command: "metadata",
