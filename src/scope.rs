@@ -1535,6 +1535,32 @@ pub fn kept_slice<T: 'static>(lent: Lent) -> Result<&'static [T], Error> {
     Ok(unsafe { *place.cast_const().cast::<&'static [T]>() })
 }
 
+/// The pins the innermost region [`open_anchored`] opened on this thread
+/// is anchored on, at `'static`, while that call runs: where a crate call
+/// made outside any region, whose output the arena holds at `'static`,
+/// holds a value it keeps borrowed, as a crate's opaque output keeps a
+/// receiver shared from its slot (#2023). `None` out of any such call, or
+/// for a region of no pins, whose call's output borrows nothing. The pins
+/// outlive the anchored call's result, and are let go only when native
+/// code next takes the value they belong to `&mut`, or drops it: rustc
+/// checked the program against the signature native code called it by,
+/// so what the program makes of a borrow of the value lives no longer
+/// than that call's result, which native code keeps no longer than its
+/// borrow of the value. Its own pins would hold the value for the
+/// runner's life, so the next `&mut` of it would find it still borrowed.
+#[must_use]
+pub fn anchored_pins() -> Option<&'static Pins> {
+    let anchor = anchor()?;
+    let pins = with_ref::<RegionF, _>(anchor, |region| region.pins().map(std::ptr::from_ref))
+        .ok()
+        .flatten()?;
+    // SAFETY: the region is anchored on these pins, which outlive it, and
+    // it is open, as `anchor` names it. The reference outlives neither the
+    // anchored call's result nor the value the pins belong to, on the
+    // terms above, by rustc's check of the program.
+    Some(unsafe { &*pins })
+}
+
 /// [`open`] of a scope frame's region [`Region::anchored`] on pins of the
 /// frame's own (#1335): while `body`, the rest of the frame's scope, runs,
 /// a later `let` of a call whose output borrows a script string it takes
@@ -2777,6 +2803,32 @@ mod tests {
                 });
             });
         }
+    }
+
+    /// The pins an anchored call's region is anchored on are reached while
+    /// the call runs (#2023), so a value a crate call there holds is let
+    /// go with them, and no pins are reached out of any such call or in a
+    /// region of none.
+    #[test]
+    fn an_anchored_call_s_pins_are_reached_while_it_runs() {
+        let value = std::rc::Rc::new(String::from("items"));
+        let mut pins = super::Pins::new();
+        assert!(super::anchored_pins().is_none());
+        let mut anchored = super::Region::anchored(&pins);
+        super::open_anchored(&mut anchored, || {
+            let reached = super::anchored_pins().expect("the anchored call's pins");
+            assert!(std::ptr::eq(reached, &pins));
+            reached.hold(value.clone());
+            let mut unpinned = super::Region::new();
+            super::open_anchored(&mut unpinned, || {
+                assert!(super::anchored_pins().is_none());
+            });
+        });
+        drop(anchored);
+        assert!(super::anchored_pins().is_none());
+        assert_eq!(std::rc::Rc::strong_count(&value), 2);
+        pins.clear();
+        assert_eq!(std::rc::Rc::try_unwrap(value).as_deref(), Ok("items"));
     }
 
     /// A native value a view borrows is held by its `Rc` once however

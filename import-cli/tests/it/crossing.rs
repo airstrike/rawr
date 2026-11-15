@@ -1244,6 +1244,26 @@ fn an_opaque_program_whose_message_is_a_tuple_takes_a_theme() {
     );
 }
 
+/// iced's markdown stream (#2023): the view lends a crate method's slice
+/// of the state's field to a crate call whose opaque widget keeps it
+/// (`ViewedSlice::Held`), with a gallery that lines it, and each later
+/// update grows the field through `&mut` inside `match &mut self.mode`.
+/// The widget is gone before the update runs, so nothing borrows the field
+/// any longer: the shared receiver is held in the view's pins, which the
+/// update lets go, not for the runner's life. The output is `cargo run`'s,
+/// apart from the instants' values.
+#[test]
+fn a_field_a_view_s_widget_kept_a_lent_slice_of_is_borrowed_mutably_by_the_next_update() {
+    let (rawr, cargo) = both_printed("streamed.rs", "Stream,Next,Next,Next,Next,Next,Next");
+    assert_eq!(instants(&rawr), instants(&cargo));
+    assert!(
+        instants(&rawr).ends_with(
+            "6 view pad 0 <x Stream:0> [Next] p o s t lined #p #o #s #t framed\n6 message (Next, Instant { .. })\n7 view pad 0 <Stream:0> [Next] p o s t lined #p #o #s #t framed\n7 message (Next, Instant { .. })\nlast view pad 0 <Stream:0> [Next] p o s t lined #p #o #s #t framed"
+        ),
+        "{rawr}"
+    );
+}
+
 /// iced's clock (#981): native code calls the subscription's closure,
 /// `|_| Message::Tick(Stamp::now())`, and the boot task's function on
 /// another thread, and each reads the crate's clock into the message. The
