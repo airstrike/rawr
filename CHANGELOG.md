@@ -73,6 +73,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A closure can compare parameters whose types its later calls fix, and keyed_column takes (key, element) pairs made inside a view, so iced's todos adds, checks, filters, deletes and saves its tasks. (#2019; part of #249)
 - A program's impl of a crate trait whose `impl Trait` function returns a crate type holding another crate function's opaque output compiles: the runner gives the boxed value, which implements the trait and its supertraits. (#2013; part of #83)
 - A crate call whose result keeps a slice a crate method lent, as `view_with(content.items(), ..)`, borrows it where it is, and a crate value that borrows its inputs can join a value made in a view's region in one call, as `hover(code_block(..), right(..))`. (#2020, #2021; part of #83)
+- A trait method a program implements, whose result borrows a slice iced passes it, can return a crate value that keeps that slice, as markdown's `Viewer::code_block` does with `markdown::code_block(self, settings, lines, ..)`. (#2022; part of #83)
 
 ## 0.3.213 (2026-11-13)
 

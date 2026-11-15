@@ -2021,6 +2021,6 @@
     {"t":"T2019","issue":2019,"title":"T2019: A closure can compare parameters whose types its later calls fix, and keyed_column takes (key…","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b77ee04ef","release":null},
     {"t":"T2020","issue":2020,"title":"T2020: A crate call whose &[T] argument is a slice a crate method lent fails with TypeMismatch when the output keeps the lend","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":"934c8b223","release":null},
     {"t":"T2021","issue":2021,"title":"T2021: An arena-held opaque value that borrows can't join a region value in one call (hover(code_block(..), ..))","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"opaque-values"},"decisions":[],"commit":"934c8b223","release":null},
-    {"t":"T2022","issue":2022,"title":"T2022: A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2022","issue":2022,"title":"T2022: A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":"7a2fa83ae","release":null}
   ]
 }
