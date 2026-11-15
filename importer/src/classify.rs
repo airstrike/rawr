@@ -321,6 +321,12 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// wherever the item names it. What its own function leaves out
     /// (`Shared::left_out`) comes first (`left_out`).
     opaque_excluded: std::cell::RefCell<BTreeMap<api::identity::Definition, Box<[u32]>>>,
+    /// The arguments each opaque type takes for the associated types its
+    /// bounds bind (`OpaqueBound`), where the item being classified first
+    /// converts it, by the type's definition, so the type has as many
+    /// arguments wherever the item names it. What its own function gives
+    /// (`Shared::bound`) comes first (`bound`).
+    opaque_bound: std::cell::RefCell<BTreeMap<api::identity::Definition, OpaqueBound>>,
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
@@ -337,6 +343,35 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a function's output is converted: the associated types each
     /// opaque `impl Trait` type it gives binds, as arguments of that type.
     opaque_associated: std::cell::RefCell<Vec<representability::signature::Opaque>>,
+}
+
+/// Each opaque type's record (`Shared::left_out`, `Shared::bound`) from
+/// `found`, each function that gives opaque types with the records its
+/// classification made, in graph order: of two functions whose outputs
+/// give one opaque type, the first's record is the type's. Then the record
+/// of each opaque type no function's output gives, but whose conversion
+/// one of them meets, in the same order.
+fn settled<T: Clone>(
+    found: &[(&model::Definition, &BTreeMap<api::identity::Definition, T>)],
+) -> BTreeMap<api::identity::Definition, T> {
+    let mut settled = BTreeMap::new();
+    for (definition, records) in found {
+        for opaque in own_opaques(definition) {
+            if let Some(record) = records.get(opaque) {
+                settled
+                    .entry(opaque.clone())
+                    .or_insert_with(|| record.clone());
+            }
+        }
+    }
+    for (_, records) in found {
+        for (opaque, record) in *records {
+            settled
+                .entry(opaque.clone())
+                .or_insert_with(|| record.clone());
+        }
+    }
+    settled
 }
 
 /// What makes a [`Context`] that classifies items of a graph beside others
@@ -407,7 +442,20 @@ struct Shared<'graph> {
     /// (`opaque_output`), so the opaque type has the same arguments
     /// wherever it is named, whatever is classified first (`left_out`).
     left_out: std::sync::OnceLock<BTreeMap<api::identity::Definition, Box<[u32]>>>,
+    /// The arguments each opaque type a function gives takes for the
+    /// associated types its bounds bind, by the opaque type's definition:
+    /// those the function's own output takes where its classification
+    /// converts it. A binding's value converts or not by where the type is
+    /// named, as a borrow inside it is held only in a type argument
+    /// (`held_borrow`), so each other use takes these, the ones the facade
+    /// declares the type with, whatever is classified first (`bound`).
+    bound: std::sync::OnceLock<BTreeMap<api::identity::Definition, OpaqueBound>>,
 }
+
+/// The associated types an opaque type binds that are arguments of it, each
+/// with its argument's position (`signature::Opaque::associated`), in the
+/// order its conversion gives them.
+type OpaqueBound = Box<[(representability::signature::Associated, u32)]>;
 
 /// The concrete types a projection bound `<_ as Trait>::Name` may read,
 /// each with what `Name` is there, as [`associated_at`] reads it from the
@@ -863,6 +911,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             shared,
             opaque_output: std::cell::RefCell::new(None),
             opaque_excluded: std::cell::RefCell::new(BTreeMap::new()),
+            opaque_bound: std::cell::RefCell::new(BTreeMap::new()),
             opaque_self: std::cell::RefCell::new(None),
             opaque_converting: std::cell::RefCell::new(Vec::new()),
             opaque_associated: std::cell::RefCell::new(Vec::new()),
@@ -916,6 +965,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 Ok((
                     plan,
                     std::mem::take(&mut *worker.opaque_excluded.borrow_mut()),
+                    std::mem::take(&mut *worker.opaque_bound.borrow_mut()),
                 ))
             },
         );
@@ -923,34 +973,28 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             self.absorb(worker)?;
         }
         let given = given?;
-        // Taken in graph order: of two functions whose outputs give one
-        // opaque type, the first's positions are the type's. Then those
-        // of each opaque type no function's output gives, but whose
-        // conversion one of them meets, in the same order.
+        // Taken in graph order (`settled`).
         let mut by_index = giving
             .iter()
             .zip(&given)
-            .map(|((index, definition), (_, found))| (*index, *definition, found))
+            .map(|((index, definition), (_, excluded, bound))| {
+                (*index, *definition, excluded, bound)
+            })
             .collect::<Vec<_>>();
         by_index.sort_unstable_by_key(|(index, ..)| *index);
-        let mut left_out = BTreeMap::new();
-        for (_, definition, found) in &by_index {
-            for opaque in own_opaques(definition) {
-                if let Some(positions) = found.get(opaque) {
-                    left_out
-                        .entry(opaque.clone())
-                        .or_insert_with(|| positions.clone());
-                }
-            }
-        }
-        for (_, _, found) in &by_index {
-            for (opaque, positions) in *found {
-                left_out
-                    .entry(opaque.clone())
-                    .or_insert_with(|| positions.clone());
-            }
-        }
-        if self.shared.left_out.set(left_out).is_err() {
+        let left_out = settled(
+            &by_index
+                .iter()
+                .map(|(_, definition, excluded, _)| (*definition, *excluded))
+                .collect::<Vec<_>>(),
+        );
+        let bound = settled(
+            &by_index
+                .iter()
+                .map(|(_, definition, _, bound)| (*definition, *bound))
+                .collect::<Vec<_>>(),
+        );
+        if self.shared.left_out.set(left_out).is_err() || self.shared.bound.set(bound).is_err() {
             return Err(Error::Cardinality);
         }
         let (classified, workers_done) = crate::parallel::try_map_with_on(
@@ -968,7 +1012,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let classified = classified?;
         let mut plans = giving
             .iter()
-            .zip(given.into_iter().map(|(plan, _)| plan))
+            .zip(given.into_iter().map(|(plan, ..)| plan))
             .chain(other.iter().zip(classified))
             .map(|((index, definition), representability)| {
                 (
@@ -993,6 +1037,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         *self.regional.borrow_mut() = Box::default();
         *self.opaque_output.borrow_mut() = None;
         self.opaque_excluded.borrow_mut().clear();
+        self.opaque_bound.borrow_mut().clear();
         *self.opaque_self.borrow_mut() = None;
         self.opaque_converting.borrow_mut().clear();
         self.opaque_associated.borrow_mut().clear();
@@ -1016,6 +1061,18 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .and_then(|defined| defined.get(id))
             .cloned()
             .or_else(|| self.opaque_excluded.borrow().get(id).cloned())
+    }
+
+    /// The arguments the opaque type `id` takes for the associated types
+    /// its bounds bind: those the function that gives it takes, and else
+    /// those the item being classified first took.
+    fn bound(&self, id: &api::identity::Definition) -> Option<OpaqueBound> {
+        self.shared
+            .bound
+            .get()
+            .and_then(|defined| defined.get(id))
+            .cloned()
+            .or_else(|| self.opaque_bound.borrow().get(id).cloned())
     }
 
     fn observe_result<T>(&self, _result: &Result<T, Error>) {}
@@ -11348,17 +11405,29 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // from it, as rustc does. So is each one a bound's
         // supertraits bind, as `impl Straw<(), Progress, Error>`
         // binds `Future::Output` through `Sipper` and `Core`.
+        // Where the type was converted before, it takes the
+        // bindings it took there (`bound`), and only those.
+        let known = self.bound(id);
+        let taken = |identity: [u8; 32], name: &str| {
+            known.as_ref().is_none_or(|known| {
+                known.iter().any(|(associated, _)| {
+                    associated.trait_identity() == identity && associated.name() == name
+                })
+            })
+        };
         let mut associated = Vec::new();
         for (trait_id, item, ty) in self.bound_associated(bounds) {
             let Some(name) = self.definition_name(&item) else {
                 continue;
             };
             let identity = *self.graph.surface_definition(&trait_id).as_bytes();
-            if associated.iter().any(
-                |(known, _): &(representability::signature::Associated, u32)| {
-                    known.trait_identity() == identity && known.name() == name
-                },
-            ) {
+            if !taken(identity, name)
+                || associated.iter().any(
+                    |(known, _): &(representability::signature::Associated, u32)| {
+                        known.trait_identity() == identity && known.name() == name
+                    },
+                )
+            {
                 continue;
             }
             // A value that is a tuple, as `timed(..)`'s `impl
@@ -11406,8 +11475,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // each input one more argument, marked with the output's,
         // so the value fills a callable parameter of that shape
         // as itself (`Definition::callable`).
-        if let Some((inputs, output)) = self.opaque_call(bounds) {
-            let callable = *crate::surface::identity::Definition::callable().as_bytes();
+        let callable = *crate::surface::identity::Definition::callable().as_bytes();
+        if let Some((inputs, output)) = self
+            .opaque_call(bounds)
+            .filter(|_| taken(callable, "Output"))
+        {
             let names = (0..inputs.len())
                 .map(|index| format!("Input{index}"))
                 .chain(["Output".to_owned()]);
@@ -11419,6 +11491,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     position,
                 ));
                 arguments.push(ty);
+            }
+        }
+        // Each use takes the arguments the first took: one whose binding's
+        // value doesn't convert here can't name the type.
+        match known {
+            Some(known) if *known != *associated => {
+                return Err(representability::reject::Kind::OpaqueType.into());
+            }
+            Some(_) => {}
+            None => {
+                self.opaque_bound
+                    .borrow_mut()
+                    .insert(id.clone(), associated.clone().into_boxed_slice());
             }
         }
         let definition = self.graph.surface_definition(id);

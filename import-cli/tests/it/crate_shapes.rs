@@ -273,6 +273,18 @@ fn an_opaque_iterator_of_a_re_exported_type_imports() {
     runs_as_cargo_does("iterated_again", "3\n");
 }
 
+/// A method's opaque `impl Stream<Item = Option<&str>> + '_` whose trait's
+/// `chain` names `Self` inside the type it gives, as polars' `par_iter`
+/// and rayon's `ParallelIterator::chain` do: the binding's value converts
+/// as a type argument there but not as the method's output, and the
+/// member used to write the opaque type with one more argument than the
+/// facade declares, which panicked the import. Each use now takes the
+/// arguments the giving method's output takes.
+#[test]
+fn an_opaque_types_members_write_it_with_its_declared_arguments() {
+    runs_as_cargo_does("streams", "2\n");
+}
+
 /// A crate's trait impl on a type with a const parameter, as palette's
 /// `impl<T> Lookup<u8, T> for ArrayTable<256>` is, leaves the crate
 /// importable: no facade type writes a const argument, so the impl's header
