@@ -170,11 +170,11 @@ impl crate::Engine {
         cells: Option<&super::Cells>,
         kept: Option<&mut Kept>,
     ) -> Result<CompiledImported, super::Error> {
-        let mut step = std::time::Instant::now();
+        let mut step = crate::Instant::now();
         let mut steps = Vec::new();
         let mut took = |name| {
             steps.push((name, step.elapsed()));
-            step = std::time::Instant::now();
+            step = crate::Instant::now();
         };
         snapshot
             .revalidate()
@@ -614,6 +614,8 @@ impl crate::Engine {
             .map_err(Error::from)
             .map_err(super::Error::import)?;
         took("requiring");
+        // The steps are said on the host, where `RAWR_VERBOSE` reaches.
+        #[cfg(not(target_arch = "wasm32"))]
         rawr_import::progress::checked_steps(&steps);
         Ok(CompiledImported { demand })
     }
