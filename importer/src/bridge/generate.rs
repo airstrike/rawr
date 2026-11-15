@@ -17141,23 +17141,28 @@ fn render_scoped_guard(
         return Ok(());
     };
     let target = substituted(signature.output(), signature, substitutions)?;
-    let mut method = format!("receiver.{}", plan.name()).into_bytes();
+    let mut call = plan.name().as_bytes().to_vec();
     render_item_turbofish(
         signature,
         substitutions,
         constants,
         container_parameters,
-        &mut method,
+        &mut call,
     )?;
     let inputs = signature.inputs().len();
-    method.write_all(b"(").map_err(encoding)?;
-    argument_list(inputs, 1, &mut method)?;
-    method.write_all(b")").map_err(encoding)?;
-    let method = String::from_utf8(method).map_err(request::unwritable)?;
+    call.write_all(b"(").map_err(encoding)?;
+    argument_list(inputs, 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    let method = format!("receiver.{call}");
     match guard {
         // A receiver in a region lends no optional shared borrow yet.
         Guard::OptionShared => Ok(()),
+        // The region gives a `&mut` of the receiver, and the call is made on
+        // the receiver itself: on the `&mut`, `deref()` would be the
+        // reference's own `Deref`, which gives the receiver, not its target.
         Guard::Shared => {
+            let method = format!("(*receiver).{call}");
             let copy = copy_macro(&target);
             let mut give = Vec::new();
             render_give(&target, "output", &mut give)?;
