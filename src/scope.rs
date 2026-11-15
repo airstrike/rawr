@@ -1023,6 +1023,25 @@ impl<'r> Region<'r> {
         Ok(slot.0)
     }
 
+    /// `value`, which a runner's arena held at `'static`, at this region's
+    /// `'r`, for a call made in the region that ties a lifetime of the
+    /// value's own type to a value of the region: a method that takes
+    /// another value at its receiver's own lifetime, where the type is
+    /// invariant in it, can't shorten `'static` to `'r` (#2050). `_family`
+    /// names the type at each lifetime, which a runner can't write where
+    /// it holds an opaque type.
+    pub fn adopt<F: Family>(&self, value: F::Of<'static>, _family: PhantomData<F>) -> F::Of<'r> {
+        let value = std::mem::ManuallyDrop::new(value);
+        // SAFETY: the types differ only in their lifetime, which has no
+        // layout, and the value is moved: the original is forgotten. The
+        // arena's `'static` is no borrow of the value's: the arena holds
+        // each value at `'static` whatever it borrows (`into_native`), as a
+        // value made at a lifetime its inputs left free, and from here the
+        // value lives no longer than the region, so it reads what it
+        // borrows for no longer than it could at `'static`.
+        unsafe { std::ptr::read(std::ptr::from_ref::<F::Of<'static>>(&value).cast::<F::Of<'r>>()) }
+    }
+
     /// Move the value `handle` names out of the region as its type at
     /// `'static`, its type erased, for native code that takes it: a native
     /// trait object's `view(&self) -> Element<'_, Message>` gives native

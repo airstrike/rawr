@@ -12968,17 +12968,27 @@ fn opaque_table_source(
                     render_adapter_body(consumer, cohort, profile, facade, &mut region_body)?;
                 }
                 let region_body = String::from_utf8(region_body).map_err(request::unwritable)?;
-                // A region boxes the output of an arena value at `'static`
-                // only where the call needn't shorten a lifetime of the
-                // operand's own type: one the call ties to the region's
-                // value is the arena path's to refuse.
-                if !(boxed && holding && takes_at_own_lifetime(&region_body, position)) {
-                    writeln!(body, "{open}").map_err(request::unwritable)?;
-                    body.write_all(region_body.as_bytes())
-                        .map_err(request::unwritable)?;
-                    body.write_all(close.as_bytes())
-                        .map_err(request::unwritable)?;
-                }
+                // An operand whose type holds the opaque type inside one
+                // with lifetimes of its own, as `Pane<'_, (), _>`, is in
+                // the arena at `'static`, which a call that ties those
+                // lifetimes to the region's value can't shorten where the
+                // type is invariant in them: the region takes it at its own
+                // lifetime (#2050).
+                let region_body = if holding {
+                    let region_body = region_body.replace(
+                        &format!("take_native(arguments, {position})"),
+                        &format!("take_like(arguments, {position}, _w)"),
+                    );
+                    let only = only_opaque_holes(&operand, &key);
+                    shape_witnesses(&region_body, position, only, Reach::Region)
+                } else {
+                    region_body
+                };
+                writeln!(body, "{open}").map_err(request::unwritable)?;
+                body.write_all(region_body.as_bytes())
+                    .map_err(request::unwritable)?;
+                body.write_all(close.as_bytes())
+                    .map_err(request::unwritable)?;
             }
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
@@ -13019,7 +13029,12 @@ fn opaque_table_source(
             );
         }
         let body = if holding {
-            shape_witnesses(&body, position, only_opaque_holes(&operand, &key))
+            shape_witnesses(
+                &body,
+                position,
+                only_opaque_holes(&operand, &key),
+                Reach::Arena,
+            )
         } else {
             body
         };
@@ -13062,6 +13077,18 @@ fn opaque_table_source(
     )))
 }
 
+/// Where a table's call that takes an operand holding the table's opaque
+/// type is made.
+#[derive(Clone, Copy)]
+enum Reach {
+    /// Of the arena's values: the operand is taken at the arena's `'static`.
+    Arena,
+    /// In a region, beside its values: the operand is moved to the region's
+    /// lifetime (`Region::adopt`), which the call may tie the lifetimes of
+    /// its own type to.
+    Region,
+}
+
 /// `body` with each operand at `position` taken at a type that holds the
 /// table's opaque type, as `boxed` takes the `Map<impl Widget, ..>` that
 /// `map` gave, taken at that type: the witness of the opaque type, made
@@ -13070,8 +13097,9 @@ fn opaque_table_source(
 /// is the opaque type, as `Hover<_, _>` of `hover(a, b)` is for two values
 /// of it (#1368). The operand is taken so whether it is the binding's whole
 /// value or, when native code didn't lend a copy of it, the value of its
-/// `lent_copy!` match (#1797).
-fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
+/// `lent_copy!` match (#1797). Where `reach` is a region and the type has
+/// lifetimes of its own, the operand is at the region's lifetime (#2050).
+fn shape_witnesses(body: &str, position: usize, only: bool, reach: Reach) -> String {
     let take = format!("take_like(arguments, {position}, _w)?");
     let mut shaped = String::with_capacity(body.len());
     for line in body.split_inclusive('\n') {
@@ -13093,15 +13121,44 @@ fn shape_witnesses(body: &str, position: usize, only: bool) -> String {
         }
         generic.push_str(&ty[from..]);
         let (holding, lifetimes) = named_lifetimes(&generic);
-        shaped.push_str(&line.replacen(
+        let line = line.replacen(
             &take,
             &format!(
                 "take_like(arguments, {position}, {{ fn shape<{lifetimes}T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?"
             ),
             1,
-        ));
+        );
+        match reach {
+            Reach::Region if !lifetimes.is_empty() => {
+                shaped.push_str(&adopted(&line, ty, &generic));
+            }
+            Reach::Arena | Reach::Region => shaped.push_str(&line),
+        }
     }
     shaped
+}
+
+/// `line`, `let name: Type = taken;` of an operand of `ty`, with what it
+/// takes moved from the arena's `'static` to the region's lifetime: through
+/// the family of `generic`, `ty` with a `T` at each of its opaque types, at
+/// each lifetime, which the witness of the opaque type picks.
+fn adopted(line: &str, ty: &str, generic: &str) -> String {
+    let annotation = format!(": {ty} = ");
+    let Some(start) = line.find(&annotation).map(|at| at + annotation.len()) else {
+        return line.to_owned();
+    };
+    let Some(taken) = line
+        .trim_end()
+        .strip_suffix(';')
+        .and_then(|statement| statement.get(start..))
+    else {
+        return line.to_owned();
+    };
+    let family = inferred_lifetimes(generic, |_| "'x".to_owned());
+    format!(
+        "{}region.adopt({taken}, {{ struct RawrAt<T>(std::marker::PhantomData<T>); impl<T: 'static> __rawr_internal::scope::Family for RawrAt<T> {{ type Of<'x> = {family}; }} fn family<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<RawrAt<T>> {{ std::marker::PhantomData }} family(_w) }});\n",
+        &line[..start]
+    )
 }
 
 /// The type `line` declares for the operand at `position` that `take`
@@ -13124,18 +13181,6 @@ fn taken_type<'l>(line: &'l str, position: usize, take: &str) -> Option<&'l str>
         })
         .map(|(ty, _)| ty)
         .filter(|ty| *ty != "_")
-}
-
-/// Whether `body` takes the arena's operand at `position` at a type that
-/// holds an opaque type inside a type with a lifetime of its own, as
-/// `Pane<'_, (), _>` of a receiver: the arena holds it at `'static`, which
-/// a call that ties that lifetime to a region's value can't shorten where
-/// the type is invariant in it.
-fn takes_at_own_lifetime(body: &str, position: usize) -> bool {
-    let take = format!("take_native(arguments, {position})?");
-    body.lines()
-        .filter_map(|line| taken_type(line, position, &take))
-        .any(|ty| !opaque_holes(ty).is_empty() && !named_lifetimes(ty).1.is_empty())
 }
 
 /// Whether each type `ty` leaves Rust to infer, as `concrete_type` writes
@@ -28426,7 +28471,7 @@ mod tests {
             [34]
         );
         let body = "    let argument_0: Map<_, Box<dyn Fn(String) -> crate::Message>, String> = take_like(arguments, 0, _w)?;\n    let receiver: _ = take_like(arguments, 0, _w)?;\n";
-        let shaped = super::shape_witnesses(body, 0, false);
+        let shaped = super::shape_witnesses(body, 0, false, super::Reach::Arena);
         assert!(
             shaped.contains("= take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(String) -> crate::Message>, String>> { std::marker::PhantomData } shape(_w) })?;"),
             "{shaped}"
@@ -28438,9 +28483,22 @@ mod tests {
         // The take of an operand native code may lend a copy of, as the
         // `Map` that `badge(..).map(..)` gave (#1797).
         let body = "    let argument_0: Map<_, Box<dyn Fn(u8) -> crate::Message>, u8> = match lent_copy!(arguments, 0, Map<_, Box<dyn Fn(u8) -> crate::Message>, u8>) { Some(copy) => copy?, None => take_like(arguments, 0, _w)? };\n";
-        let shaped = super::shape_witnesses(body, 0, false);
+        let shaped = super::shape_witnesses(body, 0, false, super::Reach::Arena);
         assert!(
             shaped.ends_with("None => take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(u8) -> crate::Message>, u8>> { std::marker::PhantomData } shape(_w) })? };\n"),
+            "{shaped}"
+        );
+        // In a region, an operand whose type has lifetimes of its own is
+        // moved to the region's lifetime, which the call may tie them to
+        // (#2050); one whose type has none is taken as the arena's.
+        let body = "    let receiver: Pane<'_, (), _> = take_like(arguments, 0, _w)?;\n    let argument_0: Map<_, u8> = take_like(arguments, 0, _w)?;\n";
+        let shaped = super::shape_witnesses(body, 0, false, super::Reach::Region);
+        assert!(
+            shaped.starts_with("    let receiver: Pane<'_, (), _> = region.adopt(take_like(arguments, 0, { fn shape<'l0, T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Pane<'l0, (), T>> { std::marker::PhantomData } shape(_w) })?, { struct RawrAt<T>(std::marker::PhantomData<T>); impl<T: 'static> __rawr_internal::scope::Family for RawrAt<T> { type Of<'x> = Pane<'x, (), T>; } fn family<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<RawrAt<T>> { std::marker::PhantomData } family(_w) });\n"),
+            "{shaped}"
+        );
+        assert!(
+            shaped.ends_with("    let argument_0: Map<_, u8> = take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, u8>> { std::marker::PhantomData } shape(_w) })?;\n"),
             "{shaped}"
         );
     }
