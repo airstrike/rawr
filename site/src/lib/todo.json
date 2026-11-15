@@ -18,7 +18,11 @@
         {"text":"A project's rawr build keeps only each target's current generation. A new run or test run retires the runner and resolution builds it supersedes, and their parts, so a project's store no longer grows by hundreds of MB per change. Switching between `rawr run` and `rawr test` still reuses both runners.","issues":[1407]},
         {"text":"Compiling rawr's runtime for a new rawr removes the runtime builds it replaces on the same compiler, unless an installed rawr still links them, so the rawr home no longer grows about 1.1 GB per rawr change.","issues":[2046]},
         {"text":"The site is readable by coding agents: every page has a Markdown copy at its address plus `.md` (such as /docs/run.md, /play.md, /todo.md and /changelog.md), /llms.txt is an index of them with the essentials, and /llms-full.txt holds every docs page in one file.","issues":[2072]},
-        {"text":"A crate whose method gives an opaque `impl Trait + '_` with a borrowing associated type, as polars' `par_iter` gives `impl ParallelIterator<Item = Option<&str>> + '_`, imports. Its trait's members, such as `chain`, wrote the type with an argument its declaration didn't have, and the import panicked before the program started.","issues":[2073]}
+        {"text":"A crate whose method gives an opaque `impl Trait + '_` with a borrowing associated type, as polars' `par_iter` gives `impl ParallelIterator<Item = Option<&str>> + '_`, imports. Its trait's members, such as `chain`, wrote the type with an argument its declaration didn't have, and the import panicked before the program started.","issues":[2073]},
+        {"text":"A builder chain whose methods take and return `&mut Self`, as tokio's `runtime::Builder::new_current_thread().enable_time().build()`, runs on a temporary or a local, for crate types without `Clone`.","issues":[2061]},
+        {"text":"`.into()` of a `&[u8]` or `Vec<u8>` fills a crate field of type `Cow<'static, [u8]>`, as `Settings { fonts: vec![FONT.into()], .. }` does, and a program struct can hold a `Cow` field.","issues":[2063]},
+        {"text":"A call that takes a value holding the type a crate function returned around an opaque type, such as a sender of events of `Wrapper<impl Trait>`, builds under `rawr run` and `rawr test`.","issues":[2075],"refs":[2060]},
+        {"text":"A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`).","issues":[2076],"refs":[2064]}
       ]
     },
     "releases": [
@@ -4487,9 +4491,9 @@
     {"issue":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed","category":"No glue (D593)"},
     {"issue":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed","category":"No glue (D593)"},
     {"issue":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"open","category":"No glue (D593)"},
-    {"issue":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"open","category":"Divergences from rustc"},
+    {"issue":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"closed","category":"Divergences from rustc"},
     {"issue":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open","category":"Divergences from rustc"},
-    {"issue":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"open","category":"Divergences from rustc"},
+    {"issue":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"closed","category":"Divergences from rustc"},
     {"issue":2064,"title":"rayon prelude par_iter on a slice is not found (E0599)","state":"open","category":"No glue (D593)"},
     {"issue":2065,"title":"futures StreamExt::next is not taken as a Future: block_on(receiver.next()) fails E0308","state":"open","category":"No glue (D593)"},
     {"issue":2066,"title":"Associated-type projections of an imported trait are unknown member, and << after a generic argument lexes as a shift","state":"open","category":"Divergences from rustc"},
@@ -4499,7 +4503,14 @@
     {"issue":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open","category":"No glue (D593)"},
     {"issue":2071,"title":"The rawr home's formats/<N>/inventories and bindings are pruned only by idle age (5.2 GB and 3.0 GB here)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2072,"title":"The site serves a Markdown copy of every page, a generated llms.txt index and llms-full.txt for agents","state":"open","category":"Health"},
-    {"issue":2073,"title":"A member of an opaque type writes it with more associated-type arguments than the facade declares (import panics)","state":"open","category":"No glue (D593)"}
+    {"issue":2073,"title":"A member of an opaque type writes it with more associated-type arguments than the facade declares (import panics)","state":"open","category":"No glue (D593)"},
+    {"issue":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2075,"title":"A call on a value holding an opaque wrapper type reaches each operand through a function generic over the opaque type","state":"open","category":"No glue (D593)"},
+    {"issue":2076,"title":"A crate trait provided method whose type parameter shares its impl parameter name fails E0403","state":"open","category":"Divergences from rustc"},
+    {"issue":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"open","category":"Divergences from rustc"},
+    {"issue":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"open","category":"No glue (D593)"},
+    {"issue":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"open","category":"Divergences from rustc"},
+    {"issue":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5178,16 +5189,21 @@
             {"number":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed"},
             {"number":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed"},
             {"number":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"open"},
-            {"number":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"open"},
+            {"number":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"closed"},
             {"number":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open"},
-            {"number":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"open"},
+            {"number":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"closed"},
             {"number":2064,"title":"rayon prelude par_iter on a slice is not found (E0599)","state":"open"},
             {"number":2065,"title":"futures StreamExt::next is not taken as a Future: block_on(receiver.next()) fails E0308","state":"open"},
             {"number":2066,"title":"Associated-type projections of an imported trait are unknown member, and << after a generic argument lexes as a shift","state":"open"},
             {"number":2067,"title":"An imported trait path call with Self inferred resolves to an unrelated default; <T as Trait>::f() is unsupported","state":"open"},
             {"number":2068,"title":"macro_rules hygiene renames fields named like a body let; tail temporaries use pre-2024 drop order (E0597)","state":"open"},
             {"number":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed"},
-            {"number":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open"}
+            {"number":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open"},
+            {"number":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open"},
+            {"number":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"open"},
+            {"number":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"open"},
+            {"number":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"open"},
+            {"number":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"open"}
           ],
           "milestone": "0.3"
         },

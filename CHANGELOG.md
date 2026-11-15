@@ -12,6 +12,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - Compiling rawr's runtime for a new rawr removes the runtime builds it replaces on the same compiler, unless an installed rawr still links them, so the rawr home no longer grows about 1.1 GB per rawr change. (#2046)
 - The site is readable by coding agents: every page has a Markdown copy at its address plus `.md` (such as /docs/run.md, /play.md, /todo.md and /changelog.md), /llms.txt is an index of them with the essentials, and /llms-full.txt holds every docs page in one file. (#2072)
 - A crate whose method gives an opaque `impl Trait + '_` with a borrowing associated type, as polars' `par_iter` gives `impl ParallelIterator<Item = Option<&str>> + '_`, imports. Its trait's members, such as `chain`, wrote the type with an argument its declaration didn't have, and the import panicked before the program started. (#2073)
+- A builder chain whose methods take and return `&mut Self`, as tokio's `runtime::Builder::new_current_thread().enable_time().build()`, runs on a temporary or a local, for crate types without `Clone`. (#2061)
+- `.into()` of a `&[u8]` or `Vec<u8>` fills a crate field of type `Cow<'static, [u8]>`, as `Settings { fonts: vec![FONT.into()], .. }` does, and a program struct can hold a `Cow` field. (#2063)
+- A call that takes a value holding the type a crate function returned around an opaque type, such as a sender of events of `Wrapper<impl Trait>`, builds under `rawr run` and `rawr test`. (#2075; part of #2060)
+- A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`). (#2076; part of #2064)
 
 ## 0.3.215 (2026-11-15)
 
