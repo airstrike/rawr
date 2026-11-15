@@ -26,7 +26,8 @@
         {"text":"A crate method that returns a borrow guard such as `Ref` builds and is read through its guard, as `*meter.borrow()` is. Before, only a method returning a plain `&T` built.","issues":[2047]},
         {"text":"`&Some(..)` of a string or number passed as a `&dyn Debug` or `&dyn Display` reaches the crate, as `both(\"count\", &count, &Some(\"two\"))` does.","issues":[2048]},
         {"text":"A boxed region value whose type is invariant in its own lifetime takes another value of its region again, as a pane's `title_bar(container)` does.","issues":[2049]},
-        {"text":"A call made in a view's region that takes a crate value holding an opaque type, such as `hover(scrollable(preview), right(..))`, takes that value at the region's lifetime. iced's markdown example starts again; it panicked with \"a value reached an adapter as a type its signature doesn't take\". A method that ties the value's own lifetime to a region value, as a pane's `title_bar` does, compiles there too.","issues":[2050]}
+        {"text":"A call made in a view's region that takes a crate value holding an opaque type, such as `hover(scrollable(preview), right(..))`, takes that value at the region's lifetime. iced's markdown example starts again; it panicked with \"a value reached an adapter as a type its signature doesn't take\". A method that ties the value's own lifetime to a region value, as a pane's `title_bar` does, compiles there too.","issues":[2050]},
+        {"text":"A Rust dependency or `[patch]` path reached through a symlink, such as a sibling directory that links elsewhere, builds under `rawr run` as it does under `cargo build`. So does a symlinked `Cargo.lock` or a symlinked file inside a dependency.","issues":[2055]}
       ]
     },
     "releases": [
@@ -4466,7 +4467,9 @@
     {"issue":2051,"title":"rawr-import's own integration suite failed 14 of 71 tests on main","state":"closed","category":"Health"},
     {"issue":2052,"title":"Retire the fixed-path runner build: the cache entry, its pins and the no-chain path in Manifest::build","state":"open","category":"Health"},
     {"issue":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open","category":"Health"},
-    {"issue":2054,"title":"Crossing test: an arena-made value holding an opaque type joins a region value through a call that ties their lifetimes","state":"open","category":"No glue (D593)"}
+    {"issue":2054,"title":"Crossing test: an arena-made value holding an opaque type joins a region value through a call that ties their lifetimes","state":"open","category":"No glue (D593)"},
+    {"issue":2055,"title":"A path dependency or patch path reached through a symlink is refused as 'reached through a symlink'","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2056,"title":"A project whose target/ is a symlink is refused as a Rawr-owned cache path","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5931,7 +5934,8 @@
             {"number":2046,"title":"A rawr home keeps every superseded runtime build, about 1.1 GB per rawr change","state":"open"},
             {"number":2051,"title":"rawr-import's own integration suite failed 14 of 71 tests on main","state":"closed"},
             {"number":2052,"title":"Retire the fixed-path runner build: the cache entry, its pins and the no-chain path in Manifest::build","state":"open"},
-            {"number":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open"}
+            {"number":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open"},
+            {"number":2056,"title":"A project whose target/ is a symlink is refused as a Rawr-owned cache path","state":"open"}
           ]
         }
       ]

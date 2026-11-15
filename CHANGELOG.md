@@ -20,6 +20,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `&Some(..)` of a string or number passed as a `&dyn Debug` or `&dyn Display` reaches the crate, as `both("count", &count, &Some("two"))` does. (#2048)
 - A boxed region value whose type is invariant in its own lifetime takes another value of its region again, as a pane's `title_bar(container)` does. (#2049)
 - A call made in a view's region that takes a crate value holding an opaque type, such as `hover(scrollable(preview), right(..))`, takes that value at the region's lifetime. iced's markdown example starts again; it panicked with "a value reached an adapter as a type its signature doesn't take". A method that ties the value's own lifetime to a region value, as a pane's `title_bar` does, compiles there too. (#2050)
+- A Rust dependency or `[patch]` path reached through a symlink, such as a sibling directory that links elsewhere, builds under `rawr run` as it does under `cargo build`. So does a symlinked `Cargo.lock` or a symlinked file inside a dependency. (#2055)
 
 ## 0.3.214 (2026-11-14)
 
