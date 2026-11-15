@@ -65,8 +65,8 @@ fn sim_todos() {
         Ok(frame) => frame,
         Err(error) => panic!("the headless renderer draws the final frame: {error}"),
     };
-    if let Err(error) = frame.matches_hash("parity-snapshots/sim_todos") {
-        panic!("the copy's parity-snapshots directory is writable: {error}");
+    if let Err(error) = frame.matches_hash("target/iced-parity/snapshots/sim_todos") {
+        panic!("the example's target directory is writable: {error}");
     }
     println!("iced-parity sim_todos passed");
 }

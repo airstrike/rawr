@@ -1,44 +1,59 @@
 #!/usr/bin/env node
 // Checks that iced's examples behave the same under `cargo test` and `rawr test`.
 //
-// Usage: node scripts/iced-parity.mjs [example ...]
+// Usage: node scripts/iced-parity.mjs [--jobs N] [--rawr-emulator] [example ...]
+//        node scripts/iced-parity.mjs --strip [example ...]
 //
 // The examples are the standalone crates scripts/iced-examples.sh makes under
-// target/scratch/iced-examples (ICED_PARITY_SRC overrides). For each one this
-// copies the crate to target/iced-parity/<name> (ICED_PARITY_WORK overrides),
-// never touching the original, and appends `#[cfg(test)] mod parity;`, whose
-// file src/parity.rs it writes from scripts/iced-parity:
+// target/scratch/iced-examples (ICED_PARITY_SRC overrides). The check runs in
+// them in place, so cargo's shared target (`_target`, which their
+// `.cargo/config.toml` names) and rawr's project builds under
+// `_target/rawr/projects/` stay warm between runs. It adds to each example:
+//
+// - src/parity.rs, generated from scripts/iced-parity, and one line at the end
+//   of src/main.rs that declares it as `#[cfg(test)] mod parity`;
+// - lines in Cargo.toml ending in `# iced-parity`: iced_test as a
+//   dev-dependency where the example lacks it, and the `iced-parity-emulator`
+//   feature.
+//
+// `--strip` removes all three, and the example's target/iced-parity directory.
+//
+// The parity module holds these tests:
 //
 // - `sim_<name>` replays <name>.ice with iced_test's Simulator: each run of
 //   interactions goes to a simulator of the example's `view`, its messages go
 //   to `update`, and each `expect` looks for its text in a fresh view. Tasks
 //   and subscriptions don't run. It hashes the final frame through
-//   `Snapshot::matches_hash`.
-// - `ice_<name>`, behind the copy's `iced-parity-emulator` feature, replays the
-//   same script through iced_test's Emulator, which runs the whole program
-//   (tasks, subscriptions) from the `iced::application(..)` chain in `main`, as
+//   `Snapshot::matches_hash` into target/iced-parity/snapshots.
+// - `ice_<name>`, behind the `iced-parity-emulator` feature, replays the same
+//   script through iced_test's Emulator, which runs the whole program (tasks,
+//   subscriptions) from the `iced::application(..)` chain in `main`, as
 //   `iced_test::run` does, and hashes its final screenshot.
-// - <name>.rs, when present, is appended to the module: hand-written tests for
-//   what the script can't express, or a `program()` the chain can't give.
+// - <name>.rs, when present, is appended: hand-written tests for what the
+//   script can't express, or a `program()` the chain can't give.
 //
 // Both draw headless with tiny-skia (ICED_TEST_BACKEND), so no window opens and
-// no GPU is used. cargo runs every test twice with the emulator feature; rawr
-// runs them once, and once more without the feature when the emulator half
-// doesn't build. A hash counts only when both cargo runs agree on it, so frames
-// that show the clock or a random seed don't count as mismatches.
+// no GPU is used. cargo runs every test twice with the emulator feature. rawr
+// runs them without it; with `--rawr-emulator` it first tries them with it,
+// and falls back when that half doesn't build. (rawr 0.3.214 can't build the
+// emulator half: its generated adapters name the program type as
+// `iced::Application<_>`. Trying costs about 5 s per warm example, so it is
+// opt-in until that's fixed.) A hash counts only when both
+// cargo runs agree on it, so frames that show the clock or a random seed don't
+// count as mismatches.
 //
-// Every copy shares one target directory, target/iced-parity/_target, for
-// cargo and for rawr's project builds. After each example the script deletes
-// that example's test binaries and rawr project build; when free disk falls
-// under ICED_PARITY_MIN_FREE_GB (default 10) it deletes the shared target.
+// Examples run `--jobs` at a time (default 4); cargo's lock on the shared
+// target serializes their builds, not their tests. The tests run with HOME and
+// the XDG directories under the example's target/iced-parity, so an example
+// that saves state writes there, not to the user's data directory. The run
+// stops before an example when free disk is under ICED_PARITY_MIN_FREE_GB
+// (default 8): it never deletes the shared target's caches.
 //
-// The tests run with HOME and the XDG directories inside the copy, so an
-// example that saves state writes there, not to the user's data directory.
-//
-// Prints one row per example, writes report.json beside the copies, and exits
-// 1 when any example's runners disagree.
+// Prints one row per example with each step's wall time, writes
+// target/iced-parity-report.json, and exits 1 when any example's runners
+// disagree.
 
-import { spawnSync, execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -52,38 +67,59 @@ const checkout = path.resolve(
   "..",
 );
 const source = process.env.ICED_PARITY_SRC ?? path.join(checkout, "target/scratch/iced-examples");
-const work = process.env.ICED_PARITY_WORK ?? path.join(checkout, "target/iced-parity");
-const targetDir = path.join(work, "_target");
-const minFreeGb = Number(process.env.ICED_PARITY_MIN_FREE_GB ?? 10);
+const minFreeGb = Number(process.env.ICED_PARITY_MIN_FREE_GB ?? 8);
 const icedRev = "be88873d38544455e26c7a104eb757da2cbbac6b";
 const feature = "iced-parity-emulator";
+const mark = "# iced-parity";
+const include = '#[cfg(test)] #[path = "parity.rs"] mod parity;';
 const cargoHome = process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo");
 const rustupHome = process.env.RUSTUP_HOME ?? path.join(os.homedir(), ".rustup");
 
-const examples = process.argv.length > 2 ? process.argv.slice(2) : allExamples();
-// Cargo builds for the host named as a target, as rawr builds a project that
-// imports Rust, so the two runners share their dependency units.
-fs.mkdirSync(path.join(work, ".cargo"), { recursive: true });
-fs.writeFileSync(path.join(work, ".cargo/config.toml"), '[build]\ntarget = "host-tuple"\n');
-
-const rows = [];
-let disagreements = 0;
-console.log(row(["example", "cargo", "rawr", "verdict"]));
-console.log(row(["---", "---", "---", "---"]));
-for (const name of examples) {
-  const result = check(name);
-  rows.push(result);
-  if (!result.agrees) {
-    disagreements += 1;
-  }
-  console.log(row([name, result.cargo, result.rawr, result.verdict]));
-  clean(name);
-  fs.writeFileSync(path.join(work, "report.json"), JSON.stringify(rows, null, 2) + "\n");
+const options = { jobs: 4, strip: false, rawrEmulator: false, names: [] };
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i] === "--jobs") options.jobs = Number(argv[++i]);
+  else if (argv[i] === "--strip") options.strip = true;
+  else if (argv[i] === "--rawr-emulator") options.rawrEmulator = true;
+  else options.names.push(argv[i]);
 }
-console.log(
-  `\n${examples.length - disagreements} of ${examples.length} agree; logs in ${work}/<example>/logs`,
+const examples = options.names.length > 0 ? options.names : allExamples();
+
+if (options.strip) {
+  for (const name of examples) strip(name);
+  process.exit(0);
+}
+
+console.log(row(["example", "cargo", "rawr", "verdict", "warm s (cargo, again, rawr, rawr sim)"]));
+console.log(row(["---", "---", "---", "---", "---"]));
+const rows = [];
+let next = 0;
+let stopped = false;
+await Promise.all(Array.from({ length: options.jobs }, worker));
+rows.sort((a, b) => a.name.localeCompare(b.name));
+fs.writeFileSync(
+  path.join(checkout, "target/iced-parity-report.json"),
+  JSON.stringify(rows, null, 2) + "\n",
 );
-process.exit(disagreements > 0 ? 1 : 0);
+const agreeing = rows.filter((result) => result.agrees).length;
+console.log(`\n${agreeing} of ${rows.length} agree; logs in <example>/target/iced-parity/logs`);
+process.exit(agreeing === examples.length ? 0 : 1);
+
+async function worker() {
+  while (next < examples.length && !stopped) {
+    const name = examples[next];
+    next += 1;
+    if (freeGb() < minFreeGb) {
+      console.error(`free disk under ${minFreeGb} GB: stopping before ${name}`);
+      stopped = true;
+      return;
+    }
+    const result = await check(name);
+    rows.push(result);
+    const times = result.seconds.map((s) => (s === null ? "-" : s.toFixed(1))).join(", ");
+    console.log(row([name, result.cargo, result.rawr, result.verdict, times]));
+  }
+}
 
 function allExamples() {
   return fs
@@ -96,24 +132,21 @@ function row(cells) {
   return `| ${cells.join(" | ")} |`;
 }
 
-// Copies the example and writes its parity modules; returns the copy's path.
-function prepare(name) {
-  const dir = path.join(work, name);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.cpSync(path.join(source, name), dir, {
-    recursive: true,
-    filter: (from) => path.basename(from) !== "target",
-  });
+// The example's own output directory, where cargo and rawr also build nothing.
+function scratchDir(dir) {
+  return path.join(dir, "target", "iced-parity");
+}
 
+// Writes the example's parity module, declares it and edits its manifest.
+// Running it again rewrites the module and leaves the rest as it is.
+function install(name) {
+  const dir = path.join(source, name);
   const manifest = path.join(dir, "Cargo.toml");
   fs.writeFileSync(manifest, withParityManifest(fs.readFileSync(manifest, "utf8")));
 
   const iceFile = path.join(scripts, `${name}.ice`);
-  const ice = fs.existsSync(iceFile) ? parseIce(fs.readFileSync(iceFile, "utf8")) : null;
-  if (ice !== null) {
-    fs.mkdirSync(path.join(dir, "parity"));
-    fs.copyFileSync(iceFile, path.join(dir, "parity", `${name}.ice`));
-  }
+  const iceText = fs.existsSync(iceFile) ? fs.readFileSync(iceFile, "utf8") : null;
+  const ice = iceText === null ? null : parseIce(iceText);
   const extraFile = path.join(scripts, `${name}.rs`);
   const extra = fs.existsSync(extraFile) ? fs.readFileSync(extraFile, "utf8") : "";
   const ownProgram = /\bfn program\(\)/.test(extra);
@@ -122,7 +155,11 @@ function prepare(name) {
   const mainText = fs.readFileSync(main, "utf8");
   const expression = programExpression(mainText);
 
-  let parity = "// rawr\n// Generated by scripts/iced-parity.mjs.\nuse crate::*;\n\n";
+  let parity =
+    "// rawr\n" +
+    "// Generated by scripts/iced-parity.mjs; `node scripts/iced-parity.mjs --strip`\n" +
+    "// removes it.\n" +
+    "use super::*;\n\n";
   parity += fs.readFileSync(path.join(scripts, "simulator.rs"), "utf8");
   const parts = expression === null ? null : applicationParts(expression, mainText);
   if (ice !== null && parts !== null) {
@@ -131,13 +168,12 @@ function prepare(name) {
   if (extra !== "") {
     parity += `\n${extra.replace(/^\/\/ rawr\n/, "")}`;
   }
-  fs.writeFileSync(path.join(dir, "src/parity.rs"), parity);
 
-  let emulated = "// rawr\n// Generated by scripts/iced-parity.mjs.\nuse crate::*;\n\n";
+  // The emulator half is an inline module: `rawr test` 0.3.214 ignores
+  // `#[path]` on a module declared outside the crate root.
+  let emulated = `\n#[cfg(feature = "${feature}")]\nmod emulated {\nuse super::*;\n\n`;
   emulated += fs.readFileSync(path.join(scripts, "emulator.rs"), "utf8");
-  if (ownProgram) {
-    emulated += "\nuse crate::parity::program;\n";
-  } else if (expression !== null) {
+  if (!ownProgram && expression !== null) {
     emulated +=
       `\nfn program() -> impl Program<Theme = iced_test::core::Theme> + 'static {\n` +
       `    ${expression}\n}\n`;
@@ -146,38 +182,59 @@ function prepare(name) {
     const test = `ice_${name}`;
     const preset = ice.preset === null ? "" : `preset ${JSON.stringify(ice.preset)}, `;
     emulated +=
+      `\nconst SCRIPT: &str = r#"${iceText}"#;\n` +
       `\n#[test]\nfn ${test}() {\n` +
       `    let app = program();\n` +
-      `    let outcome = replay!(app, ${preset}include_str!("../parity/${name}.ice"));\n` +
+      `    let outcome = replay!(app, ${preset}SCRIPT);\n` +
       `    outcome.record("${test}");\n` +
       `    outcome.assert_passed();\n}\n`;
   }
-  fs.writeFileSync(path.join(dir, "src/parity_emulator.rs"), emulated);
+  parity += `${emulated}}\n`;
+  writeIfChanged(path.join(dir, "src/parity.rs"), parity);
 
-  // Both modules are declared in the crate root. `rawr test` 0.3.214 ignores
-  // `#[path]` on a module declared in src/parity.rs and opens
-  // src/parity/<name>.rs instead.
-  fs.writeFileSync(
-    main,
-    `${mainText.replace(/\n*$/, "\n")}\n#[cfg(test)]\n#[path = "parity.rs"]\nmod parity;\n` +
-      `\n#[cfg(all(test, feature = "${feature}"))]\n#[path = "parity_emulator.rs"]\nmod parity_emulator;\n`,
-  );
+  if (!mainText.split("\n").includes(include)) {
+    fs.writeFileSync(main, `${mainText.replace(/\n*$/, "\n")}${include}\n`);
+  }
   return dir;
 }
 
+// Leaves an unchanged module's mtime alone, so cargo and rawr don't rebuild.
+function writeIfChanged(file, text) {
+  if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== text) {
+    fs.writeFileSync(file, text);
+  }
+}
+
+function strip(name) {
+  const dir = path.join(source, name);
+  const manifest = path.join(dir, "Cargo.toml");
+  const lines = fs.readFileSync(manifest, "utf8").split("\n");
+  fs.writeFileSync(manifest, lines.filter((line) => !line.endsWith(mark)).join("\n"));
+  const main = path.join(dir, "src/main.rs");
+  const mainLines = fs.readFileSync(main, "utf8").split("\n");
+  fs.writeFileSync(main, mainLines.filter((line) => line !== include).join("\n"));
+  fs.rmSync(path.join(dir, "src/parity.rs"), { force: true });
+  fs.rmSync(scratchDir(dir), { recursive: true, force: true });
+  console.log(`stripped ${name}`);
+}
+
 // Adds iced_test as a dev-dependency at the examples' iced revision, and the
-// feature that turns on the emulator tests.
+// feature that turns on the emulator tests. Every added line ends in the mark.
 function withParityManifest(manifest) {
   let text = manifest.replace(/\n*$/, "\n");
   if (!/^iced_test\s*=/m.test(text)) {
-    const line = `iced_test = { git = "https://github.com/iced-rs/iced", rev = "${icedRev}" }`;
+    const line = `iced_test = { git = "https://github.com/iced-rs/iced", rev = "${icedRev}" } ${mark}`;
     text = /^\[dev-dependencies\]$/m.test(text)
       ? text.replace(/^\[dev-dependencies\]$/m, `[dev-dependencies]\n${line}`)
-      : `${text}\n[dev-dependencies]\n${line}\n`;
+      : `${text}[dev-dependencies] ${mark}\n${line}\n`;
   }
-  return /^\[features\]$/m.test(text)
-    ? text.replace(/^\[features\]$/m, `[features]\n${feature} = []`)
-    : `${text}\n[features]\n${feature} = []\n`;
+  if (!new RegExp(`^${feature} =`, "m").test(text)) {
+    const line = `${feature} = [] ${mark}`;
+    text = /^\[features\]$/m.test(text)
+      ? text.replace(/^\[features\]$/m, `[features]\n${line}`)
+      : `${text}[features] ${mark}\n${line}\n`;
+  }
+  return text;
 }
 
 // The header and instructions of an .ice script, as iced_test reads them:
@@ -315,24 +372,24 @@ function simulatorTest(test, ice, parts) {
     `        Ok(frame) => frame,\n` +
     `        Err(error) => panic!("the headless renderer draws the final frame: {error}"),\n` +
     `    };\n` +
-    `    if let Err(error) = frame.matches_hash("parity-snapshots/${test}") {\n` +
-    `        panic!("the copy's parity-snapshots directory is writable: {error}");\n` +
+    `    if let Err(error) = frame.matches_hash("target/iced-parity/snapshots/${test}") {\n` +
+    `        panic!("the example's target directory is writable: {error}");\n` +
     `    }\n` +
     `    println!("iced-parity ${test} passed");\n`;
   return `\n#[test]\nfn ${test}() {\n${body}}\n`;
 }
 
-// The headless renderer the copy's tests draw with: tiny-skia, unless its
+// The headless renderer the example's tests draw with: tiny-skia, unless its
 // extra Rust names another with an `// iced-parity: backend <name>` line, for
 // an example whose widgets draw only with wgpu.
 function backend(dir) {
-  const extra = path.join(dir, "src/parity.rs");
-  const named = /^\/\/ iced-parity: backend (\S+)$/m.exec(fs.readFileSync(extra, "utf8"));
+  const parity = fs.readFileSync(path.join(dir, "src/parity.rs"), "utf8");
+  const named = /^\/\/ iced-parity: backend (\S+)$/m.exec(parity);
   return named === null ? "tiny-skia" : named[1];
 }
 
 function testEnv(dir) {
-  const home = path.join(dir, "home");
+  const home = path.join(scratchDir(dir), "home");
   fs.mkdirSync(home, { recursive: true });
   // ICED_THEME would pick the default theme; the parity module draws a
   // program without one in `Theme::Light`, the default while it is unset.
@@ -341,7 +398,6 @@ function testEnv(dir) {
     ...inherited,
     CARGO_HOME: cargoHome,
     RUSTUP_HOME: rustupHome,
-    CARGO_TARGET_DIR: targetDir,
     HOME: home,
     XDG_DATA_HOME: path.join(home, ".local/share"),
     XDG_CONFIG_HOME: path.join(home, ".config"),
@@ -351,26 +407,33 @@ function testEnv(dir) {
   };
 }
 
-// Runs one runner in the copy and reads each test's outcome from its output.
-function runTests(dir, label, command, args) {
-  const snapshots = path.join(dir, "parity-snapshots");
+function capture(command, args, dir) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd: dir, env: testEnv(dir) });
+    let output = "";
+    child.stdout.on("data", (chunk) => (output += chunk));
+    child.stderr.on("data", (chunk) => (output += chunk));
+    child.on("close", (status) => resolve({ status, output }));
+  });
+}
+
+// Runs one runner in the example and reads each test's outcome from its output.
+async function runTests(dir, label, command, args) {
+  const snapshots = path.join(scratchDir(dir), "snapshots");
   fs.rmSync(snapshots, { recursive: true, force: true });
   // libtest prints a line per test with `--format pretty`, which cargo's `-q`
   // would otherwise make terse; `rawr test` prints those lines and takes no
   // `--format`.
-  const options = command === "cargo" ? ["--format", "pretty", "--nocapture"] : ["--nocapture"];
-  const full = [...args, "--", ...options];
-  const result = spawnSync(command, full, {
-    cwd: dir,
-    env: testEnv(dir),
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024,
-  });
-  const output = `${result.stdout}\n${result.stderr}`;
-  fs.mkdirSync(path.join(dir, "logs"), { recursive: true });
+  const trailing = command === "cargo" ? ["--format", "pretty", "--nocapture"] : ["--nocapture"];
+  const full = [...args, "--", ...trailing];
+  const started = performance.now();
+  const { status, output } = await capture(command, full, dir);
+  const seconds = (performance.now() - started) / 1000;
+  const logs = path.join(scratchDir(dir), "logs");
+  fs.mkdirSync(logs, { recursive: true });
   fs.writeFileSync(
-    path.join(dir, "logs", `${label}.txt`),
-    `$ ${command} ${full.join(" ")}\nexit ${result.status}\n${output}`,
+    path.join(logs, `${label}.txt`),
+    `$ ${command} ${full.join(" ")}\nexit ${status} after ${seconds.toFixed(1)} s\n${output}`,
   );
 
   // With `--nocapture` a test's own line can land between libtest's
@@ -392,19 +455,21 @@ function runTests(dir, label, command, args) {
     }
   }
   const ran = /test result: /.test(output);
-  const error = ran ? null : firstError(output);
-  return { ran, status: result.status, tests, details, error };
+  return { ran, status, tests, details, error: ran ? null : firstError(output), seconds };
 }
 
-// The first error a failed build reports, with its location.
+// The first error a failed build reports, with the file it names.
 function firstError(output) {
   const lines = output.split("\n");
-  const at = lines.findIndex((line) => /^\s*error(\[E\d+\])?:/.test(line) && !/rawr could not build/.test(line));
+  const at = lines.findIndex(
+    (line) => /^\s*error(\[E\d+\])?:/.test(line) && !/rawr could not build/.test(line),
+  );
   if (at < 0) {
-    return `exit with no error line`;
+    return "no error line";
   }
   const where = lines.slice(at + 1, at + 3).find((line) => line.includes("-->"));
-  return `${lines[at].trim()}${where ? ` (${where.trim().replace(/^--> /, "")})` : ""}`;
+  const file = where ? ` (${path.basename(where.trim().replace(/^--> /, ""))})` : "";
+  return `${lines[at].trim()}${file}`;
 }
 
 function describe(run, filter = () => true) {
@@ -421,21 +486,26 @@ function describe(run, filter = () => true) {
   return text;
 }
 
-function check(name) {
-  const dir = prepare(name);
-  const cargo = runTests(dir, "cargo", "cargo", ["test", "-q", "--features", feature]);
-  const again = runTests(dir, "cargo-again", "cargo", ["test", "-q", "--features", feature]);
-  const emulated = runTests(dir, "rawr", "rawr", ["test", "--features", feature]);
-  const rawr = emulated.ran ? emulated : runTests(dir, "rawr-simulator", "rawr", ["test"]);
-  const compared = emulated.ran ? () => true : (test) => !test.startsWith("ice_");
+async function check(name) {
+  const dir = install(name);
+  const cargoArgs = ["test", "-q", "--features", feature];
+  const cargo = await runTests(dir, "cargo", "cargo", cargoArgs);
+  const again = await runTests(dir, "cargo-again", "cargo", cargoArgs);
+  const emulated = options.rawrEmulator
+    ? await runTests(dir, "rawr", "rawr", ["test", "--features", feature])
+    : null;
+  const rawr = emulated?.ran ? emulated : await runTests(dir, "rawr-simulator", "rawr", ["test"]);
+  const compared = emulated?.ran ? () => true : (test) => !test.startsWith("ice_");
+  const seconds = [cargo.seconds, again.seconds, emulated?.seconds ?? null, emulated?.ran ? null : rawr.seconds];
 
-  const differences = [];
   if (!cargo.ran) {
     // The parity module must build under cargo; a failure there is the
     // harness's fault, not a difference between the runners.
-    return { name, cargo: "build fails", rawr: "-", verdict: `HARNESS: ${cargo.error}`, differences };
+    const verdict = `HARNESS: ${cargo.error}`;
+    return { name, cargo: "build fails", rawr: "-", verdict, agrees: false, seconds };
   }
-  if (!emulated.ran) {
+  const differences = [];
+  if (emulated !== null && !emulated.ran) {
     differences.push(`emulator half doesn't build: ${emulated.error}`);
   }
   if (!rawr.ran) {
@@ -460,14 +530,15 @@ function check(name) {
     differences.push(`${test}: cargo \`${detail}\`, rawr \`${rawr.details[test] ?? "nothing"}\``);
   }
 
-  let verdict = differences.length === 0 ? "same" : `MISMATCH: ${differences.join("; ")}`;
   const notes = [];
   if (unstable.length > 0) notes.push(`frame varies between cargo runs: ${unstable.join(", ")}`);
-  const cargoFailed = Object.entries(cargo.tests).filter(([, status]) => status === "FAILED");
-  if (cargoFailed.length > 0) notes.push(`fails under cargo too: ${cargoFailed.map(([t]) => t).join(", ")}`);
-  const rawrText = emulated.ran
-    ? describe(rawr)
-    : `${describe(rawr, compared)} (emulator half: build fails)`;
+  const failing = Object.entries(cargo.tests).filter(([, status]) => status === "FAILED");
+  if (failing.length > 0) notes.push(`fails under cargo too: ${failing.map(([t]) => t).join(", ")}`);
+  const verdict = differences.length === 0 ? "same" : `MISMATCH: ${differences.join("; ")}`;
+  const rawrText =
+    emulated === null || emulated.ran
+      ? describe(rawr, compared)
+      : `${describe(rawr, compared)} (emulator half: build fails)`;
   return {
     name,
     cargo: describe(cargo),
@@ -477,52 +548,11 @@ function check(name) {
     differences,
     cargoDetails: cargo.details,
     rawrDetails: rawr.details,
+    seconds,
   };
 }
 
-// Deletes the build output the example no longer needs.
-function clean(name) {
-  const dir = path.join(work, name);
-  fs.rmSync(path.join(dir, "target"), { recursive: true, force: true });
-  const projects = path.join(targetDir, "rawr", "projects");
-  if (fs.existsSync(projects)) {
-    for (const entry of fs.readdirSync(projects)) {
-      if (entry.startsWith(`${name}-`)) {
-        fs.rmSync(path.join(projects, entry), { recursive: true, force: true });
-      }
-    }
-  }
-  const crate = name.replace(/-/g, "_");
-  for (const profile of profileDirs()) {
-    for (const sub of ["deps", "incremental", ".fingerprint", "build"]) {
-      const at = path.join(profile, sub);
-      if (!fs.existsSync(at)) continue;
-      for (const entry of fs.readdirSync(at)) {
-        if (entry.startsWith(`${crate}-`) || entry.startsWith(`lib${crate}-`)) {
-          fs.rmSync(path.join(at, entry), { recursive: true, force: true });
-        }
-      }
-    }
-  }
-  if (freeGb() < minFreeGb) {
-    console.error(`free disk under ${minFreeGb} GB: deleting ${targetDir}`);
-    fs.rmSync(targetDir, { recursive: true, force: true });
-  }
-}
-
-// Every `debug` profile directory in the shared target, host-named or not.
-function profileDirs() {
-  if (!fs.existsSync(targetDir)) {
-    return [];
-  }
-  const dirs = [path.join(targetDir, "debug")];
-  for (const entry of fs.readdirSync(targetDir)) {
-    dirs.push(path.join(targetDir, entry, "debug"));
-  }
-  return dirs.filter((dir) => fs.existsSync(dir));
-}
-
 function freeGb() {
-  const stats = fs.statfsSync(work);
+  const stats = fs.statfsSync(source);
   return (stats.bavail * stats.bsize) / 1024 ** 3;
 }
