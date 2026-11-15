@@ -190,7 +190,7 @@ fn admission_error_rolls_back_and_success_only_transfers_the_locked_roots() {
     let retained = store.pin_live_last_good(&old).unwrap();
     let before = snapshot(&store);
     let rejected = store
-        .with_live_last_good(&next, || {
+        .with_live_last_good(&next, crate::store::Target::UNNAMED, || {
             publication_is_locked(&store);
             assert_eq!(store.fixture_pin_counts().unwrap(), (4, 4));
             Err::<(), _>("profile rejected")
@@ -203,7 +203,7 @@ fn admission_error_rolls_back_and_success_only_transfers_the_locked_roots() {
     assert_eq!(snapshot(&store), before);
 
     let committed = store
-        .with_live_last_good(&next, || {
+        .with_live_last_good(&next, crate::store::Target::UNNAMED, || {
             publication_is_locked(&store);
             Ok::<_, &'static str>(19)
         })
@@ -251,9 +251,13 @@ fn post_bind_witness_drift_uses_the_same_open_store_and_never_calls_admission() 
         .unwrap();
     let before = snapshot(&store);
     armed.store(true, Ordering::SeqCst);
-    let result = store.with_live_last_good(&next, || -> Result<(), &'static str> {
-        panic!("stale union must reject before admission");
-    });
+    let result = store.with_live_last_good(
+        &next,
+        crate::store::Target::UNNAMED,
+        || -> Result<(), &'static str> {
+            panic!("stale union must reject before admission");
+        },
+    );
     assert!(matches!(
         result,
         Err(Error::StaleReadSet { action }) if action == value.receipt().action()
@@ -272,7 +276,7 @@ fn rollback_error_retains_the_original_admission_failure() {
     let retained = store.pin_live_last_good(&old).unwrap();
     let before = snapshot(&store);
     let result = store
-        .with_live_last_good(&next, || {
+        .with_live_last_good(&next, crate::store::Target::UNNAMED, || {
             FAILURE.with(|failure| failure.set(Some(Stage::Rollback)));
             Err::<(), _>("profile rejected")
         })
@@ -313,9 +317,13 @@ fn discarded_and_unwinding_transactions_release_new_guards_before_restoration() 
     .unwrap();
     assert_eq!(snapshot(&store), before);
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = store.with_live_last_good(&next, || -> Result<(), &'static str> {
-            panic!("injected admission panic");
-        });
+        let _ = store.with_live_last_good(
+            &next,
+            crate::store::Target::UNNAMED,
+            || -> Result<(), &'static str> {
+                panic!("injected admission panic");
+            },
+        );
     }));
     assert!(panicked.is_err());
     assert_eq!(snapshot(&store), before);

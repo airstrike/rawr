@@ -1315,7 +1315,7 @@ pub fn initial(
     profile: &dyn crate::Profile,
 ) -> Result<(Lane, rawr::reload::source::Inputs), diagnostic::Report> {
     let source = fallback(target)?;
-    let mut lane = open_lane(target, lifecycle, None, &source)?;
+    let mut lane = open_lane(target, lifecycle, None, profile, &source)?;
     let Initial {
         built,
         snapshot,
@@ -1364,7 +1364,7 @@ fn initial_watched_program(
     Unchecked,
 > {
     let source = fallback(target)?;
-    let mut lane = open_lane(target, lifecycle, program, &source)?;
+    let mut lane = open_lane(target, lifecycle, program, profile, &source)?;
     let mut initial = prepare_on_lane(
         &mut lane,
         target,
@@ -1480,6 +1480,7 @@ fn open_lane(
     target: &rawr::project::Target,
     lifecycle: rawr_import::process::Lifecycle,
     program: Option<&rawr_import::process::Arguments>,
+    profile: &dyn crate::Profile,
     source: &diagnostic::Source,
 ) -> Result<Lane, diagnostic::Report> {
     let project = project(target).ok_or_else(|| {
@@ -1489,7 +1490,24 @@ fn open_lane(
         )
     })?;
     Lane::for_program(&project, lifecycle, program.cloned())
+        .map(|lane| lane.with_target(build_target(target, profile)))
         .map_err(|error| framework(error, source.clone()))
+}
+
+/// The build target a program's runners are generations of: its path and
+/// how its profile builds it. A run and a test run of one program, or two
+/// of a project's binaries, are different targets.
+fn build_target(
+    target: &rawr::project::Target,
+    profile: &dyn crate::Profile,
+) -> rawr_import::store::Target {
+    let mut name = Vec::from(target.source().path().as_os_str().as_encoded_bytes());
+    name.push(0);
+    name.extend_from_slice(match profile.build() {
+        rawr_cli::base::Build::Program => b"program".as_slice(),
+        rawr_cli::base::Build::Test => b"test".as_slice(),
+    });
+    rawr_import::store::Target::named(&name)
 }
 
 fn prepare_on_lane(

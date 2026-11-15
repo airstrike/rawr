@@ -934,9 +934,14 @@ fn scopes_survive_union_dedup_and_complete_every_admission_boundary() {
             Ok::<(), std::convert::Infallible>(())
         };
         let result = if retained {
-            store.with_live_last_good_retained(&proof, &retention, operation)
+            store.with_live_last_good_retained(
+                &proof,
+                &retention,
+                crate::store::Target::UNNAMED,
+                operation,
+            )
         } else {
-            store.with_live_last_good(&proof, operation)
+            store.with_live_last_good(&proof, crate::store::Target::UNNAMED, operation)
         };
         assert!(matches!(result, Err(Error::StaleReadSet { .. })));
         assert!(!called.get());

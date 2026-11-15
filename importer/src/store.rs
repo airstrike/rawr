@@ -29,6 +29,8 @@ pub use payload::Payload;
 mod pins;
 mod recovery;
 mod session;
+mod targets;
+pub use targets::Target;
 
 #[cfg(any(test, feature = "rustc-driver"))]
 pub(crate) use entry::read_file_budgeted;
@@ -1513,6 +1515,7 @@ impl Store {
     pub(crate) fn bind_live_last_good_held(
         &self,
         proof: &crate::node::ReadSetProof,
+        target: Target,
     ) -> Result<[pins::Guard; 2], Error> {
         let result = lease::with_project(&self.root, self.project, || {
             lease::with_publication(&self.root, |publication| {
@@ -1532,7 +1535,7 @@ impl Store {
                 )?
                 .finish(|| Ok(()), || Ok::<(), std::convert::Infallible>(()))
             })
-            .and_then(|result| self.retire_superseded(proof, result))
+            .and_then(|result| self.retire_superseded(proof, target, result))
         })?;
         match result {
             Ok(((), guards)) => Ok(guards),
@@ -1547,6 +1550,7 @@ impl Store {
         &self,
         proof: &crate::node::ReadSetProof,
         retention: &crate::node::read_set::Retention,
+        target: Target,
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<transaction::Admitted<T, E, 2>, Error> {
         self.with_retained_pin_roles(
@@ -1558,7 +1562,7 @@ impl Store {
         )
         .and_then(|admitted| {
             lease::with_project(&self.root, self.project, || {
-                self.retire_superseded(proof, admitted)
+                self.retire_superseded(proof, target, admitted)
             })
         })
     }
@@ -1607,7 +1611,9 @@ impl Store {
         &self,
         proof: &crate::node::ReadSetProof,
     ) -> Result<(pins::Guard, pins::Guard), Error> {
-        match self.with_live_last_good(proof, || Ok::<(), std::convert::Infallible>(()))? {
+        match self.with_live_last_good(proof, Target::UNNAMED, || {
+            Ok::<(), std::convert::Infallible>(())
+        })? {
             Ok(((), [live, last_good])) => Ok((live, last_good)),
             Err(
                 transaction::Rejected::Operation(never)
@@ -1621,6 +1627,7 @@ impl Store {
     pub(crate) fn with_live_last_good<T, E>(
         &self,
         proof: &crate::node::ReadSetProof,
+        target: Target,
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<transaction::Admitted<T, E, 2>, Error> {
         lease::with_project(&self.root, self.project, || {
@@ -1630,22 +1637,24 @@ impl Store {
                 crate::node::read_set::Scope::Complete,
                 operation,
             )
-            .and_then(|admitted| self.retire_superseded(proof, admitted))
+            .and_then(|admitted| self.retire_superseded(proof, target, admitted))
         })
     }
 
-    /// Once the Live and LastGood roles name `proof`'s generation, retire
-    /// the executions it supersedes: those published before it that no pin
-    /// root or running program holds any more (#1407). A rejected
-    /// admission bound nothing new and retires nothing. Runs under the
-    /// project lease, outside any publication.
+    /// Once the Live and LastGood roles name `proof`'s generation, record
+    /// it as `target`'s and retire the executions it supersedes: those
+    /// published before it that no root, no other target's generation and
+    /// no running program holds any more (#1407). A rejected admission
+    /// bound nothing new and retires nothing. Runs under the project lease,
+    /// outside any publication.
     fn retire_superseded<T, E, const N: usize>(
         &self,
         proof: &crate::node::ReadSetProof,
+        target: Target,
         admitted: transaction::Admitted<T, E, N>,
     ) -> Result<transaction::Admitted<T, E, N>, Error> {
         if admitted.is_ok() {
-            eviction::retire_superseded(&self.root, self.project, proof.entries())?;
+            eviction::retire_superseded(&self.root, self.project, target, proof.entries())?;
         }
         Ok(admitted)
     }

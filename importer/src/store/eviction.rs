@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::accounting::{self, Allocation, Class, Reference, Registered};
-use super::{bundle, entry, index, lease, pins, recovery, session};
+use super::{bundle, entry, index, lease, pins, recovery, session, targets};
 use crate::node::codec::Envelope;
 use crate::node::{ActionKey, Digest, Error, Kind};
 
@@ -388,7 +388,7 @@ fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool,
     let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        unrooted(&snapshot, &registrations)
+        unrooted(store, &snapshot, &registrations)
     })?;
     let Some(selected) = selected else {
         return Ok(false);
@@ -406,7 +406,7 @@ fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool,
     lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        if unrooted(&snapshot, &registrations)?.as_deref() != Some(selected.as_ref()) {
+        if unrooted(store, &snapshot, &registrations)?.as_deref() != Some(selected.as_ref()) {
             return Ok(false);
         }
         accounting::begin_eviction(publication, store, &selected, budget)?;
@@ -443,20 +443,21 @@ const SUPERSEDED: [(Kind, usize); 3] = [
     (Kind::NativeProduct, 0),
 ];
 
-/// Retire what a project's newly bound Live and LastGood generation, the
-/// closure of `bound`, supersedes: each of the project's executions
-/// (resolution, runner, native product) published before the generation's
-/// newest unit that no pin root and no running program holds, with its
-/// bundle, its content, and the older units only a retired runner's
-/// generation reached (`generation`). What stays is what the project's
-/// Live, LastGood, Prepared and InFlight roots reach, what a running
-/// program pins, and what was published after the generation, which a
-/// build still under way may bind next. A generation a program still runs
-/// goes at the first bind after the program lets it go. Another project's
-/// units are never retired here.
+/// Record the closure of `bound` as `target`'s generation, newly bound as
+/// Live and LastGood, and retire what it supersedes: each of the project's
+/// executions (resolution, runner, native product) published before the
+/// generation's newest unit that no root holds, with its bundle, its
+/// content, and the older units only a retired runner's generation reached
+/// (`generation`). What stays is what the project's Live, LastGood,
+/// Prepared and InFlight roots reach, each other target's recorded
+/// generation ([`targets`]), what a running program pins, and what was
+/// published after the generation, which a build still under way may bind
+/// next. A generation a program still runs goes at the first bind after
+/// the program lets it go. Another project's units are never retired here.
 pub(super) fn retire_superseded(
     store: &Path,
     project: Digest,
+    target: targets::Target,
     bound: &[crate::node::read_set::Entry],
 ) -> Result<(), Error> {
     let bound = accounting::references(store, bound)?;
@@ -468,6 +469,7 @@ pub(super) fn retire_superseded(
     else {
         return Ok(());
     };
+    targets::record(store, project, target, &bound, newest)?;
     while recover_excess(
         store,
         project,
@@ -542,6 +544,7 @@ pub(super) fn recover_idle(store: &Path, requesting: Digest) -> Result<usize, Er
         if !released {
             continue;
         }
+        targets::release(store, project);
         while recover_excess(
             store,
             project,
@@ -611,9 +614,9 @@ pub(super) fn recover_excess(
 /// What a project's kept kinds were when this thread last found none of
 /// them in excess: each kind's bound, its count of the project's actions
 /// with its newest seal, the sequence the units considered precede, the
-/// project's pin ledger and the pin roots recorded. Only an action of a
-/// kept kind published or retired, or a pin bound, released or retired, can
-/// put one in excess, so a reservation that finds the same reads no pin
+/// project's pin ledger, its target records and the pin roots recorded.
+/// Only an action of a kept kind published or retired, or a pin or target
+/// record bound, released or retired, can put one in excess, so a reservation that finds the same reads no pin
 /// (#1843). Off Unix nothing is the same, and every reservation looks.
 #[derive(PartialEq)]
 struct Settled {
@@ -622,6 +625,7 @@ struct Settled {
     kinds: Vec<(Kind, usize, usize, u64)>,
     before: u64,
     pins: Option<crate::file_digest::Identity>,
+    targets: Option<(i64, i64)>,
     roots: [Option<(i64, i64)>; 4],
 }
 
@@ -661,6 +665,7 @@ impl Settled {
             kinds,
             before,
             pins: pins::ledger_identity(store, project),
+            targets: changed(&targets::project_directory(store, project)),
             roots: ["live", "last-good", "prepared", "in-flight"]
                 .map(|role| changed(&store.join("pins").join(role))),
         })
@@ -692,7 +697,7 @@ fn excess(
     kept: &[(Kind, usize)],
     before: u64,
 ) -> Result<Option<Box<[Registered]>>, Error> {
-    let rooted = rooted(snapshot);
+    let rooted = rooted(store, snapshot);
     for (kind, keep) in kept.iter().copied() {
         if let Some(selected) = kind_excess(
             store,
@@ -710,9 +715,11 @@ fn excess(
 }
 
 /// Everything a pin holds: a running program's, and each project's roots no
-/// process holds now (its Live, LastGood, Prepared and InFlight runners).
-fn rooted(snapshot: &pins::lock::Snapshot) -> BTreeSet<Reference> {
+/// process holds now (its Live, LastGood, Prepared and InFlight runners and
+/// each target's recorded generation).
+fn rooted(store: &Path, snapshot: &pins::lock::Snapshot) -> BTreeSet<Reference> {
     let mut rooted = BTreeSet::new();
+    rooted.extend(targets::rooted(store));
     rooted.extend(snapshot.protected().iter().copied());
     for root in snapshot.active() {
         rooted.extend(root.references().iter().copied());
@@ -1101,10 +1108,11 @@ fn unreadable_units(
 }
 
 fn unrooted(
+    store: &Path,
     snapshot: &pins::lock::Snapshot,
     registrations: &[Registered],
 ) -> Result<Option<Box<[Registered]>>, Error> {
-    let rooted = rooted(snapshot);
+    let rooted = rooted(store, snapshot);
 
     let mut actions = registrations
         .iter()

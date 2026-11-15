@@ -50,6 +50,11 @@ pub trait Profile {
     fn socket(&self, _project: &Path) -> Option<PathBuf> {
         None
     }
+
+    /// How this profile builds a program, which with the program's path
+    /// names the build target whose current generation the store keeps
+    /// apart from other targets'.
+    fn build(&self) -> rawr_cli::base::Build;
 }
 
 /// What an owner that prepares again on each save keeps from one

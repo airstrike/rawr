@@ -99,6 +99,8 @@ pub struct Owner {
     rawr: PathBuf,
     lifecycle: Lifecycle,
     program: Option<Arguments>,
+    /// The build target each runner this owner starts is a generation of.
+    target: crate::store::Target,
 }
 
 /// What a program `rawr run` runs gets as `cargo run` gives it (D500.1):
@@ -171,6 +173,7 @@ struct Inner<B> {
     /// it: its program ended, whether between exchanges or during one.
     exited: Option<std::process::ExitStatus>,
     lifecycle: Lifecycle,
+    target: crate::store::Target,
     started: bool,
     observed: bool,
     hot_sequence: u64,
@@ -244,6 +247,7 @@ impl Owner {
             project: runtime_root,
             lifecycle,
             program: None,
+            target: crate::store::Target::UNNAMED,
         })
     }
 
@@ -256,6 +260,15 @@ impl Owner {
     #[must_use]
     pub fn with_program(mut self, program: Arguments) -> Self {
         self.program = Some(program);
+        self
+    }
+
+    /// Name the build target the runners this owner starts are
+    /// generations of, so each target keeps its own current generation in
+    /// the store (#1407).
+    #[must_use]
+    pub fn with_target(mut self, target: crate::store::Target) -> Self {
+        self.target = target;
         self
     }
 
@@ -281,11 +294,12 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
     /// Spawn and authenticate one new whole-process epoch.
     #[cfg(unix)]
     pub fn spawn(
-        self,
+        mut self,
         epoch: crate::supervisor::Epoch,
         process: &Owner,
     ) -> Result<Candidate<Spawned, B>, Error> {
         self.revalidate_native()?;
+        self.bind_target(process.target);
         let key = crate::supervisor::GenerationKey::seal(
             self.generated.build_request_key(),
             self.request.snapshot,
@@ -446,6 +460,7 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             reaped: false,
             exited: None,
             lifecycle: process.lifecycle,
+            target: process.target,
             started: false,
             observed: false,
             hot_sequence: 0,
@@ -1035,6 +1050,7 @@ impl<B> Candidate<Admitted, B> {
             payload.extend_from_slice(request.application_semantic());
             let mut manifest = request.generate()?;
             let mut read_set = manifest.replay_hot(inner.manifest())?;
+            read_set.bind_target(inner.target);
             read_set.bind_snapshot(&snapshot)?;
             read_set.pin_prepared()?;
             payload.extend_from_slice(&snapshot.into_inner());

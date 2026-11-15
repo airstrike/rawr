@@ -5573,6 +5573,88 @@ fn a_new_live_generation_retires_the_execution_it_supersedes() {
     fs::remove_dir_all(root).expect("the fixture retires");
 }
 
+/// Each build target keeps its current generation: a run binds, a test run
+/// binds, and the run binds again with neither runner built again. A new
+/// generation of one target retires only that target's superseded one
+/// (#1407).
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn each_build_target_keeps_its_current_generation() {
+    let root = temporary("store-targets");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the store opens");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let publish = |name: &[u8]| {
+        let recipe = context
+            .discover::<BundleValue>(name)
+            .expect("the runner recipe seals");
+        let current = store.clone();
+        let runner = evaluator
+            .discover_bundled(
+                &recipe,
+                move |candidate| candidate.validate_published(&current),
+                large_bundled_fixture,
+            )
+            .expect("the runner publishes");
+        let action = store
+            .root()
+            .join("actions/runner")
+            .join(super::STORAGE_DIRECTORY)
+            .join(runner.receipt().action().directory());
+        (action, runner)
+    };
+    let bind = |runner: &super::Validated<BundleValue>, target| {
+        let proof = evaluator
+            .seal_read_set([runner.receipt().read_set().clone()])
+            .expect("the runner closure seals");
+        match store
+            .with_live_last_good(&proof, target, || Ok::<(), std::convert::Infallible>(()))
+            .expect("the generation binds as Live and LastGood")
+        {
+            Ok(((), guards)) => drop(guards),
+            Err(
+                crate::store::transaction::Rejected::Operation(never)
+                | crate::store::transaction::Rejected::Cleanup { failure: never, .. },
+            ) => match never {},
+        }
+    };
+    let misses = || counts.miss.load(Ordering::Relaxed);
+    let run = crate::store::Target::named(b"program run");
+    let test = crate::store::Target::named(b"program test");
+
+    let (program, runner) = publish(b"store-targets-program");
+    bind(&runner, run);
+    let (tests, runner) = publish(b"store-targets-tests");
+    bind(&runner, test);
+    assert!(program.is_dir(), "the run's generation stays a root");
+    let built = misses();
+    let (again, runner) = publish(b"store-targets-program");
+    assert_eq!(again, program);
+    bind(&runner, run);
+    let (tests_again, _) = publish(b"store-targets-tests");
+    assert_eq!(tests_again, tests);
+    assert_eq!(misses(), built, "neither runner builds again");
+    assert!(tests.is_dir(), "the test run's generation stays a root");
+
+    // An edit to the program retires the run's old generation only.
+    let (edited, runner) = publish(b"store-targets-program-edited");
+    bind(&runner, run);
+    assert!(!program.exists(), "the run's superseded generation goes");
+    assert!(edited.is_dir());
+    assert!(tests.is_dir(), "the test run's generation stays");
+    assert_eq!(
+        crate::store::bundle::count_bundles(store.root()).unwrap(),
+        2
+    );
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
 /// Bindings an older rawr selected: their schema folds in other versions.
 struct OldDerived(Derived);
 

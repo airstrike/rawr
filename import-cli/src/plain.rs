@@ -122,6 +122,10 @@ impl Plain {
 }
 
 impl crate::Profile for Plain {
+    fn build(&self) -> rawr_cli::base::Build {
+        self.build
+    }
+
     fn prepare(
         &self,
         target: &rawr::project::Target,

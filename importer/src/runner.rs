@@ -249,6 +249,13 @@ impl<B> Manifest<Built, B> {
         }
     }
 
+    /// Bind the runner closure to the build target it is a generation of.
+    pub(crate) fn bind_target(&mut self, target: crate::store::Target) {
+        if let Some(read_set) = &mut self.phase.read_set {
+            read_set.bind_target(target);
+        }
+    }
+
     pub(crate) fn pin_live_last_good(&self) -> Result<(), crate::node::Error> {
         match self.phase.read_set.as_ref() {
             Some(read_set) => read_set.pin_live_last_good(),
