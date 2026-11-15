@@ -1297,7 +1297,9 @@ fn main() {
 }
 
 /// A real adapter build reports the selected crate when its nightly API
-/// differs from the API that the project's stable compiler provides.
+/// differs from the API that the project's stable compiler provides. The
+/// program prints the value, which either API's type can, so the project's
+/// `cargo check` passes and only the adapter the nightly's API shaped fails.
 #[test]
 fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     let root = crate::support::fresh("shared-adapter-drift");
@@ -1363,7 +1365,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     .unwrap();
     fs::write(
         project.join("src/main.rs"),
-        "// rawr\nuse adapter_drift_fixture::value;\nfn main() { let result: u32 = value(); println!(\"{result}\"); }\n",
+        "// rawr\nuse adapter_drift_fixture::value;\nfn main() { println!(\"{}\", value()); }\n",
     )
     .unwrap();
     let home = crate::support::scratch().join("rawr-home");
@@ -1382,16 +1384,20 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
     let diagnostic = text(&output.stderr);
     assert!(!output.status.success(), "{}", text(&output.stdout));
     assert!(
-        diagnostic.contains("the API of `adapter_drift_fixture` differs between the extraction nightly and the project's toolchain"),
+        diagnostic.contains("the API of `adapter_drift_fixture` differs between the extraction nightly and the project's build"),
         "{diagnostic}"
     );
-    assert!(diagnostic.contains("mismatched types"), "{diagnostic}");
+    assert!(
+        diagnostic
+            .contains("could not compile `rawr-generated-runner-adapters-adapter_drift_fixture`"),
+        "{diagnostic}"
+    );
     // The first failure may be a stale run in the shared nightly directory:
     // it runs again once, and the same difference after that is drift
     // (D742), reported once.
     assert_eq!(
         diagnostic
-            .matches("differs from this project's build: running it again")
+            .matches("): running it again in rawr's nightly build")
             .count(),
         1,
         "{diagnostic}"
@@ -1502,7 +1508,7 @@ fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_diffe
     };
     let reruns = |output: &Output| {
         text(&output.stderr)
-            .matches("differs from this project's build: running it again")
+            .matches("): running it again in rawr's nightly build")
             .count()
     };
     let first = run(&projects[0], "run", "1");
