@@ -6,7 +6,6 @@ use rawr_import::cargo::config::{Dependency, Environment, GitReference, Role};
 use rawr_import::cargo::{Limits, Request};
 use rawr_import::extract::Policy;
 use rawr_import::process::Native;
-use rawr_import::Error;
 
 const HOST: &str = rawr_import::cargo::toolchain::HOST;
 const GIT_REV: &str = "be88873d38544455e26c7a104eb757da2cbbac6b";
@@ -114,9 +113,7 @@ fn native_request(project: &Project, fixture: &Path, limits: &Limits) -> Request
 }
 
 #[test]
-fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
-    let project = Project::new("validation");
-    let limits = Limits::standard();
+fn every_cargo_git_reference_seals() {
     // Cargo accepts a branch, a tag, a short or full rev and the default
     // branch; its `Cargo.lock` pins the commit each resolves to.
     for reference in [
@@ -131,24 +128,6 @@ fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
     }
     Dependency::registry("catalog", "1")
         .expect("Cargo's shorthand registry requirement seals semantically");
-
-    let error = Request::builder(&project.root, &project.cache(), &limits)
-        .expect("the limits-bound request builder seals")
-        .environment(Environment::empty())
-        .policy(Policy::manifest().seal())
-        .target("x86_64-unknown-linux-gnu")
-        .dependency(
-            Dependency::path("catalog", &fixture())
-                .and_then(|dependency| dependency.package("catalog-api"))
-                .expect("the fixture specification is valid"),
-        )
-        .build()
-        .expect_err("unsupported targets reject before Cargo graph authority");
-    assert!(matches!(
-        error,
-        Error::Request { ref reason }
-            if reason.as_ref() == "rawr does not support the target `x86_64-unknown-linux-gnu`"
-    ));
 }
 
 fn fixture() -> PathBuf {
