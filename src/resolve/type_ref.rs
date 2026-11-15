@@ -1781,6 +1781,21 @@ impl Type {
         })
     }
 
+    /// `T` of the core's future of `T`, which `impl Future<Output = T>` and
+    /// an `async fn`'s output are (D511.3).
+    pub(crate) fn future_output(&self) -> Option<&Type> {
+        let Type::Path(path) = self else {
+            return None;
+        };
+        if path.name.as_str() != CORE_FUTURE || !matches!(path.target, Target::Host { .. }) {
+            return None;
+        }
+        path.arguments.iter().find_map(|argument| match argument {
+            Argument::Type(ty) => Some(ty),
+            Argument::Lifetime(_) => None,
+        })
+    }
+
     /// `T` of `impl Iterator<Item = T>` and `impl IntoIterator<Item = T>`,
     /// and whether it is the latter.
     pub(crate) fn iterator_item(&self) -> Option<(&Type, bool)> {

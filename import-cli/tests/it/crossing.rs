@@ -3449,6 +3449,122 @@ fn a_body_edit_takes_effect_at_the_next_event_with_the_state_kept() {
     assert!(status.success(), "{}", run.seen.join("\n"));
 }
 
+/// The state a native generic `run` holds as `S` takes each save's fields
+/// in place (#2026): a new field, read by the new code at its `Default`, the
+/// fields in another order, and the new field removed again. The count goes
+/// on from where it was in one process, each save says what it kept, and
+/// the last source prints what `cargo run` prints.
+#[test]
+fn the_state_a_native_run_holds_keeps_its_count_as_its_fields_change() {
+    let root = lane(None);
+    let main = root.join("src/main.rs");
+    let mut run = start(
+        &root,
+        &[
+            ("EVENTS_COUNT", PathBuf::from("3000")),
+            ("EVENTS_STOP", root.join("stop")),
+        ],
+    );
+    let pid = run.until(|line| line.starts_with("pid "));
+    run.until(|line| parse(line).is_some_and(|(_, count)| count >= 3));
+
+    let save = |from: &[(&str, &str)]| {
+        let mut text = fs::read_to_string(&main).unwrap();
+        for (from, to) in from {
+            assert!(text.contains(from), "{from}\n{text}");
+            text = text.replace(from, to);
+        }
+        fs::write(&main, text).unwrap();
+    };
+    // Waits for an event that counts by `step`, after the last one seen.
+    let previous = std::cell::Cell::new(None::<i64>);
+    let counted = |run: &mut crate::support::Run, step: i64| {
+        run.until(|line| {
+            let Some((_, count)) = parse(line) else {
+                return false;
+            };
+            let stepped = previous
+                .get()
+                .is_some_and(|previous| count - previous == step);
+            previous.set(Some(count));
+            stepped
+        });
+    };
+
+    // A new field: its first step is 10 from its `Default` of 0.
+    save(&[
+        (
+            "    label: String,\n}",
+            "    label: String,\n    step: i64,\n}",
+        ),
+        (
+            "counter.value += 1;",
+            "counter.value += 10 + counter.step;\n            counter.step += 1;",
+        ),
+    ]);
+    counted(&mut run, 10);
+    // The fields in another order.
+    save(&[
+        (
+            "    value: i64,\n    label: String,\n    step: i64,\n",
+            "    step: i64,\n    label: String,\n    value: i64,\n",
+        ),
+        (
+            "counter.value += 10 + counter.step;\n            counter.step += 1;",
+            "counter.value += 100;",
+        ),
+    ]);
+    counted(&mut run, 100);
+    // The new field removed, and the fixture's own step.
+    save(&[
+        ("    step: i64,\n", ""),
+        ("counter.value += 100;", "counter.value += 1;"),
+    ]);
+    counted(&mut run, 1);
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    let seen = run.seen.join("\n");
+    assert!(status.success(), "{seen}");
+    // The count went up at each event: the state was kept.
+    let counts = run
+        .seen
+        .iter()
+        .filter_map(|line| parse(line))
+        .map(|(_, count)| count)
+        .collect::<Vec<_>>();
+    assert!(counts.windows(2).all(|pair| pair[1] > pair[0]), "{seen}");
+    assert!(!seen.contains("restarting"), "{seen}");
+    assert_eq!(
+        run.seen
+            .iter()
+            .filter(|line| line.starts_with("pid "))
+            .count(),
+        1,
+        "{seen}"
+    );
+    assert!(run.seen.contains(&pid));
+    let kept = run
+        .seen
+        .iter()
+        .filter_map(|line| line.strip_prefix("stderr: rawr: "))
+        .filter(|line| line.ends_with("state kept"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kept,
+        [
+            "`Counter` gained `step` (default); state kept",
+            "`Counter` reordered its fields; state kept",
+            "`Counter` dropped `step`; state kept",
+        ],
+        "{seen}"
+    );
+    assert_eq!(
+        printed_in(&root),
+        format!("title crossing::Counter\n{EVENTS}")
+    );
+}
+
 /// A save that first names a crate's module through a `use` that binds a
 /// function of the same name, as `use iced::widget::button;` binds both
 /// and `.style(button::success)` names the module's item, in a view whose

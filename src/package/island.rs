@@ -467,6 +467,9 @@ enum Pass {
     /// The receiver of a native trait object's stand-in: the handle of the
     /// program value it holds, which the call takes as its receiver (#1264).
     Object,
+    /// `&mut T` of a struct native code holds by its handle (D961): the
+    /// handle, whose program value the call changes in place (#2026).
+    ObjectMut,
     /// An argument-position `impl Trait` of a marked trait, at `path` as
     /// the signature writes it, as `impl IntoView<'a,
     /// Message>`: the impl that applies to the argument's type gives it,
@@ -1411,11 +1414,9 @@ impl<'a> Generator<'a> {
         }
         match self.crosses(file, target, owner) {
             Ok(()) if self.holds(file, target, owner) => Ok(Pass::LendParts { mutable: *mutable }),
-            // Its value is the program's, which a copy back can't replace.
-            Ok(()) if *mutable && self.handled_type(file, target, owner) => Err(format!(
-                "`{}` of a type native code holds by its handle can't cross yet",
-                text.trim()
-            )),
+            // Its value is the program's, which the call changes where the
+            // handle keeps it.
+            Ok(()) if *mutable && self.handled_type(file, target, owner) => Ok(Pass::ObjectMut),
             Ok(()) if *mutable => Ok(Pass::Mutable),
             Ok(()) => Ok(Pass::Borrow),
             // A type the marked crate doesn't declare, as ratatui's `Frame`,
@@ -2876,6 +2877,12 @@ impl<'a> Generator<'a> {
             Pass::LendSlice { element } => lend_slice(name, &element, &island, text),
             Pass::Object => {
                 let _ = writeln!(text, "    __call.object(&{name}.0);");
+            }
+            // A `&mut` ends every borrow of the value, as a `&mut self`
+            // call does (#1305).
+            Pass::ObjectMut => {
+                let _ = writeln!(text, "    {name}.0.release();");
+                let _ = writeln!(text, "    __call.object_mut(&{name}.0);");
             }
         };
         // A result read part by part that borrows a marked input, as
@@ -4875,6 +4882,7 @@ fn give(pass: &Pass, name: &str, call: &str, island: &str, text: &mut String) {
         | Pass::LendSlice { .. }
         | Pass::LendParts { .. }
         | Pass::Object
+        | Pass::ObjectMut
         | Pass::Trait { .. }
         | Pass::Boxed { .. } => {
             unreachable!("only a by-value pass gives its value")
@@ -7537,6 +7545,12 @@ impl<'c> Call<'c> {
         self.values.0.extend_from_slice(&object.0.to_le_bytes());
         self.count += 1;
     }
+    /// A `&mut` argument of a struct native code holds by its handle:
+    /// the handle, whose program value the call changes where it is.
+    pub fn object_mut(&mut self, object: &Object) {
+        self.mutable |= 1 << self.count;
+        self.object(object);
+    }
     /// The call's result is a `&str` that borrows its receiver: a
     /// stand-in's comes back as the program's own text, pinned with the
     /// value ([`Object::pinned`]), and a marked value's as text it
@@ -7868,8 +7882,9 @@ mod tests {
     /// private field of a plain type leaves its shape as it was, though one
     /// of a type it didn't hold needs a native build. With no record, or with a field
     /// native code sees, a derive the handle can't stand for, a marked
-    /// type that holds it, or a function that takes `&mut` of it beside a
-    /// receiver, it keeps its real layout.
+    /// type that holds it, or a function that takes `&mut` of it inside
+    /// another type beside a receiver, it keeps its real layout. A bare
+    /// `&mut` of it crosses as its handle.
     #[test]
     fn a_struct_native_code_holds_but_never_opens_is_the_handle_of_the_program_value() {
         let state = |fields: &str, derives: &str| {
@@ -7908,6 +7923,25 @@ mod tests {
             Some(&opaque),
         );
         assert_eq!(handled.shape.change(&grown.shape), None);
+        // A bare `&mut` of it beside a receiver crosses as its handle, whose
+        // value the call changes in place (#2026).
+        let updated = generate_with(
+            &format!(
+                "{}pub fn update(state: &mut State) {{}}\n",
+                state(fields, "")
+            ),
+            None,
+            Some(&opaque),
+        );
+        assert_eq!(updated.handles, ["physics::State"]);
+        let [(_, text)] = updated.files.as_slice() else {
+            panic!("{:?}", updated.files);
+        };
+        assert!(
+            text.contains("    __a0.0.release();\n    __call.object_mut(&__a0.0);\n"),
+            "{text}"
+        );
+        assert!(!text.contains("*__a0 = __reply.take();"), "{text}");
         // A field of a type it didn't hold, not one of std's plain ones,
         // may change whether it is `Send` or `Sync`, which native code is
         // built against.
@@ -7937,17 +7971,8 @@ mod tests {
             ),
             generate_with(&state(fields, "#[derive(Hash)]\n"), None, Some(&opaque)),
             generate_with(&state(fields, "#[repr(C)]\n"), None, Some(&opaque)),
-            // A `&mut` of it beside a receiver, or inside another type,
-            // crosses as a copy taken back, which can't replace the
-            // program's value.
-            generate_with(
-                &format!(
-                    "{}pub fn update(state: &mut State) {{}}\n",
-                    state(fields, "")
-                ),
-                None,
-                Some(&opaque),
-            ),
+            // A `&mut` of it inside another type crosses as a copy taken
+            // back, which can't replace the program's value.
             generate_with(
                 &format!(
                     "{}impl State {{\n    pub fn swap(&self, other: &mut Vec<Self>) {{}}\n}}\n",

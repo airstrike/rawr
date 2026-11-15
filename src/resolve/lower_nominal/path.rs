@@ -1636,8 +1636,11 @@ impl<'a> Parser<'a> {
             span(owner_span.start(), end),
         );
         let copied = method_copied(&definition, &self.models);
+        let lent = method_lent(&definition);
         let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
+        self.mutable_arguments(&arguments, lent.iter().copied())?;
         self.move_copied_in(&mut arguments, &copied);
+        self.lend_mutable(&mut arguments, &lent)?;
         let source = origin::Fragment::call(
             method_name(&definition),
             arguments

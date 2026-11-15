@@ -22,6 +22,13 @@ pub(super) struct Held {
     located: origin::Fragment,
 }
 
+impl Held {
+    /// The runtime local holding the shared handle of the place's local.
+    pub(super) const fn holder(&self) -> &ImmutableString {
+        &self.holder
+    }
+}
+
 /// A local holding `v.iter_mut()` (`let mut it = v.iter_mut();`). Rawr
 /// has no references at runtime, so the local is the index of the next
 /// element, and each `it.next()` lends `v` at that index as
@@ -1672,19 +1679,15 @@ impl Parser<'_> {
             .iter()
             .find(|held| held.name == *name && held.declaration == declaration)
         {
-            return Ok(held.holder.clone());
+            let holder = held.holder.clone();
+            self.relay(closure, &holder);
+            return Ok(holder);
         }
         let unreached = |construct: &str| Error::UnsupportedNominalSyntax {
             construct: format!("a closure using `{name}`, {construct}: not supported in Rawr yet")
                 .into(),
             source: span,
         };
-        if self.closures[closure..]
-            .iter()
-            .any(|scope| scope.asynchronous)
-        {
-            return Err(unreached("a `&mut` borrow of a place, in an async block"));
-        }
         if matches!(lvalue, Lvalue::Slice(_)) {
             return Err(unreached("a `&mut` borrow of a range of elements"));
         }
@@ -1701,7 +1704,33 @@ impl Parser<'_> {
             holder: holder.clone(),
             located,
         });
+        self.relay(closure, &holder);
         Ok(holder)
+    }
+
+    /// Each closure inside the closure `closure` (by its depth) reaches the
+    /// handle `holder` that closure holds, so it captures it from there.
+    fn relay(&mut self, closure: usize, holder: &ImmutableString) {
+        for scope in &mut self.closures[closure + 1..] {
+            if !scope.relayed.contains(holder) {
+                scope.relayed.push(holder.clone());
+            }
+        }
+    }
+
+    /// What takes each place a closure's body reaches (`held`), where the
+    /// closure is made: `let h_at = path; let h = __rawr_share(h_at);`.
+    pub(super) fn held_setup(held: &[Held]) -> origin::Fragment {
+        let mut setup = origin::Fragment::default();
+        for held in held {
+            let holder = &held.holder;
+            setup.push_text(format!("let {holder}{HELD_STEPS} = "));
+            setup.push(held.located.clone());
+            setup.push_text(format!(
+                "; let {holder} = {KEYWORD_SHARE}({holder}{HELD_STEPS}); "
+            ));
+        }
+        setup
     }
 
     /// The closure `source`, made where each place its body reaches
@@ -1712,14 +1741,7 @@ impl Parser<'_> {
             return source;
         }
         let mut made = origin::Fragment::plain("{ ");
-        for held in held {
-            let holder = &held.holder;
-            made.push_text(format!("let {holder}{HELD_STEPS} = "));
-            made.push(held.located.clone());
-            made.push_text(format!(
-                "; let {holder} = {KEYWORD_SHARE}({holder}{HELD_STEPS}); "
-            ));
-        }
+        made.push(Self::held_setup(held));
         made.push(source);
         made.push_text(" }");
         made

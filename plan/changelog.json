@@ -9,7 +9,9 @@
       {"text":"`rawr-import run` of a project built for a target this machine can't run, such as wasm32, builds its runner and exits 0 without starting it.","issues":[1753]},
       {"text":"The browser universe builds and covers its programs' calls again: one proxy holds a universe runner's script type, and a script impl crosses only with its own program's uses.","issues":[2027],"refs":[1395]},
       {"text":"A Rust dependency that declares several crate types, as a library exposing a C ABI does with lib, cdylib and staticlib, no longer stops `rawr run` with an internal error. The runner also builds for crates whose async methods give futures that borrow their receiver; calling one says it isn't supported yet, instead of the native build failing.","issues":[2029],"refs":[2024,2030]},
-      {"text":"In the playground's browser mode, an edit to a running iced snippet reloads it in place and keeps its state. A compile error shows under the window while the program keeps running, and an edit that can't reload starts it over and says why.","issues":[1455],"refs":[1395]}
+      {"text":"In the playground's browser mode, an edit to a running iced snippet reloads it in place and keeps its state. A compile error shows under the window while the program keeps running, and an edit that can't reload starts it over and says why.","issues":[1455],"refs":[1395]},
+      {"text":"A save that adds, removes or reorders a marked type's private fields keeps the program running: each live value takes the new fields in place, a new field at its type's `Default`, and one line says what changed (\"`App` gained `filter` (default); state kept\"). A native loop that passes its state as `&mut` keeps it too, with no native build.","issues":[2026]},
+      {"text":"An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error.","issues":[176],"refs":[2024]}
     ]
   },
   "releases": [

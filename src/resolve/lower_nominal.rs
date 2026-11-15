@@ -168,6 +168,10 @@ pub(crate) use disk::Disk;
 pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
+use dispatch::{lent_parameters, method_lent};
+/// The generated function that runs a value's `Drop` and its parts'.
+#[cfg(feature = "sync")]
+pub(crate) use drops::GLUE;
 #[cfg(feature = "rust-import")]
 use entry::body_source;
 pub(super) use entry::lower;
@@ -1290,6 +1294,7 @@ impl<'a> Parser<'a> {
             &definition.parameters,
             receiver,
             definition.formatter.as_ref(),
+            definition.body.asynchronous,
         )
         .into_iter()
         .map(|index| definition.parameters[index].name.text.clone())

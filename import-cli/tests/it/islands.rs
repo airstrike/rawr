@@ -1320,12 +1320,13 @@ fn a_marked_type_becomes_a_native_trait_object() {
 
 /// A private marked type whose value the running program holds, inside the
 /// page native code keeps as a `Box<dyn Page>`, though native code never
-/// names it (#1746): a body edit swaps in and the page keeps its count, but
-/// the type's new field, and its removal, restart the program with their
+/// names it (#1746): a body edit swaps in and the page keeps its count, and
+/// so does the type's new field, which the live value takes in place with
+/// its `Default` (#2026). The type's removal restarts the program with its
 /// reason, which says a live value holds it, and the page counts from the
 /// start.
 #[test]
-fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds_it() {
+fn a_held_private_type_s_new_field_keeps_the_state_and_its_removal_restarts() {
     const OBJECTS: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-objects"
@@ -1382,7 +1383,15 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
         "grown",
     );
     let grown = ticks("grown");
-    run.until(|line| grown(line) == Some((1, 1)));
+    let line = run.until(|line| grown(line).is_some());
+    let (tick, count) = grown(&line).unwrap();
+    assert!(tick > 3 && count == tick, "{}", run.seen.join("\n"));
+    assert!(
+        run.seen.iter().any(|line| line
+            == "stderr: rawr: `component::badge::Step` gained `twice` (default); state kept"),
+        "{}",
+        run.seen.join("\n")
+    );
 
     // The step removed: the kept page still holds one.
     save(
@@ -1410,10 +1419,8 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
     assert_eq!(
         restarts,
         [
-            "stderr: rawr: `component::badge::Step` changed its fields, but a live value holds \
-             it; restarting the program",
             "stderr: rawr: `component::badge::Step` was removed, but a live value holds it; \
-             restarting the program",
+          restarting the program"
         ],
         "{seen}"
     );
@@ -1425,11 +1432,11 @@ fn a_held_private_type_s_new_field_or_removal_restarts_saying_a_live_value_holds
 /// (D961): it holds a native field, and its methods take `&mut self`, give
 /// a `&str` of it and a sidebar that borrows it and native code's registry,
 /// and its derived `Debug` prints it, as `cargo run` prints them. A save
-/// that adds a private field changes nothing native code is built against:
-/// the program restarts, as the running screen has the old fields, in a new
-/// process of the running runner with no check, and counts from the start.
+/// that adds a private field changes nothing native code is built against,
+/// and the running screen takes the new field in place with its `Default`
+/// (#2026): the same process counts on.
 #[test]
-fn a_held_struct_native_code_never_opens_restarts_on_a_new_field_without_a_native_build() {
+fn a_held_struct_native_code_never_opens_takes_a_new_field_in_place() {
     const HELD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-held");
     let root = crate::support::fresh("islands-held");
     let stop = root.join("stop");
@@ -1478,24 +1485,22 @@ fn a_held_struct_native_code_never_opens_restarts_on_a_new_field_without_a_nativ
     )
     .unwrap();
     let held = ticks("held");
-    run.until(|line| held(line) == Some((1, 1)));
+    let line = run.until(|line| held(line).is_some());
+    let (tick, count) = held(&line).unwrap();
     fs::write(&stop, "").unwrap();
     let status = run.wait();
     let seen = run.seen.join("\n");
     assert!(status.success(), "{status}\n{seen}");
+    assert!(tick > 3 && count > 1, "{seen}");
     assert!(
-        run.seen.iter().any(|line| line
-            == "stderr: rawr: `home::State` changed its fields, but a live value holds it; \
-                restarting the program"),
+        run.seen
+            .iter()
+            .any(|line| line == "stderr: rawr: `home::State` gained `held` (default); state kept"),
         "{seen}"
     );
+    assert!(!seen.contains("restarting"), "{seen}");
     assert!(!seen.contains("preparing again"), "{seen}");
     let said = |text: &str| run.seen.iter().filter(|line| line.contains(text)).count();
-    assert_eq!(
-        said("rawr-import: a restart respawned its runner with no check"),
-        1,
-        "{seen}"
-    );
     assert_eq!(said("rawr-import: a start ran"), 1, "{seen}");
 }
 
@@ -2225,9 +2230,9 @@ fn a_save_beside_an_item_two_routes_reach_swaps_in_place() {
 /// Saves of a marked file in a running program reach it in turn, a body,
 /// a line above a function, a doc comment, a lint, a blank line and a
 /// signature over more lines among them (#1604, #1646); a held type's new
-/// private field restarts the program with no native build while a live
-/// value has the old fields (D961), a `cfg` swaps in place, and an error
-/// below the moved lines names its own line.
+/// private field builds nothing native (D961) and the live value takes it
+/// in place (#2026), a `cfg` swaps in place, and an error below the moved
+/// lines names its own line.
 #[test]
 fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line() {
     let root = THEME.project();
@@ -2327,22 +2332,18 @@ fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line(
         "            wizard: None,\n            visits: 0,\n",
     );
     // Native code holds `home::State` by its handle (D961), so its new
-    // private field changes nothing native code is built against, but the
-    // program's live screen has the old fields (D937): the program restarts
-    // from the save in a new process of the running runner, with no native
-    // build (D943).
+    // private field changes nothing native code is built against, and the
+    // program's live screen takes it in place (#2026): the save is queued
+    // in the running process.
     let told = run.told(&events, |text| settled(text) > settled(&before));
     let after = &told[before.len()..];
     assert!(
-        after.contains(
-            "{\"event\":\"restarting\",\"reason\":\"`home::State` changed its fields, but a \
-             live value holds it\"}"
-        ) && !after.contains("\"event\":\"preparing\""),
+        after.contains("\"event\":\"queued\"")
+            && !after.contains("\"event\":\"restarting\"")
+            && !after.contains("\"event\":\"preparing\""),
         "{told}\n{}",
         run.seen.join("\n")
     );
-    // The new program's start.
-    run.until(|line| line.starts_with("default Selected("));
     save(
         "#[allow(dead_code)]\npub fn default<",
         "#[cfg(test)]\npub fn default<",
@@ -2390,6 +2391,11 @@ fn saves_of_a_marked_file_reach_the_running_program_and_an_error_names_its_line(
     run.child.kill().unwrap();
     run.wait();
     let seen = run.seen.join("\n");
+    assert!(
+        run.seen.iter().any(|line| line
+            == "stderr: rawr: `home::State` gained `visits` (default); state kept"),
+        "{seen}"
+    );
     // The field builds nothing native: native code holds `State` by its
     // handle. (A start that replayed shared bindings has no record of what
     // native code uses, so the `cfg` that takes `widget::sidebar::default`
@@ -2672,13 +2678,13 @@ fn a_new_function_or_struct_native_code_names_starts_the_program_with_it() {
 }
 
 /// A private field added to a marked pub struct native code holds, as
-/// inboard's `State`, prepares again and starts the program again (#1776,
-/// #1786). So does another private field after a save that built, each
-/// save that puts back an earlier save's sources or the launch's (#1794),
-/// and the field made public, which changes the project crate's API: each
-/// new program runs, and the last ends cleanly.
+/// inboard's `State`, builds nothing native, and the live screen takes it in
+/// place (#2026). So does another private field, each save that puts back an
+/// earlier save's sources or the launch's (#1794), and each takes its fields
+/// in place. The field made public changes the project crate's API: it
+/// prepares again and starts the program again, which ends cleanly.
 #[test]
-fn a_held_pub_type_s_private_fields_their_undos_and_a_public_one_restart_the_program() {
+fn a_held_pub_type_s_private_fields_and_their_undos_swap_and_a_public_one_restarts() {
     let root = THEME.project();
     let events = root.join("events.jsonl");
     let stop = root.join("stop");
@@ -2704,9 +2710,9 @@ fn a_held_pub_type_s_private_fields_their_undos_and_a_public_one_restart_the_pro
     assert_ne!(edited, text);
     fs::write(&home, &edited).unwrap();
     run.told(&events, |text| {
-        text.matches("{\"event\":\"running\"}").count() >= 2
+        text.matches("{\"event\":\"swapped\"}").count() >= 1
     });
-    // Another private field, after a save that built: inboard's case.
+    // Another private field: inboard's case.
     edit(
         &home,
         "    seen: u8,\n}",
@@ -2718,7 +2724,7 @@ fn a_held_pub_type_s_private_fields_their_undos_and_a_public_one_restart_the_pro
         "            seen: 0,\n            seen_again: 0,\n        }",
     );
     run.told(&events, |text| {
-        text.matches("{\"event\":\"running\"}").count() >= 3
+        text.matches("{\"event\":\"swapped\"}").count() >= 2
     });
     // Undo the second field: the first save's sources, which that save
     // sealed a harness for. Then undo the first: the launch's.
@@ -2733,20 +2739,20 @@ fn a_held_pub_type_s_private_fields_their_undos_and_a_public_one_restart_the_pro
         "            seen: 0,\n        }",
     );
     run.told(&events, |text| {
-        text.matches("{\"event\":\"running\"}").count() >= 4
+        text.matches("{\"event\":\"swapped\"}").count() >= 3
     });
     fs::write(&home, &text).unwrap();
     run.told(&events, |text| {
-        text.matches("{\"event\":\"running\"}").count() >= 5
+        text.matches("{\"event\":\"swapped\"}").count() >= 4
     });
     // The first save's sources again.
     fs::write(&home, &edited).unwrap();
     run.told(&events, |text| {
-        text.matches("{\"event\":\"running\"}").count() >= 6
+        text.matches("{\"event\":\"swapped\"}").count() >= 5
     });
     edit(&home, "    seen: u8,\n", "    pub seen: u8,\n");
     run.told(&events, |text| {
-        text.matches("{\"event\":\"running\"}").count() >= 7
+        text.matches("{\"event\":\"running\"}").count() >= 2
     });
     fs::write(&stop, "").unwrap();
     let told = run.told(&events, |text| text.contains("{\"event\":\"ended\""));

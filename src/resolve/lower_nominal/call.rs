@@ -945,14 +945,6 @@ impl<'a> Parser<'a> {
         let Some(index) = self.lifted.iter().position(|closure| closure.key == *key) else {
             return Ok(());
         };
-        if self.lifted[index].held {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "a closure using a `&mut` borrow of a place declared outside it, \
-                            passed to a native function: not supported in Rawr yet"
-                    .into(),
-                source: self.lifted[index].span,
-            });
-        }
         // The closure's type keeps its parameters' borrows, which the
         // runtime passes by value. Its signature names a shared borrow of a
         // script value only, as `|event: &Event|` makes a crate's `impl
@@ -1016,8 +1008,18 @@ impl<'a> Parser<'a> {
             });
         }
         let captures = closure.captures.clone();
+        let held = closure.held.clone();
         self.lifted[index].value = Some(item.clone());
         let mut symbolic = self.symbolic_expr(item, inputs, *output, value.span, captures);
+        // The places its body reaches are taken first, and their handles
+        // are among its captures (`places::held`).
+        if !held.as_str().is_empty() {
+            let mut taken = origin::Fragment::plain("{ ");
+            taken.push(held);
+            taken.push(symbolic.source);
+            taken.push_text(" }");
+            symbolic.source = taken;
+        }
         // A block's tail closure captures what the block's statements bind,
         // as `{ let todo = Rc::clone(&todo); move |key| .. }`: they run
         // first, in the block (#1450).
@@ -1082,7 +1084,7 @@ impl<'a> Parser<'a> {
             body,
             span: value.span,
             header: value.span,
-            held: false,
+            held: origin::Fragment::default(),
         });
         value.prelude = origin::Fragment::default();
         value.source = origin::Fragment::plain("()");
@@ -1334,11 +1336,21 @@ impl<'a> Parser<'a> {
                 &function.definition.parameters,
                 receiver,
                 function.definition.formatter.as_ref(),
+                function.definition.body.asynchronous,
+            )
+        });
+        let lent = function.as_ref().map_or_else(Vec::new, |function| {
+            lent_parameters(
+                &function.definition.parameters,
+                receiver,
+                function.definition.formatter.as_ref(),
+                function.definition.body.asynchronous,
             )
         });
         let borrow = std::mem::replace(
             &mut self.mutable_borrow,
-            (receiver.is_some() || !copied.is_empty()).then(|| self.expression_stack.len() + 1),
+            (receiver.is_some() || !copied.is_empty() || !lent.is_empty())
+                .then(|| self.expression_stack.len() + 1),
         );
         // A generic function's parameter types, its parameters fresh, for
         // what each argument read tells the ones after it.
@@ -1453,7 +1465,10 @@ impl<'a> Parser<'a> {
             }
             let places =
                 self.mutable_arguments(&arguments, receiver.into_iter().chain(copied.clone()))?;
+            // The lent places are the caller's own: nothing is copied back.
+            self.mutable_arguments(&arguments, lent.iter().copied())?;
             self.move_copied_in(&mut arguments, &copied);
+            self.lend_mutable(&mut arguments, &lent)?;
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver
                 && index < arguments.len()
