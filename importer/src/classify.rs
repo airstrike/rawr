@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 232;
+const CLASSIFIER_VERSION: u32 = 233;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2633,6 +2633,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 parameter: index,
                 hops,
                 synthetic: signature::projection_output(index, ordinal),
+                borrowed: false,
             });
         }
         projected
@@ -2643,16 +2644,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// Widget for Image<Handle>` has `Renderer: image::Renderer<Handle =
     /// Handle>`: the projection of `R` whose synthetic is `H` itself, so the
     /// type that fills `R`, at the call or by a later use, fixes `H`, as
-    /// rustc's projection does (#1632).
+    /// rustc's projection does (#1632). A shared borrow of `H`, as
+    /// `I: Spread<Item = &'a T>` has, ties `H` to what the associated type
+    /// borrows, as rustc unifies the two references.
     fn equated_projections(&self, generics: &model::Generics) -> Vec<Projected> {
         let mut equated = Vec::new();
         for predicate in generics.predicates() {
-            let model::Predicate::ProjectionEquality {
-                projection,
-                ty: model::Type::Parameter { index: target, .. },
-            } = predicate
-            else {
+            let model::Predicate::ProjectionEquality { projection, ty } = predicate else {
                 continue;
+            };
+            let (target, borrowed) = match ty {
+                model::Type::Parameter { index, .. } => (index, false),
+                model::Type::Reference {
+                    mutability: model::Mutability::Shared,
+                    ty,
+                    ..
+                } if let model::Type::Parameter { index, .. } = ty.as_ref() => (index, true),
+                _ => continue,
             };
             let Some((index, chain)) = projection_chain(projection) else {
                 continue;
@@ -2689,9 +2697,73 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     name: name.to_owned(),
                 }]),
                 synthetic: *target,
+                borrowed,
             });
         }
         equated
+    }
+
+    /// For each parameter a value holds as its callable, as `F` of a
+    /// receiver's `Map<I, F>`, whose output a where-clause equates to
+    /// another parameter, as `F: Fn(I::Item) -> R` does: the relation that
+    /// reads that parameter from the closure the value holds, as rustc
+    /// reads `R` from `F`. A callable parameter the call takes keeps its
+    /// own `Fn` bound, which makes its closure.
+    fn held_callable_outputs(
+        &self,
+        generics: &model::Generics,
+    ) -> Vec<representability::signature::Relation> {
+        use representability::convert::Type;
+        use representability::signature::{Case, Relation, IMPL_PARAMETER};
+        let callable = |index: u32| {
+            generics.predicates().any(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound: model::Bound::Trait { trait_id, .. },
+                } if *bounded == index
+                    && matches!(self.definition_name(trait_id), Some("Fn" | "FnMut" | "FnOnce")))
+            })
+        };
+        generics
+            .predicates()
+            .filter_map(|predicate| {
+                let model::Predicate::ProjectionEquality {
+                    projection,
+                    ty: model::Type::Parameter { index: output, .. },
+                } = predicate
+                else {
+                    return None;
+                };
+                let model::Type::Projection { arguments, .. } = projection else {
+                    return None;
+                };
+                let [model::Argument::Type(model::Type::Parameter { index, .. }), model::Argument::Type(model::Type::Tuple(inputs))] =
+                    arguments.as_ref()
+                else {
+                    return None;
+                };
+                if !callable_projection(projection, *index, |trait_id| {
+                    self.definition_name(trait_id)
+                }) || callable(*index)
+                {
+                    return None;
+                }
+                let count = u32::try_from(inputs.len()).ok()?;
+                let returned = Type::Parameter(IMPL_PARAMETER | count);
+                let this = Type::Nominal {
+                    definition: crate::surface::identity::Definition::callable(),
+                    arguments: (0..count)
+                        .map(|input| Type::Parameter(IMPL_PARAMETER | input))
+                        .chain([returned.clone()])
+                        .collect(),
+                };
+                Some(Relation::new(
+                    *index,
+                    Box::new([Type::Parameter(*output)]),
+                    Box::new([Case::new(this, Box::new([returned]))]),
+                ))
+            })
+            .collect()
     }
 
     /// `generics` with each projection of `projected` its bounds name
@@ -2846,14 +2918,26 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 // A projection of a projection reads each further one at
                 // the type the one before gives, as `Srgb`'s `Space` is
                 // `Srgb`, whose `WhitePoint` is `D65`.
-                let value = value.and_then(|value| self.associated_through(rest, value.clone()));
+                let value = value
+                    .and_then(|value| self.associated_through(rest, value.clone()))
+                    .and_then(|value| lent(value, projection.borrowed));
                 let Some(Ok(value)) = value.map(|value| self.convert(&value)) else {
                     continue;
                 };
-                if names_other_parameter(&this, u32::MAX) || names_other_parameter(&value, u32::MAX)
+                // A generic implementation is a case of its parameters, as
+                // `impl<'data, T> Spread for Iter<'data, T>` gives `&'data T`
+                // for any `Iter<'_, T>`, unless its self type is one alone,
+                // which every type would fit.
+                let (this, value) = if names_other_parameter(&this, u32::MAX)
+                    || names_other_parameter(&value, u32::MAX)
                 {
-                    continue;
-                }
+                    if matches!(this, representability::convert::Type::Parameter(_)) {
+                        continue;
+                    }
+                    (marked_impl_parameters(this), marked_impl_parameters(value))
+                } else {
+                    (this, value)
+                };
                 cases.push(Case::new(this, Box::new([value])));
             }
             // A generic implementation at each concrete type it is read at
@@ -2869,7 +2953,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .definition_index(&first.associated)
                 .and_then(|associated| self.projection_cases(&first.trait_id, associated));
             for case in read.iter().flat_map(|read| read.iter()) {
-                let Some(value) = self.associated_through(rest, case.value.clone()) else {
+                let Some(value) = self
+                    .associated_through(rest, case.value.clone())
+                    .and_then(|value| lent(value, projection.borrowed))
+                else {
                     continue;
                 };
                 let (Ok(this), Ok(value)) = (self.convert(&case.candidate), self.convert(&value))
@@ -2896,7 +2983,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 )]),
                 cases.into_boxed_slice(),
             );
-            relations.push(if rest.is_empty() {
+            relations.push(if rest.is_empty() && !projection.borrowed {
                 self.retain_str(&first.name)?;
                 relation.of_associated(representability::signature::Associated::new(
                     *self.graph.surface_definition(&first.trait_id).as_bytes(),
@@ -3193,22 +3280,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     ) -> Result<Box<[representability::signature::Relation]>, Failure> {
         use representability::convert::Type;
         use representability::signature::{Case, Relation, IMPL_PARAMETER};
-        /// `ty` with each parameter marked as the impl's own.
-        fn marked(ty: Type) -> Type {
-            match ty {
-                Type::Parameter(index) => Type::Parameter(IMPL_PARAMETER | index),
-                Type::Range(element) => Type::Range(Box::new(marked(*element))),
-                Type::Option(element) => Type::Option(Box::new(marked(*element))),
-                Type::Nominal {
-                    definition,
-                    arguments,
-                } => Type::Nominal {
-                    definition,
-                    arguments: arguments.into_vec().into_iter().map(marked).collect(),
-                },
-                other => other,
-            }
-        }
+        let marked = marked_impl_parameters;
         let mut relations = Vec::new();
         for predicate in generics.predicates() {
             let model::Predicate::Bound {
@@ -6019,7 +6091,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            let provided = provided_signature(implementation, definition, signature, generics)?;
+            let provided =
+                provided_signature(self.graph, implementation, definition, signature, generics)?;
             let (signature, generics) = provided
                 .as_ref()
                 .map_or((signature, generics), |(signature, generics)| {
@@ -7673,7 +7746,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         };
         // A concrete implementation still fixes the trait's parameters,
         // even when the implementation itself declares none.
-        let provided = provided_signature(implementation, definition, signature, generics)?;
+        let provided =
+            provided_signature(self.graph, implementation, definition, signature, generics)?;
         let (signature, generics) = provided
             .as_ref()
             .map_or((signature, generics), |(signature, generics)| {
@@ -7786,7 +7860,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .iter()
                 .map(|parameter| parameter.index())
                 .collect::<Vec<_>>();
-            let provided = provided_signature(implementation, definition, signature, generics)?;
+            let provided =
+                provided_signature(self.graph, implementation, definition, signature, generics)?;
             let (signature, generics) = match &provided {
                 Some((signature, generics)) => (signature, generics),
                 None => (signature, generics),
@@ -8000,7 +8075,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 return Err(reject::Kind::GenericImplementation.into());
             }
             let container_parameters = parameters.len() - inferred.len();
-            let provided = provided_signature(implementation, definition, signature, generics)?;
+            let provided =
+                provided_signature(self.graph, implementation, definition, signature, generics)?;
             let (signature, generics) = match &provided {
                 Some((signature, generics)) => (signature, generics),
                 None => (signature, generics),
@@ -10441,6 +10517,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         });
         relations.extend(self.projection_relations(related)?);
         relations.extend(self.projection_relations(&self.equated_projections(generics))?);
+        relations.extend(self.held_callable_outputs(generics));
         let relations = relations.into_boxed_slice();
         let signature_plan = representability::signature::Signature::new(
             parameters,
@@ -13778,8 +13855,11 @@ fn receiver_lent_for_call(signature: &model::Signature) -> bool {
 /// `implementation`: it names the trait's parameters, which the
 /// implementation's trait arguments are, and its own parameters follow the
 /// trait's, so they follow the implementation's here. `None` for any other
-/// definition.
+/// definition. A projection of the implementation's own trait on its own
+/// type, as `Self::Item` of `map<F: Fn(Self::Item) -> R>`, is the
+/// associated type the implementation gives, as rustc normalizes it there.
 fn provided_signature(
+    graph: &api::Graph<impl api::Phase>,
     implementation: &model::Implementation,
     definition: &model::Definition,
     signature: &model::Signature,
@@ -13830,17 +13910,113 @@ fn provided_signature(
             parameter.kind().clone(),
         ));
     }
+    let given = implementation
+        .associated()
+        .filter_map(|associated| {
+            let definition = graph
+                .definition_index(associated)
+                .and_then(|index| graph.definitions().nth(index))?;
+            match definition.kind() {
+                model::Kind::AssociatedType {
+                    default: model::Default::Present(ty),
+                    ..
+                } => Some((definition.display_path().last()?, ty)),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    let substitute = |ty: &model::Type| {
+        own_projections(
+            graph,
+            &substitute_parameters(ty, &substitutions),
+            implementation,
+            &given,
+        )
+    };
     let own = model::Generics::new(
         own.into_boxed_slice(),
         generics
             .predicates()
-            .map(|predicate| substituted_predicate(predicate, &substitutions))
+            .map(|predicate| mapped_predicate(predicate, &substitute))
             .collect(),
     );
-    Ok(Some((
-        substituted_signature(signature, &substitutions),
-        own,
-    )))
+    Ok(Some((map_signature_types(signature, substitute), own)))
+}
+
+/// `ty` with each projection of `implementation`'s trait on its own type
+/// read as the associated type it `given` gives by that name, and each
+/// projection the implementation's where-clause equates to a type read as
+/// that type, as `F::Output` is `R` where `F: Fn(I::Item) -> R`.
+fn own_projections(
+    graph: &api::Graph<impl api::Phase>,
+    ty: &model::Type,
+    implementation: &model::Implementation,
+    given: &[(&str, &model::Type)],
+) -> model::Type {
+    let each = |ty: &model::Type| own_projections(graph, ty, implementation, given);
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => model::Argument::Type(each(ty)),
+        other => other.clone(),
+    };
+    match ty {
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } => {
+            // The trait's `Self` is the implementation's type.
+            let own = matches!(implementation.trait_ref(),
+                model::Trait::Trait { id, .. } if id == trait_id)
+                && matches!(arguments.first(), Some(model::Argument::Type(this))
+                    if this == implementation.self_type()
+                        || matches!(this, model::Type::SelfType(owner) if owner == trait_id));
+            let value = definition_name(graph, associated).and_then(|name| {
+                given
+                    .iter()
+                    .find(|(candidate, _)| *candidate == name)
+                    .map(|(_, value)| *value)
+            });
+            if let Some(value) = value.filter(|_| own) {
+                return each(value);
+            }
+            let projection = model::Type::Projection {
+                trait_id: trait_id.clone(),
+                associated: associated.clone(),
+                arguments: arguments.iter().map(argument).collect(),
+            };
+            implementation
+                .generics()
+                .predicates()
+                .find_map(|predicate| match predicate {
+                    model::Predicate::ProjectionEquality {
+                        projection: equated,
+                        ty,
+                    } if *equated == projection => Some(ty.clone()),
+                    _ => None,
+                })
+                .unwrap_or(projection)
+        }
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(members.iter().map(each).collect()),
+        model::Type::Slice(element) => model::Type::Slice(Box::new(each(element))),
+        model::Type::Array { element, length } => model::Type::Array {
+            element: Box::new(each(element)),
+            length: length.clone(),
+        },
+        model::Type::Reference {
+            lifetime,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime.clone(),
+            mutability: *mutability,
+            ty: Box::new(each(ty)),
+        },
+        other => other.clone(),
+    }
 }
 
 /// A method whose own lifetimes only lend its `&str` inputs, as chrono's
@@ -15976,6 +16152,68 @@ struct Projected {
     /// `<<S as RgbStandard>::Space as RgbSpace>::WhitePoint` is two.
     hops: Box<[Hop]>,
     synthetic: u32,
+    /// Whether the projection is a shared borrow of the synthetic, as
+    /// `I: Spread<Item = &'a T>` ties `T` to what `I`'s `Item` borrows:
+    /// each case's associated type is then read through its borrow.
+    borrowed: bool,
+}
+
+/// `ty` with each parameter marked as a case's implementation's own
+/// ([`representability::signature::IMPL_PARAMETER`]).
+fn marked_impl_parameters(ty: representability::convert::Type) -> representability::convert::Type {
+    use representability::convert::Type;
+    use representability::signature::IMPL_PARAMETER;
+    match ty {
+        Type::Parameter(index) => Type::Parameter(IMPL_PARAMETER | index),
+        Type::Range(element) => Type::Range(Box::new(marked_impl_parameters(*element))),
+        Type::Option(element) => Type::Option(Box::new(marked_impl_parameters(*element))),
+        Type::Result(ok, err) => Type::Result(
+            Box::new(marked_impl_parameters(*ok)),
+            Box::new(marked_impl_parameters(*err)),
+        ),
+        Type::Sequence {
+            element,
+            owned,
+            length,
+        } => Type::Sequence {
+            element: Box::new(marked_impl_parameters(*element)),
+            owned,
+            length,
+        },
+        Type::Tuple(members) => Type::Tuple(
+            members
+                .into_vec()
+                .into_iter()
+                .map(marked_impl_parameters)
+                .collect(),
+        ),
+        Type::Nominal {
+            definition,
+            arguments,
+        } => Type::Nominal {
+            definition,
+            arguments: arguments
+                .into_vec()
+                .into_iter()
+                .map(marked_impl_parameters)
+                .collect(),
+        },
+        other => other,
+    }
+}
+
+/// `value`, or what it borrows when the projection is `borrowed`
+/// ([`Projected::borrowed`]): `None` for a value that borrows nothing then.
+fn lent(value: model::Type, borrowed: bool) -> Option<model::Type> {
+    match value {
+        model::Type::Reference {
+            mutability: model::Mutability::Shared,
+            ty,
+            ..
+        } if borrowed => Some(*ty),
+        _ if borrowed => None,
+        value => Some(value),
+    }
 }
 
 /// One projection of a [`Projected`] chain: the trait, its associated

@@ -1138,6 +1138,33 @@ impl<'a> Parser<'a> {
                 )?;
                 continue;
             }
+            // A crate trait's bound on a parameter no argument fills, as
+            // `C: FromSpread<Self::Item>` of `collect<C>(self) -> C`, waits
+            // for what fixes the parameter, as the type the output is given
+            // to: the impl for that type then fixes the bound's argument, as
+            // rustc selects `FromSpread<Result<T, E>> for Result<C, E>`.
+            #[cfg(feature = "rust-import")]
+            if argument.is_none()
+                && !projection
+                && relation.std_trait().is_none()
+                && !relation
+                    .cases()
+                    .iter()
+                    .any(|case| matches!(case.this(), crate::host::signature::Pattern::Variable(_)))
+                && let Some(open) = parameters
+                    .get(relation.parameter())
+                    .filter(|ty| matches!(self.inference.resolve(ty), Ty::Infer(_)))
+                    .cloned()
+            {
+                self.defer_projection(
+                    relation,
+                    open,
+                    parameters,
+                    (&item_path, span),
+                    owner.as_ref(),
+                )?;
+                continue;
+            }
             let Some(argument) = argument.or_else(|| {
                 parameters
                     .get(relation.parameter())

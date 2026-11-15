@@ -1484,17 +1484,19 @@ fn pattern(
         | facade::Type::FixedArray { .. }
         | facade::Type::Array(_)
         | facade::Type::Slice(_)
+        | facade::Type::Result(..)
             if !names_variable(source) =>
         {
             Pattern::Type(nominal(source)?)
         }
         // A crate type that names the impl's own parameters, as `Text<'a,
         // Theme, Renderer>` of `From<Text<..>> for Element<..>`: each is
-        // named as the case's variable.
+        // named as the case's variable, as is a `Result` of them.
         facade::Type::Nominal { .. }
         | facade::Type::FixedArray { .. }
         | facade::Type::Array(_)
-        | facade::Type::Slice(_) => Pattern::Generic(nominal(source)?),
+        | facade::Type::Slice(_)
+        | facade::Type::Result(..) => Pattern::Generic(nominal(source)?),
         _ => return None,
     })
 }
