@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 229;
+const CLASSIFIER_VERSION: u32 = 230;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8727,27 +8727,31 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 continue;
             };
             // The method's opaque output is an anonymous associated type of
-            // the trait, whose bounds name the trait's parameters.
-            let model::Type::Projection {
-                associated: output, ..
-            } = signature.output()
-            else {
-                continue;
+            // the trait, whose bounds name the trait's parameters, or, for a
+            // method with a default body, that body's opaque type.
+            let (output, bounds) = match signature.output() {
+                model::Type::Projection {
+                    associated: output, ..
+                } => {
+                    let Some(model::Kind::AssociatedType { bounds, .. }) = self
+                        .graph
+                        .definition_index(output)
+                        .and_then(|index| self.graph.definitions().nth(index))
+                        .map(model::Definition::kind)
+                    else {
+                        continue;
+                    };
+                    let anonymous = self
+                        .definition_name(output)
+                        .is_some_and(|name| name.starts_with("{anonymous-associated-type:"));
+                    if !anonymous {
+                        continue;
+                    }
+                    (output, bounds)
+                }
+                model::Type::ImplTrait { id, bounds, .. } => (id, bounds),
+                _ => continue,
             };
-            let Some(model::Kind::AssociatedType { bounds, .. }) = self
-                .graph
-                .definition_index(output)
-                .and_then(|index| self.graph.definitions().nth(index))
-                .map(model::Definition::kind)
-            else {
-                continue;
-            };
-            let anonymous = self
-                .definition_name(output)
-                .is_some_and(|name| name.starts_with("{anonymous-associated-type:"));
-            if !anonymous {
-                continue;
-            }
             let bounds = bounds
                 .iter()
                 .map(|predicate| {

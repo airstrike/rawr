@@ -11,6 +11,11 @@ impl<'a> Gallery<'a> for Wall<'a> {
         let caption = framing::caption(self.label);
         framing::framed(shape, caption)
     }
+
+    fn outline(&self, label: &'a str) -> impl Shape<u32> + 'a {
+        let shape = framing::traced(label);
+        framing::framed(shape, framing::caption(label))
+    }
 }
 
 fn main() {
@@ -18,4 +23,7 @@ fn main() {
     let wall = Wall { label: &label };
     println!("{}", framing::show(&wall, 2));
     println!("{}", framing::show(&wall, 4));
+    let plan = framing::Plan::new(vec!["beam".to_owned(), "post".to_owned()]);
+    let listing = framing::listing(plan.parts(), &wall);
+    println!("{}", listing.render());
 }

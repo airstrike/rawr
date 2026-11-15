@@ -3561,22 +3561,32 @@ impl<T: 'static> ViewedArgument<T> {
 }
 
 /// A slice of crate values a call's output keeps borrowed (D568): the
-/// values moved out of their slots into one slice, or a slice native code
+/// values moved out of their slots into one slice, a slice native code
 /// lent a marked function, which keeps it as long as the anchored call's
-/// result (#1292, #1413).
+/// result (#1292, #1413), or a native slice place that can be borrowed
+/// past one operation, as a slice a crate method lends from a receiver in
+/// its slot is, by sharing that receiver (`place::slice::held`).
 #[allow(dead_code)]
 pub enum ViewedSlice<T: 'static> {
     Shared(SliceLent<T>),
     Lent(__rawr_internal::scope::Lent),
+    Held(__rawr_internal::place::slice::Held<T>),
 }
 
 #[allow(dead_code)]
 impl<T: 'static> ViewedSlice<T> {
-    /// The slice `value` names: one native code lent, or an array of
-    /// values in their slots.
+    /// The slice `value` names: one native code lent, a native slice place
+    /// held where it is, or an array of values in their slots.
     pub fn of(arena: &mut Arena, value: Dynamic) -> Result<Self, Error> {
         if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>().map(|lent| *lent) {
             return Ok(Self::Lent(lent));
+        }
+        if let Some(place) = __rawr_internal::place::get(&value) {
+            let arena: &mut dyn Any = arena;
+            return match __rawr_internal::place::slice::held::<T>(&place, arena) {
+                Some(held) => held.map(Self::Held).map_err(|error| Error::Value(error.to_string())),
+                None => Err(Error::Home("rawr can't keep this slice borrowed past the call yet".into())),
+            };
         }
         let handles = value
             .into_array()
@@ -3600,6 +3610,7 @@ impl<T: 'static> ViewedSlice<T> {
                 .ok_or(__rawr_internal::scope::Error::Mismatch)
                 .and_then(|region| region.lent_slice::<T>(lent))
                 .map_err(|error| Error::Lent(lent.name(), error)),
+            Self::Held(held) => held.reach(pins).ok_or(Error::TypeMismatch),
         }
     }
 }
@@ -3928,6 +3939,23 @@ pub fn lender_nonce(value: &Dynamic) -> Option<__rawr_internal::scope::Nonce> {
     LENDERS.with_borrow(|lenders| lenders.get(&(handle.epoch, handle.slot, handle.generation)).copied())
 }
 
+/// The receiver `lender` names, shared from its slot in `arena` (the
+/// runner's [`Arena`]) for as long as what holds the `Rc` lives, as a call's
+/// output that keeps a slice of it borrowed holds it (D568,
+/// `place::slice::SliceHold`). Only a value in a slot is shared so.
+#[allow(dead_code)]
+pub fn share_lender<T: 'static>(
+    lender: &Lender,
+    arena: &mut dyn Any,
+) -> Result<std::rc::Rc<dyn Any>, Box<__rawr_internal::EvalAltResult>> {
+    let Lender::Handle(handle) = lender else {
+        return Err(place_error(Error::Home("rawr can't keep a slice of this receiver borrowed past the call yet".into())));
+    };
+    let arena = arena.downcast_mut::<Arena>().ok_or_else(|| place_error(Error::TypeMismatch))?;
+    let shared: std::rc::Rc<dyn Any> = arena.share::<T>(handle.clone()).map_err(place_error)?;
+    Ok(shared)
+}
+
 /// Reach the receiver `lender` names, shared, for one operation on the
 /// slice it lends. A value in a slot is leased for the operation, so the
 /// arena is free while native code reads the slice, and the value goes
@@ -4075,6 +4103,14 @@ pub fn with_slice_argument<E: __rawr_internal::place::Policy>(
     let Some(place) = arguments.values.get(index).and_then(|value| __rawr_internal::place::get(value)) else {
         return body(arguments, None);
     };
+    // A slice a crate method lends from a receiver its slot shares, read
+    // through that share, so a call whose output keeps the slice borrowed
+    // shares the same receiver (`ViewedSlice::Held`) and none is leased.
+    let arena: &mut dyn Any = &mut *arguments.arena;
+    if let Some(Ok(held)) = __rawr_internal::place::slice::held::<E::Value>(&place, arena) {
+        let slice = held.get().ok_or(Error::TypeMismatch)?;
+        return body(arguments, Some(slice));
+    }
     let Arguments { values, arena } = arguments;
     lend(arena, || {
         __rawr_internal::place::slice::reach::<E, _>(&place, place.witness(), false, |slice| {
@@ -12861,33 +12897,59 @@ fn opaque_table_source(
             // in the arena, makes its output in the region. What the region
             // holds boxed is made of a receiver in the region
             // (`region_operand`), or of this value where it borrows nothing,
-            // so it outlives any region (#2013).
+            // so it outlives any region (#2013). One that borrows is in the
+            // arena at `'static` all the same, but its opaque types' own
+            // lifetimes are the table's, which rustc can't show outlive the
+            // region: the call is made in a function generic over each opaque
+            // type of the value, of its bounds and `'static` (`Shape::lasting`).
             let boxed = scoped_type(&produced).is_some_and(|key| family::Ops::held(&key).is_some());
+            let lasting = if boxed && borrows {
+                scoped_shape(&returned).map(|shape| shape.lasting())
+            } else {
+                None
+            };
             let region = region_inputs(consumer)?;
-            if !region.is_empty() && (!boxed || !borrows) {
+            if !region.is_empty() && (!boxed || !borrows || lasting.is_some()) {
                 let indices = region
                     .iter()
                     .map(usize::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                writeln!(
-                    body,
-                    "    if let Some(scoped) = scoped_innermost(arguments, &[{indices}]) {{
+                let (open, close) = match &lasting {
+                    Some((spelled, parameters)) => (
+                        format!(
+                            "    if let Some(scoped) = scoped_innermost(arguments, &[{indices}]) {{
+        #[allow(clippy::all)]
+        fn in_region<{parameters}>(arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w: std::marker::PhantomData<{spelled}>, scoped: __rawr_internal::scope::Scoped) -> Result<Dynamic, Error> {{
+        let _ = (&table, &_w);
+        __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
+                        ),
+                        "        })
+        .map_err(|error| Error::Lent(scoped.name(), error))?
+        }
+        return in_region(arguments, table, _w, scoped);
+    }
+",
+                    ),
+                    None => (
+                        format!(
+                            "    if let Some(scoped) = scoped_innermost(arguments, &[{indices}]) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
-                )
-                .map_err(request::unwritable)?;
+                        ),
+                        "        })
+        .map_err(|error| Error::Lent(scoped.name(), error))?;
+    }
+",
+                    ),
+                };
+                writeln!(body, "{open}").map_err(request::unwritable)?;
                 {
                     let _region = InRegion::enter();
                     let _arguments = RegionArguments::enter();
                     render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
                 }
-                body.write_all(
-                    b"        })
-        .map_err(|error| Error::Lent(scoped.name(), error))?;
-    }
-",
-                )
-                .map_err(request::unwritable)?;
+                body.write_all(close.as_bytes())
+                    .map_err(request::unwritable)?;
             }
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
@@ -17004,6 +17066,11 @@ fn render_lent_slice(
     )?;
     call.write_all(b")").map_err(request::unwritable)?;
     let call = String::from_utf8(call).map_err(request::unwritable)?;
+    // A call whose output keeps the slice borrowed holds it past one
+    // operation: the receiver is shared from its slot, and the method lends
+    // the slice of that (`place::slice::held`).
+    let item =
+        concrete_type(&element).ok_or_else(|| request::drift("a lent slice's element type"))?;
     writeln!(
         output,
         "    let witness = output_witness().ok_or(Error::Stale)?;
@@ -17011,9 +17078,18 @@ fn render_lent_slice(
         Some(lent) => Lender::Lent(lent),
         None => Lender::Handle(native_handle(arguments, 0, false)?),
     }};
-    __rawr_internal::place::slice::lent_by::<{policy}>(&witness, move |visit| {{
-        reach_lender::<{container}>(&lender, &mut |receiver| visit({call}))
-    }})
+    let held = lender.clone();
+    __rawr_internal::place::slice::lent_by_holding::<{policy}>(
+        &witness,
+        move |visit| reach_lender::<{container}>(&lender, &mut |receiver| visit({call})),
+        move |arena| {{
+            let receiver = share_lender::<{container}>(&held, arena)?;
+            Ok(__rawr_internal::place::slice::SliceHold::<{item}>::new(receiver, |receiver| {{
+                let receiver = receiver.downcast_ref::<{container}>()?;
+                Some({call})
+            }}))
+        }},
+    )
     .map_err(|error| Error::Value(error.to_string()))"
     )
     .map_err(request::unwritable)

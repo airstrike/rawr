@@ -286,6 +286,28 @@ impl Shape {
         format!("RawrHeld{position}")
     }
 
+    /// The shape at `'static`, and the type parameters of a generic
+    /// function that takes it, one for each opaque position, of its bounds
+    /// and `'static`: what a value the arena holds at `'static` is, where
+    /// rustc can't see that its opaque types live as long as any region.
+    pub(super) fn lasting(&self) -> (String, String) {
+        let at_static = |text: &str| text.replace("'x", "'static");
+        let parameters = self
+            .bounds
+            .iter()
+            .enumerate()
+            .map(|(position, bounds)| {
+                format!(
+                    "{}: {} + 'static",
+                    Self::parameter(position),
+                    at_static(bounds)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        (at_static(&self.spelled), parameters)
+    }
+
     /// The type as messages show it, `impl Bounds` at each position.
     fn shown(&self) -> String {
         let mut shown = self.spelled.clone();
@@ -528,18 +550,117 @@ pub fn rawr_given_{index}<'x>(({names}): ({types})) -> impl {bounds} + use<'x> {
                 let _ = write!(implemented, "\n{}", forwards.bodies.trim_end());
                 implementation = &forwards.implementation;
             }
+            let (spelled, lifetimes) = loosened(&shape.spelled);
+            let lifetimes = lifetimes
+                .iter()
+                .map(|lifetime| format!(", {lifetime}: 'x"))
+                .collect::<String>();
             let _ = writeln!(
                 output,
                 "pub trait RawrOpaque{index}<'x> {{{declared}
 }}
 
-impl<'x{parameters}> RawrOpaque{index}<'x> for {spelled} {{{implemented}
+impl<'x{lifetimes}{parameters}> RawrOpaque{index}<'x> for {spelled} {{{implemented}
 }}
-{implementation}",
-                spelled = shape.spelled
+{implementation}"
             );
         }
     });
+}
+
+/// `spelled` with a lifetime of its own, which outlives `'x`, for each `'x`
+/// inside a type argument that holds an opaque type, as `Scrollable<'x, M,
+/// RawrHeld0>` of `Hover<Scrollable<'x, M, RawrHeld0>, Container<'x, ..>>`,
+/// and those lifetimes. The type's own methods are generic over what such an
+/// argument is, so they take one of any lifetime that outlives the
+/// region's: a value the arena holds at `'static` joins a region's value in
+/// one type, as a value that borrows what native code lent does. The type's
+/// own lifetimes, and those of an argument that holds none, stay `'x`, as
+/// its methods may tie them to their inputs. An `Option`'s argument is its
+/// value's type, whose own lifetimes stay `'x` too.
+fn loosened(spelled: &str) -> (String, Vec<String>) {
+    let mut lifetimes = Vec::new();
+    let mut loosened = String::with_capacity(spelled.len());
+    loosen(spelled, &mut loosened, &mut lifetimes);
+    (loosened, lifetimes)
+}
+
+/// How each opaque position of a shape is named ([`Shape::parameter`]).
+const HELD: &str = "RawrHeld";
+
+/// [`loosened`] of `spelled`, written to `into`, naming each new lifetime
+/// in `lifetimes`.
+fn loosen(spelled: &str, into: &mut String, lifetimes: &mut Vec<String>) {
+    let Some(open) = spelled.find('<') else {
+        into.push_str(spelled);
+        return;
+    };
+    let (head, rest) = spelled.split_at(open);
+    let Some(close) = rest.rfind('>') else {
+        into.push_str(spelled);
+        return;
+    };
+    let arguments = &rest[1..close];
+    let optional = matches!(
+        head.trim_start_matches("::"),
+        "Option" | "core::option::Option" | "std::option::Option"
+    );
+    into.push_str(head);
+    into.push('<');
+    for (position, argument) in split_arguments(arguments).into_iter().enumerate() {
+        if position > 0 {
+            into.push(',');
+        }
+        let bare = argument.trim();
+        if optional {
+            let lead = &argument[..argument.len() - argument.trim_start().len()];
+            into.push_str(lead);
+            loosen(bare, into, lifetimes);
+        } else if bare.contains(HELD) && !bare.starts_with(HELD) {
+            let mut rest = argument;
+            while let Some(at) = rest.find("'x") {
+                let next = rest[at + 2..].chars().next();
+                into.push_str(&rest[..at]);
+                if next.is_some_and(|next| next.is_alphanumeric() || next == '_') {
+                    into.push_str("'x");
+                } else {
+                    let lifetime = format!("'l{}", lifetimes.len());
+                    into.push_str(&lifetime);
+                    lifetimes.push(lifetime);
+                }
+                rest = &rest[at + 2..];
+            }
+            into.push_str(rest);
+        } else {
+            into.push_str(argument);
+        }
+    }
+    into.push('>');
+    into.push_str(&rest[close + 1..]);
+}
+
+/// The type arguments `arguments` lists, split at its own commas.
+fn split_arguments(arguments: &str) -> Vec<&str> {
+    let mut split = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    let mut previous = None;
+    for (at, character) in arguments.char_indices() {
+        match character {
+            '<' | '(' | '[' => depth += 1,
+            // The arrow of a function type closes nothing.
+            '>' if previous == Some('-') => {}
+            '>' | ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                split.push(&arguments[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+        previous = Some(character);
+    }
+    split.push(&arguments[start..]);
+    split
 }
 
 #[cfg(test)]
@@ -547,6 +668,29 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{Family, Method, Ops, Reach, Shape};
+
+    /// #2021: a type argument that holds an opaque type takes lifetimes of
+    /// its own, which outlive the region's, so a value the arena holds at
+    /// `'static` joins a region's value in one type. The type's own
+    /// lifetimes, and an `Option`'s value's, stay the region's.
+    #[test]
+    fn an_argument_holding_an_opaque_type_outlives_the_region() {
+        assert_eq!(
+            super::loosened("Hover<Scrollable<'x, M, RawrHeld0>, Container<'x, Row<Element<'x>>>>"),
+            (
+                "Hover<Scrollable<'l0, M, RawrHeld0>, Container<'x, Row<Element<'x>>>>".to_owned(),
+                vec!["'l0".to_owned()]
+            )
+        );
+        assert_eq!(
+            super::loosened("Container<'x, RawrHeld0, Theme>").0,
+            "Container<'x, RawrHeld0, Theme>"
+        );
+        assert_eq!(
+            super::loosened("Option<Container<'x, Map<'x, RawrHeld0, fn(A) -> B>>>").0,
+            "Option<Container<'x, Map<'l0, RawrHeld0, fn(A) -> B>>>"
+        );
+    }
 
     /// A family struct is reached by its type, and a wrapper's family by
     /// its inputs' family and the wrapper itself, which rustc infers it from.

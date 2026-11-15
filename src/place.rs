@@ -381,6 +381,12 @@ trait Storage: Any + crate::func::SendSync {
         None
     }
 
+    /// How the storage's slice is borrowed past one operation, boxed as
+    /// its `slice::Hold`; `None` for storage that can't be.
+    fn held(&self) -> Option<&dyn Any> {
+        None
+    }
+
     fn as_any(&self) -> &dyn Any;
 }
 
