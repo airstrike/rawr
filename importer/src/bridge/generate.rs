@@ -5631,12 +5631,17 @@ mod __rawr_profile {
     /// Make `program`, compiled beside the running program, the generation
     /// its next calls from native code run in (D553.3). This
     /// runs on the thread that owns the program, at an outermost entry. The
-    /// arena stays: its native values live on (D553.4). One that values
-    /// made since its compile, or code native code still holds, depend on
-    /// the old types of ends the runner, saying why, and `rawr run` starts
-    /// the program again (#1746).
+    /// arena stays: its native values live on (D553.4), and the live values
+    /// of a type whose fields changed take the new fields in place, which
+    /// one line says (#2026). One that values made since its compile, or
+    /// code native code still holds, depend on the old types of ends the
+    /// runner, saying why, and `rawr run` starts the program again (#1746).
     pub fn admit(mut program: super::Program) -> Result<(), String> {
-        if let Some(reason) = __rawr_internal::island::admit(bind(&mut program)?) {
+        let admitted = __rawr_internal::island::admit(bind(&mut program)?);
+        if let __rawr_internal::island::Admission::Admitted(Some(report)) = &admitted {
+            eprintln!("rawr: {report}");
+        }
+        if let __rawr_internal::island::Admission::Refused(reason) = admitted {
             eprintln!("rawr: {reason}; restarting the program");
             // An owner restarts it; a runner with no owner, as a
             // browser's, only ends.

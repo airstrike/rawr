@@ -42,8 +42,12 @@ impl Proxy {
     /// The proxy of `value`, which it now owns.
     #[must_use]
     pub fn new(value: Dynamic) -> Self {
+        let value = value.into_shared();
+        // A save that changes the value's type's fields rewrites it in its
+        // cell (#2026).
+        crate::types::nominal::roots::hold(&value);
         Self {
-            value: value.into_shared(),
+            value,
             pins: crate::scope::Pins::new(),
         }
     }
@@ -143,6 +147,7 @@ impl Proxy {
             return;
         }
         self.value = value.into_shared();
+        crate::types::nominal::roots::hold(&self.value);
     }
 
     /// The strings native values borrow from the value while it is lent

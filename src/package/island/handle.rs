@@ -14,8 +14,9 @@
 //! has no `repr`, derives only `Debug`, `Clone` and `Default`, which the
 //! handle implements by asking the interpreter, and no other marked type
 //! holds it, as such a type's value crosses whole, nor does a marked
-//! function take `&mut` of it beside a receiver, which crosses as a copy
-//! taken back.
+//! function take `&mut` of it inside another type beside a receiver, which
+//! crosses as a copy taken back. A bare `&mut` of it crosses as its handle,
+//! whose value the call changes in place.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -48,10 +49,10 @@ impl Generator<'_> {
                 );
             }
         }
-        // And each a marked function takes `&mut` of beside its receiver,
-        // alone or inside another type, which crosses as a copy taken back,
-        // as a handle can't yet: native code calls it, so its trampoline
-        // must cross.
+        // And each a marked function takes `&mut` of inside another type
+        // beside its receiver, which crosses as a copy taken back, as a
+        // handle can't yet: native code calls it, so its trampoline must
+        // cross.
         for source in sources {
             held.extend(self.lent_mutably(source));
         }
@@ -76,9 +77,10 @@ impl Generator<'_> {
     }
 
     /// The marked types a function of `source` native code can call takes
-    /// `&mut` of outside its receiver, as a free `update(state: &mut
-    /// State, ..)` does, by their paths: the referent's own and each one it
-    /// names, `Self` as its impl's type.
+    /// `&mut` of inside another type outside its receiver, as a free
+    /// `update(states: &mut Vec<State>, ..)` does, by their paths: each one
+    /// the referent names, `Self` as its impl's type. A bare `&mut State`
+    /// crosses as the handle, and names none.
     fn lent_mutably(&self, source: &Source<'_>) -> BTreeSet<String> {
         let mut functions = Vec::new();
         for item in source.items {
@@ -112,7 +114,16 @@ impl Generator<'_> {
                     continue;
                 };
                 let mut paths = Vec::new();
-                paths_in(target, &mut paths);
+                match &**target {
+                    // A bare `&mut T` crosses as `T`'s handle, which the
+                    // call changes in place (#2026).
+                    type_ref::Type::Path(path)
+                        if path
+                            .segments
+                            .iter()
+                            .all(|segment| segment.arguments.is_empty()) => {}
+                    target => paths_in(target, &mut paths),
+                }
                 for path in paths {
                     let named = match &path.segments[..] {
                         [only] if only.name.text == "Self" => owner,

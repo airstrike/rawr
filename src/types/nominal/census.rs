@@ -5,7 +5,9 @@
 //! still holds a value of it: the program's state, a value native code
 //! holds as a handle, a pending task or a captured closure. The
 //! count is kept where values are made and dropped, so a save walks no
-//! value.
+//! value to learn that. A save that rewrites the live values of a type
+//! whose fields changed checks that its walk found as many as the count
+//! says live (#2026).
 
 use crate::type_def;
 use std::collections::HashMap;
@@ -72,6 +74,16 @@ pub(crate) fn holds(identity: &type_def::Identity) -> bool {
             .get(identity)
             // The entry's own token is the one reference that is no value's.
             .is_some_and(|entry| Arc::strong_count(&(entry.0).0) > 1)
+    })
+}
+
+/// How many values of the script type `identity` live in this process.
+#[must_use]
+pub(crate) fn count(identity: &type_def::Identity) -> usize {
+    with_entries(|entries| {
+        entries
+            .get(identity)
+            .map_or(0, |entry| Arc::strong_count(&(entry.0).0) - 1)
     })
 }
 

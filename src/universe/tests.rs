@@ -118,18 +118,24 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     assert_eq!(total(&program, 2, 3), 6);
 
     // A script type whose fields changed can't swap in while a value of
-    // it lives (D553.6), here the one the caller holds (#1746).
+    // it lives where rawr can't reach it to rewrite it (D553.6, #2026), here
+    // the one the caller holds (#1746).
     let held = program.call("counter", &mut []).unwrap();
     let grown = doubled
         .replace("pub count: i64,", "pub count: i64,\n    pub step: i64,")
         .replace("Counter { count: 1 }", "Counter { count: 1, step: 2 }");
-    assert_eq!(
-        program.replace(grown),
-        Outcome::Restarting {
-            reason: "`Counter` changed its fields, but a live value holds it".to_owned()
-        }
-    );
+    assert_eq!(program.replace(grown), Outcome::Queued);
     assert_eq!(total(&program, 2, 3), 6);
+    let said = outcomes.try_iter().collect::<Vec<_>>();
+    assert!(
+        said.ends_with(&[
+            Outcome::Queued,
+            Outcome::Restarting {
+                reason: "`Counter` changed its fields, but a live value holds it".to_owned()
+            }
+        ]),
+        "{said:?}"
+    );
     // Once nothing holds one, its fields change in place.
     drop(held);
     let grown = doubled
@@ -167,6 +173,12 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     a_kept_callable_that_makes_the_old_type_refuses_a_save_where_it_would_be_admitted(&universe);
     a_save_taken_at_once_says_its_admission_refused_it(&universe);
     a_save_that_changes_a_type_nothing_holds_or_makes_swaps_in(&universe);
+
+    // A save rewrites the live values of the types whose fields it changed
+    // where native code holds them (#2026).
+    a_held_value_keeps_its_fields_across_saves_that_add_reorder_and_remove(&universe);
+    a_new_field_without_a_default_refuses_a_save_a_held_value_would_take(&universe);
+    a_held_value_in_a_removed_variant_refuses_the_save(&universe);
 }
 
 /// A snippet's statements outside any function, as ?play runs them, call
@@ -317,4 +329,174 @@ fn a_save_that_changes_a_type_nothing_holds_or_makes_swaps_in(universe: &Univers
     assert_eq!(total(&program, 2, 3), 5);
     let said = outcomes.try_iter().collect::<Vec<_>>();
     assert_eq!(said, [Outcome::Queued, Outcome::Swapped]);
+}
+
+const TALLY: &str = "// rawr
+pub struct Tally {
+    pub count: i64,
+    pub ticks: i64,
+}
+
+pub fn start() -> Tally {
+    Tally { count: 0, ticks: 0 }
+}
+
+pub fn tick(tally: &mut Tally) -> i64 {
+    tally.count += 1;
+    tally.ticks += 1;
+    tally.count
+}
+
+fn main() {}
+";
+
+/// `tick` of the value `state` holds, as native code lends a proxy's value
+/// `&mut` to a script function.
+fn tick(program: &super::Program, state: &mut crate::crossing::Proxy) -> i64 {
+    let mut arguments = [state.lend_mut()];
+    let ticked = program.call("tick", &mut arguments).unwrap();
+    let [value] = arguments;
+    state.restore(value);
+    ticked.as_int().unwrap()
+}
+
+/// The last outcome a program said, once a call admitted what it queued.
+fn last(outcomes: &std::sync::mpsc::Receiver<Outcome>) -> Option<Outcome> {
+    outcomes.try_iter().last()
+}
+
+/// A value native code holds in a proxy, as a native generic `run` holds
+/// its state, takes each save's fields in place: a new field takes its
+/// type's `Default`, an order change is free and a removed field drops,
+/// and the count goes on from where it was (#2026).
+fn a_held_value_keeps_its_fields_across_saves_that_add_reorder_and_remove(universe: &Universe) {
+    let entry = PathBuf::from("/universe-tally/src/main.rs");
+    let program = universe.program(entry, TALLY, Vec::new()).unwrap();
+    let outcomes = program.outcomes();
+    let mut state = crate::crossing::Proxy::new(program.call("start", &mut []).unwrap());
+    for count in 1..=3 {
+        assert_eq!(tick(&program, &mut state), count);
+    }
+
+    // A new field, read by the new code: its `Default` is 0.
+    let gained = TALLY
+        .replace("pub ticks: i64,", "pub ticks: i64,\n    pub best: i64,")
+        .replace(
+            "Tally { count: 0, ticks: 0 }",
+            "Tally { count: 0, ticks: 0, best: 0 }",
+        )
+        .replace(
+            "    tally.count\n",
+            "    tally.best += 10;\n    tally.count * 1000 + tally.best\n",
+        );
+    assert_eq!(program.replace(gained.as_str()), Outcome::Queued);
+    assert_eq!(tick(&program, &mut state), 4_010);
+    assert_eq!(last(&outcomes), Some(Outcome::Swapped));
+
+    // The fields in another order.
+    let reordered = gained.replace(
+        "    pub count: i64,\n    pub ticks: i64,\n    pub best: i64,",
+        "    pub best: i64,\n    pub count: i64,\n    pub ticks: i64,",
+    );
+    assert_ne!(reordered, gained);
+    assert_eq!(program.replace(reordered.as_str()), Outcome::Queued);
+    assert_eq!(tick(&program, &mut state), 5_020);
+    assert_eq!(last(&outcomes), Some(Outcome::Swapped));
+
+    // `ticks` removed.
+    let removed = reordered
+        .replace("    pub ticks: i64,\n", "")
+        .replace(", ticks: 0", "")
+        .replace("    tally.ticks += 1;\n", "");
+    assert_eq!(program.replace(removed.as_str()), Outcome::Queued);
+    assert_eq!(tick(&program, &mut state), 6_030);
+    assert_eq!(last(&outcomes), Some(Outcome::Swapped));
+}
+
+/// A new field whose type has no `Default` can't be filled in a value that
+/// lives: the save is refused, naming it, and the running program keeps
+/// its state (#2026).
+fn a_new_field_without_a_default_refuses_a_save_a_held_value_would_take(universe: &Universe) {
+    let entry = PathBuf::from("/universe-tally-undefaulted/src/main.rs");
+    let source = TALLY.replace(
+        "pub struct Tally",
+        "pub struct Label(i64);\n\npub struct Tally",
+    );
+    let program = universe
+        .program(entry, source.as_str(), Vec::new())
+        .unwrap();
+    let outcomes = program.outcomes();
+    let mut state = crate::crossing::Proxy::new(program.call("start", &mut []).unwrap());
+    assert_eq!(tick(&program, &mut state), 1);
+    let labeled = source
+        .replace("pub ticks: i64,", "pub ticks: i64,\n    pub label: Label,")
+        .replace(
+            "Tally { count: 0, ticks: 0 }",
+            "Tally { count: 0, ticks: 0, label: Label(0) }",
+        );
+    assert_eq!(program.replace(labeled), Outcome::Queued);
+    assert_eq!(tick(&program, &mut state), 2);
+    assert_eq!(
+        last(&outcomes),
+        Some(Outcome::Restarting {
+            reason: "`Tally` gained `label`, whose type has no `Default`".to_owned()
+        })
+    );
+}
+
+/// A live value in a variant a save removes has nothing to become: the
+/// save is refused, naming the variant (#2026). One in a variant the save
+/// keeps takes the new variants in place.
+fn a_held_value_in_a_removed_variant_refuses_the_save(universe: &Universe) {
+    const MODE: &str = "// rawr
+pub enum Mode {
+    On,
+    Off,
+}
+
+pub fn off() -> Mode {
+    Mode::Off
+}
+
+pub fn named(mode: &Mode) -> i64 {
+    match mode {
+        Mode::On => 1,
+        Mode::Off => 2,
+    }
+}
+
+fn main() {}
+";
+    let entry = PathBuf::from("/universe-mode/src/main.rs");
+    let program = universe.program(entry, MODE, Vec::new()).unwrap();
+    let outcomes = program.outcomes();
+    let state = crate::crossing::Proxy::new(program.call("off", &mut []).unwrap());
+    let named = |program: &super::Program| {
+        program
+            .call("named", &mut [state.lend()])
+            .unwrap()
+            .as_int()
+            .unwrap()
+    };
+    assert_eq!(named(&program), 2);
+    let removed = MODE
+        .replace("    Off,\n", "")
+        .replace("Mode::Off\n", "Mode::On\n")
+        .replace("        Mode::Off => 2,\n", "");
+    assert_eq!(program.replace(removed), Outcome::Queued);
+    assert_eq!(named(&program), 2);
+    assert_eq!(
+        last(&outcomes),
+        Some(Outcome::Restarting {
+            reason: "a live `Mode` is `Off`, which the save removed".to_owned()
+        })
+    );
+    // A new variant beside the one the value is in swaps in.
+    let grown = MODE.replace("    Off,\n", "    Off,\n    Idle,\n").replace(
+        "        Mode::Off => 2,\n",
+        "        Mode::Off => 20,\n        Mode::Idle => 3,\n",
+    );
+    assert_eq!(program.replace(grown), Outcome::Queued);
+    assert_eq!(named(&program), 20);
+    assert_eq!(last(&outcomes), Some(Outcome::Swapped));
 }
