@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
+import { universe } from "../scripts/universe.ts";
 import { createEditor, setDoc } from "./editor.ts";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
 
@@ -43,6 +44,12 @@ function browserDeps() {
       await m.default();
       return m as Web;
     },
+    // The browser's universe, for snippets that use crates.
+    universe: universe({
+      document,
+      fetch: window.fetch.bind(window),
+      compile: (response) => WebAssembly.compileStreaming(response),
+    }),
     now: () => performance.now(),
     clipboard: (text: string) => navigator.clipboard.writeText(text),
     turnstile: () => (window as Window & { turnstile?: any }).turnstile,
@@ -72,12 +79,13 @@ export default function Playground() {
     () => NONE,
   );
   const host = useRef<HTMLDivElement>(null);
+  const frames = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
 
   // After hydration: the session from the page's data, the editor, the theme and the keys.
   useEffect(() => {
     const data = readData();
-    const s = new Session(data, browserDeps(), pageTheme());
+    const s = new Session(data, { ...browserDeps(), frameHost: () => frames.current }, pageTheme());
     setSession(s);
     const view = createEditor({ parent: host.current!, doc: s.state.code, onChange: (code) => s.setCode(code), onRun: () => void s.go() });
     editor.current = view;
@@ -173,7 +181,9 @@ export default function Playground() {
             <span><span className="text-red">//</span> Output</span>
             <span id="status" className="truncate">{state.status}</span>
           </p>
-          <div id="out" className="out" aria-live="polite">
+          <div id="out" className={state.output.kind === "frame" ? "out framed" : "out"} aria-live="polite">
+            {/* The universe's frames (session.ts), which the session adds and removes itself. */}
+            <div ref={frames} className="frames" hidden={state.output.kind !== "frame"} />
             <OutputView output={state.output} />
           </div>
         </section>
@@ -200,6 +210,17 @@ function OutputView({ output }: { output: Output }) {
       );
     case "error":
       return <pre className="error">{output.text}</pre>;
+    case "frame":
+      // The program draws in its frame; under it, what it printed or how it failed.
+      if (!output.chunks.some((chunk) => chunk.text !== "") && output.status === 0) return null;
+      return (
+        <pre className="term">
+          {output.chunks.map((chunk, i) => (
+            <span key={i} className={chunk.stream === "stderr" ? "err" : undefined}>{chunk.text}</span>
+          ))}
+          {output.status !== 0 && <span className="exit">exit status {output.status}{"\n"}</span>}
+        </pre>
+      );
     case "term": {
       const empty = !output.chunks.some((chunk) => chunk.text !== "");
       const term = (

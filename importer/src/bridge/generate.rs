@@ -5638,7 +5638,12 @@ mod __rawr_profile {
     pub fn admit(mut program: super::Program) -> Result<(), String> {
         if let Some(reason) = __rawr_internal::island::admit(bind(&mut program)?) {
             eprintln!("rawr: {reason}; restarting the program");
+            // An owner restarts it; a runner with no owner, as a
+            // browser's, only ends.
+            #[cfg(unix)]
             __rawr_internal::process::leave(__rawr_internal::island::REFUSED);
+            #[cfg(not(unix))]
+            std::process::exit(__rawr_internal::island::REFUSED);
         }
         ADMITTED.set(Some(program));
         super::admitted();

@@ -1,7 +1,8 @@
 //! The `rawr-import` command. `rawr` hands it a program with Rust
 //! dependencies in `Cargo.toml`, or native modules, after loading the
 //! program through its parse cells; rawr-import reads the cells and parses
-//! nothing again. `run` builds the program's runner and starts it, and
+//! nothing again. `run` builds the program's runner and starts it, or only
+//! builds it when Cargo builds for a target this machine can't run, and
 //! `check` checks the program against the Rust it imports and runs
 //! `cargo check` beside it, and `test` runs its tests in its runner, as
 //! `cargo test` runs them.

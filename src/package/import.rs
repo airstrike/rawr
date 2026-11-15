@@ -170,11 +170,11 @@ impl crate::Engine {
         cells: Option<&super::Cells>,
         kept: Option<&mut Kept>,
     ) -> Result<CompiledImported, super::Error> {
-        let mut step = std::time::Instant::now();
+        let mut step = crate::Instant::now();
         let mut steps = Vec::new();
         let mut took = |name| {
             steps.push((name, step.elapsed()));
-            step = std::time::Instant::now();
+            step = crate::Instant::now();
         };
         snapshot
             .revalidate()
@@ -373,7 +373,8 @@ impl crate::Engine {
         for used in symbolic.uses {
             // The script's impls for the script types the instance takes,
             // which cross with them (D594).
-            let crossing = crossing_impls(&used.types, &impls);
+            let crossing =
+                crossing_impls(&used.types, &impls, symbolic.programs.source(used.source));
             let source = program
                 .source()
                 .table()
@@ -614,6 +615,8 @@ impl crate::Engine {
             .map_err(Error::from)
             .map_err(super::Error::import)?;
         took("requiring");
+        // The steps are said on the host, where `RAWR_VERBOSE` reaches.
+        #[cfg(not(target_arch = "wasm32"))]
         rawr_import::progress::checked_steps(&steps);
         Ok(CompiledImported { demand })
     }
@@ -692,10 +695,12 @@ pub(crate) fn admit_applications(
 }
 
 /// The impls in `impls` for the script types `types` name at any depth,
-/// each once.
+/// each once, of the types `program` declares: a universe runner's
+/// programs name their types alike.
 pub(crate) fn crossing_impls(
     types: &[representability::convert::Type],
-    impls: &[(Box<str>, rawr_import::surface::instance::ScriptImpl)],
+    impls: &[crate::resolve::lower_nominal::NativeImpl],
+    program: &str,
 ) -> Box<[rawr_import::surface::instance::ScriptImpl]> {
     fn paths<'a>(ty: &'a representability::convert::Type, found: &mut Vec<&'a str>) {
         use representability::convert::Type;
@@ -743,8 +748,8 @@ pub(crate) fn crossing_impls(
     }
     impls
         .iter()
-        .filter(|(owner, _)| found.contains(&owner.as_ref()))
-        .map(|(_, script)| script.clone())
+        .filter(|native| *native.program == *program && found.contains(&native.owner.as_ref()))
+        .map(|native| native.script.clone())
         .collect()
 }
 

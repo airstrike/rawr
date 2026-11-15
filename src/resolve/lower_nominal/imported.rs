@@ -158,10 +158,12 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     }
     uses.sort_unstable();
     uses.dedup();
-    let impls = native_impls(program, &models)?.into_boxed_slice();
+    let programs = Programs::of(program);
+    let impls = native_impls(program, &models, &programs)?.into_boxed_slice();
     Ok(ImportedOutput {
         uses: uses.into_boxed_slice(),
         impls,
+        programs,
     })
 }
 
@@ -1938,9 +1940,87 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
 #[cfg(feature = "rust-import")]
 pub(crate) struct ImportedOutput {
     pub(crate) uses: Box<[ImportedUse]>,
-    /// The script's impls of dependencies' traits, by the script path of
-    /// the type each is for (D594).
-    pub(crate) impls: Box<[(Box<str>, rawr_import::surface::instance::ScriptImpl)]>,
+    /// The script's impls of dependencies' traits (D594).
+    pub(crate) impls: Box<[NativeImpl]>,
+    /// The program each source is in.
+    pub(crate) programs: Programs,
+}
+
+/// One script impl of a dependency's trait (D594): the script path of the
+/// type it is for, and the program that declares the type.
+#[cfg(feature = "rust-import")]
+pub(crate) struct NativeImpl {
+    pub(crate) owner: Box<str>,
+    pub(crate) program: Box<str>,
+    pub(crate) script: rawr_import::surface::instance::ScriptImpl,
+}
+
+/// The programs of a universe runner's crate (#1000), each a module with
+/// its own `main`, and the program each source is in. A universe runner
+/// names each program's script types by their index, so the same path
+/// names a type in each program, and an impl crosses only with its own
+/// program's uses. Outside a universe runner the crate is one program.
+#[cfg(feature = "rust-import")]
+pub(crate) struct Programs {
+    mains: Box<[Box<[ImmutableString]>]>,
+    sources: BTreeMap<crate::program::source::Id, Box<str>>,
+}
+
+#[cfg(feature = "rust-import")]
+impl Programs {
+    pub(super) fn of(program: &Program) -> Self {
+        let mut programs = Self {
+            mains: Box::default(),
+            sources: BTreeMap::new(),
+        };
+        if !rawr_import::universe::enabled() {
+            return programs;
+        }
+        programs.mains = program
+            .items
+            .iter()
+            .filter(|shell| matches!(shell.kind, item::Kind::Function(_)))
+            .filter_map(|shell| shell.key.as_ref())
+            .filter(|key| key.owner().is_none() && key.name() == "main")
+            .map(|key| Box::from(key.modules()))
+            .collect();
+        // A source is its file's module, the shortest its items are in.
+        let mut modules = BTreeMap::<_, &[ImmutableString]>::new();
+        for shell in program.items.iter() {
+            let Some(key) = shell.key.as_ref() else {
+                continue;
+            };
+            let shortest = modules.entry(shell.source).or_insert(key.modules());
+            if key.modules().len() < shortest.len() {
+                *shortest = key.modules();
+            }
+        }
+        programs.sources = modules
+            .into_iter()
+            .map(|(source, modules)| (source, programs.space(modules)))
+            .collect();
+        programs
+    }
+
+    /// The program `modules` is in: the longest of the programs' modules
+    /// it starts with, or the crate root's.
+    fn space(&self, modules: &[ImmutableString]) -> Box<str> {
+        (0..=modules.len())
+            .rev()
+            .map(|length| &modules[..length])
+            .find(|space| self.mains.iter().any(|main| **main == **space))
+            .unwrap_or_default()
+            .iter()
+            .map(ImmutableString::as_str)
+            .collect::<Vec<_>>()
+            .join("::")
+            .into_boxed_str()
+    }
+
+    /// The program `source` is in.
+    pub(crate) fn source(&self, source: crate::program::source::Id) -> &str {
+        self.sources.get(&source).map_or("", |program| program)
+    }
 }
 
 /// A body's lowering in a pass that goes on past misses (#662), as
@@ -2051,10 +2131,8 @@ pub(super) fn imported_result<T>(
 pub(super) fn native_impls(
     program: &Program,
     models: &Models,
-) -> Result<
-    Vec<(Box<str>, rawr_import::surface::instance::ScriptImpl)>,
-    crate::resolve::ImportedFailure,
-> {
+    programs: &Programs,
+) -> Result<Vec<NativeImpl>, crate::resolve::ImportedFailure> {
     let mut impls = Vec::new();
     for (index, shell) in program.items.iter().enumerate() {
         let item::Kind::Impl(implementation) = &shell.kind else {
@@ -2118,10 +2196,12 @@ pub(super) fn native_impls(
             Some(instances) => instances.iter().map(Some).collect::<Vec<_>>(),
             None => vec![None],
         };
+        let owner = models.definition(definition).definition().key().modules();
         for instance in instances {
-            impls.push((
-                models.script_path(definition),
-                native_impl(
+            impls.push(NativeImpl {
+                owner: models.script_path(definition),
+                program: programs.space(owner),
+                script: native_impl(
                     program,
                     models,
                     shell,
@@ -2130,7 +2210,7 @@ pub(super) fn native_impls(
                     arguments,
                     instance,
                 )?,
-            ));
+            });
         }
     }
     Ok(impls)

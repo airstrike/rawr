@@ -86,17 +86,53 @@ say({ listening: true });
 </script></body></html>`;
 }
 
+/**
+ * The crates `manifest` declares in its dependency tables, a target's own
+ * among them, by the name a snippet's paths give them (`-` read as `_`).
+ */
+export function crates(manifest: string): string[] {
+  const names = new Set<string>();
+  let dependencies = false;
+  for (const line of manifest.split("\n")) {
+    const table = line.match(/^\s*\[([^\]]*)\]/);
+    if (table) {
+      dependencies = /(^|\.)dependencies$/.test(table[1].trim());
+      continue;
+    }
+    const key = dependencies ? line.match(/^\s*([A-Za-z0-9_-]+)\s*=/) : null;
+    if (key) names.add(key[1].replaceAll("-", "_"));
+  }
+  return [...names];
+}
+
+/** Whether `code` names one of `crates`: a path that starts at it, or `extern crate`. */
+export function usesCrate(code: string, crates: string[]): boolean {
+  return crates.some((name) =>
+    new RegExp(`(^|[^\\w:])(::)?${name}::|\\bextern\\s+crate\\s+${name}\\b|\\buse\\s+${name}\\s*;`).test(code),
+  );
+}
+
 /** The page's universe: the module compiled once, an instance per frame. */
 export function universe({ document, fetch, compile }: UniverseEnv) {
-  let loaded: Promise<Loaded> | null = null;
-  const load = () =>
-    (loaded ??= Promise.all([
-      compile(fetch(UNIVERSE_WASM)),
-      fetch(UNIVERSE_MANIFEST).then((response) => {
+  // The manifest alone, for a page that asks which snippets use crates
+  // before it fetches the module. A fetch that failed is tried again.
+  let manifest: Promise<string> | null = null;
+  const readManifest = () =>
+    (manifest ??= fetch(UNIVERSE_MANIFEST)
+      .then((response) => {
         if (!response.ok) throw new Error(`the universe's manifest answered ${response.status}`);
         return response.text();
-      }),
-    ]).then(([module, manifest]) => ({ module, manifest })));
+      })
+      .catch((error) => {
+        manifest = null;
+        throw error;
+      }));
+  let loaded: Promise<Loaded> | null = null;
+  const load = () =>
+    (loaded ??= Promise.all([compile(fetch(UNIVERSE_WASM)), readManifest()]).then(([module, manifest]) => ({
+      module,
+      manifest,
+    })));
 
   /** A new frame in `parent`, hidden until shown, with its instance prepared. */
   const frame = async (parent: Element): Promise<Frame> => {
@@ -135,5 +171,5 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
     }
   };
 
-  return { load, frame, run };
+  return { manifest: readManifest, load, frame, run };
 }

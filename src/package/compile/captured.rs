@@ -139,7 +139,11 @@ impl Output {
             // The impls that cross with its script types, as the runner
             // was built with them: a changed shape is a use it doesn't
             // cover (#326).
-            let impls = package::import::crossing_impls(&used.types, &self.imported.impls);
+            let impls = package::import::crossing_impls(
+                &used.types,
+                &self.imported.impls,
+                self.imported.programs.source(used.source),
+            );
             let matched = carrier.cover(
                 coverage::Use {
                     path: &*path,

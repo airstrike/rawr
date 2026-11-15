@@ -1167,6 +1167,12 @@ impl Models {
         if self.mirrors.contains(&path) {
             return Holder::Mirror;
         }
+        // A universe runner names a script type by its index, so one holder
+        // serves the type at that index in each program it runs: a holder
+        // of one program's variants would be every program's.
+        if rawr_import::universe::enabled() {
+            return Holder::Proxy;
+        }
         let nominal = self.definition(id);
         match nominal {
             Nominal::Enum { item, .. }
