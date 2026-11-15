@@ -132,6 +132,46 @@ impl Plan {
     pub fn parts(&self) -> &[Part] {
         &self.parts
     }
+
+    /// The plan with a part named `name` at its end, as iced markdown's
+    /// `Content::push_str(&mut self, ..)` grows its items.
+    pub fn push(&mut self, name: &str) {
+        self.parts.push(Part {
+            name: name.to_owned(),
+        });
+    }
+}
+
+/// A widget of a plan's parts, which it keeps borrowed, and of what a
+/// gallery makes of them, as iced markdown's `view_with(items, settings,
+/// viewer)` gives an `Element<'a, ..>` of the items and the viewer's
+/// widgets.
+pub struct Board<'a> {
+    parts: &'a [Part],
+    lines: Box<dyn Shape<u32> + 'a>,
+}
+
+/// The board of `parts`, lined by `gallery`, as an opaque widget, as
+/// `view_with` gives `impl Widget<Message, Theme, Renderer> + 'a`.
+pub fn board<'a, Message, Theme, Renderer>(
+    parts: &'a [Part],
+    gallery: &impl Gallery<'a>,
+) -> impl crate::widgets::Widget<Message, Theme, Renderer> + 'a {
+    Board {
+        parts,
+        lines: Box::new(gallery.lines(parts)),
+    }
+}
+
+impl<Message, Theme, Renderer> crate::widgets::Widget<Message, Theme, Renderer> for Board<'_> {
+    fn labels(&self, labels: &mut Vec<String>) {
+        labels.extend(self.parts.iter().map(|part| part.name.clone()));
+        labels.push(self.lines.name());
+    }
+
+    fn press(&self, _label: &str) -> Option<Message> {
+        None
+    }
 }
 
 /// A shape traced along a borrowed label.

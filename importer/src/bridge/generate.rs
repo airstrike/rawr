@@ -13733,13 +13733,17 @@ fn render_adapter_body(
                 } else if VIEWED_ARGUMENTS.get() {
                     // Out of any view's region, the output is at
                     // `'static`, and so is what it borrows: no lend native
-                    // code keeps is so long.
+                    // code keeps is so long. What it borrows is held in
+                    // the pins of the anchored call it is made in, which
+                    // let it go when that call's value is next taken
+                    // `&mut` (`scope::anchored_pins`), else for the
+                    // runner's life.
                     let reaches = kept_reaches(
                         "None::<&__rawr_internal::scope::Region<'static>>",
                     );
                     writeln!(
                         output,
-                        "    let pins = static_pins();{reaches}\n    let output = lend(arguments.arena, || {call});"
+                        "    let pins = __rawr_internal::scope::anchored_pins().unwrap_or_else(static_pins);{reaches}\n    let output = lend(arguments.arena, || {call});"
                     )
                 } else {
                     writeln!(output, "    let output = lend(arguments.arena, || {call});")
