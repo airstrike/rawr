@@ -603,13 +603,9 @@ fn resolution_report_with_sources(
     }
     // The labels of rustc's note on the parameter that takes the value.
     if let resolve::Error::MovedValue {
-        cause:
-            Some(resolve::MoveCause {
-                parameter: Some(parameter),
-                ..
-            }),
-        ..
+        cause: Some(cause), ..
     } = error
+        && let Some(parameter) = &cause.parameter
     {
         builder = builder
             .secondary(

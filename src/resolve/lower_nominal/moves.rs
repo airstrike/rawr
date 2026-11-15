@@ -734,14 +734,14 @@ impl<'a> Parser<'a> {
     /// Why using the local `name` after its move at `moved` is rustc's
     /// E0382: its type, which isn't `Copy`, labelled at its declaration,
     /// and how rustc suggests keeping the value.
-    pub(super) fn move_cause(&self, name: &str, binding: &Binding, moved: Span) -> MoveCause {
+    pub(super) fn move_cause(&self, name: &str, binding: &Binding, moved: Span) -> Box<MoveCause> {
         let site = self.move_sites.get(&moved.start());
-        MoveCause {
+        Box::new(MoveCause {
             moved: MovedPlace::Local(self.name_span(binding.declaration, name)),
             ty: self.settled_name(&binding.ty),
             cloning: site.map_or(Cloning::None, |_| self.cloning(&binding.ty)),
             parameter: site.and_then(|site| site.parameter.clone()),
-        }
+        })
     }
 
     /// Why the borrow check's use of a moved place is rustc's E0382, from
@@ -753,10 +753,10 @@ impl<'a> Parser<'a> {
         place: &str,
         declaration: Span,
         partial: bool,
-    ) -> Option<MoveCause> {
+    ) -> Option<Box<MoveCause>> {
         let site = self.move_sites.get(&moved.start())?;
         let local = place.split('.').next().unwrap_or(place);
-        Some(MoveCause {
+        Some(Box::new(MoveCause {
             moved: if partial {
                 MovedPlace::Part(place.into())
             } else {
@@ -770,7 +770,7 @@ impl<'a> Parser<'a> {
                 self.cloning(&site.ty)
             },
             parameter: site.parameter.clone(),
-        })
+        }))
     }
 
     /// Where the move at `moved` is, whole: `p.a`, not its first token.
