@@ -156,6 +156,16 @@
       ]
     },
     {
+      "id": "beyond-ui",
+      "title": "Beyond UI",
+      "subtitle": "Data apps on turso and polars, to see if rawr helps outside iced",
+      "open": true,
+      "rows": [
+        {"id":"turso-app","name":"A turso data app","start":64,"size":4,"state":"next","note":"Declares turso, queries a local database and prints a report; matches cargo and hot-reloads its queries.","issues":[2024]},
+        {"id":"polars-app","name":"A polars data app","start":64,"size":6,"state":"next","note":"Declares polars, runs lazy queries over a CSV; matches cargo and hot-reloads its queries.","issues":[2025]}
+      ]
+    },
+    {
       "id": "debug",
       "title": "Debugger",
       "subtitle": "D557: a debugger any editor or MCP hooks into",

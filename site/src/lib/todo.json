@@ -4416,7 +4416,9 @@
     {"issue":2020,"title":"A crate call whose &[T] argument is a slice a crate method lent fails with TypeMismatch when the output keeps the lend","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2021,"title":"An arena-held opaque value that borrows can't join a region value in one call (hover(code_block(..), ..))","state":"closed","category":"No glue (D593)","release":"0.3.214"},
     {"issue":2022,"title":"A &'a [T] that native code lent a script impl function can't be kept by a crate call's output","state":"closed","category":"No glue (D593)","release":"0.3.214"},
-    {"issue":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"closed","category":"No glue (D593)","release":"0.3.214"}
+    {"issue":2023,"title":"A lend a view kept is still held when update borrows the state mutably (E0502 in markdown's stream)","state":"closed","category":"No glue (D593)","release":"0.3.214"},
+    {"issue":2024,"title":"A data app on turso runs under rawr run as under cargo, and its query and report code hot-reloads","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -6108,6 +6110,36 @@
             {"number":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open"},
             {"number":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed"},
             {"number":1247,"title":"A snippet of statements doesn't drop its locals at its end","state":"open"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "beyond-ui",
+      "title": "Beyond UI",
+      "subtitle": "Data apps on turso and polars, to see if rawr helps outside iced",
+      "open": true,
+      "rows": [
+        {
+          "id": "turso-app",
+          "name": "A turso data app",
+          "start": 64,
+          "size": 4,
+          "state": "next",
+          "note": "Declares turso, queries a local database and prints a report; matches cargo and hot-reloads its queries.",
+          "issues": [
+            {"number":2024,"title":"A data app on turso runs under rawr run as under cargo, and its query and report code hot-reloads","state":"open"}
+          ]
+        },
+        {
+          "id": "polars-app",
+          "name": "A polars data app",
+          "start": 64,
+          "size": 6,
+          "state": "next",
+          "note": "Declares polars, runs lazy queries over a CSV; matches cargo and hot-reloads its queries.",
+          "issues": [
+            {"number":2025,"title":"A data app on polars runs under rawr run as under cargo, and its lazy-query code hot-reloads","state":"open"}
           ]
         }
       ]
