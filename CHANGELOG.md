@@ -11,6 +11,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A Rust dependency that declares several crate types, as a library exposing a C ABI does with lib, cdylib and staticlib, no longer stops `rawr run` with an internal error. The runner also builds for crates whose async methods give futures that borrow their receiver; calling one says it isn't supported yet, instead of the native build failing. (#2029; part of #2024, #2030)
 - In the playground's browser mode, an edit to a running iced snippet reloads it in place and keeps its state. A compile error shows under the window while the program keeps running, and an edit that can't reload starts it over and says why. (#1455; part of #1395)
 - A save that adds, removes or reorders a marked type's private fields keeps the program running: each live value takes the new fields in place, a new field at its type's `Default`, and one line says what changed ("`App` gained `filter` (default); state kept"). A native loop that passes its state as `&mut` keeps it too, with no native build. (#2026)
+- An async fn or async `&mut self` method can use its `&mut` parameters across `.await`: its future holds the caller's place, as in Rust, and using the place while the future lives is rustc's borrow error. (#176; part of #2024)
 
 ## 0.3.214 (2026-11-14)
 
