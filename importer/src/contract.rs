@@ -231,7 +231,7 @@ impl Contract<Classified> {
             }
         }
         // A crate no root is, named as rustc names it, as `tracing_core::
-        // Level` is named where only inboard's `log` reaches tracing: under
+        // Level` is named where only one crate's `log` reaches tracing: under
         // each root whose table reaches that crate's segment, the type at
         // the same path there.
         if own.is_empty() {

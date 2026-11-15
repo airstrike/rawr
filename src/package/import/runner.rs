@@ -1410,7 +1410,7 @@ pub(crate) fn signature(
 
 /// `ty` with a facade type's path from the root `root`, as a relation's
 /// case names it: a relation is read where the program calls the item, not
-/// resolved where the facade installs (`Padding`, which pane_grid's
+/// resolved where the facade installs (`Padding`, which iced's
 /// `TitleBar::padding(impl Into<Padding>)` converts to).
 fn rooted(root: &str, ty: host::type_ref::Type) -> Option<host::type_ref::Type> {
     match ty.shape() {

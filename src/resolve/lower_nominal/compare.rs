@@ -638,7 +638,7 @@ impl<'a> Parser<'a> {
                 .iter()
                 .any(|item| item.kind() == crate::host::item::Kind::Method)
         }) {
-            // An imported type compared with another type, as clock's
+            // An imported type compared with another type, as a
             // `rotation < 180.0` of `Degrees` or log's `level <=
             // STATIC_MAX_LEVEL`: a miss the importer answers with the type's
             // `PartialOrd<Rhs>` or `PartialEq<Rhs>`.

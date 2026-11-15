@@ -1296,13 +1296,13 @@ impl<'a> Parser<'a> {
         };
         let places = self.mutable_arguments(&arguments, copied)?;
         // An impl of the method compiled per instantiation, as a blanket
-        // `IntoContent` impl's `into_content` (D629), is reached only at
+        // `IntoView` impl's `into_view` (D629), is reached only at
         // the receiver's own type: this body is compiled per instantiation
         // too, so the call names it.
         #[cfg(feature = "rust-import")]
         {
             // A trait impl's function keeps its trait in its name
-            // (`IntoContent<Message>::into_content`).
+            // (`IntoView<Message>::into_view`).
             let member = function.name.text.as_str();
             self.reaches_host |= self.models.instances.templates.keys().any(|key| {
                 key.name()

@@ -95,8 +95,8 @@ struct NativeRoot {
     /// Each marked module's path from the crate root, at any depth.
     marked: Box<[Box<[ImmutableString]>]>,
     /// The native modules on the way from the root to a marked module
-    /// (#1467), as `["workspace", "screen"]` for a marked
-    /// `workspace::screen::home`: native, and also Rawr sources of their
+    /// (#1467), as `["app", "screen"]` for a marked
+    /// `app::screen::home`: native, and also Rawr sources of their
     /// `mod` declarations alone, as the root is ([`island::module_text`]).
     ///
     /// [`island::module_text`]: super::island::module_text

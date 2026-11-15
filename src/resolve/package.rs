@@ -152,7 +152,7 @@ struct Resolver<'a> {
     type_ids: BTreeSet<type_def::Id>,
     /// Each crate trait whose name another module's trait has too, by its
     /// address, with the path it is known by, as rustc names it then:
-    /// `home::IntoContent` beside `sidebar::IntoContent`. A trait whose
+    /// `home::IntoView` beside `panel::IntoView`. A trait whose
     /// name is the crate's only one is known by its name.
     trait_names: BTreeMap<Address, ImmutableString>,
     /// Each crate derive whose expansion the graph loaded (#593).
@@ -2370,8 +2370,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// Each path of `item`'s signatures and bounds that names a crate trait
-    /// whose name another module's trait has, as `IntoContent<'a, Message>`
-    /// in `mod sidebar` or `crate::home::IntoContent`, written as the one
+    /// whose name another module's trait has, as `IntoView<'a, Message>`
+    /// in `mod panel` or `crate::home::IntoView`, written as the one
     /// segment of the path the trait is known by
     /// ([`Resolver::trait_names`]), its own arguments kept, and a trait
     /// declaration of such a name so renamed: two traits of one name are

@@ -281,7 +281,7 @@ impl Lent {
 
     /// The lent value, shared, which native code keeps borrowed for as
     /// long as what the call it was lent to gives back lives, as `&'a
-    /// inbox::State` of `view<'a>(&'a self, inbox: &'a inbox::State) ->
+    /// panel::State` of `view<'a>(&'a self, panel: &'a panel::State) ->
     /// Element<'a, Message>` (#1413): a call in the call's anchored region
     /// may borrow it there ([`Region::lent`]).
     #[must_use]
@@ -876,8 +876,8 @@ impl<'r> Region<'r> {
 
     /// Keep the region past the call that opened it, as a slot keeps the
     /// region of `view(&state)` once its output is taken out (#1217): a
-    /// script value native code took of the call, as loupe's `Loupe {
-    /// content }` inside the view's element, may hold one of its values,
+    /// script value native code took of the call, as a widget struct's
+    /// `content` field inside the view's element, may hold one of its values,
     /// and native code reaches it after the view returns. A region
     /// [`Region::anchored`] on pins lives as long as they do: they are let
     /// go when the owner is next reached `&mut`, when rustc would have
@@ -914,7 +914,7 @@ impl<'r> Region<'r> {
     }
 
     /// The value `lent` lends, a `T`, borrowed at the region's `'r`, as
-    /// `inbox.view()` of a lent `&'a inbox::State` borrows it for the
+    /// `panel.view()` of a lent `&'a panel::State` borrows it for the
     /// element it gives (#1413). Only a region [`Region::anchored`], as the
     /// call it was lent to runs in, reaches one, and only a shared lend
     /// native code keeps ([`Lent::kept`]): [`Error::Mismatch`] for any
@@ -938,7 +938,7 @@ impl<'r> Region<'r> {
     }
 
     /// The slice `lent` lends, of `T`s, borrowed at the region's `'r`, as
-    /// `inbox::view(.., browser_updates)` of a lent `&'a [Update]` borrows
+    /// `panel::view(.., updates)` of a lent `&'a [Update]` borrows
     /// it for the element it gives (#1292), on the terms of
     /// [`Region::lent`]. The lend's place is the trampoline's own `&[T]`,
     /// read here while the call runs: the slice it names outlives it.

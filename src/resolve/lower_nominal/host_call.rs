@@ -2087,7 +2087,7 @@ impl<'a> Parser<'a> {
     }
 
     /// An imported method's `Option<&mut T>` lent from its receiver, as
-    /// pane_grid's `state.get_mut(pane)`: the call gives `Some` of a place
+    /// iced's `pane_grid::State::get_mut(pane)`: the call gives `Some` of a place
     /// (`island::place::Place`) or `None`. The value is `Some` of a copy of
     /// the target, whose place a pattern's `&mut` binding reaches through
     /// the place at each use (`pattern_place`).
@@ -2643,7 +2643,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `local.field` by value of a crate struct whose every field the
-    /// program can name, as inboard's `action.task` of a `common::Action`:
+    /// program can name, as `action.task` of a crate's `Action` struct:
     /// only the field moves, as rustc moves it, and the struct's other
     /// fields stay for the program (#834), apart in the runner's slot. A
     /// struct behind a reference, or with fields the program can't name,
@@ -2745,7 +2745,7 @@ impl<'a> Parser<'a> {
 
     /// `place.a.b = value` of an imported struct's fields `a`, `b`: the
     /// value set in place, through the place's handle or a value native
-    /// code lends `&mut` (custom_widget's `tree.size = Size::new(..)`), as
+    /// code lends `&mut` (a widget's `tree.size = Size::new(..)`), as
     /// a `&mut self` method changes it. Rust sets a field below another
     /// where it is: Rawr reads each field on the way, a `Copy` value,
     /// sets the next one in it and sets it back, as a script place is

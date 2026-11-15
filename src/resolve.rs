@@ -101,7 +101,7 @@ pub struct Program {
     qualified_traits: BTreeMap<(program::source::Id, Span), ImmutableString>,
     /// The name each source writes a crate trait by, when another module's
     /// trait has that name too, with the path the trait is known by
-    /// (`home::IntoContent`).
+    /// (`panel::IntoView`).
     trait_names: BTreeMap<(program::source::Id, ImmutableString), ImmutableString>,
     /// The app crate's name, when a marked root's `async fn main` names a
     /// runtime's entry, which the shadow crate holds (D513.4).
@@ -3507,7 +3507,7 @@ fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
 pub(crate) const BLANKET_OWNER: i64 = -13;
 
 /// The owner of a blanket impl bounded by `IntoIterator<Item = X>` or
-/// `Iterator<Item = X>` (inboard's `impl<'a, T, Message> IntoContent<'a,
+/// `Iterator<Item = X>` (a crate's `impl<'a, T, Message> IntoView<'a,
 /// Message> for T where T: IntoIterator<Item = Element<'a, Message>>`) is
 /// Rawr's iterator of `X`, as a function's parameter of that bound is
 /// (`parser::item::erase_fn_bounds`): its functions take `self` as the
@@ -5037,7 +5037,7 @@ fn resolve_bounds_with_arguments(
                 traits.push(segment.name.clone());
                 continue;
             }
-            // `Convert<i64>` or `IntoContent<'a, Message>`: a generic user
+            // `Convert<i64>` or `IntoView<'a, Message>`: a generic user
             // trait and its type arguments. Its lifetimes are the enclosing
             // impl's or fn's, which rawr erases as rustc's borrow check
             // has already judged them.
@@ -5100,7 +5100,7 @@ fn resolve_bounds_with_arguments(
 }
 
 /// A bound segment's type arguments, without its lifetimes: `[Message]` of
-/// `IntoContent<'a, Message>`.
+/// `IntoView<'a, Message>`.
 fn type_arguments(segment: &crate::item::type_ref::Segment) -> Vec<crate::item::type_ref::Type> {
     segment
         .arguments

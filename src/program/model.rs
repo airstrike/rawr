@@ -43,8 +43,8 @@ pub(crate) struct Model {
     inputs: BTreeMap<(bool, String), Box<[Option<type_ref::Type>]>>,
     /// Each associated type of a script's impl of a crate trait, by the
     /// path of the type the runner names it by (`associated_path`): a type
-    /// Rust code holds as a script value, as the_matrix's `type State =
-    /// RefCell<Vec<Cache>>`, is a proxy whose `Default` is made here.
+    /// Rust code holds as a script value, as a `type State =
+    /// RefCell<Vec<Cache>>` of a canvas program, is a proxy whose `Default` is made here.
     #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
     associated: BTreeMap<String, type_ref::Type>,
     /// Each script type, in the order the program defines them, in a

@@ -406,7 +406,7 @@ pub(super) fn imported_surface_type(
             arguments: Box::default(),
         },
         // A `&dyn Trait` of a crate's trait the program holds, as iced's
-        // `window::run` lends editor's `open_file(window: &dyn Window)`: the
+        // `window::run` lends a program's `open_file(window: &dyn Window)`: the
         // object's shared pointer, which `Pointer::Shared` is, as rfd's
         // `set_parent(&window)` takes it for its `W: ?Sized` (D872).
         Ty::Reference {

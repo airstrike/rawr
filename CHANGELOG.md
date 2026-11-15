@@ -71,6 +71,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A future polled on another thread brings back the crate values it made, inside an Option or a Result too, so pokedex's images and todos' saved task ids survive. (#1986, #1957)
 - A widget made inside a view and passed in an Option, as gallery's `stack![content, viewer]` does, reaches the call that boxes it, so gallery's image viewer opens. (#2015)
 - A closure can compare parameters whose types its later calls fix, and keyed_column takes (key, element) pairs made inside a view, so iced's todos adds, checks, filters, deletes and saves its tasks. (#2019; part of #249)
+- A program's impl of a crate trait whose `impl Trait` function returns a crate type holding another crate function's opaque output compiles: the runner gives the boxed value, which implements the trait and its supertraits. (#2013; part of #83)
 
 ## 0.3.213 (2026-11-13)
 

@@ -249,7 +249,7 @@ pub(crate) struct Trait {
     /// The trait's own type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[Generic]>,
     /// How many lifetime parameters the trait declares: one of `trait
-    /// IntoContent<'a, Message>`, which rustc writes `'_` in a bound's
+    /// IntoView<'a, Message>`, which rustc writes `'_` in a bound's
     /// name.
     pub lifetimes: usize,
     /// The declaration of a facade trait (iced's `canvas::Program`), whose
@@ -476,7 +476,7 @@ pub(crate) struct Lifetimes {
     /// An instance's parameters as its template writes them: the signature
     /// says what each borrows, as rustc reads the generic signature, and a
     /// type argument written without its lifetimes, as `Content<M>` for
-    /// `impl IntoContent<'a, M> + 'a`, does not.
+    /// `impl IntoView<'a, M> + 'a`, does not.
     pub written_parameters: Option<Box<[type_ref::Type]>>,
 }
 

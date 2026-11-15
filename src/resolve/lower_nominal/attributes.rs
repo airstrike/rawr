@@ -267,7 +267,7 @@ impl<'a> Parser<'a> {
     /// over up to the first that stays. The attributes of the one that
     /// stays are read too, as they have no other effect, so a block-like
     /// expression followed only by left-out statements ends its block, as
-    /// pokedex's `#[cfg(not(target_arch = "wasm32"))] { .. }` before a
+    /// a `#[cfg(not(target_arch = "wasm32"))] { .. }` block before a
     /// `#[cfg(target_arch = "wasm32")]` tail does.
     pub(super) fn skip_left_out_statements(&mut self) -> Result<(), Error> {
         while self.attribute_ahead() {

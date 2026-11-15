@@ -3338,12 +3338,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             Some(AssociatedPathKind::Named) | None => None,
         };
         // `PartialOrd`'s provided `lt`, `le`, `gt` and `ge`, which a crate's
-        // impl that writes only `partial_cmp` gives its type, as clock's
+        // impl that writes only `partial_cmp` gives its type, as a crate's
         // `rotation < 180.0` of iced's `Degrees` calls (T412): its
         // signature, which the impl's trait reference instantiates. So is
         // `Into::into`, which a crate's `impl From<Degrees> for f32` gives
         // `Degrees` through core's blanket `impl<T, U: From<T>> Into<U> for
-        // T`, as ferris's `f32::from(degrees)` calls. So are `Iterator` and
+        // T`, as a crate's `f32::from(degrees)` calls. So are `Iterator` and
         // its `next`, which a crate's `impl Iterator<Item = T>` gives its
         // value, as polars' `downcast_iter_mut` does: a `for` loop and the
         // iterator's adaptors pull from it. Any other standard definition
@@ -3596,7 +3596,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // An alias that names an associated type is the type it gives
             // at its defaults, with the alias's own defaulted parameters,
             // which the type names none of: Rust code writes it with none
-            // of them or with them all, as sandpiles writes
+            // of them or with them all, as a crate may write
             // `canvas::Geometry<Renderer>`, and rustc normalizes it to that
             // type.
             DefKind::TyAlias if let Some(instance) = projected_alias_instance(self.tcx, def_id) => {

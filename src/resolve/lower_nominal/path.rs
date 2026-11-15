@@ -15,9 +15,9 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let (path, reference, next) = self.peek_path(&first, first_span);
         // A path into a native module is spelled through the app's crate,
-        // as markdown's `icon::copy` is `markdown::icon::copy`: its head is
-        // that crate, which no `use` shadows, as `use iced::widget::markdown`
-        // would.
+        // as a program's `icon::copy` is `app::icon::copy` in a crate named
+        // `app`: its head is that crate, which no `use` shadows, as a `use`
+        // of a library module of the same name would.
         let head = self
             .models
             .qualified_rust(reference)
@@ -290,7 +290,7 @@ impl<'a> Parser<'a> {
             .pop()
             .expect("qualified paths retain a member after their owner");
         // `Point::<u32> { x, y }`: a generic struct's literal at the
-        // turbofish's types, as screenshot's `Rectangle::<u32> { .. }`.
+        // turbofish's types, as `Rectangle::<u32> { .. }`.
         if segments.is_empty()
             && matches!(self.peek(), Token::LeftBrace)
             && !self.no_struct
@@ -749,7 +749,7 @@ impl<'a> Parser<'a> {
                             .native_site()
                             .is_some_and(|site| site.missing_binding(&self.models.host, &path)));
                 // A module a `use` names lacks only the item, as `fonts::
-                // UI_FAMILY` after `use common::fonts;`: rustc's E0425 for
+                // MISSING` after `use shared::fonts;`: rustc's E0425 for
                 // the module, not a type's E0599 (#1146). A crate's trait,
                 // which Rawr names as a module, is a type.
                 let error = if matches!(binding.target, item::Import::Module) && !crate_trait {
@@ -917,7 +917,7 @@ impl<'a> Parser<'a> {
                     }) = *target
                 {
                     // A crate's alias of a crate type through the module,
-                    // as the_matrix's `canvas::Cache::with_group`: that
+                    // as `canvas::Cache::with_group`: that
                     // type's, as `Cache::with_group` is after `use` (T327).
                     definition.path().as_str().into()
                 } else if through_module {
@@ -1103,7 +1103,7 @@ impl<'a> Parser<'a> {
             }
             // A library module or type that exists lacks only the member:
             // `iced::widget::Column::missing`. A module is rustc's E0425,
-            // `fount::google::load` naming no item of `fount::google`; a
+            // `fonts::google::load` naming no item of `fonts::google`; a
             // crate's trait, which Rawr also names as a module, is a type.
             let error = if matches!(
                 self.models.host.entry(&owner),

@@ -28,7 +28,7 @@
 //! profile `cargo build` gives it, not with the project's settings for
 //! packages outside the workspace (#1789).
 //!
-//! A workspace root that is a package itself, as `icedxdy = { path = "." }`
+//! A workspace root that is a package itself, as `app = { path = "." }`
 //! names it, can't be placed at its own path: the runner is its workspace's
 //! root. The runner names a copy of it under its root ([`ROOT`]), as it does
 //! the generated packages, so the root's path dependencies are placed and it

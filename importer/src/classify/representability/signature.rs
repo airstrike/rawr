@@ -526,10 +526,10 @@ pub enum Scope {
 pub enum Guard {
     Shared,
     Mutable,
-    /// An `Option<&T>` a method lends from its receiver, as pane_grid's
+    /// An `Option<&T>` a method lends from its receiver, as iced's pane_grid
     /// `State::get(&self, pane)` gives: a copy of the target, or `None`.
     OptionShared,
-    /// An `Option<&mut T>` a method lends from its receiver, as pane_grid's
+    /// An `Option<&mut T>` a method lends from its receiver, as iced's pane_grid
     /// `State::get_mut(&mut self, pane)` gives: `Some` of a place each
     /// read and store reaches by calling the method again with copies of
     /// its inputs, or `None`.
