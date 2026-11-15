@@ -283,13 +283,21 @@ impl Parser<'_> {
     }
 
     /// `value`, `lhs operator rhs` of the operands spanning `lhs` and
-    /// `rhs`: known when both are.
+    /// `rhs`: known when both are. Known values are found by their spans,
+    /// so operands whose spans coincide with each other or with the value's
+    /// can't be told apart, and the operation isn't followed: the tokens a
+    /// macro's own body gives all take its call's position, and taking one
+    /// nested call's value for both operands would double the noted tree
+    /// at each level.
     pub(super) fn note_known_binary(
         &mut self,
         operator: &Token,
         (lhs, rhs): (Span, Span),
         value: &ParsedExpr,
     ) {
+        if lhs == rhs || value.span == lhs || value.span == rhs {
+            return;
+        }
         let (Some(operator), Some(lhs), Some(rhs)) = (
             Operator::of(operator),
             self.known_values.get(&lhs),
