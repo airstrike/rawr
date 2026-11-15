@@ -12,6 +12,8 @@ interface Props {
   description: string;
   /** The page's path, for its canonical URL. */
   path: string;
+  /** The path of the page's Markdown copy, for agents (lib/agents.ts). */
+  markdown?: string;
   current?: "docs" | "play";
   /** The page has the docs' tree (#docs-nav), which the bar opens as a drawer on narrow screens. */
   drawer?: boolean;
@@ -20,7 +22,7 @@ interface Props {
   icon?: string;
   bodyClass?: string;
 }
-const { title, description, path, current, drawer = false, og = {}, icon = "/favicon.svg", bodyClass } = Astro.props;
+const { title, description, path, markdown, current, drawer = false, og = {}, icon = "/favicon.svg", bodyClass } = Astro.props;
 const url = `${SITE}${path}`;
 const image = og.image ?? `${SITE}/og/card.png`;
 const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.";
@@ -48,6 +50,7 @@ const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for 
 {og.twitter && <meta name="twitter:image" content={image}>}
 {og.twitter && <meta name="twitter:image:alt" content={alt}>}
 <link rel="canonical" href={url}>
+{markdown && <link rel="alternate" type="text/markdown" href={markdown}>}
 <link rel="icon" href={icon} type="image/svg+xml">
 <link rel="preconnect" href="https://abitaro-sans.pages.dev" crossorigin>
 <link rel="stylesheet" href="https://abitaro-sans.pages.dev/abitaro-sans.css?v=0.300">

@@ -1,0 +1,44 @@
+# rawr
+
+> rawr is rust augmented with rust: a Rust interpreter for your dev builds. Put `// rawr` on the first line of a file in a Cargo crate. `rawr run` checks the marked files (names, types, traits, borrows and `match` arms, with rustc's error codes) and interprets them, while Cargo compiles everything else: dependencies and unmarked "native" modules. A save reloads the running program, in place when it can. `cargo build --release` compiles the same files natively, since the marker is a comment, so no interpreter ships. rawr is pre-alpha and runs part of Rust; `rawr check` also runs `cargo check`, so rustc has the final word. Separately, an app can embed the `rawr` crate to run its users' Rust scripts.
+
+Every page of the site is also Markdown at its address plus `.md`: https://rawr.airstrike.fyi/docs/run is https://rawr.airstrike.fyi/docs/run.md, and https://rawr.airstrike.fyi/ is https://rawr.airstrike.fyi/index.md. Each HTML page names its copy in `<link rel="alternate" type="text/markdown">`. The essentials:
+
+- Install on macOS or Linux: `curl -LsSf https://rawr.airstrike.fyi/install.sh | sh`. It puts `rawr`, `cargo-rawr` and `rawr-import` in `~/.cargo/bin`, then runs `rawr cache warm`. Windows, best effort and without rawr-import: `irm https://rawr.airstrike.fyi/install.ps1 | iex`. From source, `rawr` alone: `cargo install --locked --git https://github.com/airstrike/rawr rawr-cli` (Rust 1.95 or newer). `cargo rawr run` is `rawr run`.
+- The marker: a file whose first line of Rust is exactly `// rawr` is interpreted, and every other file is native Rust that Cargo compiles. Only a shebang line and a cargo-script frontmatter block may come before it, and the marker is the very next line. The crate root may be marked or native; a native root runs when a module it declares is marked. A path dependency is always native. A single `.rs` file runs with or without the marker and may hold top-level statements.
+- Programs with Rust dependencies, native modules or iced go to `rawr-import`, which builds a runner with your own cargo, toolchain and `target/`, and generates the bindings marked code calls. You write no bindings. The first run with dependencies builds them, which can take minutes.
+- Commands: `rawr [run] [path] [-- args]` checks and runs, then reloads on save; `rawr check [path]` runs rawr's check and then `cargo check`; `rawr test [path] [filter]` runs `#[test]` functions as `cargo test` does; `rawr new <path>` makes a crate with a marked `src/main.rs`; `rawr mcp [path]` is an MCP server for coding agents; `rawr init [--claude] [--codex]` registers it; `rawr doctor` shows what is installed; `rawr cache warm` and `rawr cache clean` come with rawr-import. `run`, `check` and `test` take `-p`, `--bin` and Cargo's feature flags. Exit status: 0 ok, 1 a failed check or `main` returned `Err`, 101 a panic or a failed test.
+- Errors: where rustc has an error for the same mistake, rawr uses rustc's code and wording (`error[E0599]`, `E0382`, `E0502`), one error per check.
+- The agent loop over `rawr mcp`: `new` makes a crate; edit its files with your own tools; `check` returns each diagnostic with file, line and column; `run` runs a command-line program to its end with args and stdin; `start` keeps a window or long-running program going; after each save, `wait` says whether it swapped, restarted or failed; `screenshot` shows its window (macOS); `move`, `click`, `drag`, `scroll`, `key` and `type` send it input; `inspect` reads its values; `break`, `step`, `continue` and `clear` debug it; `stop` ends it. rawr puts no time limit on a call.
+
+## Docs
+
+{{docs}}
+
+## Playground
+
+- [The playground](https://rawr.airstrike.fyi/play.md): what https://rawr.airstrike.fyi/play is, how to run and share a snippet, its limits, and how a run in the browser (rawr compiled to WebAssembly) differs from a run on rawr's server.
+{{play}}
+- [Invite the ?play bot](https://rawr.airstrike.fyi/bot/invite): add the Discord bot to a server you manage; moderators turn it on per channel with `/play-channel`.
+
+## Work plan
+
+- [Work plan](https://rawr.airstrike.fyi/todo.md): the current version, the chart's open groups and rows, what is unreleased, and every open issue by category.
+- [Changelog](https://rawr.airstrike.fyi/changelog.md): every release, newest first. Each merge to main bumps the patch version, and a minor version marks a milestone.
+- [GitHub issues](https://github.com/airstrike/rawr/issues): each item of the plan is an issue, and `#N` on the site is issue N. Report a divergence from Rust there with a small reproduction.
+- [GitHub milestones](https://github.com/airstrike/rawr/milestones): each shipped issue is in the milestone of the minor series it shipped in, such as 0.3.
+
+## Source
+
+- [github.com/airstrike/rawr](https://github.com/airstrike/rawr): the source, in Rust.
+- [README](https://github.com/airstrike/rawr/blob/main/README.md): what rawr is, what it looks like, how to install it, how far along it is and how to work on rawr itself.
+- [CHANGELOG.md](https://github.com/airstrike/rawr/blob/main/CHANGELOG.md): the changelog as the repository keeps it.
+- License: MIT or Apache-2.0, at your option ([LICENSE-MIT.txt](https://github.com/airstrike/rawr/blob/main/LICENSE-MIT.txt), [LICENSE-APACHE.txt](https://github.com/airstrike/rawr/blob/main/LICENSE-APACHE.txt)). rawr's evaluator began as a fork of Rhai, and the LICENSE files carry its attribution.
+
+## Author
+
+- rawr is made by airstrike: [github.com/airstrike](https://github.com/airstrike) and [airstrike.fyi](https://airstrike.fyi).
+
+## Optional
+
+- [llms-full.txt](https://rawr.airstrike.fyi/llms-full.txt): every docs page above as Markdown, in one file.
