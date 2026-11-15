@@ -946,15 +946,21 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
 
     check(second);
     // The second project probed its own crate, and replayed semver's table
-    // as the home had it. A table the probe extracted, even in part, is
-    // recorded again beside it with what it served.
+    // as the home had it, read in place where the importer names it, with
+    // no copy in the project (#1355). A table the probe extracted, even in
+    // part, is recorded again beside it with what it served.
     let tables = kept(second, Kept::Extraction);
-    let replayed = fs::read(tables.join(key)).unwrap();
-    assert_eq!(
-        String::from_utf8(replayed).unwrap(),
-        table,
-        "semver's table replays unchanged"
-    );
+    let keys = fs::read_to_string(tables.join("keys.json")).unwrap();
+    let keys = serde_json::from_str::<serde_json::Value>(&keys).unwrap();
+    let named = keys
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|shared| shared["key"] == key.to_str().unwrap())
+        .unwrap_or_else(|| panic!("the importer names semver's key: {keys}"));
+    let replayed = fs::read_to_string(named["table"].as_str().unwrap()).unwrap();
+    assert_eq!(replayed, table, "semver's table replays unchanged");
+    assert!(!tables.join(key).exists(), "semver's table is copied");
     let mut served = key.clone();
     served.push(".served");
     assert!(
