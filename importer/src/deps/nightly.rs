@@ -4,9 +4,9 @@
 //! there, so every unit in it is rawr's. Each build records the units it
 //! named under its key: the project, the target, the profile and which of
 //! extraction's builds it is. After each build, a unit no live record names
-//! goes. A record lives while its project's manifest is on disk and its
-//! format is this one; the next build of its key replaces it. Nothing goes
-//! by age.
+//! goes. A record lives while its project's manifest is on disk, or the
+//! project's directory for a project with no manifest, and its format is
+//! this one; the next build of its key replaces it. Nothing goes by age.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -39,7 +39,7 @@ pub(crate) enum Build {
 #[derive(Serialize, Deserialize)]
 struct Record {
     version: u32,
-    /// The project's manifest.
+    /// The project's manifest, or the project's directory when it has none.
     manifest: PathBuf,
     named: BTreeSet<String>,
 }
@@ -66,9 +66,16 @@ pub(crate) fn prune(shared: &Path, messages: &[u8], key: &Key<'_>) {
         return;
     }
     let records = shared.join(RECORDS);
+    let manifest = key.project.join("Cargo.toml");
     let record = Record {
         version: VERSION,
-        manifest: key.project.join("Cargo.toml"),
+        // A request may name a project directory with no manifest of its
+        // own, its dependencies given one by one; the directory keeps it.
+        manifest: if manifest.is_file() {
+            manifest
+        } else {
+            key.project.to_path_buf()
+        },
         named: named.hashes().map(str::to_owned).collect(),
     };
     let own = records.join(format!("{}.json", key.digest()));
@@ -90,7 +97,7 @@ pub(crate) fn prune(shared: &Path, messages: &[u8], key: &Key<'_>) {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
             .filter(|record| record.version == VERSION)
-            .filter(|record| record.manifest.is_file());
+            .filter(|record| record.manifest.exists());
         match record {
             Some(record) => live.extend(record.named),
             None => {
@@ -284,5 +291,16 @@ mod tests {
             fs::read_dir(shared.join(super::RECORDS)).unwrap().count(),
             1
         );
+        // A project with no manifest keeps its units while its directory
+        // is there.
+        let unmanifested = root.path().join("c");
+        fs::create_dir_all(&unmanifested).unwrap();
+        let toml = unit(&profile, "toml", 'f');
+        prune(&unmanifested, &[&toml]);
+        prune(&second, &[&serde]);
+        assert!(exists(&toml) && exists(&serde));
+        fs::remove_dir_all(&unmanifested).unwrap();
+        prune(&second, &[&serde]);
+        assert!(!exists(&toml) && exists(&serde));
     }
 }

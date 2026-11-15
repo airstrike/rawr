@@ -289,7 +289,7 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
 }
 
 #[test]
-fn pinned_cargo_package_file_set_honors_include_and_exclude() {
+fn package_without_rerun_inputs_is_proved_by_its_whole_tree() {
     let _lane = crate::shared::lane();
     let project = Project::new("package-files");
     let copied = project.0.join("fallback-copy");
@@ -297,28 +297,15 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let first = extract_fallback(&native, &project, &copied, &limits)
-        .expect("the initial exact package file set publishes");
+        .expect("the initial package tree publishes");
+    // The tree is walked whatever `include` and `exclude` say, so a file
+    // outside the package's archive is an input as much as one inside it.
     fs::write(copied.join("excluded.txt"), b"changed excluded source\n")
         .expect("the excluded package file can mutate");
-    fs::write(
-        copied.join(".cargo_vcs_info.json"),
-        b"{\"git\":{\"sha1\":\"1111111111111111111111111111111111111111\"}}\n",
-    )
-    .expect("the excluded real VCS archive-name file can mutate");
-    fs::write(
-        copied.join("Cargo.toml.orig"),
-        b"# changed excluded real original-manifest archive entry\n",
-    )
-    .expect("the excluded real original-manifest archive-name file can mutate");
-    fs::write(
-        copied.join("Cargo.lock"),
-        b"# changed but valid excluded real lock archive entry\nversion = 4\n\n[[package]]\nname = \"fallback-api\"\nversion = \"0.1.0\"\n",
-    )
-    .expect("the excluded real lock archive-name file can mutate");
     let excluded = extract_fallback(&native, &project, &copied, &limits)
         .expect("the excluded package mutation publishes");
     assert_eq!(first.fingerprint(), excluded.fingerprint());
-    assert_eq!(
+    assert_ne!(
         first.freshness_fingerprint(),
         excluded.freshness_fingerprint()
     );
@@ -329,7 +316,7 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
         .expect("the included package mutation publishes");
     assert_eq!(first.fingerprint(), included.fingerprint());
     assert_ne!(
-        first.freshness_fingerprint(),
+        excluded.freshness_fingerprint(),
         included.freshness_fingerprint()
     );
 
@@ -360,10 +347,11 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
     .expect("a new included package member can be added after capture");
     let error = rawr_import::extract::from_resolution(resolution, &native, &limits)
         .err()
-        .expect("a newly-added included fallback member rejects publication");
-    // Said as Cargo says a package that changed under it (D664).
+        .expect("a file added to the package after capture rejects publication");
+    // Said as Cargo says an input that changed under it (D664): the walked
+    // tree is one input, so no single file is named.
     assert!(
-        format!("{error}").contains("fallback-api@0.1.0` changed during the build; run it again"),
+        format!("{error}").contains("changed during the build; run it again"),
         "{error}"
     );
 }

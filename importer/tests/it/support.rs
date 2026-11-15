@@ -534,10 +534,12 @@ fn duplicate_crate_names_keep_distinct_artifact_and_compiler_identities() {
 fn assert_impl_shapes(graph: &rawr_import::api::Graph<rawr_import::api::Extracted>) {
     let primitive = implementation(graph, "PrimitiveImpl");
     assert!(matches!(primitive.self_type(), model::Type::Primitive(name) if &**name == "u32"));
+    // A selected trait's impl for a scalar keeps its methods, each a
+    // function of the scalar beside the trait (#1614).
     assert_eq!(
         associated_names(graph, primitive),
-        BTreeSet::new(),
-        "nominal-independent trait evidence retains its impl header without unrelated members"
+        BTreeSet::from(["increment"]),
+        "a scalar impl of a selected trait retains its methods"
     );
 
     let blanket = implementation(graph, "BlanketImpl");
@@ -696,9 +698,12 @@ fn assert_semantic_edge_cases(graph: &rawr_import::api::Graph<rawr_import::api::
                 && export.span().file().ends_with("/facade-api/src/lib.rs")
                 && export.span().byte_range() == (897..909)
     )));
+    // A bound-only trait's impls for scalars come with it, as every selected
+    // trait's do (#1614); the fixture has no other.
     assert!(graph.implementations().all(|implementation| {
         !matches!(implementation.trait_ref(), model::Trait::Trait { id, .. }
             if definition_name(graph, id) == Some("BoundOnly"))
+            || matches!(implementation.self_type(), model::Type::Primitive(name) if &**name == "u8")
     }));
 
     let opaque = function_output(graph, "opaque_private");

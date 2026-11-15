@@ -143,53 +143,7 @@ impl<B> super::Manifest<super::Generated, B> {
     }
 
     fn compile_entry(&self, entry: &Path) -> Result<super::artifact::BuiltArtifactProof, Error> {
-        use crate::bridge::generate;
-        // The runner compiles rawr's crate from the host, not from the
-        // Cargo view its resolution read, and so does each of its members.
-        let runner = self
-            .files
-            .iter()
-            .find(|file| file.path() == "Cargo.toml")
-            .and_then(|file| std::str::from_utf8(file.bytes()).ok())
-            .map(|text| crate::host::relocated(text).unwrap_or_else(|| text.to_owned()));
-        let parsed = runner
-            .as_deref()
-            .and_then(|runner| runner.parse::<toml_edit::DocumentMut>().ok());
-        for file in &self.files {
-            let path = entry.join(file.path());
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|source| Error::Io {
-                    operation: "create generated runner source directory",
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
-            let relocated = match file.path() {
-                "Cargo.toml" => runner.clone(),
-                path if generate::is_member_manifest(path) => parsed.as_ref().and_then(|runner| {
-                    let mut member = std::str::from_utf8(file.bytes())
-                        .ok()?
-                        .parse::<toml_edit::DocumentMut>()
-                        .ok()?;
-                    generate::member::rebase(runner, &mut member)?;
-                    Some(member.to_string())
-                }),
-                _ => None,
-            };
-            let bytes = relocated.as_deref().map_or(file.bytes(), str::as_bytes);
-            fs::write(&path, bytes).map_err(|source| Error::Io {
-                operation: "write generated runner file",
-                path,
-                source,
-            })?;
-        }
-        let carrier = self.generated.carrier()?;
-        let carrier_path = entry.join("rawr-generated-manifest.carrier");
-        fs::write(&carrier_path, &carrier).map_err(|source| Error::Io {
-            operation: "write generated manifest carrier",
-            path: carrier_path,
-            source,
-        })?;
+        self.write_sources(entry)?;
         let target = entry.join("target");
         let mut command = Command::new(cargo());
         command.args(["build", "--offline", "--locked"]);
@@ -235,6 +189,62 @@ impl<B> super::Manifest<super::Generated, B> {
         Ok(artifact)
     }
 
+    /// Write the runner's sources into `directory` as Cargo builds them:
+    /// rawr's crate named at the host rather than at the Cargo view its
+    /// resolution read, each member rebased on that manifest, the lock
+    /// settled with rawr's own dependency graph, which the harness locked
+    /// rawr's crate without (#1914), and the manifest carrier beside them.
+    pub fn write_sources(&self, directory: &Path) -> Result<(), Error> {
+        use crate::bridge::generate;
+        // The runner compiles rawr's crate from the host, not from the
+        // Cargo view its resolution read, and so does each of its members.
+        let runner = self
+            .files
+            .iter()
+            .find(|file| file.path() == "Cargo.toml")
+            .and_then(|file| std::str::from_utf8(file.bytes()).ok())
+            .map(|text| crate::host::relocated(text).unwrap_or_else(|| text.to_owned()));
+        let parsed = runner
+            .as_deref()
+            .and_then(|runner| runner.parse::<toml_edit::DocumentMut>().ok());
+        for file in &self.files {
+            let path = directory.join(file.path());
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|source| Error::Io {
+                    operation: "create generated runner source directory",
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+            let relocated = match file.path() {
+                "Cargo.toml" => runner.clone(),
+                path if generate::is_member_manifest(path) => parsed.as_ref().and_then(|runner| {
+                    let mut member = std::str::from_utf8(file.bytes())
+                        .ok()?
+                        .parse::<toml_edit::DocumentMut>()
+                        .ok()?;
+                    generate::member::rebase(runner, &mut member)?;
+                    Some(member.to_string())
+                }),
+                _ => None,
+            };
+            let bytes = relocated.as_deref().map_or(file.bytes(), str::as_bytes);
+            fs::write(&path, bytes).map_err(|source| Error::Io {
+                operation: "write generated runner file",
+                path,
+                source,
+            })?;
+        }
+        let carrier = self.generated.carrier()?;
+        let carrier_path = directory.join("rawr-generated-manifest.carrier");
+        fs::write(&carrier_path, &carrier).map_err(|source| Error::Io {
+            operation: "write generated manifest carrier",
+            path: carrier_path,
+            source,
+        })?;
+        settle_lock(directory)
+    }
+
     fn built(
         self,
         native: super::Native,
@@ -264,6 +274,31 @@ fn executable(entry: &Path, files: &[super::manifest::File]) -> PathBuf {
         .unwrap_or_default();
     let name = crate::bridge::generate::member::executable(manifest);
     entry.join("target/debug").join(name)
+}
+
+/// Settle the lock of the runner in `directory` to its manifest: Cargo adds
+/// what the lock lacks, rawr's crate graph among it, and changes no package
+/// the lock already pins.
+fn settle_lock(directory: &Path) -> Result<(), Error> {
+    let manifest = directory.join("Cargo.toml");
+    let output = Command::new(cargo())
+        .args(["update", "--workspace", "--offline", "--quiet"])
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|source| Error::Io {
+            operation: "settle the generated runner's lockfile",
+            path: manifest,
+            source,
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::Lock(
+            String::from_utf8_lossy(&output.stderr).trim().into(),
+        ))
+    }
 }
 
 fn cargo() -> PathBuf {
@@ -316,6 +351,8 @@ pub enum Error {
     },
     #[error("generated runner Cargo build failed with status {0:?}")]
     Build(Option<i32>),
+    #[error("cargo could not settle the generated runner's lockfile: {0}")]
+    Lock(Box<str>),
     #[error(transparent)]
     Manifest(#[from] super::manifest::Error),
 }
