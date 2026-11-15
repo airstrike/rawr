@@ -108,3 +108,32 @@ pub mod store {
         }
     }
 }
+
+/// A connection whose async `&mut self` method changes it after a yield,
+/// as a database client's `execute` does.
+pub mod db {
+    /// The statements a connection ran.
+    #[derive(Debug, Default)]
+    pub struct Connection {
+        statements: Vec<String>,
+    }
+
+    /// A connection that has run nothing.
+    pub fn open() -> Connection {
+        Connection::default()
+    }
+
+    impl Connection {
+        /// Runs `statement` after a yield, and gives how many have run.
+        pub async fn execute(&mut self, statement: &str) -> usize {
+            tokio::task::yield_now().await;
+            self.statements.push(statement.to_string());
+            self.statements.len()
+        }
+
+        /// How many statements have run.
+        pub fn count(&self) -> usize {
+            self.statements.len()
+        }
+    }
+}

@@ -165,6 +165,39 @@ fn an_async_fn_leases_every_borrow_its_inputs_hold() {
     );
 }
 
+/// A program's `async fn` that takes `&mut` parameters holds each borrow
+/// of the caller's place in its future across its awaits (#176): a `Vec`,
+/// a program struct through a free function and its own `&mut self`
+/// method, and a crate's connection whose `&mut self` async method the
+/// future calls, each called twice. The output is `cargo run`'s.
+#[test]
+fn an_async_fn_holds_its_mut_parameters_across_its_awaits() {
+    let mutable = BORROWED.read("variants/mutable.rs");
+    let root = BORROWED.lease(&[("src/main.rs", &mutable)]);
+    let directory = crate::support::scratch();
+    let output = |command: &mut Command| {
+        let run = command
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let rawr = output(
+        crate::support::rawr_import()
+            .arg("run")
+            .arg(&*root)
+            .env("RAWR_HOME", directory.join("rawr-home")),
+    );
+    let cargo = output(Command::new("cargo").args(["run", "-q"]));
+    assert_eq!(rawr, cargo);
+}
+
 #[test]
 fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
     let root = TICKS.lease(&[]);

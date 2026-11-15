@@ -1292,9 +1292,22 @@ impl<'a> Parser<'a> {
         let copied = if matches!(trait_name.as_str(), "Debug" | "Display") {
             Vec::new()
         } else {
-            copied_parameters(&function.parameters, None, function.formatter.as_ref())
+            copied_parameters(
+                &function.parameters,
+                None,
+                function.formatter.as_ref(),
+                function.body.asynchronous,
+            )
         };
+        let lent = lent_parameters(
+            &function.parameters,
+            None,
+            function.formatter.as_ref(),
+            function.body.asynchronous,
+        );
         let places = self.mutable_arguments(&arguments, copied)?;
+        self.mutable_arguments(&arguments, lent.iter().copied())?;
+        self.lend_mutable(&mut arguments, &lent)?;
         // An impl of the method compiled per instantiation, as a blanket
         // `IntoView` impl's `into_view` (D629), is reached only at
         // the receiver's own type: this body is compiled per instantiation

@@ -655,9 +655,15 @@ impl Engine {
             (_, Some(..)) => unreachable!("cannot assign to an expression"),
             // {expr}.??? or {expr}[???]
             (lhs_expr, None) => {
-                let value = self
-                    .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), lhs_expr)?
-                    .flatten();
+                let value =
+                    self.eval_expr(global, caches, scope, this_ptr.as_deref_mut(), lhs_expr)?;
+                // A lent place (`KEYWORD_LEND`) stays its shared handle, so
+                // a method whose future holds its receiver holds the place.
+                let value = if crate::func::call::lent_local(lhs_expr).is_some() {
+                    value
+                } else {
+                    value.flatten()
+                };
                 let item_ptr = &mut value.into();
                 let scope = Some(scope);
                 let lent = ChainLent::default();

@@ -198,6 +198,16 @@ impl Reader<'_> {
                     self.positions(item, at.push(Step::Arg(0)), output, out);
                 }
             }
+            // A future captures what it was made of, as an `impl Trait`
+            // output does: an `async fn`'s future holds each borrow its
+            // inputs hold for as long as it lives. As an output, what it
+            // gives is below it.
+            Type::Path(_) if let Some(output_ty) = ty.future_output() => {
+                out.push((own, Region::Captures));
+                if output {
+                    self.positions(output_ty, at.push(Step::Arg(0)), output, out);
+                }
+            }
             // A function value holds what it captures: within the
             // lifetimes its type is bounded by (`impl Fn() + 'a`), or any.
             Type::Path(path) if ty.fn_signature().is_some() => {

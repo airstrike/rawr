@@ -7,6 +7,7 @@ use super::{
     assignment_token, contains_inference, drops, origin, pattern, places, point_span, span,
     text_end, Binding, BindingKind, ParsedExpr, Parser,
 };
+use crate::engine::HELD_STEPS;
 use crate::resolve::borrowck::record;
 use crate::resolve::borrowck::record::ScopeEnd;
 use crate::resolve::{borrowck, BindingSite, Error};
@@ -39,10 +40,10 @@ pub(super) struct Lifted {
     pub(super) span: Span,
     /// Its parameters from `|` to `|`.
     pub(super) header: Span,
-    /// Whether its body reaches a place through a handle made where it is
-    /// written (`places::held`), which its generated function has no way to
-    /// be given.
-    pub(super) held: bool,
+    /// What takes each place its body reaches through a handle made where
+    /// it is written (`places::held`), run before its captures are read:
+    /// the handles are among its captures.
+    pub(super) held: origin::Fragment,
 }
 
 /// An executable callable for a lifted closure.
@@ -74,6 +75,9 @@ pub(super) struct Scope {
     /// body uses, each reached through a shared handle made where the
     /// closure is (`places::held`).
     pub(super) held: Vec<places::Held>,
+    /// The handles of places an enclosing closure holds (`held`) that this
+    /// body reaches, which it captures from that closure's body.
+    pub(super) relayed: Vec<ImmutableString>,
 }
 
 impl<'a> Parser<'a> {
@@ -526,6 +530,7 @@ impl<'a> Parser<'a> {
             consumed: BTreeSet::new(),
             asynchronous: async_step.is_some(),
             held: Vec::new(),
+            relayed: Vec::new(),
         });
         let outer_loops = std::mem::take(&mut self.loops);
         let closure_split = self.flow().closure_enter();
@@ -938,13 +943,47 @@ impl<'a> Parser<'a> {
                 let mut lifted_parameters = Vec::new();
                 let mut captures = Vec::new();
                 for name in &scope.captures {
+                    // A `&mut` borrow of a place is reached through the
+                    // place's handle (`held`), captured below.
+                    if self
+                        .aliases
+                        .get(name)
+                        .is_some_and(|(at, _)| scope.outer.get(name) == Some(at))
+                    {
+                        continue;
+                    }
+                    // An async body runs after the call that made it
+                    // returns, so a `&mut` it captures is the place itself,
+                    // lent for the future's life, as Rust's future holds
+                    // the borrow: a change it makes is the place's own.
+                    let lent = scope.asynchronous
+                        && self.bindings.get(name.as_str()).is_some_and(|binding| {
+                            matches!(
+                                self.inference.resolve(&binding.ty),
+                                Ty::Reference { mutable: true, .. }
+                            )
+                        });
                     if name == "self" {
-                        lifted_parameters.push(SELF_CAPTURE.into());
-                        captures.push(origin::Fragment::plain(if self.closures.is_empty() {
+                        let local = if self.closures.is_empty() {
                             "self"
                         } else {
                             SELF_CAPTURE
-                        }));
+                        };
+                        lifted_parameters.push(SELF_CAPTURE.into());
+                        captures.push(if lent {
+                            origin::Fragment::call(
+                                crate::engine::KEYWORD_LEND,
+                                [origin::Fragment::plain(local)],
+                            )
+                        } else {
+                            origin::Fragment::plain(local)
+                        });
+                    } else if lent {
+                        lifted_parameters.push(name.clone());
+                        captures.push(origin::Fragment::call(
+                            crate::engine::KEYWORD_LEND,
+                            [origin::Fragment::plain(name.as_str())],
+                        ));
                     } else if moving.contains(name) {
                         lifted_parameters.push(name.clone());
                         captures.push(origin::Fragment::call(
@@ -971,6 +1010,24 @@ impl<'a> Parser<'a> {
                         captures.push(origin::Fragment::plain(name.as_str()));
                     }
                 }
+                // Each handle the body reaches a place through is captured
+                // as itself, not a copy, with the place's path, as the
+                // body's runtime finds them (`KEYWORD_HELD`).
+                let holders = scope
+                    .held
+                    .iter()
+                    .map(places::Held::holder)
+                    .chain(&scope.relayed);
+                for holder in holders {
+                    let steps: ImmutableString = format!("{holder}{HELD_STEPS}").into();
+                    captures.push(origin::Fragment::call(
+                        crate::engine::KEYWORD_LEND,
+                        [origin::Fragment::plain(holder.as_str())],
+                    ));
+                    captures.push(origin::Fragment::plain(steps.as_str()));
+                    lifted_parameters.push(holder.clone());
+                    lifted_parameters.push(steps);
+                }
                 lifted_parameters.extend(names_list);
                 self.lifted.push(Lifted {
                     key: key.clone(),
@@ -980,7 +1037,7 @@ impl<'a> Parser<'a> {
                     body: body_block,
                     span: expression,
                     header,
-                    held: !scope.held.is_empty(),
+                    held: Self::held_setup(&scope.held),
                 });
                 Ty::FnItem {
                     key: Box::new(key),

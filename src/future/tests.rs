@@ -350,3 +350,115 @@ fn steps_polled_elsewhere_queue_for_the_owner_which_drains_them() {
     super::drain();
     assert_eq!(poller.join().unwrap().into_inner().as_int().unwrap(), 10);
 }
+
+/// An async fn's future holds each `&mut` parameter, its receiver's too,
+/// as the caller's place across its awaits (#176): a `Vec` and a `String`,
+/// a program struct's fields, a method's `&mut self` beside a `&mut`
+/// parameter, a borrow passed on to another async fn, a `&mut` local an
+/// async block captures, and a closure inside the body. Each place is
+/// borrowed again after its future ends, by an async fn, a method and a
+/// plain fn. The text is what rustc's build prints.
+#[test]
+fn an_async_fns_mut_parameters_are_the_callers_places_across_awaits() {
+    let future = main_of(
+        r#"
+        struct Bag { items: Vec<i64>, name: String }
+        async fn tick() {}
+        async fn push(items: &mut Vec<i64>) { tick().await; items.push(4); }
+        async fn both(a: &mut Vec<i64>, b: &mut String) { a.push(2); tick().await; b.push_str("x"); }
+        async fn pass(a: &mut Vec<i64>, b: &mut String) { both(a, b).await; push(a).await; }
+        async fn adds(items: &mut Vec<i64>) {
+            tick().await;
+            let mut add = |x| items.push(x);
+            add(5);
+            add(6);
+        }
+        fn grow(items: &mut Vec<i64>) { let mut add = |x| items.push(x); add(9); }
+        impl Bag {
+            async fn fill(&mut self, other: &mut Vec<i64>) {
+                tick().await;
+                self.items.push(7);
+                other.push(8);
+            }
+            fn plain(&mut self) { self.items.push(5); }
+        }
+        #[tokio::main]
+        pub async fn main() -> String {
+            let mut bag = Bag { items: vec![1], name: String::from("n") };
+            let mut v = vec![0];
+            both(&mut bag.items, &mut bag.name).await;
+            let f = push(&mut bag.items);
+            f.await;
+            bag.fill(&mut v).await;
+            bag.fill(&mut v).await;
+            bag.plain();
+            pass(&mut v, &mut bag.name).await;
+            let mut i = 0;
+            while i < 2 { push(&mut v).await; i += 1; }
+            grow(&mut v);
+            let r = &mut v;
+            let g = async move { r.push(3); tick().await; push(r).await; };
+            g.await;
+            adds(&mut v).await;
+            format!("{:?} {} {v:?}", bag.items, bag.name)
+        }
+        "#,
+    );
+    assert_eq!(
+        block_on(future).unwrap().into_string().unwrap(),
+        "[1, 2, 4, 7, 7, 5] nxx [0, 8, 8, 2, 4, 4, 4, 9, 3, 4, 5, 6]"
+    );
+}
+
+/// A use of a place while a future that borrows it lives is refused with
+/// rustc's error: an async fn's future holds what its inputs borrow, as
+/// an `impl Trait` output does, and a use once it has ended is accepted.
+#[test]
+fn a_use_of_a_place_a_live_future_borrows_is_rustcs_error() {
+    let compiled = |body: &str| {
+        let mut engine = Engine::new();
+        engine
+            .register_host_facade(super::facade::definition().unwrap())
+            .unwrap();
+        let source = format!(
+            "async fn push(items: &mut Vec<i64>) {{ items.push(4); }}
+             async fn len(items: &Vec<i64>) -> usize {{ items.len() }}
+             struct C {{ n: i64 }}
+             impl C {{ async fn bump(&mut self) {{ self.n += 1; }} }}
+             #[tokio::main] pub async fn main() {{ {body} }}"
+        );
+        Shared::new(engine)
+            .compile_authority(&source)
+            .err()
+            .map(|error| error.to_string())
+    };
+    for (body, code) in [
+        (
+            "let mut v = vec![1]; let f = push(&mut v); v.push(2); f.await;",
+            "E0499",
+        ),
+        (
+            "let mut v = vec![1]; let f = push(&mut v); let n = v.len(); f.await;",
+            "E0502",
+        ),
+        (
+            "let mut v = vec![1]; let f = len(&v); v.push(2); f.await;",
+            "E0502",
+        ),
+        (
+            "let mut c = C { n: 0 }; let f = c.bump(); c.n += 1; f.await;",
+            "E0503",
+        ),
+        (
+            "let mut c = C { n: 0 }; let f = c.bump(); let n = c.n; f.await;",
+            "E0503",
+        ),
+    ] {
+        let error = compiled(body).unwrap_or_else(|| panic!("accepted: {body}"));
+        assert!(error.contains(code), "{body}: {error}");
+    }
+    assert_eq!(
+        compiled("let mut v = vec![1]; let f = push(&mut v); f.await; v.push(2);"),
+        None
+    );
+}
