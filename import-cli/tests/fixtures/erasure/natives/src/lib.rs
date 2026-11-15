@@ -679,3 +679,53 @@ impl<T: 'static> Signal<T> {
         self.0.borrow_mut()
     }
 }
+
+/// A builder with no `Clone` whose setters give back the builder they
+/// borrow, as tokio's `runtime::Builder` does.
+pub struct Setup {
+    time: bool,
+    io: bool,
+}
+
+impl Setup {
+    pub fn new() -> Self {
+        Self {
+            time: false,
+            io: false,
+        }
+    }
+
+    pub fn enable_time(&mut self) -> &mut Self {
+        self.time = true;
+        self
+    }
+
+    pub fn enable_io(&mut self) -> &mut Self {
+        self.io = true;
+        self
+    }
+
+    pub fn build(&mut self) -> Result<String, String> {
+        Ok(format!("time {} io {}", self.time, self.io))
+    }
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Settings whose fonts are std's clone-on-write slices, as iced's
+/// `Settings::fonts` are.
+#[derive(Default)]
+pub struct Fonts {
+    pub fonts: Vec<std::borrow::Cow<'static, [u8]>>,
+    pub size: u32,
+}
+
+impl Fonts {
+    pub fn bytes(&self) -> usize {
+        self.fonts.iter().map(|font| font.len()).sum()
+    }
+}

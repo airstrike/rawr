@@ -1910,7 +1910,8 @@ impl<'a> Parser<'a> {
                     evaluation,
                 }
                 .retain_origin();
-                return self.copied_places_back(value, &places);
+                let value = self.copied_places_back(value, &places)?;
+                return Ok(self.guarded(value, guard));
             }
             let place = self.temporary("receiver");
             let result = self.temporary("result");
@@ -1942,7 +1943,10 @@ impl<'a> Parser<'a> {
                 evaluation,
             }
             .retain_origin();
-            return self.copied_places_back(value, &places);
+            // A guard the method gives through a guard's place, as
+            // `builder.enable_io().enable_time()` gives, is a place too.
+            let value = self.copied_places_back(value, &places)?;
+            return Ok(self.guarded(value, guard));
         }
         // A `&self` receiver that is a local is lent where it is. It is
         // read after the arguments, which Rust's borrow of it keeps from
@@ -1976,9 +1980,19 @@ impl<'a> Parser<'a> {
         }
         .retain_origin();
         let value = self.scoped_call(value, opens, &places)?;
+        Ok(self.guarded(value, guard))
+    }
+
+    /// `value`, a host method's output, as its borrow guard gives it
+    /// (`guarded_output`), or itself for a method that gives none.
+    fn guarded(
+        &mut self,
+        value: ParsedExpr,
+        guard: Option<crate::host::item::Guard>,
+    ) -> ParsedExpr {
         match guard {
-            None => Ok(value),
-            Some(guard) => Ok(self.guarded_output(value, guard)),
+            None => value,
+            Some(guard) => self.guarded_output(value, guard),
         }
     }
 
