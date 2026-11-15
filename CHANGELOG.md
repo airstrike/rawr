@@ -16,6 +16,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A closure whose `?` converts into an error type nothing in the body names is rustc's E0282 "type annotations needed", as rustc reports it; `unwrap` on its result no longer says "`_` doesn't implement `Debug`". (#2039)
 - A project that uses smallvec, smartstring or thin-vec without serde keeps its one copy of the crate: the runner no longer turns on serde in them. (#2041)
 - After an edit to a crate that a trait-method call's proof reads, the next run lowers that call again instead of failing with "missing runtime binding". (#2042)
+- A crate method that returns a borrow guard such as `Ref` builds and is read through its guard, as `*meter.borrow()` is. Before, only a method returning a plain `&T` built. (#2047)
+- `&Some(..)` of a string or number passed as a `&dyn Debug` or `&dyn Display` reaches the crate, as `both("count", &count, &Some("two"))` does. (#2048)
+- A boxed region value whose type is invariant in its own lifetime takes another value of its region again, as a pane's `title_bar(container)` does. (#2049)
 
 ## 0.3.214 (2026-11-14)
 
