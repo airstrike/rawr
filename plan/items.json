@@ -2044,6 +2044,7 @@
     {"t":"T2042","issue":2042,"title":"T2042: After an edit to a crate that a trait-method call's proof reads, the next run lowers that call…","state":"open","category":"Hot reload of a marked `main` (D555)","labels":["hot reload"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2043","issue":2043,"title":"T2043: The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open","category":"Importer","labels":["importer"],"gantt":{"group":"parity","row":"save-in-place"},"decisions":[],"commit":null,"release":null},
     {"t":"T2044","issue":2044,"title":"T2044: rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open","category":"Importer","labels":["importer"],"gantt":{"group":"parity","row":"save-in-place"},"decisions":[],"commit":null,"release":null},
-    {"t":"T2045","issue":2045,"title":"T2045: rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"save-in-place"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2045","issue":2045,"title":"T2045: rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"save-in-place"},"decisions":[],"commit":"a73f96269","release":null},
+    {"t":"T2046","issue":2046,"title":"T2046: A rawr home keeps every superseded runtime build, about 1.1 GB per rawr change","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"parity","row":"save-in-place"},"decisions":[],"commit":null,"release":null}
   ]
 }

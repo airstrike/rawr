@@ -4453,7 +4453,8 @@
     {"issue":2042,"title":"After an edit to a crate that a trait-method call's proof reads, the next run lowers that call…","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":2043,"title":"The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open","category":"Importer"},
     {"issue":2044,"title":"rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open","category":"Importer"},
-    {"issue":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"open","category":"Health"}
+    {"issue":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"closed","category":"Health"},
+    {"issue":2046,"title":"A rawr home keeps every superseded runtime build, about 1.1 GB per rawr change","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5912,7 +5913,8 @@
             {"number":2040,"title":"`use std::sync::Barrier; Barrier::new(2)` fails with \"Unknown member '{integer}::new'\"","state":"open"},
             {"number":2043,"title":"The runner turns on serde's rc and std, so a project whose serde lacks rc builds a second serde","state":"open"},
             {"number":2044,"title":"rawr-import run given a relative project path joins it with an absolute Cargo output path","state":"open"},
-            {"number":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"open"}
+            {"number":2045,"title":"rawr-import's integration suite leaves about 48 GB of scratch in target/tmp","state":"closed"},
+            {"number":2046,"title":"A rawr home keeps every superseded runtime build, about 1.1 GB per rawr change","state":"open"}
           ]
         }
       ]
