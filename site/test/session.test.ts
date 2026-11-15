@@ -275,6 +275,7 @@ function universeStandIn(answer: (code: string) => any, manifest = '[dependencie
       return { element: { remove: () => void (record.removed = true) }, instance: {} } as unknown as Frame;
     },
     run: async (_frame, code) => (runs.push(code), answer(code)),
+    replace: () => ({ kind: "restart", reason: "a stand-in" }),
   };
   return { universe, frames, runs };
 }
@@ -333,4 +334,86 @@ test("a universe snippet is one that names a crate of the manifest's dependency 
   assert.ok(!usesCrate('let iced = 1; println!("{iced}");', names));
   assert.ok(!usesCrate("use my::iced::thing;", names));
   assert.ok(!usesCrate("let x = opt_level;", names));
+});
+
+/** A universe stand-in whose frames' programs take edits as `edit` answers them. */
+function reloading(edit: (code: string) => any) {
+  const stand = universeStandIn(() => ({ kind: "text", status: 0, output: [{ stream: "stdout", text: "started\n" }] }));
+  const edits: string[] = [];
+  stand.universe.replace = (_frame, code) => (edits.push(code), edit(code));
+  return { ...stand, edits };
+}
+
+/** An edit to `code`, run once its pause has passed. */
+async function edited(page: ReturnType<typeof standIn>, code: string) {
+  page.session.setCode(code);
+  page.tick();
+  await new Promise((done) => setTimeout(done, 0));
+}
+
+test("an edit reloads the program its frame runs in place, and Run starts it over", async () => {
+  const { universe, frames, runs, edits } = reloading(() => ({ kind: "swapped", output: [{ stream: "stdout", text: "reloaded\n" }] }));
+  const page = standIn({ code: 'use iced::widget::button;\nfn main() { button("+"); }', universe });
+  await page.session.go();
+  await edited(page, 'use iced::widget::button;\nfn main() { button("Add"); }');
+  assert.deepEqual(edits, ['use iced::widget::button;\nfn main() { button("Add"); }']);
+  assert.equal(runs.length, 1, "the edit runs nothing again");
+  assert.equal(frames[0].removed, false, "the program keeps its frame and its state");
+  assert.deepEqual(page.session.state.output, {
+    kind: "frame",
+    chunks: [{ stream: "stdout", text: "started\n" }, { stream: "stdout", text: "reloaded\n" }],
+    status: 0,
+  });
+  assert.match(page.session.state.status, /reloaded in place$/);
+  // Run starts the program over in the next frame.
+  await page.session.go();
+  assert.equal(runs.length, 2);
+  assert.equal(frames[0].removed, true);
+  assert.equal(edits.length, 1);
+});
+
+test("an edit that does not compile shows its error under the frame, and the program runs on", async () => {
+  const { universe, frames, runs } = reloading((code) =>
+    code.includes("oops") ? { kind: "error", text: "error: expected `;`" } : { kind: "unchanged" },
+  );
+  const start = "use iced::widget::button;\nfn main() {}";
+  const page = standIn({ code: start, universe });
+  await page.session.go();
+  await edited(page, start + " oops");
+  assert.deepEqual(page.session.state.output, {
+    kind: "frame",
+    chunks: [{ stream: "stdout", text: "started\n" }],
+    status: 0,
+    error: "error: expected `;`",
+  });
+  assert.match(page.session.state.status, /^error/);
+  assert.equal(frames[0].removed, false);
+  // Back to the code it runs: the error goes, and nothing runs again.
+  await edited(page, start);
+  assert.deepEqual(page.session.state.output, { kind: "frame", chunks: [{ stream: "stdout", text: "started\n" }], status: 0 });
+  assert.equal(runs.length, 1);
+});
+
+test("an edit that cannot reload in place runs in the next frame, and says why", async () => {
+  const { universe, frames, runs } = reloading(() => ({ kind: "restart", reason: "`main` changed" }));
+  const page = standIn({ code: "use iced::widget::button;\nfn main() {}", universe });
+  await page.session.go();
+  await edited(page, "use iced::widget::button;\nfn main() { let _ = 1; }");
+  assert.deepEqual(runs, ["use iced::widget::button;\nfn main() {}", "use iced::widget::button;\nfn main() { let _ = 1; }"]);
+  assert.equal(frames[0].removed, true, "the fresh frame replaces it");
+  assert.match(page.session.state.status, /restarted: `main` changed$/);
+});
+
+test("an edit after a compile error, with no program running, runs in a fresh frame", async () => {
+  let compiles = false;
+  const stand = universeStandIn(() => (compiles ? { kind: "text", status: 0, output: [] } : { kind: "error", text: "error[E0425]" }));
+  const edits: string[] = [];
+  stand.universe.replace = (_frame, code) => (edits.push(code), { kind: "swapped", output: [] });
+  const page = standIn({ code: "iced::run(x)", universe: stand.universe });
+  await page.session.go();
+  compiles = true;
+  await edited(page, "iced::run(y)");
+  assert.deepEqual(edits, [], "no program runs to reload");
+  assert.equal(stand.runs.length, 2);
+  assert.equal(page.session.state.output.kind, "frame");
 });
