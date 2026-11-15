@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 231;
+const CLASSIFIER_VERSION: u32 = 232;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1275,11 +1275,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 },
                 model::Default::Absent => None,
             };
-            let declared = representability::signature::Parameter::new(
-                parameter.index(),
-                parameter.name().into(),
-                kind,
-            );
+            // A method's parameter may share its name with its impl's, as a
+            // trait's provided `fn cloned<'a, T>` does in `impl<'data, T>
+            // Trait for Iter<'data, T>`: rustc keeps them apart by owner,
+            // and a signature by a name of its own, shown as written.
+            let mut name = parameter.name().to_owned();
+            let mut suffix = 1_u32;
+            while parameters
+                .iter()
+                .any(|declared: &representability::signature::Parameter| declared.name() == name)
+            {
+                suffix += 1;
+                name = format!("{}{suffix}", parameter.name());
+            }
+            let shown = (name != parameter.name()).then(|| parameter.name().into());
+            let declared =
+                representability::signature::Parameter::new(parameter.index(), name.into(), kind)
+                    .with_shown(shown);
             let declared = if parameter.name().starts_with("impl ")
                 && !self.callable_bound(generics, parameter.index())
             {

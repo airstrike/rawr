@@ -26,6 +26,7 @@ pub mod named;
 pub mod nested;
 pub mod ordered;
 pub mod paired;
+pub mod piped;
 pub mod pixels;
 pub mod plane;
 pub mod pointers;

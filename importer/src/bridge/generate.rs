@@ -10,7 +10,9 @@ use crate::classify::representability::convert;
 use crate::classify::representability::ownership::Receiver;
 use crate::classify::representability::signature::{Lifetime, Written};
 use crate::surface::adapter::{EntryIdentity, Operation, Plan};
+use around::Around;
 
+mod around;
 pub(crate) mod cached;
 mod family;
 mod frame;
@@ -3723,6 +3725,17 @@ impl<'a> Reached<'a> {
             Self::Mutable(value) => value.downcast_mut(),
         }
     }
+
+    /// [`Self::shared`] at the type `witness` names, which Rust code can't
+    /// write.
+    pub fn shared_like<T: 'static>(self, _witness: std::marker::PhantomData<T>) -> Option<&'a T> {
+        self.shared::<T>()
+    }
+
+    /// [`Self::mutable`] at the type `witness` names.
+    pub fn mutable_like<T: 'static>(self, _witness: std::marker::PhantomData<T>) -> Option<&'a mut T> {
+        self.mutable::<T>()
+    }
 }
 
 /// The lent arguments a call reached, by argument index.
@@ -3731,6 +3744,13 @@ pub type LentArguments<'r> = [(usize, Option<Reached<'r>>)];
 /// Reaches the value `lent` names through the accessor its trampoline made
 /// for a `T`, mutably or not, and hands it to `visit`.
 pub type Reach = fn(Dynamic, bool, &mut dyn FnMut(Reached<'_>)) -> Result<(), Error>;
+
+/// [`reach_lent`] at the type `witness` names, which Rust code can't
+/// write.
+#[allow(dead_code)]
+pub fn reach_lent_like<T: 'static>(_witness: std::marker::PhantomData<T>) -> Reach {
+    reach_lent::<T>
+}
 
 #[allow(dead_code)]
 pub fn reach_lent<T: 'static>(
@@ -4583,6 +4603,78 @@ pub fn mutable_like<T: 'static, R>(
     call: impl FnOnce(&mut T) -> R,
 ) -> Result<R, Error> {
     arena.mutable(handle, call)
+}
+
+/// [`Arena::shared`], the witness's type first, as a table's entry
+/// reaches a value at the type its witness names.
+#[allow(dead_code)]
+pub fn shared_at<T: 'static, R>(
+    arena: &Arena,
+    _witness: std::marker::PhantomData<T>,
+    handle: NativeHandle,
+    call: impl FnOnce(&T) -> R,
+) -> Result<R, Error> {
+    arena.shared(handle, call)
+}
+
+/// [`Arena::mutable`] at the type `witness` names, the witness first.
+#[allow(dead_code)]
+pub fn mutable_at<T: 'static, R>(
+    arena: &mut Arena,
+    _witness: std::marker::PhantomData<T>,
+    handle: NativeHandle,
+    call: impl FnOnce(&mut T) -> R,
+) -> Result<R, Error> {
+    arena.mutable(handle, call)
+}
+
+/// [`Arena::held_shared`] at the type `witness` names.
+#[allow(dead_code)]
+pub fn held_shared_like<T: 'static, R>(
+    arena: &mut Arena,
+    _witness: std::marker::PhantomData<T>,
+    handle: NativeHandle,
+    call: impl FnOnce(&mut Arena, &T) -> R,
+) -> Result<R, Error> {
+    arena.held_shared(handle, call)
+}
+
+/// [`Arena::held`] at the type `witness` names.
+#[allow(dead_code)]
+pub fn held_like<T: 'static, R>(
+    arena: &mut Arena,
+    _witness: std::marker::PhantomData<T>,
+    handle: NativeHandle,
+    call: impl FnOnce(&mut Arena, &mut T) -> R,
+) -> Result<R, Error> {
+    arena.held(handle, call)
+}
+
+/// [`Arena::share`] at the type `witness` names.
+#[allow(dead_code)]
+pub fn share_like<T: 'static>(
+    arena: &mut Arena,
+    _witness: std::marker::PhantomData<T>,
+    handle: NativeHandle,
+) -> Result<std::rc::Rc<T>, Error> {
+    arena.share(handle)
+}
+
+/// A place's value reached at the type `witness` names.
+#[allow(dead_code)]
+pub fn reach_as_like<T: 'static, R>(
+    _witness: std::marker::PhantomData<T>,
+    place: &__rawr_internal::place::Place,
+    mutable: bool,
+    visit: impl FnOnce(__rawr_internal::place::Access<'_, T>) -> Result<R, Box<__rawr_internal::EvalAltResult>>,
+) -> Result<R, Box<__rawr_internal::EvalAltResult>> {
+    __rawr_internal::place::reach_as(place, mutable, visit)
+}
+
+/// `value`, of the type `witness` names, which Rust code can't write.
+#[allow(dead_code)]
+pub fn witnessed_as<T>(_witness: std::marker::PhantomData<T>, value: T) -> T {
+    value
 }
 
 /// The type of `value`, which Rust code can't write when it is opaque.
@@ -12054,7 +12146,8 @@ fn render_adapter(
             writeln!(
                 output,
                 "    }};\n    {}\n}}\n",
-                table.replace("__RAWR_WITNESS__", "witness")
+                around::witnessed(&table, &produced_type(plan)?)
+                    .replace("__RAWR_WITNESS__", "witness")
             )
             .map_err(encoding)?;
             Some(format!("{name}_opaque()"))
@@ -12770,6 +12863,23 @@ fn by_handle(operand: &convert::Type, opaque: &convert::Type) -> bool {
     }
 }
 
+/// The type of the value `plan` gives, `()` for one that gives none.
+fn produced_type(plan: &Plan) -> Result<convert::Type, request::Error> {
+    match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            ..
+        }
+        | Operation::Method {
+            signature,
+            substitutions,
+            ..
+        } => substituted(signature.output(), signature, substitutions),
+        _ => Ok(convert::Type::Unit),
+    }
+}
+
 /// The opaque type the value `plan` gives holds, when it does. A plan of
 /// the cohort being rendered has it found already (`opaques`).
 fn produced_opaque(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
@@ -12887,6 +12997,7 @@ fn opaque_table_source(
     let Some(key) = first_opaque(&returned).cloned() else {
         return Ok(None);
     };
+    let around = Around::of(plan, cohort, &returned, &key)?;
     // A value that lives beside what it borrows (`lent_cell`) is reached
     // through its proxy. Where it implements its trait through the proxy
     // (`Owned::forwards`), a call takes it by value, and what it borrows
@@ -13077,6 +13188,10 @@ fn opaque_table_source(
                 only_opaque_holes(&operand, &key),
                 Reach::Arena,
             )
+        } else if let Some(around) = &around
+            && only_opaque_holes(&operand, &key)
+        {
+            around.shape(&body, position)
         } else {
             body
         };
@@ -21731,9 +21846,10 @@ fn producing_table(ty: &convert::Type, value: &str) -> Option<String> {
         return Some("table".to_owned());
     }
     OPAQUE_PRODUCING.with_borrow(|table| {
-        table
-            .as_ref()
-            .map(|table| table.replace("__RAWR_WITNESS__", &format!("witness_of(&{value})")))
+        table.as_ref().map(|table| {
+            around::witnessed(table, ty)
+                .replace("__RAWR_WITNESS__", &format!("witness_of(&{value})"))
+        })
     })
 }
 
@@ -23886,8 +24002,20 @@ fn opaque_bounds(
     substitutions: &[convert::Type],
 ) -> Result<Option<String>, request::Error> {
     let returned = substituted(signature.output(), signature, substitutions)?;
+    declared_bounds(signature, substitutions, &returned)
+}
+
+/// The bounds the declaration of the opaque type `opaque` records, where
+/// `signature` gives it at `substitutions`, itself or inside its output,
+/// as `SomeTrait<Out = u32>` of a `Wrapper<impl SomeTrait<Out = u32>>`,
+/// when Rust can write them.
+fn declared_bounds(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    opaque: &convert::Type,
+) -> Result<Option<String>, request::Error> {
     let Some((_, traits)) =
-        opaque_traits(signature, substitutions, &returned, bound_trait_path, false)?
+        opaque_traits(signature, substitutions, opaque, bound_trait_path, false)?
     else {
         return Ok(None);
     };
