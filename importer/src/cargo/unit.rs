@@ -2165,8 +2165,8 @@ fn prepare_owned_graph(
                     unit: index,
                     package_id: unit.pkg_id,
                     target,
-                    target_kinds: unit.target.kind,
-                    crate_types: unit.target.crate_types,
+                    target_kinds: canonical_set(unit.target.kind),
+                    crate_types: canonical_set(unit.target.crate_types),
                     crate_name: unit.target.name,
                     edition: unit.target.edition,
                     features: unit.features,
@@ -2189,6 +2189,15 @@ fn prepare_owned_graph(
     outputs.sort_unstable_by_key(|output| output.unit);
     scripts.sort_unstable();
     Ok(PreparedGraph { outputs, scripts })
+}
+
+/// A target's kinds or crate types in sorted order. Cargo lists them in the
+/// manifest's order, and Build JSON's artifact keys hold them sorted, so a
+/// target with several crate types joins its artifact only once both sides
+/// agree on one order.
+fn canonical_set(mut values: Vec<String>) -> Vec<String> {
+    values.sort_unstable();
+    values
 }
 
 fn add_ownership(ownership: &mut JsonOwnership, added: JsonOwnership) -> Result<()> {
@@ -5689,6 +5698,56 @@ mod allocation_tests {
         )
         .expect("the unit graph is prepared");
         assert_eq!((prepared.outputs.len(), prepared.scripts.len()), (2, 1));
+    }
+
+    /// A library with several crate types (`lib`, `cdylib`, `staticlib`, as
+    /// a crate exposing a C ABI declares them) keeps them sorted, as Build
+    /// JSON's artifact keys do, so its artifact joins its unit.
+    #[test]
+    fn prepared_graph_sorts_kinds_and_crate_types_as_build_messages_do() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cargo/unit.rs");
+        let source = source.to_str().expect("the fixture source path is UTF-8");
+        let document = json!({
+            "version": 1,
+            "roots": [0],
+            "units": [{
+                "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#turso_sdk_kit@0.8.3",
+                "target": {
+                    "kind": ["lib", "cdylib", "staticlib"],
+                    "crate_types": ["lib", "cdylib", "staticlib"],
+                    "name": "turso_sdk_kit",
+                    "src_path": source,
+                    "edition": "2021"
+                },
+                "profile": {
+                    "name": "dev",
+                    "opt_level": "0",
+                    "debuginfo": 2,
+                    "debug_assertions": true,
+                    "overflow_checks": true
+                },
+                "platform": "aarch64-apple-darwin",
+                "mode": "check",
+                "features": [],
+                "dependencies": [],
+                "is_std": false
+            }]
+        });
+        let owned = serde_json::from_value::<super::OwnedUnitDocument>(document)
+            .expect("the fixture unit graph deserializes");
+        let masks = super::UnitMasks {
+            flags: Box::from([super::RETAINED_UNIT]),
+        };
+        let prepared = super::prepare_owned_graph(
+            owned,
+            &masks,
+            "aarch64-apple-darwin",
+            crate::cargo::config::NoBuildStd::fixture(),
+        )
+        .expect("the unit graph is prepared");
+        let sorted = ["cdylib", "lib", "staticlib"];
+        assert_eq!(prepared.outputs[0].target_kinds, sorted);
+        assert_eq!(prepared.outputs[0].crate_types, sorted);
     }
 
     #[test]

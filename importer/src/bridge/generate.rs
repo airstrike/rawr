@@ -14008,7 +14008,17 @@ fn render_adapter_body(
                 // An async method that borrows its receiver (D513.6): its
                 // future holds a copy of a `Clone` receiver for `&self`, or
                 // the receiver lent from its slot, and is made when first
-                // polled, where its runtime is.
+                // polled, where its runtime is. An output that borrows the
+                // receiver would outlive that copy or lease, which the
+                // future drops as it ends.
+                let returned = &substituted(signature.output(), signature, substitutions)?;
+                if future_output(returned).is_some_and(carries_lifetime) {
+                    return writeln!(
+                        output,
+                        "    Err(Error::Value(\"an async method whose output borrows its receiver is not supported in Rawr yet\".to_owned()))"
+                    )
+                    .map_err(request::unwritable);
+                }
                 writeln!(
                     output,
                     "    let receiver = native_handle(arguments, 0, false)?;"
@@ -14075,7 +14085,6 @@ fn render_adapter_body(
                 output
                     .write_all(b").await\n    });\n")
                     .map_err(request::unwritable)?;
-                let returned = &substituted(signature.output(), signature, substitutions)?;
                 let element = future_output(returned)
                     .ok_or_else(|| request::drift("borrowed async method output"))?;
                 render_give_task(element, "output", "imported", output)?;
@@ -15741,6 +15750,12 @@ fn render_scoped_receiver(
     };
     let reached = family.call(reach, "scoped");
     let returned = substituted(signature.output(), signature, substitutions)?;
+    // A future captures its receiver, here a value at the region's
+    // lifetime, and runs after the call that reached it: no region holds a
+    // future, so its call is the arena's alone.
+    if is_future(&returned) {
+        return Ok(());
+    }
     // An opaque output Rust code can't name is made through its wrapper
     // (`family`), whose output the region holds, and a trait method's is
     // what the region holds.
@@ -17146,23 +17161,28 @@ fn render_scoped_guard(
         return Ok(());
     };
     let target = substituted(signature.output(), signature, substitutions)?;
-    let mut method = format!("receiver.{}", plan.name()).into_bytes();
+    let mut call = plan.name().as_bytes().to_vec();
     render_item_turbofish(
         signature,
         substitutions,
         constants,
         container_parameters,
-        &mut method,
+        &mut call,
     )?;
     let inputs = signature.inputs().len();
-    method.write_all(b"(").map_err(encoding)?;
-    argument_list(inputs, 1, &mut method)?;
-    method.write_all(b")").map_err(encoding)?;
-    let method = String::from_utf8(method).map_err(request::unwritable)?;
+    call.write_all(b"(").map_err(encoding)?;
+    argument_list(inputs, 1, &mut call)?;
+    call.write_all(b")").map_err(encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    let method = format!("receiver.{call}");
     match guard {
         // A receiver in a region lends no optional shared borrow yet.
         Guard::OptionShared => Ok(()),
+        // The region gives a `&mut` of the receiver, and the call is made on
+        // the receiver itself: on the `&mut`, `deref()` would be the
+        // reference's own `Deref`, which gives the receiver, not its target.
         Guard::Shared => {
+            let method = format!("(*receiver).{call}");
             let copy = copy_macro(&target);
             let mut give = Vec::new();
             render_give(&target, "output", &mut give)?;
