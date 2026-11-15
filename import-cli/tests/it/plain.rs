@@ -1181,7 +1181,9 @@ fn main() {
     for project in &projects {
         fs::create_dir_all(project.join("src")).unwrap();
         fs::write(project.join("Cargo.toml"), format!("[package]\nname='binding-input-app'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nbinding-input-fixture={{git='file://{}',rev='{}'}}\n[workspace]\n", dependency.display(), revision.trim())).unwrap();
-        fs::write(project.join("src/main.rs"), "// rawr\nuse binding_input_fixture::only_when_narrow;\nfn main() { println!(\"{}\", only_when_narrow()); }\n").unwrap();
+        // It calls `width` too, which the live program below calls: a
+        // shared table holds what its programs demanded of the crate.
+        fs::write(project.join("src/main.rs"), "// rawr\nuse binding_input_fixture::{only_when_narrow, width};\nfn main() { println!(\"{}\", only_when_narrow().min(width())); }\n").unwrap();
     }
     let run = |project: &Path, action: &str, mode: &str| {
         crate::support::rawr_import()
