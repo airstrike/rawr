@@ -381,6 +381,9 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         let mut waiting = Vec::new();
         let mut first_failure = None;
         let mut first_unknown = None;
+        // A reveal's failure is the program's, so a miss against native
+        // code it meets is recorded as the lowering's would be (#2004).
+        let native = program.native.clone();
         for &next in &pending {
             let mut uses = Vec::new();
             let mut dependencies = BTreeSet::new();
@@ -418,7 +421,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                                 0,
                                 0,
                                 Some(ImportedContext {
-                                    native: None,
+                                    native: native.as_deref(),
                                     allocation: &mut *allocation,
                                     failure,
                                     source: shell.source,
@@ -461,7 +464,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                                 0,
                                 0,
                                 Some(ImportedContext {
-                                    native: None,
+                                    native: native.as_deref(),
                                     allocation: &mut *allocation,
                                     failure,
                                     source: definition.source(),
