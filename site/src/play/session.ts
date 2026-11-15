@@ -13,9 +13,13 @@
 // A snippet that names a crate the browser's universe declares (iced,
 // tokio, ratatui: universe.toml) runs on the universe instead
 // (scripts/universe.ts), in a frame of its own in the output pane: the
-// program draws there and takes clicks and keys there. Each run gets a
+// program draws there and takes clicks and keys there. Each Run gets a
 // fresh frame, and the next one is made ahead, so a run only compiles and
-// runs. The server runs it when the universe doesn't load.
+// runs. An edit reloads the program running in its frame instead, with its
+// state kept, as `rawr run` reloads a save (#1455): a compile error shows
+// under the frame while the program runs its last good code, and an edit
+// that can't reload in place, or a program that has ended, runs in the
+// next frame. The server runs it when the universe doesn't load.
 //
 // The address keeps the page's state: `#<slug>` names the example loaded,
 // and `?run=server` the server when the visitor chose it (the browser, the
@@ -79,8 +83,12 @@ export type Output =
   | { kind: "note" }
   /** A program's output, with its status, and the image an iced program drew, as a data URL. */
   | { kind: "term"; chunks: Chunk[]; status: number; note?: string; image?: string }
-  /** A program that runs in a universe frame, shown in the frame host, and what it printed. */
-  | { kind: "frame"; chunks: Chunk[]; status: number }
+  /**
+   * A program that runs in a universe frame, shown in the frame host, and
+   * what it printed. `error` is an edit's compile error, which left it
+   * running its last good code.
+   */
+  | { kind: "frame"; chunks: Chunk[]; status: number; error?: string }
   | { kind: "error"; text: string };
 
 export interface State {
@@ -105,6 +113,8 @@ export interface Universe {
   manifest(): Promise<string>;
   frame(parent: Element): Promise<Frame>;
   run(frame: Frame, code: string): Promise<any>;
+  /** The edit `code` for the program running in `frame`, which reloads in place. */
+  replace(frame: Frame, code: string): any;
 }
 
 interface Widget {
@@ -158,6 +168,8 @@ export class Session {
   /** The universe frame shown, and the next one, made ahead. */
   private frame: Frame | null = null;
   private next: Promise<Frame> | null = null;
+  /** The edit the frame's program refused last, for its compile error. */
+  private refused: string | null = null;
   private runs = 0;
   private typing: unknown = null;
   private saving: unknown = null;
@@ -225,7 +237,7 @@ export class Session {
   private typed() {
     if (this.state.where !== "browser") return;
     this.deps.clearTimeout(this.typing);
-    this.typing = this.deps.setTimeout(() => this.browser(), 500);
+    this.typing = this.deps.setTimeout(() => this.browser(true), 500);
   }
 
   private remember() {
@@ -429,7 +441,7 @@ export class Session {
    * of the output: the program draws there and takes input there. What it
    * prints shows under it, and a compile error in its place.
    */
-  private async framed(mine: number, code: string): Promise<void> {
+  private async framed(mine: number, code: string, restarted = ""): Promise<void> {
     const host = this.deps.frameHost?.();
     if (!host) return this.server("the page has no place for the program's window");
     if (!this.next) this.set({ status: "loading…" });
@@ -451,19 +463,54 @@ export class Session {
     if (result.kind === "error") this.result(result, took);
     else {
       this.show({ kind: "frame", chunks: result.output ?? [], status: result.status });
-      this.set({ status: took + (result.status !== 0 ? " · exit " + result.status : "") });
+      this.set({ status: took + (result.status !== 0 ? " · exit " + result.status : "") + (restarted && " · restarted: " + restarted) });
     }
     // The next run only compiles and runs.
     this.nextFrame(host).catch(() => {});
   }
 
-  /** "Run in browser", the default. A run that a later one replaced shows nothing. */
-  async browser(): Promise<void> {
+  /**
+   * Reload the program running in the frame shown with the edit `code`,
+   * its state kept. A compile error shows under the frame and the program
+   * runs on; an edit that can't reload there runs in the next frame.
+   */
+  private reload(mine: number, code: string, output: Extract<Output, { kind: "frame" }>): Promise<void> | void {
+    const start = this.deps.now();
+    const answer = this.deps.universe!.replace(this.frame!, code);
+    const took = Math.round(this.deps.now() - start) + " ms in the browser";
+    switch (answer.kind) {
+      case "restart":
+        return this.framed(mine, code, answer.reason);
+      case "unchanged":
+        // The code the program runs, after an edit that failed: its error goes.
+        if (output.error !== undefined && code !== this.refused) {
+          this.show({ kind: "frame", chunks: output.chunks, status: output.status });
+          this.set({ status: "unchanged" });
+        }
+        return;
+      case "error":
+        this.refused = code;
+        this.show({ ...output, error: answer.text ?? "" });
+        this.set({ status: "error · the program runs its last good code" });
+        return;
+      default:
+        this.show({ kind: "frame", chunks: [...output.chunks, ...(answer.output ?? [])], status: output.status });
+        this.set({ status: took + " · reloaded in place" });
+    }
+  }
+
+  /**
+   * "Run in browser", the default. An `edit` reloads the program a frame
+   * runs in place. A run that a later one replaced shows nothing.
+   */
+  async browser(edit = false): Promise<void> {
     this.save();
     const mine = ++this.runs;
     const code = this.state.code;
     if (this.deps.universe && usesCrate(code, await this.crates())) {
       if (mine !== this.runs) return;
+      const output = this.state.output;
+      if (edit && this.frame && output.kind === "frame") return this.reload(mine, code, output);
       return this.framed(mine, code);
     }
     if (!this.loaded) this.set({ status: "loading…" });

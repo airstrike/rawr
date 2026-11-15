@@ -210,10 +210,12 @@ function OutputView({ output }: { output: Output }) {
       );
     case "error":
       return <pre className="error">{output.text}</pre>;
-    case "frame":
-      // The program draws in its frame; under it, what it printed or how it failed.
-      if (!output.chunks.some((chunk) => chunk.text !== "") && output.status === 0) return null;
-      return (
+    case "frame": {
+      // The program draws in its frame; under it, what it printed or how it
+      // failed, and an edit's compile error while it runs its last good code.
+      const printed = output.chunks.some((chunk) => chunk.text !== "") || output.status !== 0;
+      const error = output.error !== undefined && <pre className="error">{output.error}</pre>;
+      const term = printed && (
         <pre className="term">
           {output.chunks.map((chunk, i) => (
             <span key={i} className={chunk.stream === "stderr" ? "err" : undefined}>{chunk.text}</span>
@@ -221,6 +223,9 @@ function OutputView({ output }: { output: Output }) {
           {output.status !== 0 && <span className="exit">exit status {output.status}{"\n"}</span>}
         </pre>
       );
+      if (!printed && !error) return null;
+      return <>{error}{term}</>;
+    }
     case "term": {
       const empty = !output.chunks.some((chunk) => chunk.text !== "");
       const term = (

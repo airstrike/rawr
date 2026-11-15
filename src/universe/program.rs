@@ -194,6 +194,23 @@ impl Program {
         self.reloader().replace(text)
     }
 
+    /// Give the crate root `text`, as [`Program::replace`] does, and take
+    /// a text that compiled at once when this thread is outside every call
+    /// from native code into script code, as a page's handler of an edit
+    /// is: the outcome is what taking it did, [`Outcome::Swapped`] or
+    /// [`Outcome::Restarting`]. Inside a call, the next outermost entry
+    /// takes it, and the outcome is [`Outcome::Queued`].
+    #[must_use]
+    pub fn replace_now(&self, text: impl Into<Box<str>>) -> Outcome {
+        let outcomes = self.outcomes();
+        let outcome = self.replace(text);
+        if outcome != Outcome::Queued {
+            return outcome;
+        }
+        future::admit_idle();
+        outcomes.try_iter().last().unwrap_or(outcome)
+    }
+
     /// Every outcome from now on, in order: what each reload said, and
     /// [`Outcome::Swapped`] once the owner takes a queued one. The
     /// receiver ends when the program and its reloaders are gone.

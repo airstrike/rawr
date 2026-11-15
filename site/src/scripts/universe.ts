@@ -7,7 +7,10 @@
 // in a frame of its own, in place of the run strip's output: a program that
 // hands its loop to the page (iced's `run` to its web shell, ratzilla's
 // `draw_web` to the page's animation frames) keeps that instance, and winit
-// allows one event loop per instance. In the frame, iced's shell puts its
+// allows one event loop per instance. An edit replaces the running
+// program's text in its instance, which keeps its state (#1455); only an
+// edit that can't reload there, as `rawr run` restarts for one, gets a
+// fresh instance. In the frame, iced's shell puts its
 // canvas in place of the element `#iced`, and ratzilla's terminal fills the
 // body. Keys reach the program only while its frame has focus, which a
 // click or Tab gives it, and the frame draws an outline while it does.
@@ -35,6 +38,7 @@ export const UNIVERSE_MANIFEST = "/web/universe.toml";
 export interface Instance {
   prepare(): void;
   run(manifest: string, source: string): string;
+  replace(source: string): string;
   panic_message(): string | undefined;
 }
 
@@ -171,5 +175,20 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
     }
   };
 
-  return { manifest: readManifest, load, frame, run };
+  /**
+   * Give the program running in `frame` `code` as its new text, which it
+   * takes at once with its state kept: "swapped" with what it printed
+   * since, "unchanged", "error" for a compile error, which leaves it
+   * running, or "restart" with a reason, when the code needs a fresh frame.
+   * A panic aborts the instance, which then needs one too.
+   */
+  const replace = (frame: Frame, code: string): any => {
+    try {
+      return JSON.parse(frame.instance.replace(code));
+    } catch (error) {
+      return { kind: "restart", reason: frame.instance.panic_message?.() ?? String(error) };
+    }
+  };
+
+  return { manifest: readManifest, load, frame, run, replace };
 }

@@ -875,9 +875,9 @@ pub fn offer(admit: impl FnOnce() + Send + 'static) {
 
 /// Admit the generation offered last when this thread owns the program
 /// and is outside every call from native code into script code, as an
-/// event loop is between events. Inside one, the next outermost entry
-/// admits it.
-fn admit_idle() {
+/// event loop is between events, or a page's handler of an edit is.
+/// Inside one, the next outermost entry admits it.
+pub fn admit_idle() {
     if outermost() {
         admit_waiting();
     }
