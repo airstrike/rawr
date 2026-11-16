@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"An async `main` keeps running across a save under `rawr run`. The new code takes over the next time one of its futures resumes, such as a timer loop at its next tick, and the futures keep their locals. An edit to `main`, or to the body of an async function or block a future waits in, restarts the program with a one-line reason.","issues":[2127]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.222",
@@ -4617,9 +4622,10 @@
     {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed","category":"Divergences from rustc"},
     {"issue":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed","category":"Platforms","release":"0.3.222"},
-    {"issue":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"open","category":"Platforms"},
+    {"issue":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"closed","category":"Platforms"},
     {"issue":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open","category":"Divergences from rustc"},
-    {"issue":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open","category":"Divergences from rustc"}
+    {"issue":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open","category":"Divergences from rustc"},
+    {"issue":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5333,9 +5339,10 @@
             {"number":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open"},
             {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed"},
             {"number":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed"},
-            {"number":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"open"},
+            {"number":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"closed"},
             {"number":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open"},
-            {"number":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open"}
+            {"number":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open"},
+            {"number":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"open"}
           ],
           "milestone": "0.3"
         },
