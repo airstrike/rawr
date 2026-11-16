@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A save that only moves an async function a suspended future waits in, such as a line added above it, keeps the program running with its state. A restart for an edited async block names the block. (#2126)
 
 ## 0.3.221 (2026-11-16)
 

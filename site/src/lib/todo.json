@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A save that only moves an async function a suspended future waits in, such as a line added above it, keeps the program running with its state. A restart for an edited async block names the block.","issues":[2126]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.221",
@@ -4608,8 +4613,11 @@
     {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"},
     {"issue":2123,"title":"`rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a…","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms","release":"0.3.220"},
-    {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"open","category":"Divergences from rustc"},
-    {"issue":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"open","category":"Platforms"}
+    {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed","category":"Divergences from rustc"},
+    {"issue":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed","category":"Platforms"},
+    {"issue":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"open","category":"Platforms"},
+    {"issue":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open","category":"Divergences from rustc"},
+    {"issue":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5322,7 +5330,10 @@
             {"number":2114,"title":"`.is_err()` on a crate Result whose error is a type parameter's associated type crashes the generator","state":"open"},
             {"number":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open"},
             {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed"},
-            {"number":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"open"}
+            {"number":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed"},
+            {"number":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"open"},
+            {"number":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open"},
+            {"number":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -6337,7 +6348,7 @@
             {"number":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"closed"},
             {"number":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"closed"},
             {"number":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open"},
-            {"number":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"open"}
+            {"number":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed"}
           ]
         },
         {
