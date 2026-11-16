@@ -522,6 +522,23 @@ impl<'a> Parser<'a> {
                 value = self.scalar_member_call(value, &path)?;
                 continue;
             }
+            // `items.par_iter()`: a member a crate's trait in scope gives a
+            // slice through a blanket impl over a borrow of its own type,
+            // as rayon's `IntoParallelRefIterator` gives `[T]`
+            // (`surface::slice`). The slice's own methods come first, as
+            // rustc finds an inherent method before a trait's.
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && let sequence = without_references(&self.inference.resolve(&value.ty)).clone()
+                && let Ty::Array { element, kind } = &sequence
+                && !matches!(kind, sequence::Kind::Deque)
+                && std_method::inherent(&sequence, &member).is_none()
+                && let Some(path) = self.scoped_slice_member(&member)
+            {
+                let element = (**element).clone();
+                value = self.slice_member_call(value, element, &path)?;
+                continue;
+            }
             // `value.fmt(f)` in a `Display` or `Debug` `fmt` body writes the
             // value into its formatter, through the impl's own trait.
             if member == "fmt"

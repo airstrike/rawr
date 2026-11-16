@@ -49,6 +49,9 @@ mod scope;
 )]
 mod sidecar;
 
+#[path = "compiler/slice.rs"]
+mod slice;
+
 #[path = "compiler/table.rs"]
 mod table;
 
@@ -124,10 +127,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // (#1681). Schema 73 keeps a crate trait's impls for `&str` with the
 // associated type a parameter's projection names (#1678). Schema 74 gives a
 // crate type the compound assignments' impls for a number that take it, as
-// `impl AddAssign<Turn> for f32` (#987). `driver.rs`,
-// `cargo/toolchain.rs` and `extract/protocol.rs` hold the same number and
-// move with it.
-const PROTOCOL_SCHEMA: u32 = 76;
+// `impl AddAssign<Turn> for f32` (#987). Schema 77 keeps a selected trait's
+// blanket impl over a parameter `I` bounded `&I: Other`, with each impl of
+// `Other` for `&[T]` (#2079). `driver.rs`, `cargo/toolchain.rs` and
+// `extract/protocol.rs` hold the same number and move with it.
+const PROTOCOL_SCHEMA: u32 = 77;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2893,6 +2897,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         self.request_implementation(implementation, def_id, Some(associated))?;
                     }
                 }
+                self.request_slice_applications(def_id)?;
             }
             ImplementationWork::Nominal => {
                 // The names its inherent impls give: a demanded member of one

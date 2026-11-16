@@ -15,6 +15,7 @@ pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod kept;
 pub mod representability;
+mod slice;
 pub mod std_binding;
 
 use std_binding::Std;
@@ -26,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 234;
+const CLASSIFIER_VERSION: u32 = 235;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6001,6 +6002,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                             ),
                         }
                     }
+                    // A member of a blanket impl's application to slices is
+                    // the impl's own function of the slice's borrow
+                    // (`surface::slice`).
+                    crate::surface::identity::Selector::Method { .. }
+                        if self
+                            .slice_application(implementation, export.target())
+                            .is_some() =>
+                    {
+                        crate::surface::identity::Selector::AssociatedFunction {
+                            item: crate::surface::identity::Definition::text_member(
+                                implementation.id(),
+                                definition.id(),
+                            ),
+                        }
+                    }
                     // A trait's provided method that two of the type's own
                     // impls of the trait share, as `PartialOrd::lt` of
                     // `Degrees`'s `PartialOrd` and `PartialOrd<f32>` (T412):
@@ -7553,6 +7569,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let own = matches!(implementation.trait_ref(),
                     model::Trait::Trait { id, .. } if id == target);
                 self.classify_operand_member(implementation, definition, own)
+            }
+            // A blanket impl over a borrow of its own type, applied to
+            // slices through its bound's impl for `&[T]`: the trait's
+            // member on a slice (`surface::slice`).
+            None if matches!(definition.kind(), model::Kind::Function { .. })
+                && let Some(application) = self.slice_application(implementation, target) =>
+            {
+                self.classify_slice_member(implementation, definition, &application)
             }
             None if default_method => {
                 let index = self

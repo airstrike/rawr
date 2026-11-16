@@ -2610,6 +2610,13 @@ pub mod spread {
 
     pub struct Iter<'data, T>(&'data [T]);
 
+    /// A copy of the borrow, whatever `T` is, as rayon's `slice::Iter`.
+    impl<T> Clone for Iter<'_, T> {
+        fn clone(&self) -> Self {
+            Iter(self.0)
+        }
+    }
+
     /// Every shade's spread, as `Shade::ALL.spread_iter()` gives it.
     pub fn shades() -> Iter<'static, Shade> {
         Iter(Shade::ALL)
@@ -2632,6 +2639,7 @@ pub mod spread {
         }
     }
 
+    #[derive(Clone)]
     pub struct Cloned<I>(I);
 
     impl<'a, T, I> Spread for Cloned<I>
@@ -2646,6 +2654,8 @@ pub mod spread {
         }
     }
 
+    /// Clone when its closure is, as rayon's `Map` derives it.
+    #[derive(Clone)]
     pub struct Map<I, F>(I, F);
 
     impl<I, F, R> Spread for Map<I, F>

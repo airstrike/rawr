@@ -889,6 +889,16 @@ fn a_provided_map_takes_the_impls_item_and_collects_into_a_result() {
     runs_as_cargo_does("spread_mapped", "[\"light\", \"dark\"]\nOk(())\n");
 }
 
+/// A crate trait's blanket `impl<I: ?Sized> IntoSpreadRef for I where &I:
+/// IntoSpread` gives a crate type's `&'static [T]` const its
+/// `spread_iter`, as rustc reaches it through `IntoSpread for &[T]`, and
+/// the spread it lends is cloned, mapped and collected (#2079, #2064). The
+/// `Map` it maps into derives `Clone`, which its boxed closure is not.
+#[test]
+fn a_blanket_impl_bounded_on_a_borrow_gives_a_slice_its_method() {
+    runs_as_cargo_does("spread_ref", "[\"light\", \"dark\"]\nOk(())\n");
+}
+
 /// A crate trait's generic impl for another crate's generic type, as
 /// ratzilla's `impl<B: Backend + ..> WebRenderer for Terminal<B>` is, gives
 /// `Terminal<DomBackend>` its methods: a `&mut self` one and a `self` one,

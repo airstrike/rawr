@@ -1459,6 +1459,10 @@ fn imported_paths<'contract>(
                 .or_else(|| {
                     rawr_import::surface::object::of(associated.representability())
                         .then(|| rawr_import::surface::object::path(&path, associated.name()))
+                })
+                .or_else(|| {
+                    rawr_import::surface::slice::is_member(associated.representability())
+                        .then(|| rawr_import::surface::slice::path(&path, associated.name()))
                 });
             if let Some(associated_path) = beside {
                 allocation.retain(1, associated_path.len())?;
@@ -1569,9 +1573,9 @@ struct Facade<'contract> {
     /// their impls for `&str`, each at its path (`surface::text`).
     text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The members the traits the program names give a number, `bool` or
-    /// `char` through their impls for it, and their methods on their
-    /// objects, each a function at its path (`surface::scalar`,
-    /// `surface::object`).
+    /// `char` through their impls for it, their methods on their objects,
+    /// and the members their blanket impls give slices, each a function at
+    /// its path (`surface::scalar`, `surface::object`, `surface::slice`).
     scalar_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The methods of the traits the program names that take `self` by
     /// value, each a function generic over the trait's `Self` at its path,
@@ -1900,6 +1904,9 @@ fn install(
                     }
                     None if rawr_import::surface::object::of(representability) => {
                         rawr_import::surface::object::path(&relative, associated.name())
+                    }
+                    None if rawr_import::surface::slice::is_member(representability) => {
+                        rawr_import::surface::slice::path(&relative, associated.name())
                     }
                     None => continue,
                 };
@@ -2804,9 +2811,12 @@ fn build(
                 .checked_add(selector)
         });
         // A method on an object takes it as `&impl Trait`, as any `&dyn`
-        // input is read, which the object fills (`surface::object`).
+        // input is read, which the object fills (`surface::object`). A
+        // member on a slice is generic over the slice's element, which the
+        // call infers (`surface::slice`).
         if let Representability::FunctionItem(plan) = member.representability()
-            && rawr_import::surface::object::of(member.representability())
+            && (rawr_import::surface::object::of(member.representability())
+                || rawr_import::surface::slice::is_member(member.representability()))
             && callable_generic(plan)
         {
             allocation.retain_checked(Some(1), bytes)?;

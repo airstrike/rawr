@@ -23526,9 +23526,13 @@ fn render_container_path(
     // member on a number is reached through the trait, `<u64 as
     // NumCast>::from`, as `u64` has `From::from` too (`surface::scalar`),
     // and a trait's method on its object through the trait at the object,
-    // `<(dyn Shape) as Shape>::area` (`surface::object`).
+    // `<(dyn Shape) as Shape>::area` (`surface::object`), and a trait's
+    // member on a slice through the trait at a slice whose element the
+    // call's slice gives, `<[_] as IntoParallelRefIterator>::par_iter`
+    // (`surface::slice`).
     let instance = signature.instance().and_then(|instance| match instance {
         convert::Type::Object(object) => object::dyn_type(object),
+        instance if crate::surface::slice::is_instance(instance) => Some("[_]".to_owned()),
         instance => concrete_type(instance),
     });
     if let Some(instance) = instance {
@@ -25472,8 +25476,42 @@ fn family_of(ty: &convert::Type) -> Option<family::Family> {
         let held = family::Ops::held(&scoped_type(ty)?)?;
         return family(held, BOXED_LIFETIMES);
     }
-    let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
+    let mut lifetimes =
+        TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
+    // A derived `Clone` holds only where each argument is `Clone`, as
+    // `Map<I, F>`'s does not of a boxed closure `F`.
+    lifetimes.clone = lifetimes.clone && arguments.iter().all(clones);
     family(scoped_type(ty)?, lifetimes)
+}
+
+/// Whether a value of `ty` is `Clone`, as an argument of a type whose
+/// derived `Clone` bounds its parameters by it: not a boxed closure, nor a
+/// crate type that isn't `Clone` or holds one that isn't.
+fn clones(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal { definition, .. }
+            if *definition == crate::surface::identity::Definition::callable() =>
+        {
+            false
+        }
+        ty if boxed_callable_type(ty).is_some() => false,
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            TYPE_TRAITS.with_borrow(|types| {
+                types
+                    .get(definition.as_bytes())
+                    .is_none_or(|lifetimes| lifetimes.clone)
+            }) && arguments.iter().all(clones)
+        }
+        convert::Type::Option(element)
+        | convert::Type::Range(element)
+        | convert::Type::Sequence { element, .. } => clones(element),
+        convert::Type::Result(ok, err) => clones(ok) && clones(err),
+        convert::Type::Tuple(members) => members.iter().all(clones),
+        _ => true,
+    }
 }
 
 /// Whether the type at `path` has lifetime parameters, which a lent value
@@ -25485,7 +25523,11 @@ fn carries_lifetimes(path: &str) -> bool {
 /// The family of a method's container, spelled `container` as
 /// `render_container_path` writes it, at `'x`.
 fn container_family(path: &str, container: &str) -> Option<family::Family> {
-    let lifetimes = SCOPED_PATHS.with_borrow(|paths| paths.get(path).copied())?;
+    let mut lifetimes = SCOPED_PATHS.with_borrow(|paths| paths.get(path).copied())?;
+    // A derived `Clone` holds only where each argument is `Clone`, and a
+    // boxed closure (`callable_box`) is not, as `Map<I, F>`'s isn't of one
+    // (`clones`).
+    lifetimes.clone = lifetimes.clone && !container.contains("Box<dyn Fn(");
     // A type has one family, by the path its facade names it at, whatever
     // path the adapter reaches it by (`quick_xml::reader::Reader` is
     // `quick_xml::Reader`).
@@ -27786,14 +27828,17 @@ fn through_trait(
 }
 
 /// Whether a method called through a trait is a member of the trait's impl
-/// for a number or an object (`surface::scalar`, `surface::object`), which
-/// has no path of its own, so its container's path is the trait's.
+/// for a number, an object or a slice (`surface::scalar`, `surface::object`,
+/// `surface::slice`), which has no path of its own, so its container's path
+/// is the trait's.
 fn is_trait_member(signature: &crate::classify::representability::signature::Signature) -> bool {
     signature.through().is_some()
-        && matches!(
-            signature.instance(),
-            Some(convert::Type::Builtin(_) | convert::Type::Object(_))
-        )
+        && signature.instance().is_some_and(|instance| {
+            matches!(
+                instance,
+                convert::Type::Builtin(_) | convert::Type::Object(_)
+            ) || crate::surface::slice::is_instance(instance)
+        })
 }
 
 /// The trait a demand reaches `plan` through when it is a member of the
