@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- An edit to the async function a running program is suspended in restarts the program with a one-line reason, under `rawr run` and on `rawr run --web`'s page, rather than failing at its next poll. (#2117)
+- `rawr run --web` compiles a project with the features and cfg options Cargo resolves for it on wasm32, a workspace member's inherited settings included. A save that changes them restarts the page. (#2121)
 
 ## 0.3.220 (2026-11-16)
 

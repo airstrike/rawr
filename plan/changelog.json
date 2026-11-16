@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"An edit to the async function a running program is suspended in restarts the program with a one-line reason, under `rawr run` and on `rawr run --web`'s page, rather than failing at its next poll.","issues":[2117]},
+      {"text":"`rawr run --web` compiles a project with the features and cfg options Cargo resolves for it on wasm32, a workspace member's inherited settings included. A save that changes them restarts the page.","issues":[2121]}
+    ]
   },
   "releases": [
     {
