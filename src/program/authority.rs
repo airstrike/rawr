@@ -56,6 +56,20 @@ impl Authority {
         self.executable.model()
     }
 
+    /// The body hash of the async function `key` names, as its state
+    /// machine has it.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn machine_body(&self, key: &item::Key) -> Option<u64> {
+        self.executable.machine_body(key)
+    }
+
+    /// Whether an `async fn` or method of this generation writes the
+    /// closure `step` names.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn in_async_fn(&self, step: &item::Key) -> bool {
+        self.executable.in_async_fn(step)
+    }
+
     /// Return stable symbolic values declared by this generation.
     pub fn items(&self) -> impl ExactSizeIterator<Item = &item::Value> {
         self.executable.items()

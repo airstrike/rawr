@@ -1700,8 +1700,10 @@ fn main_text(text: &str) -> Option<String> {
 ///   rebuilds by the island's shape instead (D932).
 /// - A callable a marked `main`'s own frame gave native code, which no
 ///   longer rebinds: `main` never runs again to give a new one.
-/// - A program that never called from native code into script code: no
-///   entry would ever admit the new generation.
+/// - A program that never reached a point that admits a generation: an
+///   outermost call from native code into script code, a step of an async
+///   body that its executor polls among them. Nothing would run the new
+///   generation.
 /// - An async function a suspended future waits in, whose body changed:
 ///   its frame can't resume in the new body, and runs it from its start
 ///   only in a fresh program (#2117).
@@ -1723,7 +1725,7 @@ pub fn refusal(
     ) {
         return Some(reason);
     }
-    if !crate::future::called_from_native() {
+    if !crate::future::admits() {
         return Some("the source changed".to_owned());
     }
     // `main` runs once: an edit to it would need it to run again.
@@ -1732,7 +1734,10 @@ pub fn refusal(
     {
         return Some("`main` changed".to_owned());
     }
-    if let Some(reason) = suspension(candidate) {
+    if let Some(reason) = suspension(
+        |key| candidate.machine_body(key),
+        |key| candidate.in_async_fn(key),
+    ) {
         return Some(reason);
     }
     let held = crate::future::held();
@@ -1764,16 +1769,21 @@ pub fn refusal(
     None
 }
 
-/// Why `candidate` can't resume each suspended future: the body of an
-/// async function one waits in changed, or went. Of the bodies that
-/// changed, it names the innermost: a body another awaits first suspends
-/// after the one awaiting it.
+/// Why a generation can't resume each suspended future: the body of an
+/// async function one waits in changed, or went. `machine_body` gives the
+/// generation's body hash of a step, and `in_async_fn` whether an
+/// `async fn` writes it. Of the bodies that changed, it names the
+/// innermost: a body another awaits first suspends after the one awaiting
+/// it.
 #[cfg(feature = "sync")]
-fn suspension(candidate: &crate::reload::Candidate) -> Option<String> {
+fn suspension(
+    machine_body: impl Fn(&crate::item::Key) -> Option<u64>,
+    in_async_fn: impl Fn(&crate::item::Key) -> bool,
+) -> Option<String> {
     crate::future::suspended()
         .into_iter()
         .rev()
-        .find(|(step, body)| candidate.machine_body(step.key()) != Some(*body))
+        .find(|(step, body)| machine_body(step.key()) != Some(*body))
         .map(|(step, _)| {
             let key = step.key();
             let name = key.name();
@@ -1781,7 +1791,7 @@ fn suspension(candidate: &crate::reload::Candidate) -> Option<String> {
             let function = &name[..at];
             // An `async fn`'s body is one of its closures, as Rust
             // desugars it; any other is an async block.
-            if at == name.len() || candidate.in_async_fn(key) {
+            if at == name.len() || in_async_fn(key) {
                 format!("`{function}`, which a suspended future waits in, changed")
             } else {
                 format!(
@@ -1888,7 +1898,9 @@ pub enum Admission {
 /// value of a removed one may live, and no callable native code holds
 /// that won't rebind in `bootstrap` may run code that makes either. Each
 /// live value of a type whose fields changed is rewritten in place to the
-/// new fields (#2026), or the generation is refused when one can't be.
+/// new fields (#2026), or the generation is refused when one can't be. A
+/// future that suspended since the compile is checked too: it can't
+/// resume in a body that changed (#2117).
 #[cfg(feature = "sync")]
 pub fn admit(bootstrap: Bootstrap) -> Admission {
     let next = Current::new(bootstrap);
@@ -1919,6 +1931,13 @@ pub fn admit(bootstrap: Bootstrap) -> Admission {
             },
         );
         if let Some(reason) = reason {
+            return Admission::Refused(reason);
+        }
+        let authority = next.bootstrap.catalog().authority();
+        if let Some(reason) = suspension(
+            |key| authority.machine_body(key),
+            |key| authority.in_async_fn(key),
+        ) {
             return Admission::Refused(reason);
         }
         if !changed.is_empty() {

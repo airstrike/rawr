@@ -193,8 +193,12 @@ fn an_async_fn_holds_its_mut_parameters_across_its_awaits() {
     assert_eq!(rawr, cargo);
 }
 
+/// An async `main` whose script code runs only as the steps its runtime
+/// polls keeps running across a save to a function its loop calls: the
+/// save is taken where the loop resumes, with its count kept (#2127). An
+/// edit to `main`'s loop restarts it, saying why.
 #[test]
-fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
+fn an_async_main_takes_a_save_where_its_loop_resumes_and_restarts_for_its_own_edit() {
     let root = TICKS.lease(&[]);
     let main = root.join("src/main.rs");
     let mut run = start(&root, &[]);
@@ -209,17 +213,27 @@ fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
     );
 
     let text = fs::read_to_string(&main).unwrap();
-    fs::write(
-        &main,
-        text.replace("const VERSION: i64 = 1;", "const VERSION: i64 = 2;"),
-    )
-    .unwrap();
-    let restarted = run.until(|line| line.starts_with("version 2"));
-    assert_eq!(restarted, "version 2 tick 1");
+    let swapped = text.replace("    1\n}", "    2\n}");
+    fs::write(&main, &swapped).unwrap();
+    let kept = run.until(|line| line.starts_with("version 2"));
+    let tick = kept
+        .strip_prefix("version 2 tick ")
+        .and_then(|tick| tick.parse::<u64>().ok())
+        .unwrap();
+    assert!(tick > 3, "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+
+    fs::write(&main, swapped.replace("tick += 1;", "tick += 1000;")).unwrap();
+    let restarted = run.until(|line| line == "version 2 tick 1000");
+    assert_eq!(restarted, "version 2 tick 1000");
     assert!(
         run.seen
             .iter()
-            .any(|line| line == "stderr: rawr: the source changed; restarting the program"),
+            .any(|line| line == "stderr: rawr: `main` changed; restarting the program"),
         "{}",
         run.seen.join("\n")
     );

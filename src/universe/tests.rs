@@ -185,6 +185,11 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     a_suspended_future_restarts_only_for_an_edit_to_its_function(&universe);
     a_suspended_future_resumes_where_it_waited_after_its_function_moves(&universe);
     a_restart_for_an_edited_async_block_names_the_block(&universe);
+
+    // A step of a suspended future is a call from native code: a save
+    // queued for the owner is admitted where the future resumes (#2127).
+    a_suspended_future_resumes_in_a_save_queued_while_it_waited(&universe);
+    a_future_that_suspended_since_a_save_compiled_refuses_it_at_its_resumption(&universe);
 }
 
 /// A snippet's statements outside any function, as ?play runs them, call
@@ -455,6 +460,98 @@ fn a_restart_for_an_edited_async_block_names_the_block(universe: &Universe) {
             reason: "an async block in `spawn`, which a suspended future waits in, changed"
                 .to_owned()
         }
+    );
+}
+
+const STEPPING: &str = "// rawr
+pub async fn ticks(gate: rawr::future::Future<i64>) -> i64 {
+    let value = gate.await;
+    step(value)
+}
+
+pub fn step(value: i64) -> i64 {
+    value + 1
+}
+
+fn main() {}
+";
+
+/// A native future that is pending at its first poll and gives `value` at
+/// its second.
+fn opening(value: i64) -> future::Future {
+    let mut opened = false;
+    future::Future::native(move || {
+        Box::pin(std::future::poll_fn(move |cx| {
+            if std::mem::replace(&mut opened, true) {
+                let output: future::Finish = Box::new(move || Ok(Dynamic::from(value)));
+                std::task::Poll::Ready(output)
+            } else {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }))
+    })
+}
+
+/// A future suspended in `ticks`, while nothing else calls into the
+/// program: a save to `step`, queued for the owner, is admitted when the
+/// future resumes, and the step it resumes in runs the new `step`.
+fn a_suspended_future_resumes_in_a_save_queued_while_it_waited(universe: &Universe) {
+    let entry = PathBuf::from("/universe-stepping/src/main.rs");
+    let program = universe.program(entry, STEPPING, Vec::new()).unwrap();
+    let outcomes = program.outcomes();
+    let mut waiting = program
+        .call("ticks", &mut [Dynamic::from(opening(41))])
+        .unwrap()
+        .cast::<future::Future>()
+        .into_script();
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.poll_output(&mut cx).is_pending());
+
+    let edited = STEPPING.replace("value + 1", "value + 10");
+    assert_eq!(program.replace(edited.as_str()), Outcome::Queued);
+    let std::task::Poll::Ready(output) = waiting.poll_output(&mut cx) else {
+        panic!("the gate opens at the second poll");
+    };
+    assert_eq!(output.unwrap().as_int(), Ok(51));
+    let said = outcomes.try_iter().collect::<Vec<_>>();
+    assert_eq!(said, [Outcome::Queued, Outcome::Swapped]);
+}
+
+/// A save compiled while no future waits in `ticks`, which changes it: a
+/// future that suspends in `ticks` before the owner takes the save can't
+/// resume in it, so the owner refuses it where the future resumes.
+fn a_future_that_suspended_since_a_save_compiled_refuses_it_at_its_resumption(universe: &Universe) {
+    let entry = PathBuf::from("/universe-stepping-late/src/main.rs");
+    let program = universe.program(entry, STEPPING, Vec::new()).unwrap();
+    let outcomes = program.outcomes();
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    let mut waiting = {
+        // Inside a call from native code, nothing admits the save.
+        let _entry = future::entry();
+        let edited = STEPPING.replace("let value = gate.await;", "let value = gate.await + 1;");
+        assert_eq!(program.replace(edited.as_str()), Outcome::Queued);
+        let mut waiting = program
+            .call("ticks", &mut [Dynamic::from(opening(41))])
+            .unwrap()
+            .cast::<future::Future>()
+            .into_script();
+        assert!(waiting.poll_output(&mut cx).is_pending());
+        waiting
+    };
+    let std::task::Poll::Ready(output) = waiting.poll_output(&mut cx) else {
+        panic!("the gate opens at the second poll");
+    };
+    assert_eq!(output.unwrap().as_int(), Ok(42));
+    let said = outcomes.try_iter().collect::<Vec<_>>();
+    assert_eq!(
+        said,
+        [
+            Outcome::Queued,
+            Outcome::Restarting {
+                reason: "`ticks`, which a suspended future waits in, changed".to_owned()
+            }
+        ]
     );
 }
 

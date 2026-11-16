@@ -223,6 +223,7 @@ sum 5050</span></div>
   <li>Your own <code>async fn</code> holds each <code>&amp;</code> and <code>&amp;mut</code> parameter, its <code>&amp;mut self</code> too, until its future ends, as in Rust. A change it makes after an <code>.await</code> is the caller&rsquo;s place&rsquo;s own, whether the parameter is a <code>Vec</code>, one of your structs or a crate&rsquo;s value such as a connection. Using the place before the future ends is rustc&rsquo;s borrow error.</li>
   <li>A native value drops with its last owner, so a channel closes when its last sender goes.</li>
   <li><code>spawn_blocking</code> runs your closure on a worker thread, with an evaluation of its own.</li>
+  <li>A save keeps the program running. The new code takes over the next time one of your futures resumes, such as a timer loop at its next tick or a spawned task at its next step, and your futures keep their locals. A save that changes <code>main</code>, or the body of an <code>async</code> function or block a future is waiting in, restarts the program, and rawr says why in one line.</li>
 </ul>
 <p>Limits today:</p>
 <ul>
