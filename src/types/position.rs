@@ -13,7 +13,7 @@ use std::{
 /// meaning they go up to a maximum of 65,535 lines and 65,535 characters per line.
 ///
 /// Advancing beyond the maximum line length or maximum number of lines is not an error but has no effect.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Position {
     /// Line number: 0 = none
@@ -114,6 +114,39 @@ impl Position {
             self
         }
     }
+}
+
+impl std::hash::Hash for Position {
+    /// Its line and column, or nothing inside [`unplaced`].
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if UNPLACED.get() {
+            return;
+        }
+        self.line.hash(state);
+        self.pos.hash(state);
+    }
+}
+
+thread_local! {
+    /// Whether this thread hashes positions as nothing (`unplaced`).
+    static UNPLACED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `hash` with each position this thread hashes hashed as nothing, so
+/// a hash of code sees what the code does and not where it is written: a
+/// save that moves it without changing it hashes it the same.
+pub(crate) fn unplaced<T>(hash: impl FnOnce() -> T) -> T {
+    /// Puts back how positions hashed before, as `hash` ends or unwinds.
+    struct Restore(bool);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNPLACED.set(self.0);
+        }
+    }
+
+    let _restore = Restore(UNPLACED.replace(true));
+    hash()
 }
 
 impl Default for Position {

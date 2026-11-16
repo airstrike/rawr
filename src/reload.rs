@@ -133,6 +133,13 @@ impl Candidate {
         self.catalog.machine_body(key)
     }
 
+    /// Whether the closure `step` names is written by an `async fn` or
+    /// method of this generation.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn in_async_fn(&self, step: &crate::item::Key) -> bool {
+        self.catalog.in_async_fn(step)
+    }
+
     /// Return this candidate's immutable metadata proof.
     #[must_use]
     pub const fn generation(&self) -> &Arc<Generation> {
