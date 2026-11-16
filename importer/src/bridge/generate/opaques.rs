@@ -37,6 +37,8 @@ struct Opaques {
     /// they take and don't declare it (`made_opaque`), in the cohort's
     /// order.
     made: BTreeMap<convert::Type, Vec<usize>>,
+    /// The opaque types a plan declares (`declares_opaque`).
+    declared: std::collections::BTreeSet<convert::Type>,
 }
 
 thread_local! {
@@ -78,8 +80,14 @@ impl Opaques {
         let mut declaring = BTreeMap::new();
         let mut undeclared = BTreeMap::new();
         let mut made = BTreeMap::<convert::Type, Vec<usize>>::new();
+        let mut declared = std::collections::BTreeSet::new();
         for (index, (operand, given)) in operands.iter().zip(&produced).enumerate() {
             let plan = &cohort[index];
+            if let Some(given) = given
+                && super::declares_opaque(plan, given)
+            {
+                declared.insert(super::opaque_key(given));
+            }
             if let crate::surface::adapter::Operation::EnumVariant { instance, .. } =
                 plan.operation()
                 && let Some(opaque) = instance.iter().find_map(super::first_opaque)
@@ -105,7 +113,10 @@ impl Opaques {
                 (None, None) => {}
             }
         }
+        // A plan that makes the type from nothing is its producer only where
+        // none declares it.
         let mut producers = undeclared;
+        producers.retain(|key, _| !declared.contains(key));
         producers.extend(declaring);
         Ok(Self {
             start: cohort.as_ptr() as usize,
@@ -115,6 +126,7 @@ impl Opaques {
             consumers,
             producers,
             made,
+            declared,
         })
     }
 
@@ -192,5 +204,14 @@ pub(super) fn made<'p>(cohort: &'p [Plan], key: &convert::Type) -> Option<Vec<&'
                 .map(|index| &cohort[*index])
                 .collect(),
         )
+    })
+}
+
+/// Whether a plan of `cohort` declares the opaque type `key`, when it is
+/// the indexed cohort.
+pub(super) fn declared(cohort: &[Plan], key: &convert::Type) -> Option<bool> {
+    COHORT.with_borrow(|indexed| {
+        let indexed = indexed.as_ref().filter(|indexed| indexed.is(cohort))?;
+        Some(indexed.declared.contains(&super::opaque_key(key)))
     })
 }
