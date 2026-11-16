@@ -14986,6 +14986,34 @@ fn a_let_of_a_value_that_never_comes_takes_any_use() {
     assert_eq!(value, 42);
 }
 
+/// A type variable only a diverging expression is coerced into falls back
+/// to `!` once the body is read, as rustc's edition 2024 fallback makes
+/// it: a generic function's or closure's output, an `Option`'s element and
+/// a `match` whose arms all diverge each check, and `!` and `Option<!>`
+/// are `Debug`. The output is rustc's build of the same program.
+#[test]
+fn a_variable_only_a_diverging_expression_constrains_falls_back_to_never() {
+    let value = run(r#"
+        fn id<T>(t: T) -> T { t }
+        fn call<F: FnOnce() -> T, T>(f: F) -> T { f() }
+        pub fn run() -> i64 {
+            let n = 3;
+            if n < 0 {
+                let a = id(loop {});
+                let b = call(|| panic!());
+                let c = Some(unreachable!());
+                let d = match n { 0 => panic!(), _ => loop {} };
+                let f = || -> _ { todo!() };
+                let e = f();
+                println!("{:?} {:?} {:?} {:?} {:?}", a, b, c, d, e);
+            }
+            n
+        }
+        run()
+    "#);
+    assert_eq!(value, 3);
+}
+
 /// A module and a function of one name bind in Rust's two namespaces:
 /// `use parts::badge::{self, badge};` brings in both, so
 /// `badge::Secondary::weight()` goes through the module and `badge("..")`

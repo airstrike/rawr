@@ -2231,6 +2231,8 @@ impl<'a> Parser<'a> {
                 }
             }
             Ty::Unit => "\"()\"".into(),
+            // std's `Debug` of `!`: a value that never comes is never written.
+            Ty::Never => value,
             Ty::Int(Int::U64 | Int::Usize) => {
                 self.prelude_op(PreludeOp::FormatRadix, [value, "10".into()])
             }

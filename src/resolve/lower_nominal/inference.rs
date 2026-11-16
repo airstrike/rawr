@@ -20,6 +20,11 @@ pub(super) struct Inference {
     /// `T::Output = i64` of the bounds in scope (`T: Shape<Output = i64>`),
     /// by parameter, trait and name.
     pub(super) equalities: BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty>,
+    /// The variables a diverging expression was coerced into, as rustc's
+    /// diverging type variables: one nothing else settles falls back once
+    /// the body is read (`fall_back_diverging`). A rollback drops those it
+    /// marked.
+    pub(super) diverging: Vec<usize>,
     /// The crate impls' bounds `<ty as Trait>::Name == value` whose `ty`
     /// wasn't known where their impl was chosen: each fixes its `value`
     /// once a later use fixes `ty`. A rollback drops those it made.
@@ -59,6 +64,7 @@ pub(super) struct Checkpoint {
     pub(super) next: usize,
     pub(super) journal: usize,
     pub(super) depth: usize,
+    pub(super) diverging: usize,
     #[cfg(feature = "rust-import")]
     pub(super) projections: usize,
 }
@@ -72,6 +78,7 @@ pub(super) struct Undo {
 pub(super) struct Patch {
     pub(super) next: usize,
     pub(super) bindings: Box<[(usize, Ty)]>,
+    pub(super) diverging: Box<[usize]>,
 }
 
 #[cfg(test)]
@@ -97,6 +104,7 @@ impl Inference {
             next: self.next,
             journal: self.journal.len(),
             depth: self.depth,
+            diverging: self.diverging.len(),
             #[cfg(feature = "rust-import")]
             projections: self.projections.len(),
         };
@@ -121,6 +129,7 @@ impl Inference {
         }
         self.next = checkpoint.next;
         self.depth = checkpoint.depth;
+        self.diverging.truncate(checkpoint.diverging);
         #[cfg(feature = "rust-import")]
         self.projections.truncate(checkpoint.projections);
     }
@@ -146,6 +155,7 @@ impl Inference {
         Patch {
             next: self.next,
             bindings,
+            diverging: self.diverging[checkpoint.diverging..].into(),
         }
     }
 
@@ -154,10 +164,35 @@ impl Inference {
         for (id, ty) in patch.bindings {
             self.set(id, ty);
         }
+        self.diverging.extend(patch.diverging);
     }
 
     pub(super) fn fresh(&mut self) -> Ty {
         Ty::Infer(self.fresh_id())
+    }
+
+    /// A fresh variable for a diverging expression's value, which falls
+    /// back if nothing else settles it.
+    pub(super) fn fresh_diverging(&mut self) -> Ty {
+        let id = self.fresh_id();
+        self.diverging.push(id);
+        Ty::Infer(id)
+    }
+
+    /// Each diverging variable still open is the edition's fallback type,
+    /// `!` from edition 2024 and `()` before, as rustc's fallback makes it
+    /// at the end of a body's inference.
+    pub(super) fn fall_back_diverging(&mut self) {
+        let fallback = if crate::resolve::std_path::EDITION >= "2024" {
+            Ty::Never
+        } else {
+            Ty::Unit
+        };
+        for id in std::mem::take(&mut self.diverging) {
+            if let Ty::Infer(open) = self.resolve(&Ty::Infer(id)) {
+                self.bind(open, fallback.clone());
+            }
+        }
     }
 
     pub(super) fn fresh_id(&mut self) -> usize {

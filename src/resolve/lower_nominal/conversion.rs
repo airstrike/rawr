@@ -1184,7 +1184,9 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     pub(super) fn finish_conversions(&mut self) -> Result<(), Error> {
-        self.fall_back_diverging();
+        // A type variable only a diverging expression constrains falls back
+        // first, as rustc's does before it selects the obligations left.
+        self.inference.fall_back_diverging();
         // A bound waiting on a type the body has fixed by now, as the
         // closure's error a `collect` into a `Result` fixes, fixes what it
         // ties before a conversion reads it.

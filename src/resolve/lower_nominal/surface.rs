@@ -459,6 +459,9 @@ pub(super) fn imported_surface_type(
         // view's widget gives: rustc infers it where the bridge calls the
         // item (D594).
         Ty::Infer(_) => Type::Inferred,
+        // `!`, as a future that never completes gives its output: no value
+        // of it is ever made, so the bridge names it as an output `!` is.
+        Ty::Never => Type::Never,
         // A shared borrow of a script value, as `Canvas::new(self)` takes
         // `&Arc` for its `P: Program`: the proxy shares the value's handle,
         // so it is the borrow, and the impls the program writes for the
@@ -1277,6 +1280,8 @@ pub(super) fn instance_surface_type(
             }
         }
         Ty::Infer(_) => Type::Inferred,
+        // `!`, as `imported_surface_type` has it.
+        Ty::Never => Type::Never,
         Ty::Script(definition, arguments) => Type::Script {
             path: models.script_path(*definition),
             arguments: arguments

@@ -402,10 +402,6 @@ struct Parser<'a> {
     /// Each `let`'s local, in the order the body declares them: where an
     /// inference variable nothing settles is reported (`unsettled`).
     local_types: Vec<LocalType>,
-    /// The type of each local whose value never comes (`let v = loop {}`):
-    /// one its uses leave open is `!` once the body is read, as rustc's
-    /// fallback of a diverging type (`fall_back_diverging`).
-    diverging: Vec<Ty>,
     /// Reads of a crate struct's field that leave the struct whole, by
     /// their span: a by-value use moves that field out, as Rust's partial
     /// move (`move_local`).
@@ -941,7 +937,6 @@ impl<'a> Parser<'a> {
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),
             local_types: Vec::new(),
-            diverging: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
