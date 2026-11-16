@@ -174,7 +174,7 @@ impl Engine {
 
     /// The compiled program, or the first native miss: a lookup with
     /// native provenance, or a use the carrier doesn't cover.
-    fn compile_covered(
+    pub(crate) fn compile_covered(
         &self,
         snapshot: &package::snapshot::Snapshot,
     ) -> Result<Result<Compiled, captured::Unbound>, Error> {

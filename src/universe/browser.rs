@@ -1,7 +1,9 @@
 //! A universe in a browser (#1395): the entry of a generated runner built
 //! for wasm32. Its `main` hands its bindings to [`serve`] as the page
 //! instantiates the module, and the page then calls [`prepare`] and [`run`],
-//! and [`replace`] for each edit, which `wasm-bindgen` exports.
+//! and [`replace`] for each edit, which `wasm-bindgen` exports. A page that
+//! runs a whole package, as `rawr run --web` serves one, calls [`start`]
+//! with the package's files and [`replace_files`] for each save.
 //!
 //! One module instance runs one program. A program that hands its loop to
 //! native code, as iced's `run` hands it to its web shell, ratzilla's
@@ -17,15 +19,25 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use serde_json::{json, Value};
-use wasm_bindgen::prelude::{wasm_bindgen, JsError};
+use wasm_bindgen::prelude::{wasm_bindgen, JsError, JsValue};
 
-use super::{Bindings, Outcome, Program, Universe};
+use super::{Bindings, Error, Outcome, Program, Universe};
 use crate::{future, Access, Output};
 
 /// Where a snippet's package lies, as its paths name it.
 const ROOT: &str = "/universe";
 /// Most output kept, in bytes, as `?play`'s server keeps it.
 const MAX_OUTPUT: usize = 64 * 1024;
+
+#[wasm_bindgen]
+extern "C" {
+    /// A page's function that takes what the program writes as it writes
+    /// it: `(stream, text)`, the stream `"stdout"` or `"stderr"`.
+    pub type Sink;
+
+    #[wasm_bindgen(method, js_name = call)]
+    fn write(this: &Sink, context: &JsValue, stream: &str, text: &str);
+}
 
 thread_local! {
     /// The bindings the runner's `main` served.
@@ -38,6 +50,9 @@ thread_local! {
     /// Whether native code called into the program since its `main`
     /// returned: only then does it run on, and an edit reload it.
     static CALLED: Cell<bool> = const { Cell::new(false) };
+    /// The page's function [`set_output`] named, which takes the program's
+    /// output in place of the answers.
+    static SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
 }
 
 /// What the program wrote, and the message of the panic that stopped it.
@@ -56,12 +71,26 @@ static WRITTEN: Mutex<Written> = Mutex::new(Written {
 
 /// Serve `bindings` to the page: what a runner's `main` calls on wasm32.
 /// A panic's message is kept for [`panic_message`], since a panic on
-/// wasm32 aborts the instance.
+/// wasm32 aborts the instance, and goes to the page's sink as it happens.
 pub fn serve(bindings: &'static dyn Bindings) {
     std::panic::set_hook(Box::new(|info| {
-        written().panic = Some(info.to_string());
+        let message = info.to_string();
+        SINK.with_borrow(|sink| {
+            if let Some(sink) = sink {
+                sink.write(&JsValue::NULL, "stderr", &format!("{message}\n"));
+            }
+        });
+        written().panic = Some(message);
     }));
     BINDINGS.set(Some(bindings));
+}
+
+/// Send what the program writes to `sink` as it writes it, rather than
+/// with the answer of the call it wrote it in: a program that runs on the
+/// page's events writes between calls from the page.
+#[wasm_bindgen]
+pub fn set_output(sink: Sink) {
+    SINK.set(Some(sink));
 }
 
 /// Install the served bindings in a universe ahead of [`run`], so a Run
@@ -83,7 +112,21 @@ pub fn prepare() -> Result<(), JsError> {
     };
     // A snippet reaches none of the page's files or environment.
     let mut universe = Universe::new(bindings, Access::none())?;
-    universe.on_output(|stream, text| written().push(stream, text));
+    universe.on_output(|stream, text| {
+        let sent = SINK.with_borrow(|sink| {
+            sink.as_ref().map(|sink| {
+                let stream = if stream == Output::Stderr {
+                    "stderr"
+                } else {
+                    "stdout"
+                };
+                sink.write(&JsValue::NULL, stream, text);
+            })
+        });
+        if sent.is_none() {
+            written().push(stream, text);
+        }
+    });
     UNIVERSE.set(Some(universe));
     Ok(())
 }
@@ -100,18 +143,47 @@ pub fn prepare() -> Result<(), JsError> {
 /// Returns the error installing the bindings gave.
 #[wasm_bindgen]
 pub fn run(manifest: &str, source: &str) -> Result<String, JsError> {
+    let root = PathBuf::from(ROOT);
+    let files = vec![(root.join("Cargo.toml"), Box::from(manifest))];
+    started(root.join("src").join("main.rs"), Box::from(source), files)
+}
+
+/// Compile the package `files` holds, a JSON array of `[path, text]`
+/// pairs, with its crate root at `entry`, and run its `main`, as [`run`]
+/// runs a snippet's, with the same answers.
+///
+/// # Errors
+///
+/// Returns the error installing the bindings gave, or that `files` isn't
+/// such an array.
+#[wasm_bindgen]
+pub fn start(entry: &str, files: &str) -> Result<String, JsError> {
+    let entry = PathBuf::from(entry);
+    let mut files = package(files)?;
+    let Some(at) = files.iter().position(|(path, _)| *path == entry) else {
+        return Err(JsError::new(&format!(
+            "rawr: the package's files have no crate root `{}`",
+            entry.display()
+        )));
+    };
+    let (_, text) = files.swap_remove(at);
+    started(entry, text, files)
+}
+
+/// Load the program whose crate root at `entry` holds `text`, with `files`
+/// for the rest of its package, and run its `main`.
+fn started(
+    entry: PathBuf,
+    text: Box<str>,
+    files: Vec<(PathBuf, Box<str>)>,
+) -> Result<String, JsError> {
     prepare()?;
     let Some(universe) = UNIVERSE.take() else {
         return Err(JsError::new("rawr: this instance has run its program"));
     };
-    let root = PathBuf::from(ROOT);
-    let files = vec![(root.join("Cargo.toml"), Box::from(manifest))];
-    let program = match universe.program(root.join("src").join("main.rs"), source, files) {
+    let program = match universe.program(entry, text, files) {
         Ok(program) => program,
-        Err(error) => {
-            let text = error.to_string();
-            return Ok(json!({ "kind": "error", "text": text }).to_string());
-        }
+        Err(error) => return Ok(failure(&error).to_string()),
     };
     let status = program.run();
     PROGRAM.set(Some((universe, program)));
@@ -129,9 +201,29 @@ pub fn run(manifest: &str, source: &str) -> Result<String, JsError> {
 /// last, `{"kind":"error","text":..}` for a compile error, which leaves the
 /// program running its last good text, and `{"kind":"restart","reason":..}`
 /// when the text can't replace the running one in this instance, or no
-/// program runs on: the page runs it in a fresh one.
+/// program runs on: the page runs it in a fresh one. An error at a use of a
+/// crate's API the bindings don't cover says `"uncovered":true`: a runner
+/// built for the new text runs it.
 #[wasm_bindgen]
 pub fn replace(source: &str) -> String {
+    replaced(|program| program.replace_now(source))
+}
+
+/// Give the running program the package `files` holds, a JSON array of
+/// `[path, text]` pairs, as its new text, and take it at once, as
+/// [`replace`] takes a new crate root, with the same answers.
+///
+/// # Errors
+///
+/// Returns that `files` isn't such an array.
+#[wasm_bindgen]
+pub fn replace_files(files: &str) -> Result<String, JsError> {
+    let files = package(files)?;
+    Ok(replaced(|program| program.replace_package_now(files)))
+}
+
+/// The answer to an edit `offer` gives the running program.
+fn replaced(offer: impl FnOnce(&Program) -> Outcome) -> String {
     let outcome = PROGRAM.with_borrow(|running| match running {
         None => Outcome::Restarting {
             reason: "no program runs".to_owned(),
@@ -139,7 +231,7 @@ pub fn replace(source: &str) -> String {
         Some(_) if !CALLED.get() => Outcome::Restarting {
             reason: "the program has ended".to_owned(),
         },
-        Some((_, program)) => program.replace_now(source),
+        Some((_, program)) => offer(program),
     });
     let answer = match outcome {
         Outcome::Unchanged => json!({ "kind": "unchanged" }),
@@ -148,9 +240,33 @@ pub fn replace(source: &str) -> String {
             json!({ "kind": "swapped", "output": taken_output() })
         }
         Outcome::Failed { message } => json!({ "kind": "error", "text": message }),
+        Outcome::Uncovered { message } => {
+            json!({ "kind": "error", "text": message, "uncovered": true })
+        }
         Outcome::Restarting { reason } => json!({ "kind": "restart", "reason": reason }),
     };
     answer.to_string()
+}
+
+/// The answer for a program that didn't load.
+fn failure(error: &Error) -> Value {
+    let text = error.to_string();
+    match error {
+        Error::Uncovered(_) => json!({ "kind": "error", "text": text, "uncovered": true }),
+        _ => json!({ "kind": "error", "text": text }),
+    }
+}
+
+/// The `[path, text]` pairs of a JSON array.
+fn package(files: &str) -> Result<Vec<(PathBuf, Box<str>)>, JsError> {
+    serde_json::from_str::<Vec<(String, String)>>(files)
+        .map(|files| {
+            files
+                .into_iter()
+                .map(|(path, text)| (PathBuf::from(path), text.into_boxed_str()))
+                .collect()
+        })
+        .map_err(|error| JsError::new(&format!("rawr: the package's files don't read: {error}")))
 }
 
 /// The message of the panic that aborted this instance, if one did.

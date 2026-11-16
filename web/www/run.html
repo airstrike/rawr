@@ -1,0 +1,149 @@
+<!doctype html>
+<!--
+  rawr-web's page for a project (`rawr run --web`): it runs the program's
+  package against the runner built for it, `universe.js` and
+  `universe_bg.wasm` (rawr::universe::browser), from the files
+  `program.json` names. A served page listens to `events` for each save's
+  files, which the running program takes in place with its state kept
+  (#1455), and for a new runner, which it reloads for. It reports what each
+  start and reload did, and what the program writes, to the server, which
+  says it in the terminal. An error shows over the program too.
+
+  iced's web shell puts its canvas in place of `#iced`, and a terminal
+  backend that draws into the page appends its rows to the body.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rawr</title>
+<style>
+:root { color-scheme: light dark; }
+html, body { margin: 0; height: 100%; }
+body { font: 13px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+pre { margin: 0; font: inherit; }
+/* A terminal backend (rows of `pre` in a `div`) draws a cell's default
+   colours as a terminal does, light text with no background, so its page
+   is a dark terminal in both themes. */
+body:has(> div > pre) { background: #111; color: #eee; }
+body:has(> div > pre) #rawr-report { background: #3a1212f2; }
+#rawr-report {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647;
+  max-height: 60%; overflow: auto; padding: 12px 16px;
+  background: #2a1010f2; color: #fbe3e3; white-space: pre-wrap;
+}
+#rawr-report[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="iced"></div>
+<pre id="rawr-report" hidden></pre>
+<script type="module">
+import init, * as glue from "./universe.js";
+
+const box = document.getElementById("rawr-report");
+const ANSI = /\x1b\[[0-9;]*m/g;
+const show = (text) => {
+  box.textContent = text.replace(ANSI, "");
+  box.hidden = false;
+};
+const hide = () => {
+  box.hidden = true;
+  box.textContent = "";
+};
+
+// Reports go one at a time, so the terminal says them in order.
+let sent = Promise.resolve();
+const report = (path, body) => {
+  sent = sent.then(() =>
+    fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      .catch(() => {}),
+  );
+};
+
+// The program runs in this page's instance until it panics, which aborts
+// the instance: a later save then needs a fresh one.
+let running = false;
+let dead = false;
+let current = null;
+let refused = null;
+
+const panicked = (error) => {
+  dead = true;
+  running = false;
+  const text = glue.panic_message?.() ?? String(error);
+  show(text);
+  report("/answer", { kind: "panic", text });
+};
+
+// What a start or a reload answered: say it, and show an error.
+const answered = (answer, files) => {
+  report("/answer", answer);
+  switch (answer.kind) {
+    case "restart":
+      location.reload();
+      return;
+    case "error":
+      refused = files;
+      show(answer.text);
+      return;
+    case "unchanged":
+      if (files !== refused) hide();
+      return;
+    default:
+      refused = null;
+      hide();
+  }
+};
+
+const program = await (await fetch("program.json", { cache: "no-store" })).json();
+
+if (program.entry) {
+  await init({ module_or_path: "universe_bg.wasm" });
+  glue.set_output((stream, text) => {
+    (stream === "stderr" ? console.error : console.log)(text.replace(/\n$/, ""));
+    report("/output", { stream, text });
+  });
+  current = JSON.stringify(program.files);
+  try {
+    const answer = JSON.parse(glue.start(program.entry, current));
+    running = answer.kind === "text";
+    answered(answer, current);
+  } catch (error) {
+    panicked(error);
+  }
+} else {
+  show("rawr: the program's runner isn't built; the terminal says why. A save builds it again.");
+}
+
+// A trap in code the page's events run aborts the instance as a panic does.
+addEventListener("error", (event) => {
+  if (event.error instanceof WebAssembly.RuntimeError && !dead) panicked(event.error);
+});
+addEventListener("unhandledrejection", (event) => {
+  if (event.reason instanceof WebAssembly.RuntimeError && !dead) panicked(event.reason);
+});
+
+if (program.watch) {
+  const events = new EventSource("events");
+  events.addEventListener("files", (event) => {
+    const files = event.data;
+    if (files === current) return;
+    current = files;
+    // A program that didn't start, or whose instance is gone, starts
+    // again in a fresh one.
+    if (!running) {
+      location.reload();
+      return;
+    }
+    try {
+      answered(JSON.parse(glue.replace_files(files)), files);
+    } catch (error) {
+      panicked(error);
+    }
+  });
+  events.addEventListener("reload", () => location.reload());
+}
+</script>
+</body>
+</html>

@@ -12,8 +12,9 @@
 # Worker serves to a browser that takes brotli.
 #
 # Beside it goes the browser's universe (#1395): ?play's universe built for
-# wasm32 by play/universe/web.sh, with the rawr-import that RAWR_IMPORT names
-# (rawr-import on the PATH by default), as universe.js, universe_bg.wasm.br
+# wasm32 and packed by play/universe/web.sh through `rawr-import run --web`,
+# with the rawr-import that RAWR_IMPORT names (rawr-import on the PATH by
+# default), as universe.js, universe_bg.wasm.br
 # and universe.toml, the manifest a snippet compiles beside. The universe's
 # module ships as its brotli copy only (#1459): raw, it is over Cloudflare's
 # 25 MiB limit on an asset. The Worker serves it as /web/universe_bg.wasm
@@ -41,10 +42,10 @@ mkdir -p "$out"
 "$(bindgen Cargo.lock)" --target web --no-typescript --remove-name-section --out-dir "$out" \
   target/wasm/wasm32-unknown-unknown/release/rawr_web.wasm
 
+# rawr-import packs the universe's runner as it packs any project's for
+# `rawr run --web`, with the wasm-bindgen its Cargo.lock names.
 sh play/universe/web.sh "${RAWR_IMPORT:-rawr-import}"
-# The universe's Cargo.lock names the wasm-bindgen its runner links.
-"$(bindgen target/wasm/universe/Cargo.lock)" --target web --no-typescript --remove-name-section \
-  --out-name universe --out-dir "$out" target/wasm/universe/target/universe/runner
+cp target/wasm/universe/site/universe.js target/wasm/universe/site/universe_bg.wasm "$out/"
 cp target/wasm/universe/Cargo.toml "$out/universe.toml"
 
 # pack FILE: write FILE.br, brotli at quality 11 with a 16 MiB window.

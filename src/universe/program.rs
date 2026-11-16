@@ -101,6 +101,11 @@ impl Sources {
         })
     }
 
+    /// The files read, in path order.
+    pub(super) fn into_files(self) -> Vec<(PathBuf, Box<str>)> {
+        self.files
+    }
+
     /// The crate root at `entry` holding `text`, with `files` for the rest
     /// of its package.
     pub(super) fn given(
@@ -202,8 +207,22 @@ impl Program {
     /// takes it, and the outcome is [`Outcome::Queued`].
     #[must_use]
     pub fn replace_now(&self, text: impl Into<Box<str>>) -> Outcome {
+        self.taken_now(|| self.replace(text))
+    }
+
+    /// Give the program `files` as its whole package's new text, its crate
+    /// root among them, as [`Reloader::replace_package`] does, and take it
+    /// as [`Program::replace_now`] takes a new crate root.
+    #[must_use]
+    pub fn replace_package_now(&self, files: Vec<(PathBuf, Box<str>)>) -> Outcome {
+        self.taken_now(|| self.reloader().replace_package(files))
+    }
+
+    /// What `offer` said, or what taking its text did when this thread is
+    /// outside every call from native code into script code.
+    fn taken_now(&self, offer: impl FnOnce() -> Outcome) -> Outcome {
         let outcomes = self.outcomes();
-        let outcome = self.replace(text);
+        let outcome = offer();
         if outcome != Outcome::Queued {
             return outcome;
         }
@@ -245,6 +264,13 @@ impl Reloader {
         let files = lock(&self.state.current).files.clone();
         let sources = Sources::given(self.state.entry.clone(), text.into(), files);
         self.offer(sources.files)
+    }
+
+    /// Give the package `files` as its new text, its crate root among
+    /// them, and compile it as [`Reloader::reload`] does: what a caller
+    /// that reads the package somewhere else gives it.
+    pub fn replace_package(&self, files: Vec<(PathBuf, Box<str>)>) -> Outcome {
+        self.offer(files)
     }
 
     /// Compile `files` beside the running program and offer the result to
@@ -297,8 +323,13 @@ impl State {
         current: &Current,
         files: &[(PathBuf, Box<str>)],
     ) -> Result<reload::Candidate, Outcome> {
-        let failed = |error: Error| Outcome::Failed {
-            message: error.to_string(),
+        let failed = |error: Error| match error {
+            Error::Uncovered(_) => Outcome::Uncovered {
+                message: error.to_string(),
+            },
+            error => Outcome::Failed {
+                message: error.to_string(),
+            },
         };
         let snapshot = Snapshot::new(self.entry.clone(), files.to_vec())
             .map_err(|error| failed(error.into()))?;

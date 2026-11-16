@@ -3047,8 +3047,10 @@ dependencies = [
  "rawr",
  "rawr-cli",
  "rawr-import",
+ "rawr-location",
  "rawr-watch",
  "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

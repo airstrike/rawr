@@ -30,6 +30,11 @@ pub enum Error {
     /// The program doesn't compile against the bindings.
     #[error("{}", rendered(.0))]
     Compile(#[source] Box<resident::Error>),
+    /// The program uses a crate's API at a place the bindings don't cover:
+    /// bindings generated for it again cover it. The error is the one Rust
+    /// gives at the use when the API isn't there.
+    #[error("{}", rendered_source(.0))]
+    Uncovered(#[source] Box<crate::package::Error>),
     /// The compiled program couldn't bind the bindings' runtime.
     #[error("{0}")]
     Bind(#[source] reload::installation::Error),
@@ -58,10 +63,14 @@ impl Error {
 /// points at.
 fn rendered(error: &resident::Error) -> String {
     match error {
-        resident::Error::Source(source) => match source.report() {
-            Ok(report) => diagnostic::render(&report),
-            Err(_) => source.to_string(),
-        },
+        resident::Error::Source(source) => rendered_source(source),
         error => error.to_string(),
+    }
+}
+
+fn rendered_source(error: &crate::package::Error) -> String {
+    match error.report() {
+        Ok(report) => diagnostic::render(&report),
+        Err(_) => error.to_string(),
     }
 }

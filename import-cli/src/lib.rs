@@ -21,6 +21,7 @@ pub mod project;
 mod release;
 pub mod report;
 mod runner_demand;
+mod web;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

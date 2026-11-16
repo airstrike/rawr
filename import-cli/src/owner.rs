@@ -1374,10 +1374,13 @@ fn initial_watched_program(
         kept.as_deref_mut(),
     )?;
     if let Some(foreign) = initial.built.foreign_target() {
-        rawr_import::process::say(format_args!(
-            "rawr: the runner is built for `{foreign}`, which this machine can't run, so it \
-             doesn't start"
-        ));
+        // A caller that takes the runner says where it runs.
+        if !rawr_import::universe::delivers() {
+            rawr_import::process::say(format_args!(
+                "rawr: the runner is built for `{foreign}`, which this machine can't run, so it \
+                 doesn't start"
+            ));
+        }
         drop(lane.shutdown());
         return Ok(None);
     }

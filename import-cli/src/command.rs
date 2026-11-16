@@ -21,7 +21,7 @@ const HELP: &str = "rawr-import: runs Rawr programs that use Rust crates\n\n\
 frontmatter, or native modules. The program runs in a runner that links the\n\
 rawr crate and the program's own dependencies, built in the project's build\n\
 directory beside `cargo build`.\n\n\
-Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import test [path] [filter] [-- options]\n                                       Run the program's `#[test]` functions, as `cargo test`\n  rawr-import cache warm               Build what a first run here builds once per toolchain\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
+Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import run --web [path] [--port <port>]\n                                       Run it in a browser, on a page served here\n  rawr-import run --web --out <dir> [path]\n                                       Write that page's files to `dir`, serving nothing\n  rawr-import check [path]            Check a program without running it\n  rawr-import test [path] [filter] [-- options]\n                                       Run the program's `#[test]` functions, as `cargo test`\n  rawr-import cache warm               Build what a first run here builds once per toolchain\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
 Options:\n  -h, --help       Show this help\n  -V, --version    Show the version\n  --color <when>   Colour errors: auto, always or never, as cargo's `--color`";
 
 /// Run `rawr-import` with `arguments`, the executable name excluded.
@@ -41,10 +41,11 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     // A universe runner, as `?play`'s image builds it (#434).
     if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
         rawr_import::universe::set();
-        // The directory its caller takes the runner from (#1752).
-        if let Some(directory) = std::env::var_os(rawr_import::universe::DIRECTORY) {
-            rawr_import::universe::deliver_into(std::path::Path::new(&directory));
-        }
+    }
+    // The directory its caller takes the runner from (#1752), a universe's
+    // or a project's that `run --web` serves.
+    if let Some(directory) = std::env::var_os(rawr_import::universe::DIRECTORY) {
+        rawr_import::universe::deliver_into(std::path::Path::new(&directory));
     }
     let arguments = match rawr_cli::target_arguments(arguments) {
         Ok(arguments) => arguments,
@@ -71,6 +72,17 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     }
     // What follows `--` is the program's.
     let (arguments, program_arguments) = rawr_cli::split_program_arguments(&arguments);
+    // `run --web` and the page's options.
+    let (web, arguments) = match rawr_cli::web::Options::take(arguments) {
+        Ok(taken) => taken,
+        Err(message) => {
+            eprintln!(
+                "{}: {message}; run `rawr-import --help` for usage",
+                color::label(color::Level::Error)
+            );
+            return ExitCode::from(2);
+        }
+    };
     let words: Vec<_> = arguments
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -91,16 +103,21 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Some("cache") => return cache(&words[1..]),
+        Some("run") if web.is_some() && !program_arguments.is_empty() => {
+            Err("`--web` takes no program arguments: the page runs the program".to_owned())
+        }
         Some("run") => path(&words[1..]).map(|path| (false, path)),
+        _ if web.is_some() => Err("`--web` runs with `run`".to_owned()),
         Some("check") if !program_arguments.is_empty() => {
             Err("`check` takes no program arguments".to_owned())
         }
         Some("check") => path(&words[1..]).map(|path| (true, path)),
         _ => path(&words).map(|path| (false, path)),
     };
-    match request {
-        Ok((check, path)) => program(check, path.as_ref(), &program_arguments),
-        Err(message) => {
+    match (request, web) {
+        (Ok((_, path)), Some(options)) => crate::web::run(path.as_ref(), &options),
+        (Ok((check, path)), None) => program(check, path.as_ref(), &program_arguments),
+        (Err(message), _) => {
             eprintln!(
                 "{}: {message}; run `rawr-import --help` for usage",
                 color::label(color::Level::Error)
