@@ -8,7 +8,7 @@ mod cached;
 
 pub(crate) use cached::EXECUTION_SCHEMA;
 
-#[cfg(all(test, feature = "test-fixtures"))]
+#[cfg(all(test, feature = "test-fixtures", feature = "rustc-driver"))]
 pub(crate) use cached::fixture_build;
 
 impl<B> super::Manifest<super::Generated, B> {

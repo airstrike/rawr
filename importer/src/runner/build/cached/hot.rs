@@ -229,6 +229,7 @@ impl Fixture {
 }
 
 /// Reuse the existing deterministic artifact producer with an actual derived request.
+#[cfg(all(test, feature = "test-fixtures", feature = "rustc-driver"))]
 pub(crate) fn fixture_build(
     manifest: Manifest<Generated, ()>,
 ) -> Result<Manifest<Built, ()>, crate::runner::BuildError> {

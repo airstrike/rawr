@@ -53,7 +53,7 @@ const BUNDLE_HEADER_BYTES: usize = 296;
 #[cfg(all(test, feature = "test-fixtures"))]
 mod hot;
 
-#[cfg(all(test, feature = "test-fixtures"))]
+#[cfg(all(test, feature = "test-fixtures", feature = "rustc-driver"))]
 pub(crate) use hot::fixture_build;
 
 pub(super) fn build<B>(

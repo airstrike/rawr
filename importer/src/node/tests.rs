@@ -76,7 +76,7 @@ pub(super) struct BundleValue {
     seal_digest: [u8; 32],
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 struct NativeBundleValue(BundleValue);
 
 #[cfg(feature = "test-fixtures")]
@@ -161,7 +161,7 @@ impl Value for BundleValue {
     }
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 impl NativeBundleValue {
     fn capture(reference: crate::store::bundle::BundleRef) -> Self {
         Self(BundleValue::capture(reference))
@@ -191,7 +191,7 @@ impl NativeBundleValue {
     }
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 impl Value for NativeBundleValue {
     const KIND: Kind = Kind::NativeProduct;
     // The current build execution schema, as for `BundleValue`.
@@ -294,7 +294,7 @@ fn old_bundled_fixture(
     })
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 fn native_bundled_fixture(
     attempt: crate::store::bundle::Attempt,
 ) -> Result<super::Bundled<NativeBundleValue>, Error> {
@@ -3665,7 +3665,7 @@ fn same_bundled_key_contenders_allocate_execute_and_publish_once() {
     fs::remove_dir_all(root).expect("the bundled contender fixture retires");
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 #[test]
 fn native_product_bundle_is_part_of_the_exact_project_pin_closure() {
     let root = temporary("native-bundle-pin-closure");
@@ -3972,7 +3972,7 @@ fn project_local_eviction_retires_its_stale_logical_root_and_whole_bundle() {
     fs::remove_dir_all(root).expect("the local runner-eviction fixture retires");
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 #[test]
 fn stale_runner_retirement_reclaims_its_newly_unreachable_native_bundle_closure() {
     let root = temporary("runner-eviction-native-closure");
@@ -4054,7 +4054,7 @@ fn stale_runner_retirement_reclaims_its_newly_unreachable_native_bundle_closure(
     fs::remove_dir_all(root).expect("the closure-eviction fixture retires");
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 #[test]
 fn released_runner_preserves_a_native_bundle_reachable_from_another_root() {
     let root = temporary("runner-eviction-shared-native");
@@ -4137,7 +4137,7 @@ fn released_runner_preserves_a_native_bundle_reachable_from_another_root() {
     fs::remove_dir_all(root).expect("the shared-native fixture retires");
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 #[test]
 fn active_upstream_bundle_lease_blocks_the_entire_released_closure() {
     let root = temporary("runner-eviction-upstream-lease");
@@ -4488,7 +4488,7 @@ fn interrupted_eviction_recovers_a_partially_removed_staged_action() {
     fs::remove_dir_all(root).expect("the staged-crash fixture retires");
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(all(feature = "test-fixtures", feature = "rustc-driver"))]
 #[test]
 fn interrupted_released_closure_recovers_native_and_runner_units_once() {
     let root = temporary("runner-eviction-interrupted-closure");

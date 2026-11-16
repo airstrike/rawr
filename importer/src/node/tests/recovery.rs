@@ -114,6 +114,7 @@ fn unknown_operational_refusal_and_external_drift_never_nominate_retirement() {
     }
 }
 
+#[cfg(feature = "rustc-driver")]
 fn inventory_owner(
     attempt: crate::store::bundle::Attempt,
 ) -> Result<super::super::Bundled<BundleValue>, Error> {
@@ -137,6 +138,7 @@ fn inventory_owner(
     })
 }
 
+#[cfg(feature = "rustc-driver")]
 fn validate_inventory(
     value: &BundleValue,
     store: &crate::store::Store,
@@ -157,6 +159,7 @@ fn validate_inventory(
     Ok(Box::from(COMPLETE))
 }
 
+#[cfg(feature = "rustc-driver")]
 #[test]
 fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
     let root = temporary("same-action-member-corruption");
