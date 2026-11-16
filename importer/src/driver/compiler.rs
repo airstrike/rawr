@@ -2395,8 +2395,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // &str { type Output = Text; }` gives `S::Output` of
             // `click("Increment")` (#1678). And each one of a type that
             // forwards the item to the same item of its own parameter, as
-            // `impl<P: Program> Program for Application<P>` gives
-            // `P::State`: the classifier makes it a case whose value that
+            // `impl<P: Trait> Trait for Wrapper<P>` gives `type State =
+            // P::State`: the classifier makes it a case whose value that
             // parameter's item fixes, as an opaque type that fills the
             // parameter gives it from its bound (#2060).
             for implementation in self.implementations(obligation.trait_id)? {

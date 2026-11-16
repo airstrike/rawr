@@ -1418,9 +1418,9 @@ impl<'a> Parser<'a> {
                 continue;
             };
             // A case's self type is named by the crate that declares it,
-            // which may be another than the item's, as `impl<P: Program>
-            // Program for Application<P>` of `iced` is a case of a bound of
-            // `iced_test`'s. A case of a type this program doesn't reach
+            // which may be another than the item's, as `impl<P: Trait> Trait
+            // for Wrapper<P>` of one crate is a case of a bound another crate
+            // declares. A case of a type this program doesn't reach
             // fits no type it has.
             let facades = self.models.host.facades().to_vec();
             let mut found = None;
