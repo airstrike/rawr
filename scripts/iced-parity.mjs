@@ -65,6 +65,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const scripts = path.join(here, "iced-parity");
@@ -420,9 +421,17 @@ function testEnv(dir) {
   };
 }
 
+// Cargo goes through scripts/cargo.mjs, which records the units each run
+// uses and removes the test builds a newer run of the same example
+// superseded, so the shared target keeps what the examples use and nothing
+// stale.
+const cargoWrapper = path.join(path.dirname(fileURLToPath(import.meta.url)), "cargo.mjs");
+
 function capture(command, args, dir) {
+  const [program, programArgs] =
+    command === "cargo" ? [process.execPath, [cargoWrapper, ...args]] : [command, args];
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: dir, env: testEnv(dir) });
+    const child = spawn(program, programArgs, { cwd: dir, env: testEnv(dir) });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
     child.stderr.on("data", (chunk) => (output += chunk));
