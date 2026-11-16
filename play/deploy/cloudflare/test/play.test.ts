@@ -247,7 +247,7 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   // file its block names, marked as a program. A library's snippet is one of
   // the server universe's programs instead (play/universe), so the server
   // runs it as that program: the iced tab is iced's counter, which
-  // examples.txt names, and the ratatui tab is programs/ui.rs.
+  // examples.txt names. The ratatui tab runs in the browser, so it isn't here.
   const universe = (path: string) => readFileSync(new URL(`play/universe/${path}`, root), "utf8");
   const icedExamples = universe("examples.txt").replace(/#.*/g, "").split(/\s+/);
   for (const [i, block] of blocks.entries()) {

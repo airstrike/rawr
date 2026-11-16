@@ -269,8 +269,11 @@ export interface RunBlock {
  */
 export function runBlocks(html: string): RunBlock[] {
   const blocks: RunBlock[] = [];
-  for (const match of html.matchAll(/<code\b[^>]*\bdata-run\b(?:="([^"]*)")?[^>]*>([\s\S]*?)<\/code>/g)) {
-    blocks.push({ name: match[1] ?? "", code: decodeHtml(match[2]), html: match[2] });
+  for (const match of html.matchAll(/<code\b([^>]*\bdata-run\b(?:="([^"]*)")?[^>]*)>([\s\S]*?)<\/code>/g)) {
+    // A block marked data-where="browser" runs in the page's own universe,
+    // and its Run never reaches /play/run.
+    if (/\bdata-where="browser"/.test(match[1])) continue;
+    blocks.push({ name: match[2] ?? "", code: decodeHtml(match[3]), html: match[3] });
   }
   return blocks;
 }
