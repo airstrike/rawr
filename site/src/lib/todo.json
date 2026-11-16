@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr run --web` names errors' paths from the directory it ran in, as `rawr run` does. For a crate API the runner doesn't cover yet, the page says the runner builds again and reloads onto it, and when that build fails, the page says so.","issues":[2120]},
+        {"text":"`rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a browser, and reloads it on each save.","issues":[2123],"refs":[2122]},
+        {"text":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen.","issues":[2124]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.219",
@@ -4586,9 +4593,11 @@
     {"issue":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open","category":"Platforms"},
     {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed","category":"Health"},
     {"issue":2119,"title":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost…","state":"closed","category":"Platforms","release":"0.3.219"},
-    {"issue":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"open","category":"Platforms"},
+    {"issue":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"closed","category":"Platforms"},
     {"issue":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open","category":"Platforms"},
-    {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"}
+    {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"},
+    {"issue":2123,"title":"`rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a…","state":"closed","category":"Platforms"},
+    {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms"}
   ],
   "groups": [
     {
@@ -6312,7 +6321,7 @@
             {"number":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open"},
             {"number":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open"},
             {"number":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open"},
-            {"number":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"open"},
+            {"number":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"closed"},
             {"number":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open"},
             {"number":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open"}
           ]

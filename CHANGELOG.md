@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr run --web` names errors' paths from the directory it ran in, as `rawr run` does. For a crate API the runner doesn't cover yet, the page says the runner builds again and reloads onto it, and when that build fails, the page says so. (#2120)
+- `rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a browser, and reloads it on each save. (#2123; part of #2122)
+- `rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen. (#2124)
 
 ## 0.3.219 (2026-11-16)
 
