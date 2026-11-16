@@ -79,15 +79,23 @@ fn resident_manifests_ignore_source_body_edits() {
 #[test]
 fn resident_manifests_detect_exact_cargo_declarations() {
     let fixture = Fixture::new();
+    // An unmarked path crate, so cargo resolves the declaration offline
+    // and the requirement can change without changing what it resolves to.
+    fixture.write(
+        "native/Cargo.toml",
+        "[package]\nname = \"native\"\nversion = \"1.0.0\"\n",
+    );
+    fs::create_dir_all(fixture.root.join("native/src")).unwrap();
+    fs::write(fixture.root.join("native/src/lib.rs"), "").unwrap();
     let manifest = concat!(
         "[package]\nname = \"resident-fixture\"\n",
-        "[dependencies]\nnative = { version = \"1\" }\n",
+        "[dependencies]\nnative = { path = \"native\", version = \"1\" }\n",
     );
     fixture.write("Cargo.toml", manifest);
     let before = Manifests::from_graph(&fixture.graph());
     fixture.write(
         "Cargo.toml",
-        &manifest.replace("version = \"1\"", "version = \"2\""),
+        &manifest.replace("version = \"1\"", "version = \"1.0\""),
     );
     assert!(before != Manifests::from_graph(&fixture.graph()));
     fixture.write(
