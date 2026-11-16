@@ -1718,6 +1718,13 @@ pub fn depart() -> Option<Box<dyn Any + Send>> {
 /// none.
 #[allow(dead_code)]
 pub fn carry(value: &mut Dynamic, arena: &mut Arena) -> Option<Box<dyn Any + Send>> {
+    // A target without threads polls each future and calls each closure on
+    // the thread that made it, as a browser page's one thread does
+    // (#1160): what it captured stays in the program's arena, with the
+    // values that can't leave it, as a page's elements and callbacks can't.
+    if cfg!(all(target_arch = "wasm32", not(target_feature = "atomics"))) {
+        return None;
+    }
     let home = arena.epoch;
     let mut moved = Vec::new();
     __rawr_internal::crossing::rebind_captures(value, |capture| {
@@ -14555,13 +14562,46 @@ fn render_adapter_body(
             substitutions,
             constants,
             container_parameters,
+            call,
+            functions,
+            slots,
             ..
         } if signature.scope().is_some() => {
             // A `&'a T` the frame's output keeps with its receiver stays
             // the program's value until the frame reaches it (`kept_inputs`).
             let kept = kept_inputs(signature, substitutions)?;
             let opens = OpensFrame::enter(true);
-            for (index, ty) in signature.inputs().iter().enumerate() {
+            let closure = (call.is_some() || !slots.is_empty()) && kept.is_empty();
+            if closure {
+                // A script closure or function the call takes, as ratatui's
+                // `draw(&mut self, impl FnOnce(&mut Frame)) ->
+                // Result<CompletedFrame<'_>, _>` does (#1457): the closure
+                // Rawr makes, or the slot, which runs within the call,
+                // before the frame opens.
+                let crossed = Crossed {
+                    slots,
+                    crossings: &[],
+                };
+                render_function_arguments(
+                    signature,
+                    substitutions,
+                    functions,
+                    &[],
+                    None,
+                    call.as_ref(),
+                    crossed,
+                    1,
+                    output,
+                )?;
+                for (position, ty) in signature.inputs().iter().enumerate() {
+                    if crossed.slot_at(position, ty).is_some() {
+                        writeln!(output, "    let argument_{position} = slot_{position};")
+                            .map_err(request::unwritable)?;
+                    }
+                }
+            }
+            let taken = signature.inputs().iter().enumerate().filter(|_| !closure);
+            for (index, ty) in taken {
                 if kept.iter().any(|input| input.position == index) {
                     writeln!(
                         output,
@@ -16120,7 +16160,9 @@ fn render_method_opening(
             None => "Some(scoped) => Err(runtime_error(Error::Lent(scoped.name(), __rawr_internal::scope::Error::Mismatch))),".to_owned(),
         };
         // A `&self` receiver of the arena is shared with the frame, as two
-        // shared borrows of it coexist, and a `&mut self` one is leased. A
+        // shared borrows of it coexist, and a `&mut self` one is leased on
+        // this thread for the frame, so it need not be `Send`, as a value
+        // that holds the page's callbacks isn't (#1457). A
         // static's place, or what a method of one gave that borrows it, is
         // lent where it is (#1602).
         let (lasting, held) = if matches!(receiver, Receiver::Shared) {
@@ -16144,7 +16186,7 @@ fn render_method_opening(
             (
                 "let lasting: Option<&'static ()> = None;".to_owned(),
                 format!(
-                    "let mut held: Held<{container}> = with_arena(|arena| arena.lease(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                    "let mut held: PlaceHeld<{container}> = with_arena(|arena| arena.lease_place(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
                 #[allow(unused_mut)]
                 let mut receiver = held.get_mut();"
                 ),
@@ -21917,6 +21959,23 @@ fn render_callable_closure(
             parameters.push(format!("input_{position}: &mut {rust}"));
             lent.push(position.to_string());
             let lend = LentInput::new(position, true, rust);
+            values.push(lend.value());
+            lends.push(lend);
+            continue;
+        }
+        // One whose type carries lifetimes, as ratatui's `draw(impl
+        // FnOnce(&mut Frame))` lends `Frame<'_>` (#1457): lent for the call
+        // too, at every lifetime its family takes, as a script function's
+        // `&mut Shell<'_, Message>` is.
+        if let convert::Type::Borrowed { mutable: true, ty } = input
+            && matches!(**ty, convert::Type::Nominal { .. })
+            && !is_value(ty)
+            && let Some(family) = scoped_type(ty)
+        {
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("closure input type"))?;
+            parameters.push(format!("input_{position}: &mut {rust}"));
+            lent.push(position.to_string());
+            let lend = LentInput::scoped(position, true, rust, family);
             values.push(lend.value());
             lends.push(lend);
             continue;
