@@ -24,11 +24,18 @@ ratatui = "0.30"
 # The browser's universe (#1395), which web.sh builds for wasm32: iced on
 # its own web shell, drawing with WebGPU or WebGL2 (tiny-skia when the page
 # has neither) and its embedded font, tokio on the page's one thread, and
-# ratatui without a terminal backend of its own.
+# ratatui drawing into the page through ratzilla's backends, with no
+# terminal of its own. A program's own async loop runs on the page's event
+# loop through wasm-bindgen-futures' `spawn_local`, as threads don't run
+# there (programs/web/). ratatui keeps `std`: without it, the layout cache
+# ratzilla turns on needs a `critical-section` implementation the page has
+# none of.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["canvas", "wgpu", "tiny-skia", "webgl", "fira-sans", "crisp", "web-colors"] }
 tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
-ratatui = { version = "0.30", default-features = false }
+ratatui = { version = "0.30", default-features = false, features = ["std"] }
+ratzilla = "0.3"
+wasm-bindgen-futures = "0.4"
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]

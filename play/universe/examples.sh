@@ -69,3 +69,11 @@ for program in "$universe"/programs/*.rs; do
   marked "$program" "$out/$name.rs"
   add "$name"
 done
+# A program in `programs/web/` draws into the page, through crates only the
+# browser's universe has, so its module is there alone.
+for program in "$universe"/programs/web/*.rs; do
+  name="$(basename "$program" .rs)"
+  marked "$program" "$out/$name.rs"
+  echo '#[cfg(target_arch = "wasm32")]' >> "$universe/src/examples.rs"
+  add "$name"
+done

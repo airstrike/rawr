@@ -4,10 +4,11 @@
 //! and [`replace`] for each edit, which `wasm-bindgen` exports.
 //!
 //! One module instance runs one program. A program that hands its loop to
-//! native code, as iced's `run` hands it to its web shell or ratzilla's
-//! `draw_web` to the page's animation frames, returns from `main` at once
-//! and keeps running on the page's events, and this instance belongs to it
-//! from then on. An edit reloads it in place, its state kept, as `rawr run`
+//! native code, as iced's `run` hands it to its web shell, ratzilla's
+//! `draw_web` to the page's animation frames, or `spawn_local` an async
+//! loop of the program's own that awaits its input, returns from `main` at
+//! once and keeps running on the page's events, and this instance belongs
+//! to it from then on. An edit reloads it in place, its state kept, as `rawr run`
 //! reloads a save (#1455). The page instantiates a fresh copy of the
 //! compiled module for the next run, and for an edit that can't reload.
 

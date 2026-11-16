@@ -5,8 +5,10 @@
 //
 // The page compiles the module once. Each run gets an instance of its own
 // in a frame of its own, in place of the run strip's output: a program that
-// hands its loop to the page (iced's `run` to its web shell, ratzilla's
-// `draw_web` to the page's animation frames) keeps that instance, and winit
+// hands its loop to the page (iced's `run` to its web shell, an async loop
+// to wasm-bindgen-futures' `spawn_local`, which polls it on the page's
+// events, as a ratatui program's loop that awaits its keys from ratzilla's
+// backend) keeps that instance, and winit
 // allows one event loop per instance. An edit replaces the running
 // program's text in its instance, which keeps its state (#1455); only an
 // edit that can't reload there, as `rawr run` restarts for one, gets a
@@ -61,9 +63,15 @@ export interface UniverseEnv {
   compile(response: Promise<Response>): Promise<WebAssembly.Module>;
 }
 
-/** Where the frame's program draws, and how focus shows. */
+/**
+ * Where the frame's program draws, and how focus shows. ratzilla's terminal
+ * (rows of `pre` in a `div`) draws a cell's default colours as a terminal
+ * does, light text with no background, so its frame is a dark terminal in
+ * both themes.
+ */
 const FRAME_STYLE = `html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
 body { font: 13px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: CanvasText; }
+body:has(> div > pre) { background: #111; color: #eee; }
 pre { margin: 0; font: inherit; }
 :focus { outline: none; }
 canvas:focus-visible, [tabindex]:focus { outline: 2px solid #d43; outline-offset: -2px; }`;

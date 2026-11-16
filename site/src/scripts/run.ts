@@ -14,7 +14,10 @@
 // runs in the browser's universe (universe.ts), in a frame of its own in
 // place of its output, and stays interactive there. Its output before Run
 // is the frame the server drew, as the build wrote it. The server runs it
-// when the universe doesn't load. Once its program runs, an edit reloads it
+// when the universe doesn't load. A block marked `data-where="browser"`
+// runs in the universe too, but only there: it draws into the page through
+// crates the server's universe doesn't have, so its output before Run says
+// where it runs, and it never goes to the server. Once its program runs, an edit reloads it
 // in its frame with its state kept (#1455): a compile error shows after the
 // frame while the program runs its last good code, and an edit that can't
 // reload there runs in a fresh frame.
@@ -207,7 +210,10 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
     const strip = out.closest(".run")!;
     const name = source.dataset.run || "this snippet";
     const onServer = source.dataset.where === "server";
-    const inUniverse = source.dataset.where === "universe";
+    // A browser block runs only in the universe: the server has no page to
+    // draw into.
+    const browserOnly = source.dataset.where === "browser";
+    const inUniverse = source.dataset.where === "universe" || browserOnly;
     const label = button.getAttribute("aria-label") || `Run ${name}`;
     const original = source.textContent ?? "";
     const originalHtml = source.innerHTML;
@@ -409,7 +415,16 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
           // The universe didn't load: the server runs it.
           console.warn("rawr: the browser's universe could not run this snippet;", error);
           clear();
+          if (browserOnly) {
+            fail("The browser's universe could not load, and this program runs only there. " + (error instanceof Error ? error.message : String(error)));
+            setState("done");
+            return;
+          }
         }
+      } else if (browserOnly) {
+        fail("This program runs only in the browser's universe, which this page doesn't load.");
+        setState("done");
+        return;
       }
       try {
         let result = edited() ? (onServer || inUniverse ? null : await browser(code)) : await early.take();
@@ -434,7 +449,7 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
     // instance made, with its bindings installed.
     warmups.push(async () => {
       if (inUniverse && universe) await nextFrame();
-      else if (!edited()) await early.warm();
+      else if (!edited() && !browserOnly) await early.warm();
     });
 
     button.addEventListener("click", () => {
