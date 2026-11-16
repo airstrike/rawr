@@ -254,6 +254,12 @@ impl<'a> Parser<'a> {
             {
                 return Err(error);
             }
+            // A method of a value an `impl Trait` output gives is the
+            // trait's (`opaque_bound`).
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+                self.bound_method(&value, &member, member_span);
+            }
             // `Widget::_boxed(text.as_ref())`: the crate trait's impl fixes
             // the lending's target (`settle_spliced_lending`).
             #[cfg(feature = "rust-import")]
@@ -468,7 +474,7 @@ impl<'a> Parser<'a> {
                     value.span = at;
                 }
                 let mut inputs = Vec::with_capacity(arguments.len() + 1);
-                self.move_local(&mut value)?;
+                self.take_self_member_receiver(&mut value, &items)?;
                 inputs.push(value);
                 for mut argument in arguments {
                     self.move_local(&mut argument)?;
@@ -499,7 +505,7 @@ impl<'a> Parser<'a> {
                 let start = value.span.start();
                 let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
                 let mut inputs = Vec::with_capacity(arguments.len() + 1);
-                self.move_local(&mut value)?;
+                self.take_self_member_receiver(&mut value, &items)?;
                 inputs.push(value);
                 for mut argument in arguments {
                     self.move_local(&mut argument)?;
@@ -1326,10 +1332,15 @@ impl<'a> Parser<'a> {
                 // `Trait::method(value, ..)` where the crate gives the
                 // value's type no such member of its own, as `column!`'s
                 // `Widget::_boxed(widget.map(f))` of a `Map`, whose impl
-                // declares parameters its type does not have: the trait's
-                // method over its `Self`, which rustc selects the impl for.
+                // declares parameters its type does not have, or only an
+                // inherent namesake (`spliced_namesake`): the trait's method
+                // over its `Self`, which rustc selects the impl for. The
+                // type's own member of the impl gives its output at the
+                // type's own types, as a projection of `Self` is.
                 #[cfg(feature = "rust-import")]
-                if !self.host_has_member(&value.ty, &member) {
+                if !self.host_has_member(&value.ty, &member)
+                    || self.spliced_namesake(&value.ty, &member, member_span)
+                {
                     match self.spliced_trait_call(value, &member, member_span)? {
                         Ok(called) => {
                             value = called;
@@ -1780,6 +1791,11 @@ impl<'a> Parser<'a> {
                     .as_deref()
                     .or(Some(definition.output())),
                 &substitution,
+            );
+            #[cfg(feature = "rust-import")]
+            self.note_opaque_bound(
+                definition.lifetimes().written_output.as_deref(),
+                span(value.span.start(), end),
             );
             // A `&mut self` method borrows its receiver for the call.
             if matches!(mode, receiver::Mode::Mutable) {

@@ -27,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 236;
+const CLASSIFIER_VERSION: u32 = 241;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -301,6 +301,10 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// its output's late-bound lifetimes are the frame's, as its early
     /// ones are `'static`, and are written by neither.
     scope_lifetimes: Cell<bool>,
+    /// A trait's method over its `Self` (`surface::member`) is being
+    /// classified: its first input is the method's `&self` or `&mut self`,
+    /// which the call borrows as the method's receiver.
+    self_receiver: Cell<bool>,
     /// A nominal type's type argument is being converted: a shared borrow
     /// in it, at any depth, is one the type holds (`held_borrow`), as
     /// wgpu's `DeviceDescriptor<Option<&'a str>>` holds its label.
@@ -908,6 +912,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
+            self_receiver: Cell::new(false),
             type_argument: Cell::new(false),
             regional: std::cell::RefCell::new(Box::default()),
             shared,
@@ -1041,6 +1046,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     fn start_item(&self) {
         self.trait_self.set(None);
         self.scope_lifetimes.set(false);
+        self.self_receiver.set(false);
         self.type_argument.set(false);
         *self.regional.borrow_mut() = Box::default();
         *self.opaque_output.borrow_mut() = None;
@@ -6587,12 +6593,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         found
     }
 
-    /// The methods the trait `definition` declares that take `self` by
-    /// value, each a function generic over the trait's `Self`
-    /// (`surface::member`): a program's own type that implements the trait
-    /// calls them, as `column!`'s `Widget::_boxed(circle)` calls the
-    /// provided `_boxed` of a script's `impl Widget<..> for Circle`. No
-    /// impl of the crate's has the script type as its `Self`.
+    /// The methods the trait `definition` declares that take `self`,
+    /// `&self` or `&mut self`, each a function generic over the trait's
+    /// `Self` whose first input is the receiver (`surface::member`): a
+    /// program's own type that implements the trait calls them, as
+    /// `column!`'s `Widget::_boxed(circle)` calls the provided `_boxed` of a
+    /// script's `impl Widget<..> for Circle`, where no impl of the crate's
+    /// has the script type as its `Self`. So does a value a call of
+    /// `Trait::method` names the trait's method of, or one an `impl Trait`
+    /// output gives, whose type may have an inherent method of the name.
     fn self_member_implementations(
         &self,
         export: &ledger::Export,
@@ -6622,7 +6631,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 continue;
             };
-            if !matches!(method_signature.receiver(), model::Receiver::Value { .. }) {
+            if !matches!(
+                method_signature.receiver(),
+                model::Receiver::Value { .. } | model::Receiver::Reference { .. }
+            ) {
                 continue;
             }
             let selector = crate::surface::identity::Selector::AssociatedFunction {
@@ -7154,10 +7166,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let retained_before = (self.retained_items.get(), self.retained_bytes.get());
         let trait_id = definition.id();
         let result = (|| -> Result<Representability, Failure> {
-            let model::Receiver::Value { ty: receiver } = signature.receiver() else {
-                return Err(reject::Kind::GenericImplementation.into());
-            };
             let this = |ty: &model::Type| self_as_parameter(ty, trait_id);
+            // The receiver is the function's first input: `self` the value,
+            // `&self` and `&mut self` a borrow of it.
+            let receiver = match signature.receiver() {
+                model::Receiver::Value { ty } => this(ty),
+                model::Receiver::Reference {
+                    lifetime,
+                    mutability,
+                    ty,
+                } => model::Type::Reference {
+                    lifetime: lifetime.clone(),
+                    mutability: *mutability,
+                    ty: Box::new(this(ty)),
+                },
+                _ => return Err(reject::Kind::GenericImplementation.into()),
+            };
             // `Self` is the trait's parameter 0, a parameter of its own here.
             let mut parameters = vec![model::Parameter::new(
                 trait_id.clone(),
@@ -7265,7 +7289,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     },
                 });
             }
-            let mut inputs = vec![this(receiver)];
+            let mut inputs = vec![receiver];
             inputs.extend(signature.inputs().map(this));
             // What the trait's implementation for every callable returns,
             // as iced's `Function::with` returns `impl Fn(B) -> O`.
@@ -7285,7 +7309,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .with_guard(signature.guard().cloned());
             let generics =
                 model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice());
-            let Representability::FunctionItem(item) = self.function(&rewritten, &generics)? else {
+            let borrowed = matches!(signature.receiver(), model::Receiver::Reference { .. });
+            let outer = self.self_receiver.replace(borrowed);
+            let classified = self.function(&rewritten, &generics);
+            self.self_receiver.set(outer);
+            let Representability::FunctionItem(item) = classified? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
             let item = item.with_inferred(&[0], container_parameters + 1);
@@ -10157,6 +10185,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         use representability::{callable, function, method, ownership, Representability};
         let rebound;
         let signature = if receiver_binder_is_exact(signature)
+            || (self.self_receiver.get() && receiver_input_binder_is_exact(signature))
             || receiver_binder_lends_inputs(signature)
             || receiver_lent_into_inputs(signature)
             || (late_binders_lend_strings(signature) && !self.opaque_borrows_strings(signature))
@@ -13749,6 +13778,29 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
         | model::Receiver::Reference { .. }
         | model::Receiver::Explicit { .. } => binders.next().is_none(),
     }
+}
+
+/// A trait's method over its `Self` whose first input is the method's
+/// `&self` at the one late-bound lifetime, as [`receiver_binder_is_exact`]
+/// reads the method: an output that names it borrows the receiver for the
+/// call, as the method's does. An output of a crate type or an opaque one
+/// that names it keeps the borrow past the call, which a function's input
+/// can't lend so.
+fn receiver_input_binder_is_exact(signature: &model::Signature) -> bool {
+    let mut binders = signature.binders();
+    let (Some(declared), None) = (binders.next(), binders.next()) else {
+        return false;
+    };
+    matches!(signature.receiver(), model::Receiver::None)
+        && matches!(
+            signature.inputs().next(),
+            Some(model::Type::Reference {
+                lifetime: model::Lifetime::Late { binder, index },
+                ..
+            }) if binder == declared && *index == binder.index()
+        )
+        && !matches!(signature.output(), model::Type::Definition { .. })
+        && !names_opaque(signature.output())
 }
 
 /// A method whose output may borrow its receiver and whose other own

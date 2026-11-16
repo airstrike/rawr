@@ -1623,6 +1623,8 @@ impl Parser<'_> {
         value: &ParsedExpr,
         start: ValueStart,
     ) {
+        #[cfg(feature = "rust-import")]
+        self.bind_opaque_bound(name, declaration, value);
         let holds = self.may_hold_borrow(&value.ty);
         let mut flow = self.flow();
         let into = flow.local(name, declaration);

@@ -379,6 +379,8 @@ impl<'a> Parser<'a> {
             self.lent_field = lent;
             let mut operand = operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
             let whole = span(start, operand.span.end());
+            #[cfg(feature = "rust-import")]
+            self.borrow_opaque_bound(&operand, whole);
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
