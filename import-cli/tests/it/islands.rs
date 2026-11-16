@@ -906,7 +906,9 @@ fn a_marked_module_names_the_items_of_its_native_crate_root() {
 /// and by a shared borrow, as `usize` crosses, and take an alias of a
 /// native struct as the struct crosses (#1272). A `&mut` of the alias
 /// crosses as `&mut usize` does, copied in and back, beside a `&mut` of a
-/// native struct, which is lent (#1297).
+/// native struct, which is lent (#1297). A marked module's inline module
+/// names its grandparent's native module through the globs of its parent
+/// and of itself.
 /// `rawr check` passes as `cargo check` does, and `rawr run` prints what
 /// `cargo run` prints.
 #[test]
@@ -915,7 +917,7 @@ fn a_marked_module_names_the_items_of_a_native_module() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-native-module"
     );
-    const PRINTED: [&str; 8] = [
+    const PRINTED: [&str; 9] = [
         "home",
         "home",
         "about",
@@ -924,6 +926,7 @@ fn a_marked_module_names_the_items_of_a_native_module() {
         "10",
         "home",
         "10 17 140",
+        "7",
     ];
     let root = crate::support::fresh("islands-native-module");
     copy(Path::new(MODULE), &root);
