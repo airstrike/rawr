@@ -1,0 +1,191 @@
+# The nightly sweep: every iced example under `cargo test` and `rawr test`
+# (scripts/iced-parity.mjs), and every rustlings solution, test and exercise
+# under cargo and rawr (scripts/rustlings.sh). It runs here, not on a
+# developer's machine: each example builds iced twice, so the iced half is
+# split across shards that each start cold. Nothing is cached but the Cargo
+# registry, since the repository's cache holds 10 GB.
+name: Sweep
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      examples:
+        description: "iced examples to run (space-separated; empty runs all)"
+        required: false
+        default: ""
+
+concurrency:
+  group: sweep
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  TOOLCHAIN: nightly-2026-07-11
+  ICED_REV: be88873d38544455e26c7a104eb757da2cbbac6b
+  RUSTLINGS_REV: f7b9b3c5882a1a43275130b95142d94f847526f5
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the pinned nightly
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal \
+            --component rustc-dev,rust-src,rustfmt,clippy --no-self-update
+          rustup default "$TOOLCHAIN"
+      - name: Restore the Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: sweep-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sweep-registry-
+      - name: Build rawr, rawr-import and rawr-import-driver
+        run: |
+          cargo build --release --locked -p rawr-cli -p rawr-import-cli
+          cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver
+          mkdir tools
+          cp target/release/rawr target/release/rawr-import target/release/rawr-import-driver tools/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools
+          path: tools
+          retention-days: 2
+
+  iced:
+    needs: tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    env:
+      SHARDS: 8
+    steps:
+      - uses: actions/checkout@v5
+      # Each shard builds iced's examples twice, cold.
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install iced's system libraries
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get install -y libxkbcommon-dev libgtk-3-dev
+      - name: Install the pinned nightly
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal \
+            --component rustc-dev,rust-src,rustfmt,clippy --no-self-update
+          rustup default "$TOOLCHAIN"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools
+          path: tools
+      - name: Put the tools on PATH
+        run: |
+          chmod +x tools/*
+          echo "$PWD/tools" >> "$GITHUB_PATH"
+      - name: Make the examples
+        run: |
+          git clone --quiet --filter=blob:none https://github.com/iced-rs/iced "$RUNNER_TEMP/iced"
+          git -C "$RUNNER_TEMP/iced" checkout --quiet "$ICED_REV"
+          ICED_SRC="$RUNNER_TEMP/iced" scripts/iced-examples.sh
+      - name: Pick this shard's examples
+        env:
+          REQUESTED: ${{ github.event.inputs.examples }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            names="$REQUESTED"
+          else
+            names="$(find target/scratch/iced-examples -mindepth 2 -maxdepth 2 -name Cargo.toml \
+              | sed 's|.*/iced-examples/||; s|/Cargo.toml||' | sort | tr '\n' ' ')"
+          fi
+          mine="$(printf '%s\n' $names | awk -v n="$SHARDS" -v s="${{ matrix.shard }}" '(NR - 1) % n == s' | tr '\n' ' ')"
+          echo "shard ${{ matrix.shard }}: $mine"
+          echo "NAMES=$mine" >> "$GITHUB_ENV"
+      - name: cargo test and rawr test
+        if: env.NAMES != ''
+        env:
+          ICED_PARITY_MIN_FREE_GB: 3
+        run: node scripts/iced-parity.mjs --jobs 2 --rawr-emulator --drop-rawr-builds $NAMES
+      - uses: actions/upload-artifact@v4
+        if: always() && env.NAMES != ''
+        with:
+          name: iced-${{ matrix.shard }}
+          path: target/iced-parity-report.json
+          retention-days: 14
+
+  rustlings:
+    needs: tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the pinned nightly and stable
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal \
+            --component rustc-dev,rust-src,rustfmt,clippy --no-self-update
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default "$TOOLCHAIN"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools
+          path: tools
+      - name: Get rustlings
+        run: |
+          chmod +x tools/*
+          git clone --quiet https://github.com/rust-lang/rustlings target/rustlings
+          git -C target/rustlings checkout --quiet "$RUSTLINGS_REV"
+      - name: Run rustlings under cargo and rawr
+        run: RAWR_BIN="$PWD/tools" scripts/rustlings.sh | tee target/rustlings-summary.txt
+      - name: Show what differs
+        if: always()
+        run: |
+          { echo "## rustlings"; echo; grep -E " of [0-9]+" target/rustlings-summary.txt; } >> "$GITHUB_STEP_SUMMARY"
+          awk -F'\t' 'NR > 1 && $5 != "pass"' target/rustlings-out/results.tsv | head -40
+          # Every count is N of N.
+          ! grep -E " of [0-9]+" target/rustlings-summary.txt | awk '{for (i = 1; i < NF; i++) if ($(i+1) == "of" && $i != $(i+2)) bad = 1} END {exit !bad}' 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rustlings
+          path: target/rustlings-out/results.tsv
+          retention-days: 14
+
+  report:
+    needs: [iced, rustlings]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: iced-*
+          path: reports
+      - name: Count the examples that agree
+        run: |
+          node - <<'JS' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require("fs");
+          const path = require("path");
+          const rows = [];
+          for (const dir of fs.existsSync("reports") ? fs.readdirSync("reports") : []) {
+            const file = path.join("reports", dir, "iced-parity-report.json");
+            if (!fs.existsSync(file)) continue;
+            const report = JSON.parse(fs.readFileSync(file, "utf8"));
+            rows.push(...(Array.isArray(report) ? report : report.examples ?? []));
+          }
+          const differ = rows.filter((row) => !row.agrees);
+          console.log(`## iced: ${rows.length - differ.length} of ${rows.length} examples agree\n`);
+          for (const row of differ) console.log(`- ${row.name}: ${row.verdict}`);
+          if (differ.length > 0) fs.writeFileSync("differ", "");
+          JS
+          test ! -e differ
