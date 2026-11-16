@@ -20,7 +20,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_span::{FileName, Span, Symbol};
 
-use crate::compat::LocalModId;
+use crate::compat::{GenericArgsRef, LocalModId};
 use crate::uses;
 
 /// How every file the shadow crate generates in place of a marked one
@@ -393,7 +393,7 @@ impl<'tcx> Walk<'tcx> {
     /// The layouts the function `def_id` reads at its type arguments
     /// `args`, when it is one of std's that reads a type's layout, as
     /// `mem::size_of` and `mem::transmute` do.
-    fn layouts(&mut self, def_id: DefId, args: ty::GenericArgsRef<'tcx>) {
+    fn layouts(&mut self, def_id: DefId, args: GenericArgsRef<'tcx>) {
         let tcx = self.tcx;
         if !matches!(
             tcx.crate_name(def_id.krate).as_str(),
