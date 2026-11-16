@@ -12,9 +12,10 @@
 //! A native future runs on whichever thread polls, and its output becomes a
 //! Rawr value on the owner, where imported values live.
 //!
-//! A step that finds its code changed since it suspended fails with the
+//! A step whose function's body changed since it suspended fails with the
 //! machine's own message (`eval::machine`), and the [`Script`] polling it
-//! panics with it, as a Rust task that panics.
+//! panics with it, as a Rust task that panics. One whose body a reload left
+//! as it was resumes in the new generation.
 
 pub use crate::eval::machine::{Frame, Poll};
 
