@@ -15014,6 +15014,41 @@ fn a_variable_only_a_diverging_expression_constrains_falls_back_to_never() {
     assert_eq!(value, 3);
 }
 
+/// `return` and `break` take a value only when an expression begins after
+/// them, as rustc's parser reads them: before `)`, `]`, `,` or `}` each ends
+/// with no value. The output is rustc's build of the same program.
+#[test]
+fn a_jump_before_a_closing_token_takes_no_value() {
+    let value = run(r#"
+        fn unit(fail: bool, n: &mut i64) {
+            if fail {
+                let o: Option<()> = Some(return);
+                let _ = o;
+            }
+            *n += 1;
+        }
+        fn take(_: ()) -> i64 { 0 }
+        fn early() -> i64 { take(return 2) }
+        pub fn run() -> i64 {
+            let mut n = 0;
+            loop {
+                n += 1;
+                let _v: Vec<()> = vec![break];
+            }
+            loop {
+                let _t = (break, 1);
+            }
+            let s = match n { 0 => return 0, _ => 4 };
+            let mut m = 0;
+            unit(true, &mut m);
+            unit(false, &mut m);
+            m + early() + s + n
+        }
+        run()
+    "#);
+    assert_eq!(value, 8);
+}
+
 /// A module and a function of one name bind in Rust's two namespaces:
 /// `use parts::badge::{self, badge};` brings in both, so
 /// `badge::Secondary::weight()` goes through the module and `badge("..")`
