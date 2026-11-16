@@ -4577,7 +4577,7 @@
     {"issue":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open","category":"No glue (D593)"},
     {"issue":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open","category":"Platforms"},
     {"issue":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open","category":"Platforms"},
-    {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"open","category":"Health"}
+    {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -5289,7 +5289,7 @@
             {"number":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open"},
             {"number":2114,"title":"`.is_err()` on a crate Result whose error is a type parameter's associated type crashes the generator","state":"open"},
             {"number":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open"},
-            {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"open"}
+            {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed"}
           ],
           "milestone": "0.3"
         },

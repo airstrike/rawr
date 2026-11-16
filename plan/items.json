@@ -2117,6 +2117,6 @@
     {"t":"T2115","issue":2115,"title":"T2115: A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null},
     {"t":"T2116","issue":2116,"title":"T2116: ratzilla's DomBackend drops its key handler when the page resizes","state":"open","category":"Platforms","labels":["platform"],"gantt":{"group":"play","row":"browser-wasm-bindings"},"decisions":[],"commit":null,"release":null},
     {"t":"T2117","issue":2117,"title":"T2117: An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open","category":"Platforms","labels":["platform"],"gantt":{"group":"play","row":"browser-wasm-bindings"},"decisions":[],"commit":null,"release":null},
-    {"t":"T2118","issue":2118,"title":"T2118: rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"open","category":"Health","labels":["health"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2118","issue":2118,"title":"T2118: rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":"19856ec55","release":null}
   ]
 }
