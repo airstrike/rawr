@@ -534,6 +534,11 @@ impl Stepper {
                 State::Idle => {
                     if owns() {
                         drop(step);
+                        // A step is a call from native code into script
+                        // code: outside every other one, the generation
+                        // offered last is admitted first, and a suspended
+                        // body resumes in it (D553.1).
+                        let _entry = trampoline();
                         run(&self.shared, |step, arguments| {
                             with_host(|host| host.invoke(step, arguments))
                         });
@@ -561,6 +566,7 @@ impl Stepper {
                             let Some(shared) = shared.upgrade() else {
                                 return;
                             };
+                            let _entry = trampoline();
                             run(&shared, |step, arguments| {
                                 with_host(|host| host.invoke(step, arguments))
                             });
@@ -898,10 +904,13 @@ static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// Whether native code has called into script code in this process.
 static ENTERED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Whether native code has called into script code in this process, so a
-/// generation [`offer`]ed can be admitted.
+/// Whether this process has reached a point that admits a generation
+/// [`offer`]ed: an outermost call from native code into script code, an
+/// executor's poll that runs a step of an async body among them. A program
+/// that never reaches one, as a `main` that loops in script code alone,
+/// would never run the new generation.
 #[must_use]
-pub fn called_from_native() -> bool {
+pub fn admits() -> bool {
     ENTERED_ONCE.load(std::sync::atomic::Ordering::Acquire)
 }
 
@@ -948,9 +957,10 @@ pub fn entry() -> Entry {
     Entry(())
 }
 
-/// A call native code makes through a marked function's trampoline (D501)
-/// on the thread that owns the program. Outside every call from native code
-/// into script code, it runs as a marked `main`'s own frame does (#1119):
+/// A call native code makes through a marked function's trampoline (D501),
+/// or a step of an async body an executor polls, on the thread that owns
+/// the program. Outside every call from native code into script code, it
+/// runs as a marked `main`'s own frame does (#1119):
 /// it first admits the generation [`offer`]ed last, and the callables it
 /// gives native code are held (D553.5), so native code's calls of them are
 /// the outermost entries that admit newer ones. A native `main` whose

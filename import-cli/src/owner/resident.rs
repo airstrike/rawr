@@ -64,12 +64,6 @@ impl Manifests {
         }
     }
 
-    /// Whether every save restarts the program: an async `main` runs on
-    /// its runtime's thread, and a new generation can't reach it there.
-    pub fn restarts_on_save(&self) -> bool {
-        self.1.is_none() && self.2.is_some()
-    }
-
     /// What changed from these manifests to `next`, in one line; `None`
     /// when nothing did.
     fn change(&self, next: &Self) -> Option<String> {
@@ -91,10 +85,12 @@ impl Manifests {
     /// The reason a marked `main` restarts when its next preparation is
     /// `next`, as `rawr run` says it in one line.
     pub fn restart_line(&self, next: &Self) -> String {
-        if self.0 == next.0 {
-            "the source changed".to_owned()
-        } else {
+        if self.0 != next.0 {
             "`Cargo.toml` changed".to_owned()
+        } else if self.2 != next.2 {
+            "`main`'s async entry changed".to_owned()
+        } else {
+            "the source changed".to_owned()
         }
     }
 
@@ -114,15 +110,6 @@ impl Manifests {
         next: &Self,
         native: impl FnOnce() -> Option<String>,
     ) -> Option<String> {
-        // An async `main` runs on its runtime's own thread: a save restarts
-        // it with the new code (D500.1, D513.7).
-        if self.1.is_none() && self.2.is_some() {
-            return Some(if next.2.is_some() {
-                "the source changed".to_owned()
-            } else {
-                "`main` is no longer async".to_owned()
-            });
-        }
         let (Some(shape), Some(next_shape)) = (&self.1, &next.1) else {
             return None;
         };

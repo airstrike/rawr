@@ -568,12 +568,6 @@ fn session(
     same_build(target)?;
     // Each save that changes Rawr source reads the same API fragments.
     rawr_import::extract::keep_fragment_reads();
-    // What the program starts from, read before it is prepared: a save
-    // restarts it only when this changed. The caller's load is it.
-    let mut started_from = program.and_then(|_| match &origin.graph {
-        Some(graph) => Some(rawr_cli::supervise::contents(graph)),
-        None => contents(target, cells),
-    });
     let source = fallback(target)?;
     let root = project(target).ok_or_else(|| {
         framework(
@@ -681,48 +675,6 @@ fn session(
                         continue;
                     }
                 };
-                // An async `main` runs on its runtime's thread, which a new
-                // generation can't reach: each save that prepares restarts the
-                // program (D500.1), and one that fails leaves it running.
-                if program.is_some() && !manifests.has_islands() && !marked {
-                    let next = rawr::project::Target::discover(&target_path);
-                    let changed = next.as_ref().ok().and_then(|next| contents(next, cells));
-                    if changed.is_some() && changed == started_from {
-                        continue;
-                    }
-                    let prepared = next
-                        .map_err(|error| rawr::diagnostic::Report::from_project(&error))
-                        .and_then(|next| {
-                            profile
-                                .prepare(
-                                    &next,
-                                    None,
-                                    revision,
-                                    &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
-                                    Some(&mut *kept),
-                                )
-                                .map_err(|error| import(error, source.clone()))
-                        });
-                    match prepared {
-                        Ok(prepared) => {
-                            let reason = manifests.restart_line(&prepared.manifests);
-                            rawr_import::process::say(format_args!(
-                                "rawr: {reason}; restarting the program"
-                            ));
-                            rawr_cli::events::restarting(&reason);
-                            return Ok(Ended::Restart(reason, Some(Box::new(prepared))));
-                        }
-                        // Latest wins: a newer save reports for itself.
-                        Err(_) if adapter.deadline().is_some() => {}
-                        Err(report) => {
-                            rawr_import::process::say(rawr_cli::diagnostic::render(&report));
-                            rawr_cli::events::failed(&report);
-                        }
-                    }
-                    // A failed save is reported once.
-                    started_from = changed;
-                    continue;
-                }
                 let started = lane
                     .begin_compile()
                     .map_err(|error| framework(error, source.clone()))?;
@@ -977,9 +929,7 @@ fn session(
                     rawr_import::process::hot::Preparation::Miss(miss) => {
                         let reason = if marked {
                             Some(manifests.restart_line(&next_manifests))
-                        } else if announced.as_ref() != Some(&next_manifests)
-                            || manifests.restarts_on_save()
-                        {
+                        } else if announced.as_ref() != Some(&next_manifests) {
                             manifests.restart_reason(&next_manifests, || {
                                 let outputs = rawr_import::location::outputs_here(&project);
                                 lane.native_change(&miss, &outputs)
@@ -1194,10 +1144,11 @@ fn session(
 
 /// Whether the program is a marked `main`, which keeps running across a
 /// save: the runner compiles the new generation beside it and admits it at
-/// its next call from native code into script code (D553). An async `main`
-/// restarts.
+/// its next call from native code into script code (D553), an async
+/// `main`'s included: its runtime's entry polls it on the thread that owns
+/// the program (D527), and each step it runs there admits.
 fn marked(program: bool, manifests: &resident::Manifests) -> bool {
-    program && !manifests.has_islands() && !manifests.restarts_on_save()
+    program && !manifests.has_islands()
 }
 
 /// Whether the running `main` admits a save: a marked one, or a native one
