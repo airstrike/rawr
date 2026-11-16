@@ -12,12 +12,15 @@
 //! fixture's sources and the `rawr-import` and driver that ran it. One
 //! whose stamp differs is stale, and is made again in its place (#1712).
 //! A test waits for a slot when every one is held and no more can be made.
-//! A test that fails gives its slot up, and the next test makes another.
-//! Its slot stays as it left it, to be looked at, only when the failure is
-//! kept ([`super::held`]). A test that runs [`super::alone`] does so before
-//! it takes a slot: once it holds one, a test waiting for that slot would
-//! never end, and neither would its wait to run alone.
+//! A test that fails gives its slot up, and the next test makes another
+//! under its number. Its slot stays as it left it, to be looked at, only
+//! when the failure is kept ([`super::held`]). A new slot takes the lowest
+//! free number, so each run takes again the slots the last one left. A
+//! test that runs [`super::alone`] does so before it takes a slot: once it
+//! holds one, a test waiting for that slot would never end, and neither
+//! would its wait to run alone.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -39,10 +42,12 @@ pub struct Started {
 
 /// The slots made so far in this run and those no test holds.
 struct Slots {
-    /// The number the next slot takes.
-    next: usize,
-    /// The slots that serve tests: those no test holds, and those held by
-    /// a test that has not failed.
+    /// The numbers of the slots that serve tests, those no test holds and
+    /// those held by a test that has not failed, and of the slots failures
+    /// kept. A new slot takes the lowest number not here, so the slots an
+    /// earlier run left are the ones a later run takes again.
+    taken: BTreeSet<usize>,
+    /// The slots that serve tests.
     live: usize,
     free: Vec<PathBuf>,
 }
@@ -73,7 +78,7 @@ impl Started {
             name,
             variables,
             slots: Mutex::new(Slots {
-                next: 0,
+                taken: BTreeSet::new(),
                 live: 0,
                 free: Vec::new(),
             }),
@@ -93,9 +98,10 @@ impl Started {
                     break Taken::Kept(slot);
                 }
                 if slots.live < SLOTS {
-                    slots.next += 1;
+                    let number = (1..).find(|number| !slots.taken.contains(number)).unwrap();
+                    slots.taken.insert(number);
                     slots.live += 1;
-                    break Taken::New(fixtures.join(slots.next.to_string()));
+                    break Taken::New(fixtures.join(number.to_string()));
                 }
                 slots = self
                     .returned
@@ -248,6 +254,9 @@ impl Drop for Project {
             slots.live -= 1;
             if !crate::support::held::failure_kept() {
                 let _ = fs::remove_dir_all(&self.slot);
+                if let Some(number) = number(&self.slot) {
+                    slots.taken.remove(&number);
+                }
             }
         } else {
             slots.free.push(std::mem::take(&mut self.slot));
@@ -255,6 +264,11 @@ impl Drop for Project {
         drop(slots);
         self.fixture.returned.notify_one();
     }
+}
+
+/// The number a slot's directory is named by.
+fn number(slot: &Path) -> Option<usize> {
+    slot.file_name()?.to_str()?.parse().ok()
 }
 
 /// Copy the tree `from` to `to`, each file with its modification time, so

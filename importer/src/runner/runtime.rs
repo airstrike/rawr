@@ -886,7 +886,7 @@ fn ensure(
             source,
         }
     };
-    let lease = entry.join(".lock");
+    let lock_path = entry.join(".lock");
     // Cleanup may rename an idle entry away between these steps; a second
     // attempt finds no entry and compiles one.
     let lock = (0..2)
@@ -896,33 +896,43 @@ fn ensure(
                 .create(true)
                 .truncate(false)
                 .write(true)
-                .open(&lease)
+                .open(&lock_path)
                 .ok()
         })
         .ok_or_else(|| node::Error::Io {
             operation: "open the lock of rawr's runtime",
-            path: lease.clone(),
+            path: lock_path.clone(),
             source: std::io::Error::from(std::io::ErrorKind::NotFound),
         })?;
-    lock.lock().map_err(io("lock rawr's runtime", &lease))?;
     let stamp = entry.join("built");
     let lib = entry.join("lib");
-    let built = fs::read_to_string(&stamp).is_ok_and(|text| text.trim() == key)
-        && fs::read_to_string(entry.join("native")).is_ok();
-    if build.reads_checkout() || !built {
-        build.compile(entry, key, toolchain, environment)?;
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        users::Users::of(entry).enroll(&executable);
-    }
+    let built = || {
+        fs::read_to_string(&stamp).is_ok_and(|text| text.trim() == key)
+            && fs::read_to_string(entry.join("native")).is_ok()
+    };
+    let executable = std::env::current_exe().ok();
+    let current = || {
+        !build.reads_checkout()
+            && built()
+            && executable
+                .as_deref()
+                .is_none_or(|executable| users::Users::of(entry).holds(executable))
+    };
+    let compiled = lease(&lock, &lock_path, current, || {
+        let compiled = !built();
+        if build.reads_checkout() || compiled {
+            build.compile(entry, key, toolchain, environment)?;
+        }
+        if let Some(executable) = &executable {
+            users::Users::of(entry).enroll(executable);
+        }
+        Ok(compiled)
+    })?;
     let native = fs::read_to_string(entry.join("native"))
         .map_err(io("read the native libraries of rawr's runtime", entry))?
         .lines()
         .filter_map(native::Link::from_record)
         .collect();
-    lock.unlock().map_err(io("unlock rawr's runtime", &lease))?;
-    lock.lock_shared()
-        .map_err(io("lease rawr's runtime", &lease))?;
     Ok((
         Runtime {
             lib,
@@ -932,8 +942,39 @@ fn ensure(
             cargo: toolchain.cargo.clone(),
             _lease: lock,
         },
-        !built,
+        compiled,
     ))
+}
+
+/// Lease the entry whose lock `lock` opens at `path`, shared. While
+/// `current` holds once the shared lock is taken, the entry needs no write
+/// and the lease is all this does: the exclusive lock would wait for every
+/// runner build that holds a lease, and for those that start meanwhile.
+/// Otherwise `refresh` runs under the exclusive lock first and says whether
+/// it compiled the entry new.
+fn lease(
+    lock: &File,
+    path: &Path,
+    current: impl FnOnce() -> bool,
+    refresh: impl FnOnce() -> Result<bool, node::Error>,
+) -> Result<bool, node::Error> {
+    let io = |operation: &'static str| {
+        move |source| node::Error::Io {
+            operation,
+            path: path.to_path_buf(),
+            source,
+        }
+    };
+    lock.lock_shared().map_err(io("lease rawr's runtime"))?;
+    if current() {
+        return Ok(false);
+    }
+    lock.unlock().map_err(io("unlock rawr's runtime"))?;
+    lock.lock().map_err(io("lock rawr's runtime"))?;
+    let compiled = refresh()?;
+    lock.unlock().map_err(io("unlock rawr's runtime"))?;
+    lock.lock_shared().map_err(io("lease rawr's runtime"))?;
+    Ok(compiled)
 }
 
 fn write_changed(path: &Path, bytes: &[u8]) -> Result<(), node::Error> {
@@ -1204,6 +1245,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             toolchain.version,
             "the proxy follows the runtime directory's different toolchain"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A current entry is leased beside a runner build that holds its
+    /// lease, and one that needs a write is refreshed under the exclusive
+    /// lock, then leased.
+    #[test]
+    fn a_current_runtime_is_leased_beside_a_held_lease() {
+        let root = scratch("beside");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(".lock");
+        let open = || {
+            fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap()
+        };
+        let building = open();
+        building.lock_shared().unwrap();
+        let lock = open();
+        let compiled = super::lease(&lock, &path, || true, || unreachable!()).unwrap();
+        assert!(!compiled);
+        drop((building, lock));
+
+        let lock = open();
+        let compiled = super::lease(
+            &lock,
+            &path,
+            || false,
+            || {
+                let other = open();
+                assert!(
+                    other.try_lock_shared().is_err(),
+                    "the refresh holds it alone"
+                );
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert!(compiled);
+        let other = open();
+        assert!(other.try_lock().is_err(), "the lease is held");
+        assert!(other.try_lock_shared().is_ok(), "the lease is shared");
+        drop((lock, other));
         fs::remove_dir_all(root).unwrap();
     }
 
