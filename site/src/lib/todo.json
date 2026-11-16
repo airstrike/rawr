@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A type that only a diverging expression gives (`loop {}`, `panic!()`, `todo!()`) is `!` once the body is read, as in rustc's edition 2024. `tokio::spawn(async move { loop { .. } })`, `id(loop {})` and a closure returning `panic!()` check where they gave E0282, and `!` fails a bound as it does in rustc (`!: Default`).","issues":[2128]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.223",
@@ -4625,9 +4630,12 @@
     {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed","category":"Divergences from rustc"},
     {"issue":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed","category":"Platforms","release":"0.3.222"},
     {"issue":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"closed","category":"Platforms","release":"0.3.223"},
-    {"issue":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open","category":"Divergences from rustc"},
+    {"issue":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"closed","category":"Divergences from rustc"},
     {"issue":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open","category":"Divergences from rustc"},
-    {"issue":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"open","category":"Health"}
+    {"issue":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"closed","category":"Health"},
+    {"issue":2131,"title":"`{:?}` of a value whose type holds a diverging variable gives E0282: the piece is rendered before the fallback","state":"open","category":"Divergences from rustc"},
+    {"issue":2132,"title":"The handle `tokio::spawn` returns has no `abort`: E0599 for `Future`","state":"open","category":"Divergences from rustc"},
+    {"issue":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5342,9 +5350,12 @@
             {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed"},
             {"number":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed"},
             {"number":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"closed"},
-            {"number":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open"},
+            {"number":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"closed"},
             {"number":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open"},
-            {"number":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"open"}
+            {"number":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"closed"},
+            {"number":2131,"title":"`{:?}` of a value whose type holds a diverging variable gives E0282: the piece is rendered before the fallback","state":"open"},
+            {"number":2132,"title":"The handle `tokio::spawn` returns has no `abort`: E0599 for `Future`","state":"open"},
+            {"number":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"open"}
           ],
           "milestone": "0.3"
         },

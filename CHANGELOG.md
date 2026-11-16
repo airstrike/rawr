@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A type that only a diverging expression gives (`loop {}`, `panic!()`, `todo!()`) is `!` once the body is read, as in rustc's edition 2024. `tokio::spawn(async move { loop { .. } })`, `id(loop {})` and a closure returning `panic!()` check where they gave E0282, and `!` fails a bound as it does in rustc (`!: Default`). (#2128)
 
 ## 0.3.223 (2026-11-16)
 
