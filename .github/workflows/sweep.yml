@@ -131,11 +131,13 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
-      - name: Install the pinned nightly and stable
+      # cargo's side builds on the toolchain rawr checks with, the pinned
+      # nightly: a newer stable's rustc can give an exercise another first
+      # error.
+      - name: Install the pinned nightly
         run: |
           rustup toolchain install "$TOOLCHAIN" --profile minimal \
             --component rustc-dev,rust-src,rustfmt,clippy --no-self-update
-          rustup toolchain install stable --profile minimal --no-self-update
           rustup default "$TOOLCHAIN"
       - uses: actions/download-artifact@v4
         with:

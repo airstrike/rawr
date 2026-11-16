@@ -36,7 +36,10 @@
 #
 # `rawr` is the one on PATH. RAWR_BIN names a development build's directory
 # (with `rawr-import` and `rawr-import-driver`) to put first on PATH.
-# RUSTC_TOOLCHAIN (default stable) picks cargo's toolchain; RAWR_TIMEOUT
+# RUSTC_TOOLCHAIN picks cargo's toolchain. By default it is the one rustup
+# selects in the package's directory, which `rawr run` and `rawr test`
+# check the package with too: two releases of rustc can give one program
+# different first errors, so both sides build on one. RAWR_TIMEOUT
 # (default 120) bounds each run in seconds. RUSTLINGS_KINDS (default
 # `solutions exercises`) picks which to run.
 set -uo pipefail
@@ -44,7 +47,6 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 rustlings=${1:-$root/target/rustlings}
 out=${2:-$root/target/rustlings-out}
-toolchain=${RUSTC_TOOLCHAIN:-stable}
 limit=${RAWR_TIMEOUT:-120}
 kinds=${RUSTLINGS_KINDS:-solutions exercises}
 [ -n "${RAWR_BIN:-}" ] && PATH=$RAWR_BIN:$PATH
@@ -79,6 +81,8 @@ done
     echo '[workspace]'
 } >"$manifest"
 export CARGO_TARGET_DIR=$package/target
+toolchain=${RUSTC_TOOLCHAIN:-$(cd "$package" && rustup show active-toolchain | cut -d' ' -f1)}
+echo "cargo builds on $toolchain" >&2
 cargo=(cargo "+$toolchain")
 
 row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >>"$results"; }
