@@ -37,6 +37,9 @@ pub(crate) enum Error {
         #[source]
         source: std::io::Error,
     },
+    /// Cargo couldn't say how it builds the package for the browser.
+    #[error("{0}")]
+    Cargo(String),
     /// The package's files couldn't be read.
     #[error("{0}")]
     Read(#[from] rawr::universe::Error),

@@ -10,11 +10,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
+
+use rawr::project::cargo::features::Enabled;
 
 use serde_json::{json, Value};
 
-use super::build::{Build, Built};
+use super::build::{self, Build, Built};
 use super::error::Failure;
 use super::package::Package;
 use super::server::{Event, Handle, Report, Server};
@@ -30,6 +32,9 @@ pub(super) struct Session {
     /// The program's crate root.
     entry: PathBuf,
     graph: rawr::package::Graph,
+    /// What the package's `cfg(..)`s read as Cargo builds it for the page,
+    /// which the builder reads too.
+    features: Arc<Mutex<Enabled>>,
     package: Package,
     handle: Handle,
     /// Whether the page has a runner: a build succeeded.
@@ -68,7 +73,8 @@ impl Session {
         let entry = loaded.target.source().path().to_path_buf();
         let mut build = Build::new(&location, &root, options.out.as_deref());
         let built = build.run();
-        let package = Package::read(&entry).map_err(Error::from)?;
+        let features = features(&loaded.graph)?;
+        let package = Package::read(&entry, &features).map_err(Error::from)?;
         if options.out.is_some() {
             built?;
             let path = build.site().join(PROGRAM);
@@ -97,12 +103,20 @@ impl Session {
         let handle = server.handle();
         server.spawn();
         let built = Arc::new(AtomicBool::new(built));
-        let builds = builder(build, entry.clone(), handle.clone(), Arc::clone(&built));
+        let features = Arc::new(Mutex::new(features));
+        let builds = builder(
+            build,
+            entry.clone(),
+            Arc::clone(&features),
+            handle.clone(),
+            Arc::clone(&built),
+        );
         reporter(heard, builds.clone());
         Ok(Some(Self {
             path: path.cloned(),
             entry,
             graph: loaded.graph,
+            features,
             package,
             handle,
             built,
@@ -126,8 +140,16 @@ impl Session {
                 rawr_cli::base::load(self.path.as_ref(), rawr_cli::base::Build::Program)
             {
                 self.graph = loaded.graph;
+                match features(&self.graph) {
+                    Ok(features) => *lock(&self.features) = features,
+                    Err(error) => eprintln!(
+                        "{}: {error}",
+                        rawr_cli::color::label(rawr_cli::color::Level::Error)
+                    ),
+                }
             }
-            let package = match Package::read(&self.entry) {
+            let read = Package::read(&self.entry, &lock(&self.features));
+            let package = match read {
                 Ok(package) => package,
                 Err(error) => {
                     eprintln!(
@@ -140,10 +162,18 @@ impl Session {
             if package == self.package {
                 continue;
             }
+            // The running program's `cfg(..)`s can't change in place: the
+            // page starts it again with the new ones.
+            let same_cfg = package.same_cfg(&self.package);
             self.package = package;
             let built = self.built.load(Ordering::Acquire);
             self.handle.set_program(program(&self.package, built));
-            if built {
+            if built && !same_cfg {
+                rawr_import::process::say(
+                    "rawr: the program's features changed; restarting the program",
+                );
+                self.handle.send(&Event::Reload);
+            } else if built {
                 self.handle.send(&Event::Files(self.package.files()));
             } else {
                 let _ = self.builds.send(());
@@ -166,6 +196,7 @@ fn program(package: &Package, built: bool) -> Value {
 fn builder(
     mut build: Build,
     entry: PathBuf,
+    features: Arc<Mutex<Enabled>>,
     handle: Handle,
     built: Arc<AtomicBool>,
 ) -> mpsc::Sender<()> {
@@ -175,7 +206,8 @@ fn builder(
             while asked.try_recv().is_ok() {}
             match build.run() {
                 Ok(Built::Packed) => {
-                    if let Ok(package) = Package::read(&entry) {
+                    let read = Package::read(&entry, &lock(&features));
+                    if let Ok(package) = read {
                         handle.set_program(program(&package, true));
                     }
                     built.store(true, Ordering::Release);
@@ -197,6 +229,19 @@ fn builder(
         }
     });
     builds
+}
+
+/// What the page's `cfg(..)`s read: the features and options Cargo builds
+/// the program's crate with for the page's target, as `cargo build
+/// --target wasm32-unknown-unknown` builds it.
+fn features(graph: &rawr::package::Graph) -> Result<Enabled, Error> {
+    graph
+        .entry_features_on(build::TARGET)
+        .map_err(|error| Error::Cargo(error.to_string()))
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Start the thread that says in the terminal what the page reported, as
@@ -289,11 +334,49 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
         std::fs::write(root.join("src").join("main.rs"), "// rawr\nfn main() {}\n").unwrap();
-        let package = super::Package::read(&root.join("src").join("main.rs")).unwrap();
+        let features = super::Enabled::default();
+        let package = super::Package::read(&root.join("src").join("main.rs"), &features).unwrap();
         assert_eq!(super::program(&package, false), json!({ "watch": true }));
         let built = super::program(&package, true);
         assert_eq!(built["watch"], true);
         assert_eq!(built["files"].as_array().map(Vec::len), Some(2));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A workspace member's page reads its `cfg(..)`s as Cargo builds it
+    /// for the browser: the features Cargo enables for it, its inherited
+    /// workspace settings resolved, and wasm32's options (#2121).
+    #[test]
+    fn a_workspace_members_cfg_is_cargos_for_the_browser() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("web-workspace");
+        let root = std::env::temp_dir().join(format!("rawr-web-workspace-{}", std::process::id()));
+        for file in ["Cargo.toml", "app/Cargo.toml", "app/src/main.rs"] {
+            let to = root.join(file);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(fixture.join(file), to).unwrap();
+        }
+        let app = root.join("app");
+        let Ok(loaded) = rawr_cli::base::load(Some(&app), rawr_cli::base::Build::Program) else {
+            panic!("the member loads");
+        };
+        let features = super::features(&loaded.graph).expect("Cargo describes the member");
+        assert!(
+            features.holds("loud"),
+            "{:?}",
+            features.lines().collect::<Vec<_>>()
+        );
+        assert!(features.option("target_arch", Some("wasm32")));
+        let package = super::Package::read(&app.join("src").join("main.rs"), &features).unwrap();
+        let cfg = package.program()["cfg"].clone();
+        assert!(
+            cfg.as_array()
+                .unwrap()
+                .contains(&json!("target_arch=\"wasm32\"")),
+            "{cfg}"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

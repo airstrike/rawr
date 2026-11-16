@@ -130,6 +130,24 @@ impl Universe {
         Program::load(self, program::Sources::given(entry, text.into(), files))
     }
 
+    /// The program [`Universe::program`] loads, its `cfg(..)`s reading
+    /// `features`: the features and options Cargo resolved for its package
+    /// where it really builds, as a page's package is built for wasm32.
+    ///
+    /// # Errors
+    ///
+    /// Returns the program's compile error, rendered as rustc renders it.
+    pub fn program_with_features(
+        &self,
+        entry: PathBuf,
+        text: impl Into<Box<str>>,
+        files: Vec<(PathBuf, Box<str>)>,
+        features: crate::project::cargo::features::Enabled,
+    ) -> Result<Program, Error> {
+        let sources = program::Sources::given(entry, text.into(), files).with_features(features);
+        Program::load(self, sources)
+    }
+
     /// Send what every program it loads prints to `output`, as
     /// [`Engine::on_output`] does, which a page shows (#1395). Set before
     /// the first program loads, while the engine is the universe's alone;

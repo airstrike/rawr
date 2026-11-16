@@ -171,6 +171,23 @@ impl Enabled {
         }
     }
 
+    /// No features, with the options rustc sets for `platform` in Cargo's
+    /// dev profile, asked from `directory`: a source Cargo builds for
+    /// `platform` with no package it describes. The host's options when
+    /// rustc can't say.
+    #[must_use]
+    pub fn of_platform(directory: &std::path::Path, platform: &str) -> Self {
+        let unit = serde_json::json!({
+            "platform": platform,
+            "profile": { "debug_assertions": true, "overflow_checks": true },
+        });
+        let enabled = Self::of_names([]);
+        match super::cfg::Target::of_unit(directory, &unit) {
+            Ok(target) => enabled.with_target(target),
+            Err(_) => enabled,
+        }
+    }
+
     /// The set rustc's lines give, as [`Enabled::lines`] writes them: a
     /// runner's, handed on in its snapshot.
     #[must_use]

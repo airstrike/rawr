@@ -1,6 +1,9 @@
-//! The program's package as the page runs it: its crate root and the files
+//! The program's package as the page runs it: its crate root, the files
 //! `rawr::universe` reads for it, which the page hands the runner's
-//! universe as text, since a page reaches no files of this machine.
+//! universe as text, since a page reaches no files of this machine, and
+//! what its `cfg(..)`s read as Cargo builds it for the page's target: the
+//! features Cargo resolves for it, a workspace member's inherited settings
+//! included, and the target's options (#2121).
 
 use std::path::{Path, PathBuf};
 
@@ -11,21 +14,34 @@ use serde_json::{json, Value};
 pub(super) struct Package {
     entry: PathBuf,
     files: Vec<(PathBuf, Box<str>)>,
+    /// What its `cfg(..)`s read, as `rustc --print cfg` writes it.
+    cfg: Vec<String>,
 }
 
 impl Package {
-    /// Read the package of the crate root at `entry`.
-    pub(super) fn read(entry: &Path) -> Result<Self, rawr::universe::Error> {
+    /// Read the package of the crate root at `entry`, whose `cfg(..)`s
+    /// read `features`.
+    pub(super) fn read(
+        entry: &Path,
+        features: &rawr::project::cargo::features::Enabled,
+    ) -> Result<Self, rawr::universe::Error> {
         Ok(Self {
             entry: entry.to_path_buf(),
             files: rawr::universe::package_files(entry)?,
+            cfg: features.lines().collect(),
         })
     }
 
+    /// Whether the page runs it with the same `cfg(..)`s as `other`: a
+    /// package whose features changed starts again on a fresh page.
+    pub(super) fn same_cfg(&self, other: &Self) -> bool {
+        self.cfg == other.cfg
+    }
+
     /// The program as the page starts it:
-    /// `{"entry":..,"files":[..],"directory":..}`, with the directory the
-    /// page's errors show the files' paths from: this command's, as
-    /// `rawr run` shows them.
+    /// `{"entry":..,"files":[..],"directory":..,"cfg":[..]}`, with the
+    /// directory the page's errors show the files' paths from: this
+    /// command's, as `rawr run` shows them.
     #[must_use]
     pub(super) fn program(&self) -> Value {
         let directory = std::env::current_dir().unwrap_or_default();
@@ -33,6 +49,7 @@ impl Package {
             "entry": self.entry.to_string_lossy(),
             "files": self.files(),
             "directory": directory.to_string_lossy(),
+            "cfg": self.cfg,
         })
     }
 
@@ -50,6 +67,8 @@ impl Package {
 
 #[cfg(test)]
 mod tests {
+    use rawr::project::cargo::features::Enabled;
+
     use super::Package;
 
     /// The page gets the manifest and every Rust file of the crate's
@@ -64,7 +83,8 @@ mod tests {
         std::fs::write(source.join("view.rs"), "mod list;\n").unwrap();
         std::fs::write(source.join("view").join("list.rs"), "").unwrap();
         std::fs::write(source.join("notes.txt"), "not Rust").unwrap();
-        let package = Package::read(&source.join("main.rs")).expect("the package reads");
+        let features = Enabled::of_names(["loud"]);
+        let package = Package::read(&source.join("main.rs"), &features).expect("the package reads");
         let program = package.program();
         let paths: Vec<_> = program["files"]
             .as_array()
@@ -84,6 +104,7 @@ mod tests {
         );
         assert_eq!(program["entry"], path(source.join("main.rs")));
         assert_eq!(program["files"][1][1], "// rawr\nmod view;\nfn main() {}\n");
+        assert_eq!(program["cfg"][0], "feature=\"loud\"");
         assert_eq!(
             program["directory"],
             path(std::env::current_dir().expect("a current directory"))
@@ -102,7 +123,9 @@ mod tests {
         let script = root.join("script.rs");
         let text = "---\n[dependencies]\nitoa = \"1\"\n---\n// rawr\nfn main() {}\n";
         std::fs::write(&script, text).unwrap();
-        let program = Package::read(&script).expect("the script reads").program();
+        let program = Package::read(&script, &Enabled::default())
+            .expect("the script reads")
+            .program();
         let path = script.to_string_lossy().into_owned();
         assert_eq!(program["files"], serde_json::json!([[path, text]]));
         assert_eq!(program["entry"], path);

@@ -145,21 +145,29 @@ pub fn prepare() -> Result<(), JsError> {
 pub fn run(manifest: &str, source: &str) -> Result<String, JsError> {
     let root = PathBuf::from(ROOT);
     let files = vec![(root.join("Cargo.toml"), Box::from(manifest))];
-    started(root.join("src").join("main.rs"), Box::from(source), files)
+    let features = crate::project::cargo::features::Enabled::default();
+    started(
+        root.join("src").join("main.rs"),
+        Box::from(source),
+        files,
+        features,
+    )
 }
 
 /// Compile the package `files` holds, a JSON array of `[path, text]`
 /// pairs, with its crate root at `entry`, and run its `main`, as [`run`]
 /// runs a snippet's, with the same answers. Errors show the package's
 /// paths from `directory`, where the command that serves the page started,
-/// as that command shows them.
+/// as that command shows them. `cfg`, a JSON array of lines as `rustc
+/// --print cfg` writes them, holds the features and options Cargo resolved
+/// for the package built for this target, which its `cfg(..)`s read.
 ///
 /// # Errors
 ///
-/// Returns the error installing the bindings gave, or that `files` isn't
-/// such an array.
+/// Returns the error installing the bindings gave, or that `files` or
+/// `cfg` isn't such an array.
 #[wasm_bindgen]
-pub fn start(entry: &str, files: &str, directory: &str) -> Result<String, JsError> {
+pub fn start(entry: &str, files: &str, directory: &str, cfg: &str) -> Result<String, JsError> {
     crate::diagnostic::show_paths_from(PathBuf::from(directory));
     let entry = PathBuf::from(entry);
     let mut files = package(files)?;
@@ -170,21 +178,27 @@ pub fn start(entry: &str, files: &str, directory: &str) -> Result<String, JsErro
         )));
     };
     let (_, text) = files.swap_remove(at);
-    started(entry, text, files)
+    let lines = serde_json::from_str::<Vec<String>>(cfg)
+        .map_err(|error| JsError::new(&format!("rawr: the package's cfg doesn't read: {error}")))?;
+    let features =
+        crate::project::cargo::features::Enabled::of_lines(lines.iter().map(String::as_str));
+    started(entry, text, files, features)
 }
 
 /// Load the program whose crate root at `entry` holds `text`, with `files`
-/// for the rest of its package, and run its `main`.
+/// for the rest of its package and `features` for its `cfg(..)`s, and run
+/// its `main`.
 fn started(
     entry: PathBuf,
     text: Box<str>,
     files: Vec<(PathBuf, Box<str>)>,
+    features: crate::project::cargo::features::Enabled,
 ) -> Result<String, JsError> {
     prepare()?;
     let Some(universe) = UNIVERSE.take() else {
         return Err(JsError::new("rawr: this instance has run its program"));
     };
-    let program = match universe.program(entry, text, files) {
+    let program = match universe.program_with_features(entry, text, files, features) {
         Ok(program) => program,
         Err(error) => return Ok(failure(&error).to_string()),
     };

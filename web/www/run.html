@@ -136,7 +136,7 @@ if (program.entry) {
   });
   current = JSON.stringify(program.files);
   try {
-    const answer = JSON.parse(glue.start(program.entry, current, program.directory ?? ""));
+    const answer = JSON.parse(glue.start(program.entry, current, program.directory ?? "", JSON.stringify(program.cfg ?? [])));
     running = answer.kind === "text";
     answered(answer, current);
     if (remembered && running && box.hidden) {

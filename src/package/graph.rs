@@ -546,6 +546,52 @@ impl Graph {
         self.entry_package().rust.is_some()
     }
 
+    /// The features Cargo enables for the entry crate and the options
+    /// rustc sets for it when Cargo builds it for `platform`, as `cargo
+    /// build --target <platform>` builds it, inherited workspace settings
+    /// included: what its `cfg(..)`s read there. A source of no package
+    /// Cargo describes has no features, and `platform`'s options.
+    ///
+    /// # Errors
+    ///
+    /// Cargo's error when it can't resolve the package's unit.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    pub fn entry_features_on(
+        &self,
+        platform: &str,
+    ) -> Result<project::cargo::features::Enabled, project::cargo::Error> {
+        let entry = self.entry_source().path();
+        let described = self.entry_package().cargo().and_then(|cargo| {
+            project::cargo::Workspace::of(&cargo.path)
+                .ok()?
+                .package(&cargo.path)
+                .cloned()
+        });
+        let Some(package) = described else {
+            let directory = entry.parent().unwrap_or(entry);
+            return Ok(project::cargo::features::Enabled::of_platform(
+                directory, platform,
+            ));
+        };
+        let target = package
+            .target_at(entry)
+            .or_else(|| package.run_binary())
+            .or_else(|| package.library());
+        match target {
+            Some(target) => project::cargo::Unit::on(
+                &package,
+                target,
+                project::cargo::Mode::Build,
+                Some(platform),
+            )
+            .map(|unit| unit.features().clone()),
+            None => Ok(project::cargo::features::Enabled::of_platform(
+                package.directory(),
+                platform,
+            )),
+        }
+    }
+
     /// The features the application package's Cargo.toml names for its
     /// dependency `alias`; empty when it has no such dependency.
     #[must_use]
