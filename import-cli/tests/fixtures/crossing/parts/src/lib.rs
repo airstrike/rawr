@@ -453,6 +453,42 @@ pub mod show {
     }
 }
 
+/// A count's steps, as iced_program's `Program`: `events` implements it
+/// for a wrapper that forwards its associated type to what it wraps, as
+/// iced's `Application<P>` does, and `tester` takes it, as iced_test's
+/// emulator takes any program.
+pub mod stepping {
+    /// Something that starts a count, with steps of `Out`.
+    pub trait Stepper {
+        /// What a step carries.
+        type Out;
+        /// The count it starts at.
+        fn first(&self) -> u32;
+    }
+
+    /// Where a count starts, in place of its stepper's start, as iced's
+    /// `Preset<State, Message>` boots a program.
+    pub struct Start<O> {
+        count: u32,
+        step: std::marker::PhantomData<fn() -> O>,
+    }
+
+    impl<O> Start<O> {
+        /// A start at `count`.
+        pub fn at(count: u32) -> Self {
+            Self {
+                count,
+                step: std::marker::PhantomData,
+            }
+        }
+
+        /// The count it starts at.
+        pub fn count(&self) -> u32 {
+            self.count
+        }
+    }
+}
+
 /// A point of the soft renderer's own, as tiny_skia's `Point`: a type of
 /// this crate that `events` reaches only through a signature, beside its
 /// own `Point` of the same name.

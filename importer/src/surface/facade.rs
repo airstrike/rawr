@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 68;
+const SCHEMA: u32 = 69;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -281,6 +281,10 @@ pub struct ImplProjection {
     ty: Type,
     value: Type,
     cases: Box<[(Type, Type)]>,
+    /// The associated type the bound names, which an opaque type that is
+    /// `ty` gives from its own bound (`signature::Projection`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    associated: Option<representability::signature::Associated>,
 }
 
 impl ImplProjection {
@@ -298,6 +302,13 @@ impl ImplProjection {
     #[must_use]
     pub fn cases(&self) -> &[(Type, Type)] {
         &self.cases
+    }
+    /// The associated type the bound names, where it is known.
+    #[must_use]
+    pub fn associated(&self) -> Option<([u8; 32], &str)> {
+        self.associated
+            .as_ref()
+            .map(|associated| (associated.trait_identity(), associated.name()))
     }
 }
 
@@ -2009,6 +2020,7 @@ impl Plan {
                                     ))
                                 })
                                 .collect::<Option<_>>()?,
+                            associated: None,
                         })
                     })
                     .collect();
@@ -4625,6 +4637,7 @@ fn relations(
                                 ))
                             })
                             .collect::<Option<_>>()?,
+                        associated: projection.associated().cloned(),
                     })
                 })
                 .collect();

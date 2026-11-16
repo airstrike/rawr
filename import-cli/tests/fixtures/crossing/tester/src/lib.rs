@@ -38,3 +38,13 @@ pub fn sight<Message, Theme, Renderer>(
         at: std::marker::PhantomData,
     }
 }
+
+/// The count `stepper` starts at, or `start` gives, as iced_test's
+/// `Emulator::with_preset` takes an `Option<&Preset<P::State, P::Message>>`
+/// of a program whose type this crate can't name.
+pub fn started<S: core::stepping::Stepper>(
+    stepper: &S,
+    start: Option<&core::stepping::Start<S::Out>>,
+) -> u32 {
+    start.map_or_else(|| stepper.first(), core::stepping::Start::count)
+}

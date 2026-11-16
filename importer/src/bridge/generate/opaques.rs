@@ -29,9 +29,14 @@ struct Opaques {
     /// By opaque type (`opaque_key`), the plans that take a value holding
     /// it, in the cohort's order.
     consumers: BTreeMap<convert::Type, Vec<usize>>,
-    /// By opaque type, the first plan that gives a value holding it and
-    /// takes none.
+    /// By opaque type, the first plan that gives a value holding it, takes
+    /// none and declares it, or without one, the first that gives such a
+    /// value and takes none (`opaque_producer`).
     producers: BTreeMap<convert::Type, usize>,
+    /// By opaque type, the plans that make a value holding it from none
+    /// they take and don't declare it (`made_opaque`), in the cohort's
+    /// order.
+    made: BTreeMap<convert::Type, Vec<usize>>,
 }
 
 thread_local! {
@@ -70,19 +75,38 @@ impl Opaques {
             produced.push(super::find_produced_opaque(plan)?);
         }
         let mut consumers = BTreeMap::<convert::Type, Vec<usize>>::new();
-        let mut producers = BTreeMap::new();
+        let mut declaring = BTreeMap::new();
+        let mut undeclared = BTreeMap::new();
+        let mut made = BTreeMap::<convert::Type, Vec<usize>>::new();
         for (index, (operand, given)) in operands.iter().zip(&produced).enumerate() {
+            let plan = &cohort[index];
+            if let crate::surface::adapter::Operation::EnumVariant { instance, .. } =
+                plan.operation()
+                && let Some(opaque) = instance.iter().find_map(super::first_opaque)
+            {
+                made.entry(super::opaque_key(opaque))
+                    .or_default()
+                    .push(index);
+                continue;
+            }
             match (operand, given) {
                 (Some((_, opaque, _)), _) => consumers
                     .entry(super::opaque_key(opaque))
                     .or_default()
                     .push(index),
+                (None, Some(given)) if super::declares_opaque(plan, given) => {
+                    declaring.entry(super::opaque_key(given)).or_insert(index);
+                }
                 (None, Some(given)) => {
-                    producers.entry(super::opaque_key(given)).or_insert(index);
+                    let key = super::opaque_key(given);
+                    undeclared.entry(key.clone()).or_insert(index);
+                    made.entry(key).or_default().push(index);
                 }
                 (None, None) => {}
             }
         }
+        let mut producers = undeclared;
+        producers.extend(declaring);
         Ok(Self {
             start: cohort.as_ptr() as usize,
             len: cohort.len(),
@@ -90,6 +114,7 @@ impl Opaques {
             produced,
             consumers,
             producers,
+            made,
         })
     }
 
@@ -149,6 +174,23 @@ pub(super) fn producer<'p>(cohort: &'p [Plan], key: &convert::Type) -> Option<Op
                 .producers
                 .get(&super::opaque_key(key))
                 .map(|index| &cohort[*index]),
+        )
+    })
+}
+
+/// The plans of `cohort` that make a value holding the opaque type `key`
+/// from none they take (`made_opaque`), when it is the indexed cohort.
+pub(super) fn made<'p>(cohort: &'p [Plan], key: &convert::Type) -> Option<Vec<&'p Plan>> {
+    COHORT.with_borrow(|indexed| {
+        let indexed = indexed.as_ref().filter(|indexed| indexed.is(cohort))?;
+        Some(
+            indexed
+                .made
+                .get(&super::opaque_key(key))
+                .into_iter()
+                .flatten()
+                .map(|index| &cohort[*index])
+                .collect(),
         )
     })
 }

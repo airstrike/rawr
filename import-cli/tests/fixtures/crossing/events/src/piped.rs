@@ -127,6 +127,22 @@ pub fn pipe_for<S: SomeTrait>(_stepper: &S) -> (Pipe<Signal<S>>, Drain<Signal<S>
     pipe()
 }
 
+/// Where a driver starts, in place of its stepper's start.
+pub struct Start<O> {
+    count: u32,
+    step: std::marker::PhantomData<fn() -> O>,
+}
+
+impl<O> Start<O> {
+    /// A start at `count`.
+    pub fn at(count: u32) -> Self {
+        Self {
+            count,
+            step: std::marker::PhantomData,
+        }
+    }
+}
+
 /// A count that words step.
 pub struct Driver<S: SomeTrait> {
     count: u32,
@@ -136,9 +152,15 @@ pub struct Driver<S: SomeTrait> {
 impl<S: SomeTrait> Driver<S> {
     /// The count `stepper` starts at, ready for a word.
     pub fn new(pipe: Pipe<Signal<S>>, stepper: &S) -> Self {
+        Self::with_start(pipe, stepper, None)
+    }
+
+    /// The count `start` gives, or `stepper` starts at without one, ready
+    /// for a word.
+    pub fn with_start(pipe: Pipe<Signal<S>>, stepper: &S, start: Option<&Start<S::Out>>) -> Self {
         pipe.send(Signal::Ready);
         Self {
-            count: stepper.start(),
+            count: start.map_or_else(|| stepper.start(), |start| start.count),
             pipe,
         }
     }
@@ -174,4 +196,33 @@ impl<S: SomeTrait> Driver<S> {
     pub fn count(&self) -> u32 {
         self.count
     }
+}
+
+/// A stepper around one the caller can't name, which gives what it wraps
+/// gives, as iced's `Application<P>` forwards `Program::State` to `P`.
+pub struct Stepped<S> {
+    inner: S,
+}
+
+impl<S: parts::stepping::Stepper> parts::stepping::Stepper for Stepped<S> {
+    type Out = S::Out;
+
+    fn first(&self) -> u32 {
+        self.inner.first() + 1
+    }
+}
+
+/// A stepper whose count starts at one more than `from`.
+pub fn stepped(from: u32) -> Stepped<impl parts::stepping::Stepper<Out = u32>> {
+    struct From(u32);
+
+    impl parts::stepping::Stepper for From {
+        type Out = u32;
+
+        fn first(&self) -> u32 {
+            self.0
+        }
+    }
+
+    Stepped { inner: From(from) }
 }

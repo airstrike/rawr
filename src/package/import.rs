@@ -4548,6 +4548,9 @@ fn relations(
                                     .iter()
                                     .map(|(this, at)| (this, at))
                                     .collect(),
+                                projection.associated().map(|associated| {
+                                    (associated.trait_identity(), associated.name())
+                                }),
                             )
                         })
                         .collect(),
@@ -4567,9 +4570,14 @@ fn relations(
     Ok(())
 }
 
-/// A case's bounds that fix an associated type, each `(ty, value, cases)`
-/// (`host::signature::Projection`).
-pub(crate) type CaseProjections<'a, T> = Vec<(&'a T, &'a T, Vec<(&'a T, &'a T)>)>;
+/// A case's bounds that fix an associated type, each `(ty, value, cases,
+/// associated)` (`host::signature::Projection`).
+pub(crate) type CaseProjections<'a, T> = Vec<(
+    &'a T,
+    &'a T,
+    Vec<(&'a T, &'a T)>,
+    Option<([u8; 32], &'a str)>,
+)>;
 
 /// A relation on `parameter`, its types made patterns by `pattern`: `None`
 /// when one of its trait arguments can't be one. A case that can't be is
@@ -4597,7 +4605,7 @@ pub(crate) fn relation<'a, T: 'a>(
         .filter_map(|(this, implemented, projections)| {
             let projections = projections
                 .into_iter()
-                .filter_map(|(ty, value, cases)| {
+                .filter_map(|(ty, value, cases, associated)| {
                     Some(host::signature::Projection {
                         ty: pattern(ty)?,
                         value: pattern(value)?,
@@ -4605,6 +4613,7 @@ pub(crate) fn relation<'a, T: 'a>(
                             .into_iter()
                             .map(|(this, at)| Some((pattern(this)?, pattern(at)?)))
                             .collect::<Option<_>>()?,
+                        associated: associated.map(|(identity, name)| (identity, name.into())),
                     })
                 })
                 .collect();

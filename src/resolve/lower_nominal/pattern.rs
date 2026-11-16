@@ -699,6 +699,7 @@ impl<'a> Parser<'a> {
             ),
         };
         let host = self.take_host_checks()?;
+        self.define_host_binds(&host.binds);
         let label = self.push_root_pattern(resolved.proof, &resolved.bindings, place.as_ref());
         // The bindings a facade pattern makes follow the script pattern's.
         let mut bindings = resolved.bindings;
@@ -3042,6 +3043,7 @@ impl<'a> Parser<'a> {
 
     /// Bind each name a facade pattern makes for the code it guards.
     pub(super) fn bind_host_pattern(&mut self, pattern: &Host) {
+        self.define_host_binds(&pattern.binds);
         for binding in &pattern.binds {
             self.bindings.insert(
                 binding.name.clone(),

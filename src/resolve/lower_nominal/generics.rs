@@ -1190,7 +1190,14 @@ pub(super) struct ImplBounds {
 pub(super) struct ImplProjection {
     pub(super) ty: Ty,
     pub(super) value: Ty,
-    pub(super) cases: Box<[(Ty, Ty)]>,
+    /// Each type `ty` may be, the associated type it gives there, and the
+    /// bounds of that impl that fix it, as an impl that forwards it to its
+    /// parameter's has (`type Out = S::Out`).
+    pub(super) cases: Box<[(Ty, Ty, Vec<ImplProjection>)]>,
+    /// The associated type the bound names, by its trait's definition
+    /// identity and its name: an opaque type that is `ty` gives it from
+    /// its own bound.
+    pub(super) associated: Option<([u8; 32], ImmutableString)>,
 }
 
 /// Why no impl fixed an `impl Trait`'s hidden type (D604): none fits the

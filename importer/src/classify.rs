@@ -27,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 235;
+const CLASSIFIER_VERSION: u32 = 236;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2914,6 +2914,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 continue;
             };
             let mut cases = Vec::new();
+            // Each impl that gives its parameter's own associated type, as
+            // `impl<S: SomeTrait> SomeTrait for Wrapper<S> { type Out =
+            // S::Out; }`: its self type, with the parameter's index.
+            let mut forwarding = Vec::new();
             for implementation in self.graph.implementations_of(&first.trait_id) {
                 let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
                     continue;
@@ -2939,6 +2943,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         _ => None,
                     }
                 });
+                if let Some(model::Type::Projection {
+                    trait_id,
+                    associated,
+                    arguments,
+                }) = value
+                    && *trait_id == first.trait_id
+                    && *associated == first.associated
+                    && rest.is_empty()
+                    && !projection.borrowed
+                    && let Some(model::Argument::Type(model::Type::Parameter { index, .. })) =
+                        arguments.first()
+                    && !matches!(this, representability::convert::Type::Parameter(_))
+                {
+                    forwarding.push((marked_impl_parameters(this), *index));
+                    continue;
+                }
                 // A projection of a projection reads each further one at
                 // the type the one before gives, as `Srgb`'s `Space` is
                 // `Srgb`, whose `WhitePoint` is `D65`.
@@ -2994,6 +3014,40 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     continue;
                 }
                 cases.push(Case::new(this, Box::new([value])));
+            }
+            // An impl that forwards the associated type to its parameter's
+            // is a case of its self type whose value is a variable of its
+            // own, which the parameter's associated type fixes: through
+            // the other cases, or the bound of an opaque type that fills
+            // the parameter, as `Wrapper<impl SomeTrait<Out = u32>>` gives
+            // `u32` (#2060).
+            if !forwarding.is_empty() {
+                let associated = representability::signature::Associated::new(
+                    *self.graph.surface_definition(&first.trait_id).as_bytes(),
+                    first.name.as_str().into(),
+                );
+                let known = cases
+                    .iter()
+                    .filter_map(|case: &Case| {
+                        Some((case.this().clone(), case.arguments().first()?.clone()))
+                    })
+                    .collect::<Box<[_]>>();
+                for (this, index) in forwarding {
+                    let value = representability::convert::Type::Parameter(
+                        representability::signature::IMPL_PARAMETER | FORWARDED,
+                    );
+                    let bound = representability::signature::Projection::new(
+                        representability::convert::Type::Parameter(
+                            representability::signature::IMPL_PARAMETER | index,
+                        ),
+                        value.clone(),
+                        known.clone(),
+                    )
+                    .of_associated(associated.clone());
+                    cases.push(
+                        Case::new(this, Box::new([value])).with_projections(Box::new([bound])),
+                    );
+                }
             }
             // Without a case, the relation still names the associated type,
             // which an opaque type that fills the parameter gives from its
@@ -16204,6 +16258,10 @@ struct Projected {
     /// each case's associated type is then read through its borrow.
     borrowed: bool,
 }
+
+/// The variable of a forwarding case's value ([`Classifier::
+/// projection_relations`]): past any impl's own parameters.
+const FORWARDED: u32 = 0x3FFF_FFFF;
 
 /// `ty` with each parameter marked as a case's implementation's own
 /// ([`representability::signature::IMPL_PARAMETER`]).

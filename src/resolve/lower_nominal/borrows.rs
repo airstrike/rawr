@@ -512,6 +512,19 @@ impl Parser<'_> {
         trace
     }
 
+    /// Each local a facade pattern binds is given its value where the
+    /// pattern binds it, and again each time it does, as in a loop's body:
+    /// a move of one is no use of the value an earlier iteration moved.
+    /// What the value borrows is left to rustc, with the rest of the
+    /// pattern (`host_trace`).
+    pub(super) fn define_host_binds(&self, binds: &[PatternBinding]) {
+        let mut flow = self.flow();
+        for binding in binds {
+            let local = flow.local(&binding.name, binding.span);
+            flow.take(local, &[], true);
+        }
+    }
+
     /// The steps through each reference `ty` is below.
     fn derefs(&self, ty: &Ty) -> Vec<Projection> {
         let mut steps = Vec::new();

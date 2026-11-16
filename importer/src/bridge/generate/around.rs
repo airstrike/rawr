@@ -20,9 +20,17 @@ use super::{convert, request, Operation, Plan};
 /// a shape takes it (`witnessed`).
 const WITNESSED: &str = "__RAWR_WITNESSED__";
 
-/// The bounds the declaration of the opaque type a value holds records.
+/// The bounds the declaration of the opaque type a value holds records,
+/// and the types of the value's that hold the opaque type itself.
 pub(super) struct Around {
     bounds: String,
+    /// Each type of the value's whose argument is the opaque type, as
+    /// `Wrapper<_>` of a `Signal<Wrapper<impl SomeTrait>>`: its Rust
+    /// spelling, and the same with `T` there. A `_` outside them is a type
+    /// rustc infers from the call, as `Start<_>` of an associated type the
+    /// call fixes, not the opaque type. Empty where the opaque type is in
+    /// no such type, where each `_` is it.
+    holders: Vec<(String, String)>,
 }
 
 impl Around {
@@ -66,7 +74,9 @@ impl Around {
                 continue;
             }
             if let Some(bounds) = super::declared_bounds(signature, substitutions, key)? {
-                return Ok(Some(Self { bounds }));
+                let mut holders = Vec::new();
+                holders_of(returned, key, &mut holders);
+                return Ok(Some(Self { bounds, holders }));
             }
         }
         Ok(None)
@@ -81,7 +91,9 @@ impl Around {
         let mut shaped = String::with_capacity(body.len());
         for line in body.split_inclusive('\n') {
             let line = self.lent(line);
-            let Some(holding) = super::taken_type(&line, position, &take).and_then(generic) else {
+            let Some(holding) =
+                super::taken_type(&line, position, &take).and_then(|ty| self.generic(ty))
+            else {
                 shaped.push_str(&line);
                 continue;
             };
@@ -95,6 +107,38 @@ impl Around {
             ));
         }
         self.annotated(&shaped)
+    }
+
+    /// `body`, of a call that takes no operand of a type that holds the
+    /// opaque type but gives one, as a generic `pipe::<Signal<_>>()` or a
+    /// variant of an enum at that type does: each value it reaches and each
+    /// `let` of such a type at the witness's type, and the value it gives
+    /// declared `given`, the Rust type of what the call gives, where it
+    /// writes none.
+    pub(super) fn made(&self, body: &str, given: Option<&str>) -> String {
+        let body = match given {
+            Some(given) => body.replacen("let output = ", &format!("let output: {given} = "), 1),
+            None => body.to_owned(),
+        };
+        let mut lent = String::with_capacity(body.len());
+        for line in body.split_inclusive('\n') {
+            lent.push_str(&self.lent(line));
+        }
+        self.annotated(&lent)
+    }
+
+    /// The Rust type `ty` with `T` at each place it holds the opaque type,
+    /// in the types that hold it itself (`holders`). None where it holds
+    /// none.
+    fn generic(&self, ty: &str) -> Option<String> {
+        if self.holders.is_empty() {
+            return generic(ty);
+        }
+        let mut generic = ty.to_owned();
+        for (spelled, at_t) in &self.holders {
+            generic = generic.replace(spelled.as_str(), at_t);
+        }
+        (generic != ty).then_some(generic)
     }
 
     /// `body` with each `let name: Type = value;` of a type that holds the
@@ -125,7 +169,7 @@ impl Around {
                     }
                     let value_at = ty_at + ty_end + 3;
                     let value_end = depth_zero(&after[value_at..], ";")?;
-                    let holding = generic(&after[ty_at..ty_at + ty_end])?;
+                    let holding = self.generic(&after[ty_at..ty_at + ty_end])?;
                     Some((value_at, value_at + value_end, holding))
                 })
                 .flatten();
@@ -189,7 +233,7 @@ impl Around {
                     } else {
                         ty
                     };
-                    Some((end, generic(ty)?))
+                    Some((end, self.generic(ty)?))
                 });
             let Some((end, holding)) = holding else {
                 reached.push_str(&rest[at..at + turbofish.len()]);
@@ -360,4 +404,72 @@ fn generic(ty: &str) -> Option<String> {
     }
     generic.push_str(&ty[from..]);
     Some(generic)
+}
+
+/// Each type in `ty` with the opaque type `key` among its arguments, as
+/// [`Around::holders`] spells it.
+fn holders_of(ty: &convert::Type, key: &convert::Type, holders: &mut Vec<(String, String)>) {
+    match ty {
+        convert::Type::Nominal { arguments, .. } => {
+            let opaque = arguments
+                .iter()
+                .map(|argument| super::same_opaque(argument, key))
+                .collect::<Vec<_>>();
+            if opaque.contains(&true)
+                && let Some(spelled) = super::concrete_type(ty)
+                && let Some(at_t) = at_arguments(&spelled, &opaque)
+                && !holders.iter().any(|(known, _)| *known == spelled)
+            {
+                holders.push((spelled, at_t));
+            }
+            for argument in arguments {
+                holders_of(argument, key, holders);
+            }
+        }
+        convert::Type::Tuple(members) => {
+            for member in members {
+                holders_of(member, key, holders);
+            }
+        }
+        convert::Type::Option(inner)
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Range(inner)
+        | convert::Type::Sequence { element: inner, .. } => holders_of(inner, key, holders),
+        convert::Type::Result(ok, err) => {
+            holders_of(ok, key, holders);
+            holders_of(err, key, holders);
+        }
+        _ => {}
+    }
+}
+
+/// `spelled`, a nominal type's Rust spelling `Path<'_, A, B>`, with `T`
+/// at each of its type arguments `opaque` marks, after the lifetimes it
+/// writes first. None where its arguments aren't spelled that way.
+fn at_arguments(spelled: &str, opaque: &[bool]) -> Option<String> {
+    let open = spelled.find('<')?;
+    let inner = spelled.strip_suffix('>')?.get(open + 1..)?;
+    let mut parts = Vec::new();
+    let mut rest = inner;
+    while let Some(end) = depth_zero(rest, ", ") {
+        parts.push(&rest[..end]);
+        rest = &rest[end + 2..];
+    }
+    parts.push(rest);
+    let lifetimes = parts.len().checked_sub(opaque.len())?;
+    let mut written = Vec::with_capacity(parts.len());
+    for (index, part) in parts.iter().enumerate() {
+        let at_opaque = index
+            .checked_sub(lifetimes)
+            .is_some_and(|argument| opaque[argument]);
+        if at_opaque {
+            if *part != "_" {
+                return None;
+            }
+            written.push("T");
+        } else {
+            written.push(part);
+        }
+    }
+    Some(format!("{}<{}>", &spelled[..open], written.join(", ")))
 }

@@ -1372,7 +1372,7 @@ impl<'a> Parser<'a> {
                     if let (Ok(this), Ok(given)) =
                         (at(self, this, &mut own), at(self, given, &mut own))
                     {
-                        cases.push((this, given));
+                        cases.push((this, given, Vec::new()));
                     }
                 }
                 let open = self
@@ -1380,6 +1380,7 @@ impl<'a> Parser<'a> {
                         ty,
                         value,
                         cases: cases.into_boxed_slice(),
+                        associated: projection.associated.clone(),
                     }])
                     .unwrap_or_default();
                 self.inference.projections.extend(open);
@@ -1416,19 +1417,75 @@ impl<'a> Parser<'a> {
             let [given] = case.arguments() else {
                 continue;
             };
-            let mut own = BTreeMap::new();
-            // A case of a type this program doesn't reach fits no type it has.
-            if let (Ok(this), Ok(given)) = (
-                self.pattern_type(case.this(), &mut own, parameters, (operation, span), owner),
-                self.pattern_type(given, &mut own, parameters, (operation, span), owner),
-            ) {
-                cases.push((this, given));
+            // A case's self type is named by the crate that declares it,
+            // which may be another than the item's, as `impl<P: Program>
+            // Program for Application<P>` of `iced` is a case of a bound of
+            // `iced_test`'s. A case of a type this program doesn't reach
+            // fits no type it has.
+            let facades = self.models.host.facades().to_vec();
+            let mut found = None;
+            for case_owner in owner.into_iter().chain(&facades) {
+                let mut own = BTreeMap::new();
+                if let (Ok(this), Ok(given)) = (
+                    self.pattern_type(
+                        case.this(),
+                        &mut own,
+                        parameters,
+                        (operation, span),
+                        Some(case_owner),
+                    ),
+                    self.pattern_type(
+                        given,
+                        &mut own,
+                        parameters,
+                        (operation, span),
+                        Some(case_owner),
+                    ),
+                ) {
+                    found = Some((this, given, own, case_owner));
+                    break;
+                }
             }
+            let Some((this, given, mut own, owner)) = found else {
+                continue;
+            };
+            let owner = Some(owner);
+            // The case's bounds that fix what it gives, at its own types,
+            // as a forwarding impl's `<S as Trait>::Name` is its value.
+            let mut bounds = Vec::new();
+            for projection in case.projections() {
+                let mut at = |this: &mut Self, pattern, own: &mut BTreeMap<u32, Ty>| {
+                    this.pattern_type(pattern, own, parameters, (operation, span), owner)
+                };
+                let (Ok(ty), Ok(value)) = (
+                    at(self, &projection.ty, &mut own),
+                    at(self, &projection.value, &mut own),
+                ) else {
+                    continue;
+                };
+                let mut inner = Vec::with_capacity(projection.cases.len());
+                for (this, given) in projection.cases.iter() {
+                    let mut fresh = BTreeMap::new();
+                    if let (Ok(this), Ok(given)) =
+                        (at(self, this, &mut fresh), at(self, given, &mut fresh))
+                    {
+                        inner.push((this, given, Vec::new()));
+                    }
+                }
+                bounds.push(ImplProjection {
+                    ty,
+                    value,
+                    cases: inner.into_boxed_slice(),
+                    associated: projection.associated.clone(),
+                });
+            }
+            cases.push((this, given, bounds));
         }
         self.inference.projections.push(ImplProjection {
             ty: open,
             value,
             cases: cases.into_boxed_slice(),
+            associated: relation.associated().cloned(),
         });
         Ok(())
     }

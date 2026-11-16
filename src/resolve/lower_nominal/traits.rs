@@ -449,9 +449,16 @@ impl<'a> Parser<'a> {
             let cases = projection
                 .cases
                 .iter()
-                .filter_map(|(this, at)| Some((at_case(self, this)?, at_case(self, at)?)))
+                .filter_map(|(this, at)| {
+                    Some((at_case(self, this)?, at_case(self, at)?, Vec::new()))
+                })
                 .collect();
-            projections.push(ImplProjection { ty, value, cases });
+            projections.push(ImplProjection {
+                ty,
+                value,
+                cases,
+                associated: None,
+            });
         }
         let projections = self.project_impl(projections)?;
         Some(ImplBounds {
@@ -477,17 +484,35 @@ impl<'a> Parser<'a> {
                 open.push(projection);
                 continue;
             }
-            for (this, value) in projection.cases.iter() {
+            // An opaque type gives the associated type from its own bound,
+            // as `impl SomeTrait<Out = u32>` gives `Out`.
+            if let Some((identity, name)) = &projection.associated
+                && let Ty::Host { proof, arguments } = &ty
+                && let Some(given) = proof
+                    .definition
+                    .associated(identity, name)
+                    .and_then(|position| arguments.get(position))
+            {
+                if !self.unify_type(given, &projection.value) {
+                    return None;
+                }
+                continue;
+            }
+            let ImplProjection { value, cases, .. } = projection;
+            for (this, given, bounds) in cases {
                 let checkpoint = self.inference.checkpoint();
-                if !self.unify_type(this, &ty) {
+                if !self.unify_type(&this, &ty) {
                     self.inference.rollback(checkpoint);
                     continue;
                 }
-                if !self.unify_type(value, &projection.value) {
+                if !self.unify_type(&given, &value) {
                     self.inference.rollback(checkpoint);
                     return None;
                 }
                 self.inference.commit(checkpoint);
+                // The impl's bounds fix what it gives, as its parameter's
+                // associated type fixes a forwarded one.
+                open.extend(self.project_impl(bounds)?);
                 break;
             }
         }
