@@ -231,6 +231,78 @@ widgets! {
     W48 W49 W50 W51 W52 W53 W54 W55 W56 W57 W58 W59 W60 W61 W62 W63
 }
 
+/// A surface whose `draw` lends a closure a frame that borrows it, and
+/// gives back what it drew, which borrows it too, with its sink's own
+/// error type, as ratatui's `Terminal::draw(&mut self, impl FnOnce(&mut
+/// Frame)) -> Result<CompletedFrame<'_>, B::Error>` does (#1457).
+pub mod surface {
+    /// Where a surface's lines go.
+    pub trait Sink {
+        type Error;
+        fn name(&self) -> String;
+    }
+
+    pub struct Page;
+
+    impl Sink for Page {
+        type Error = std::io::Error;
+        fn name(&self) -> String {
+            "page".to_owned()
+        }
+    }
+
+    /// One frame's lines, borrowed from the surface.
+    pub struct Frame<'a> {
+        lines: &'a mut Vec<String>,
+    }
+
+    impl Frame<'_> {
+        pub fn write(&mut self, line: &str) {
+            self.lines.push(line.to_owned());
+        }
+    }
+
+    /// What a draw left on the surface.
+    pub struct Drawn<'a> {
+        pub lines: &'a [String],
+        pub count: usize,
+    }
+
+    pub struct Surface<S: Sink> {
+        sink: S,
+        lines: Vec<String>,
+        count: usize,
+    }
+
+    impl<S: Sink> Surface<S> {
+        pub fn new(sink: S) -> Result<Self, S::Error> {
+            Ok(Self {
+                sink,
+                lines: Vec::new(),
+                count: 0,
+            })
+        }
+
+        pub fn draw<F>(&mut self, render: F) -> Result<Drawn<'_>, S::Error>
+        where
+            F: FnOnce(&mut Frame),
+        {
+            self.lines.clear();
+            render(&mut Frame {
+                lines: &mut self.lines,
+            });
+            for line in &self.lines {
+                println!("{} | {line}", self.sink.name());
+            }
+            self.count += 1;
+            Ok(Drawn {
+                lines: &self.lines,
+                count: self.count,
+            })
+        }
+    }
+}
+
 /// A terminal generic over its backend, as ratatui's `Terminal<B>` is,
 /// which another crate's trait gives methods by a generic impl.
 pub mod terminal {

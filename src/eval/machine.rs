@@ -33,6 +33,10 @@ const TEMPORARY: &str = "__rawr_async_";
 pub(crate) struct Machine {
     blocks: Box<[Block]>,
     loops: Box<[Loop]>,
+    /// The hash of the body it was lowered from, with its positions: a
+    /// frame suspended in one machine resumes in another of the same body,
+    /// as a reload that left the function as it was makes.
+    body: u64,
 }
 
 impl fmt::Debug for Machine {
@@ -129,6 +133,13 @@ pub(crate) fn lower(function: &mut ScriptFuncDef) -> Result<(), Unsupported> {
     };
     let mut body = function.body.statements().to_vec();
     body.iter_mut().for_each(forget_indices);
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        function.params.hash(&mut hasher);
+        body.hash(&mut hasher);
+        hasher.finish()
+    };
     let output = builder.temporary();
     builder.push(Op::Let(output.clone(), unit_stmt()));
     builder.statements_into(body, Some(&output))?;
@@ -136,6 +147,7 @@ pub(crate) fn lower(function: &mut ScriptFuncDef) -> Result<(), Unsupported> {
     function.machine = Some(crate::Shared::new(Machine {
         blocks: builder.blocks.into_boxed_slice(),
         loops: builder.loops.into_boxed_slice(),
+        body: hash,
     }));
     Ok(())
 }
@@ -941,7 +953,9 @@ impl Engine {
                     .cast::<Frame>()
                     .take()
                     .ok_or_else(|| runtime("this future already resumed"))?;
-                if !crate::Shared::ptr_eq(&saved.machine, machine) {
+                if !crate::Shared::ptr_eq(&saved.machine, machine)
+                    && saved.machine.body != machine.body
+                {
                     return Err(runtime("this future's code changed while it was suspended"));
                 }
                 scope.rewind(base);

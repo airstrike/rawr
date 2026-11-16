@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { NEXT_IMAGE, PAGES, anchors, breadcrumbs, decode, headingIds, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
+import { BROWSER_ONLY, NEXT_IMAGE, PAGES, anchors, breadcrumbs, decode, headingIds, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
 import type { Result } from "../src/lib/output.ts";
 import { highlightRust, highlightToml } from "../src/lib/highlight.ts";
 
@@ -98,6 +98,13 @@ test("a universe block's output before Run is the frame the server drew", async 
   const html = await runOutputs(block("a", "counter", ' data-where="universe"'), runs);
   assert.match(html, /<span id="out-a" aria-live="polite"><img src="data:image\/png;base64,AAAA"/);
   assert.deepEqual(ran, ["server counter"]);
+});
+
+test("a browser block isn't run at build: its output before Run says where it runs", async () => {
+  const { runs, ran } = standIn({});
+  const html = await runOutputs(block("a", "todo", ' data-where="browser"'), runs);
+  assert.match(html, new RegExp(`<span id="out-a" aria-live="polite">${BROWSER_ONLY}</span>`));
+  assert.deepEqual(ran, []);
 });
 
 test("a server block that waits for the next image says so while the live server can't compile it, then shows its run", async () => {

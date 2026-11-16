@@ -908,6 +908,18 @@ fn a_crate_traits_generic_impl_gives_a_generic_crate_type_its_methods() {
     runs_as_cargo_does("renderer", "page | hi!\n");
 }
 
+/// A method that lends a script closure `&mut` of a crate type with a
+/// lifetime, and gives back a value that borrows its receiver with its
+/// type parameter's associated error type, as ratatui's `Terminal::draw`
+/// does, takes the closure and opens a frame for what it gives (#1457).
+#[test]
+fn a_lent_frame_closure_and_a_borrowing_output_cross_one_call() {
+    runs_as_cargo_does(
+        "lent_frame",
+        "page | value 1\ndrew 1 line(s), frame 1\npage | value 2\ndrew 1 line(s), frame 2\n",
+    );
+}
+
 /// `?` turns a crate's error into an `io::Error` by the crate's `impl
 /// From<Error> for io::Error`, and into a `Box<dyn Error>` by the
 /// `std::error::Error` impl thiserror's derive writes, which a `Box` of the

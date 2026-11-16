@@ -292,6 +292,126 @@ pub fn draw(frame: &amp;mut Frame, state: &amp;mut ListState) {
 <p>rawr writes nothing to the terminal while the program holds it raw. Its own lines wait until the terminal is restored. This includes the restart line, a failing save&rsquo;s error and the build&rsquo;s progress line.</p>
 <p>At a terminal, the program writes to the terminal itself as under <code>cargo run</code>. crossterm, termion and colour detection see a terminal. A program that never touches the terminal requires no restoration.</p>
 
+<h3 id="ratatui-browser">In the browser</h3>
+<p>A ratatui program also runs in this page, on rawr&rsquo;s browser universe. The page has no terminal, so the program draws with <a href="https://github.com/ratatui/ratzilla">ratzilla</a>&rsquo;s <code>DomBackend</code>, which implements ratatui&rsquo;s <code>Backend</code> trait over the page&rsquo;s elements. <code>Terminal::new</code>, <code>Terminal::draw</code> and the widgets are ratatui&rsquo;s own.</p>
+<p>A browser tab has one thread, so a loop can&rsquo;t block in <code>event::read()</code>. The program&rsquo;s loop is <code>async</code> instead: it draws, then awaits the next key, as a terminal app does with crossterm&rsquo;s <code>EventStream</code>. ratzilla&rsquo;s key callback sends each key into a channel, and <code>wasm_bindgen_futures::spawn_local</code> runs the loop on the page&rsquo;s events.</p>
+<div class="block">
+  <div class="file"><b>todo.rs</b><span>ratatui on ratzilla&rsquo;s backend</span></div>
+  <pre><code data-lang="rust" data-run="todo.rs" id="src-todo" data-where="browser">// rawr
+use ratatui::layout::{Constraint, Layout};
+use ratatui::widgets::{Block, Paragraph};
+use ratatui::Frame;
+use ratatui::Terminal;
+use ratzilla::event::{KeyCode, KeyEvent};
+use ratzilla::{DomBackend, WebEventHandler};
+use tokio::sync::mpsc::{self, UnboundedReceiver};
+
+struct Todos {
+    items: Vec&lt;(String, bool)&gt;,
+    selected: usize,
+    draft: String,
+}
+
+impl Todos {
+    fn new() -&gt; Todos {
+        let items = ["Buy milk", "Walk the dog", "Try rawr"];
+        Todos {
+            items: items.iter().map(|item| (item.to_string(), false)).collect(),
+            selected: 0,
+            draft: String::new(),
+        }
+    }
+
+    fn press(&amp;mut self, key: KeyCode) {
+        let last = self.items.len().saturating_sub(1);
+        match key {
+            KeyCode::Up =&gt; self.selected = self.selected.saturating_sub(1),
+            KeyCode::Down =&gt; self.selected = (self.selected + 1).min(last),
+            KeyCode::Char(' ') if self.draft.is_empty() =&gt; {
+                if let Some(item) = self.items.get_mut(self.selected) {
+                    item.1 = !item.1;
+                }
+            }
+            KeyCode::Char(c) =&gt; self.draft.push(c),
+            KeyCode::Backspace =&gt; {
+                self.draft.pop();
+            }
+            KeyCode::Enter if !self.draft.is_empty() =&gt; {
+                self.items.push((std::mem::take(&amp;mut self.draft), false));
+                self.selected = self.items.len() - 1;
+            }
+            _ =&gt; {}
+        }
+    }
+
+    fn draw(&amp;self, frame: &amp;mut Frame) {
+        let areas = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(frame.area());
+        let mut list = String::new();
+        let mut left = 0;
+        for (index, (text, done)) in self.items.iter().enumerate() {
+            let cursor = if index == self.selected { '&gt;' } else { ' ' };
+            let mark = if *done { '✓' } else { '☐' };
+            list.push_str(&amp;format!("{cursor} {mark} {text}\n"));
+            if !done {
+                left += 1;
+            }
+        }
+        let draft = format!("{}_", self.draft);
+        frame.render_widget(
+            Paragraph::new(draft).block(Block::bordered().title(" New to-do ")),
+            areas[0],
+        );
+        frame.render_widget(
+            Paragraph::new(list).block(Block::bordered().title(format!(" To do: {left} left "))),
+            areas[1],
+        );
+        frame.render_widget(
+            Paragraph::new("Type and Enter adds · ↑↓ · Space checks"),
+            areas[2],
+        );
+    }
+}
+
+pub fn main() -&gt; std::io::Result&lt;()&gt; {
+    let mut backend = DomBackend::new()?;
+    let (keys, presses) = mpsc::unbounded_channel();
+    backend.on_key_event(move |key| {
+        let _ = keys.send(key);
+    })?;
+    let terminal = Terminal::new(backend)?;
+    wasm_bindgen_futures::spawn_local(async move {
+        run(terminal, presses).await.expect("a drawn frame");
+    });
+    Ok(())
+}
+
+async fn run(
+    mut terminal: Terminal&lt;DomBackend&gt;,
+    mut presses: UnboundedReceiver&lt;KeyEvent&gt;,
+) -&gt; std::io::Result&lt;()&gt; {
+    let mut todos = Todos::new();
+    loop {
+        terminal.draw(|frame| todos.draw(frame))?;
+        let Some(key) = presses.recv().await else {
+            return Ok(());
+        };
+        todos.press(key.code);
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-todo" data-out="out-todo" aria-label="Run todo.rs" hidden></button><b>rawr run todo.rs</b><span id="out-todo" aria-live="polite"></span></div>
+</div>
+<p>Run it, then click it or press Tab to give it the keys. An outline shows while it has them, and keys reach it only then. Type a to-do and press Enter, move with &uarr; and &darr;, and check one off with Space. An edit to <code>press</code> or <code>draw</code> reloads it with its to-dos kept, at the next key.</p>
+<ul>
+  <li>An edit to <code>run</code>, the loop that waits at its <code>.await</code>, stops it at its next key. Run it again.</li>
+  <li>When the page resizes, ratzilla&rsquo;s <code>DomBackend</code> builds its grid again without its key handler, and the program takes no more keys. Run it again.</li>
+  <li><code>.is_err()</code> on what <code>Terminal::draw</code> gives isn&rsquo;t reached yet. <code>?</code> is.</li>
+</ul>
+
 <h3 id="ratatui-limits">Limits</h3>
 <ul>
   <li><code>Layout::areas</code>, which returns an array whose length is a const generic, isn&rsquo;t reached yet. <code>Layout::split</code> is.</li>

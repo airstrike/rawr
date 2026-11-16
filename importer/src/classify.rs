@@ -27,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 252;
+const CLASSIFIER_VERSION: u32 = 255;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8661,7 +8661,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .convert_object(representability::object::Pointer::Shared, bounds)
                 .ok();
         }
-        let target = self.convert_value(ty).ok()?;
+        // A lent value whose own lifetimes are the bound's, as ratatui's
+        // `draw(f: impl FnOnce(&mut Frame))` lends a `Frame<'_>` (#1457):
+        // the closure takes it for the call alone, as it takes a `&'a S`.
+        let lent = self.scope_lifetimes.get() || type_has_late_lifetime(ty);
+        let outer = self.scope_lifetimes.replace(lent);
+        let target = self.convert_value(ty);
+        self.scope_lifetimes.set(outer);
+        let target = target.ok()?;
         let admitted = match &target {
             representability::convert::Type::Parameter(_) => !mutable,
             // Rawr's own values cross by value, so only a crate value is
@@ -14651,7 +14658,7 @@ fn borrows_receiver(
         && signature.guard().is_none()
         && !signature.async_function()
         && names_lifetime(output, receiver)
-        && !names_opaque(output)
+        && !names_opaque_at(output, receiver)
         && output_names_only(signature, binder)
         && signature.inputs().all(|input| {
             !names_late_lifetime(input)
@@ -14730,6 +14737,27 @@ fn lends_option_reference(
         if matches!(&arguments[..], [model::Argument::Type(model::Type::Reference { lifetime, .. })]
             if lifetime == receiver)
             && is_option(id))
+}
+
+/// Whether `ty` holds an opaque, trait object or function pointer type,
+/// or a projection that names `lifetime`. A projection that doesn't, as
+/// ratatui's `draw(&mut self, ..) -> Result<CompletedFrame<'_>, B::Error>`
+/// gives, borrows nothing at it (#1457).
+fn names_opaque_at(ty: &model::Type, lifetime: &model::Lifetime) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => names_opaque_at(ty, lifetime),
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => false,
+    };
+    match ty {
+        model::Type::Projection { .. } => names_lifetime(ty, lifetime),
+        model::Type::Reference { ty, .. }
+        | model::Type::Slice(ty)
+        | model::Type::Array { element: ty, .. }
+        | model::Type::RawPointer { ty, .. } => names_opaque_at(ty, lifetime),
+        model::Type::Definition { arguments, .. } => arguments.iter().any(argument),
+        model::Type::Tuple(types) => types.iter().any(|ty| names_opaque_at(ty, lifetime)),
+        _ => names_opaque(ty),
+    }
 }
 
 /// Whether `ty` holds an opaque, trait object or function pointer type.
