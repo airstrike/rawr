@@ -2457,6 +2457,17 @@ impl<'a> Resolver<'a> {
         context: &Context,
         path: &[ImmutableString],
     ) -> Option<Vec<ImmutableString>> {
+        self.spelling_from(context, path, &mut BTreeSet::new())
+    }
+
+    /// [`Self::rust_spelling`], through no import in `active` again: a
+    /// cycle of imports names nothing.
+    fn spelling_from(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+        active: &mut BTreeSet<Address>,
+    ) -> Option<Vec<ImmutableString>> {
         let alias = self.tables.rust_crate(context.package)?;
         let path = through_self(path);
         let first = path.first()?;
@@ -2489,17 +2500,60 @@ impl<'a> Resolver<'a> {
                 .chain(&path[1..])
                 .cloned()
                 .collect::<Vec<_>>();
-            return self.rust_spelling(&alias.context, &expanded);
+            return self.spelling_from(&alias.context, &expanded, active);
         } else {
             return None;
         }
-        self.tables
-            .names_native(context.package, &absolute)
-            .then(|| {
+        if self.tables.names_native(context.package, &absolute) {
+            return Some(
                 std::iter::once(ImmutableString::from(alias))
                     .chain(absolute)
-                    .collect()
-            })
+                    .collect(),
+            );
+        }
+        self.imported_spelling(context, &absolute, active)
+    }
+
+    /// The crate spelling of the absolute path `absolute` of `context`'s
+    /// package when one of its segments is an import of the module before
+    /// it rather than a declaration there: `super::icon` from a module
+    /// whose parent's `use super::*;` binds `icon` is the path that glob
+    /// names, spelled from the glob's own module, as rustc follows it.
+    fn imported_spelling(
+        &self,
+        context: &Context,
+        absolute: &[ImmutableString],
+        active: &mut BTreeSet<Address>,
+    ) -> Option<Vec<ImmutableString>> {
+        for (at, name) in absolute.iter().enumerate() {
+            let address = Address {
+                package: context.namespace.package.clone(),
+                modules: absolute[..at].into(),
+                name: name.clone(),
+            };
+            if let Some(declaration) = self.tables.declaration(&address) {
+                if matches!(declaration.target, Target::Module) {
+                    continue;
+                }
+                return None;
+            }
+            let import = self
+                .tables
+                .alias(&address)
+                .or_else(|| self.tables.export(&address))
+                .or_else(|| self.tables.glob(&address))?;
+            if !active.insert(address) {
+                return None;
+            }
+            let expanded = import
+                .path
+                .iter()
+                .chain(&absolute[at + 1..])
+                .cloned()
+                .collect::<Vec<_>>();
+            return self.spelling_from(&import.context, &expanded, active);
+        }
+        None
     }
 
     fn resolve_path(

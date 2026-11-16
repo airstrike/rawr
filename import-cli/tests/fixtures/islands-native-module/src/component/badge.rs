@@ -52,3 +52,19 @@ pub fn grow(by: &mut page::size::Width, tally: &mut page::Tally, again: &mut Wid
     tally.add(*by);
     *again *= *by;
 }
+
+// The parent's glob binds its native `tone` module here, and an inline
+// module's glob of this one binds it again.
+use super::*;
+
+pub fn stepped(by: usize) -> usize {
+    toned::stepped(by) + tone::STEP
+}
+
+mod toned {
+    use super::*;
+
+    pub fn stepped(by: usize) -> usize {
+        by + tone::STEP
+    }
+}

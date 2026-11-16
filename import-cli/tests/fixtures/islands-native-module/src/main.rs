@@ -22,4 +22,5 @@ fn main() {
     badge::grow(&mut by, &mut tally, &mut again);
     badge::grow(&mut by, &mut tally, &mut again);
     println!("{by} {} {again}", tally.count());
+    println!("{}", badge::stepped(1));
 }
