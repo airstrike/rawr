@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.218",
+  "version": "0.3.219",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost and reloads each save there with its state kept. Compile errors show on the page and in the terminal, and a save that uses a crate API the runner doesn't cover builds the runner again. `--out <dir>` writes the page's files instead of serving them.","issues":[2119],"refs":[1395,1387]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.219",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost and reloads each save there with its state kept. Compile errors show on the page and in the terminal, and a save that uses a crate API the runner doesn't cover builds the runner again. `--out <dir>` writes the page's files instead of serving them.","issues":[2119],"refs":[1395,1387]}
+        ]
+      },
       {
         "version": "0.3.218",
         "date": "2026-11-16",
@@ -4583,7 +4585,7 @@
     {"issue":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open","category":"Platforms"},
     {"issue":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open","category":"Platforms"},
     {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed","category":"Health"},
-    {"issue":2119,"title":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost…","state":"closed","category":"Platforms"},
+    {"issue":2119,"title":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost…","state":"closed","category":"Platforms","release":"0.3.219"},
     {"issue":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"open","category":"Platforms"},
     {"issue":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open","category":"Platforms"},
     {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"}
