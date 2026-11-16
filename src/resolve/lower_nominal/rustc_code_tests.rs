@@ -510,6 +510,21 @@ fn a_borrow_assigned_to_a_let_without_a_value_is_checked() {
 }
 
 #[test]
+fn a_diverging_variable_falls_back_to_never_before_its_bounds_are_checked() {
+    // Edition 2024's fallback: the `if`'s type, which only `panic!()`
+    // constrains, is `!`, and `!` isn't `Default`.
+    let (code, message, _) = refused(
+        "fn make<T: Default>() -> T {\n    T::default()\n}\nfn main() {\n    \
+         let c = std::env::args().count() > 5;\n    \
+         let x = if c { make() } else { panic!() };\n    let _ = x;\n}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0277", "the trait bound `!: Default` is not satisfied")
+    );
+}
+
+#[test]
 fn a_type_nothing_settles_where_rustc_needs_it_is_e0282() {
     // rustlings' generics1: two `.into()`s give the element no type.
     assert_eq!(

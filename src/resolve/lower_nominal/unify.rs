@@ -15,7 +15,15 @@ impl<'a> Parser<'a> {
     pub(super) fn unify_type(&mut self, expected: &Ty, actual: &Ty) -> bool {
         let expected = self.inference.resolve(expected);
         let actual = self.inference.resolve(actual);
-        if actual == Ty::Never || expected == actual {
+        if expected == actual {
+            return true;
+        }
+        // A diverging expression coerces to any type. A variable it is
+        // coerced into is diverging, and falls back if nothing settles it.
+        if actual == Ty::Never {
+            if let Ty::Infer(id) = expected {
+                self.inference.diverging.push(id);
+            }
             return true;
         }
         match (&expected, &actual) {

@@ -729,17 +729,6 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Each local whose value never comes and whose uses gave it no type
-    /// is `!`, as rustc's 2024 fallback makes it: `format!("{v:?}")` of
-    /// `let v = loop {}` checks, and never runs.
-    pub(super) fn fall_back_diverging(&mut self) {
-        for open in std::mem::take(&mut self.diverging) {
-            if let Ty::Infer(id) = self.inference.resolve(&open) {
-                self.inference.bind(id, Ty::Never);
-            }
-        }
-    }
-
     /// rustc's error for the inference variable `unknown`, which the use at
     /// `needed` needs known, at the first `let` whose type holds it: E0282
     /// "type annotations needed for `Vec<_>`". A conversion nothing

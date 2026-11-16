@@ -578,11 +578,7 @@ impl<'a> Parser<'a> {
         // `let x = todo!();`: a value that never comes coerces to any
         // type, so the local's is the one its uses give it.
         let ty = annotation.unwrap_or_else(|| match self.inference.resolve(&value.ty) {
-            Ty::Never => {
-                let open = self.inference.fresh();
-                self.diverging.push(open.clone());
-                open
-            }
+            Ty::Never => self.inference.fresh_diverging(),
             _ => value.ty.clone(),
         });
         // An immutable local iterator stays its chain: what it evaluates is
