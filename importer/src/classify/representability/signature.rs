@@ -632,6 +632,12 @@ pub struct Projection {
     ty: super::convert::Type,
     value: super::convert::Type,
     cases: Box<[(super::convert::Type, super::convert::Type)]>,
+    /// The associated type the bound names, where an opaque type that is
+    /// `ty` gives it from its own bound, as an impl that forwards it to
+    /// its parameter's, `type Out = S::Out`, reads it (`projection_
+    /// relations`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    associated: Option<Associated>,
 }
 
 impl Projection {
@@ -640,7 +646,25 @@ impl Projection {
         value: super::convert::Type,
         cases: Box<[(super::convert::Type, super::convert::Type)]>,
     ) -> Self {
-        Self { ty, value, cases }
+        Self {
+            ty,
+            value,
+            cases,
+            associated: None,
+        }
+    }
+
+    /// The bound of the associated type `associated`, which an opaque type
+    /// that is `ty` gives from its own bound.
+    pub(crate) fn of_associated(mut self, associated: Associated) -> Self {
+        self.associated = Some(associated);
+        self
+    }
+
+    /// The associated type the bound names, where it is known.
+    #[must_use]
+    pub const fn associated(&self) -> Option<&Associated> {
+        self.associated.as_ref()
     }
 
     /// The type whose associated type the bound names.

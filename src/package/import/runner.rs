@@ -1387,6 +1387,7 @@ pub(crate) fn signature(
                                     .iter()
                                     .map(|(this, at)| (this, at))
                                     .collect(),
+                                projection.associated(),
                             )
                         })
                         .collect(),

@@ -184,6 +184,41 @@ fn a_generic_driver_of_an_opaque_types_wrapper_takes_its_pipe() {
     );
 }
 
+/// The same driver drained in a loop, of a pipe a generic `pipe()` makes
+/// from nothing, whose signals' type only the driver's call that takes it
+/// shows, as `Driver::with_start(pipe, &stepper, None)` does: the pipe,
+/// each variant's constructor and each match of a signal are compiled
+/// where rustc knows the wrapper's type, and the optional start, of the
+/// wrapper's associated type, is reached at it (#2078, #2060). Each
+/// signal's step moves from a binding fresh in each iteration (#2077). The
+/// output is `cargo run`'s.
+#[test]
+fn a_generic_pipe_of_an_opaque_types_wrapper_is_drained_in_a_loop() {
+    let (rawr, cargo) = both_printed("drained.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("told failed stay\ncount 6"), "{rawr}");
+}
+
+/// iced_test's `Emulator::with_preset(.., None)` of iced's `Application<
+/// impl Program>`: `tester::started(&stepper, None)` takes an `Option<&
+/// Start<S::Out>>` at `S = Stepped<impl Stepper<Out = u32>>` of `events`,
+/// whose impl forwards `Out` to the opaque type's. The impl is a case of
+/// `S: Stepper` that `tester` can't name, read through the crate that
+/// declares `Stepped`, and the opaque type's bound gives `u32` (#2060).
+/// The output is `cargo run`'s.
+#[test]
+fn a_forwarded_associated_type_of_another_crates_wrapper_is_its_opaque_types() {
+    let manifest = CROSSING.read("Cargo.toml").replace(
+        "[dependencies]",
+        "[dependencies]\ntester = { path = \"tester\" }",
+    );
+    let main = CROSSING.read("variants/started.rs");
+    let root = CROSSING.lease(&[("Cargo.toml", &manifest), ("src/main.rs", &main)]);
+    let (rawr, cargo) = both_printed_in(&root, "", &[]);
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("started 5"), "{rawr}");
+}
+
 /// iced's text, system_information and multi_window: `new` gives the
 /// state and its first task, `(Self, Task<Message>)`, which
 /// `application(..)` takes through `BootFn` and the tuple's `IntoBoot`.

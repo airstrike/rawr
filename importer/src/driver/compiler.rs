@@ -129,9 +129,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // crate type the compound assignments' impls for a number that take it, as
 // `impl AddAssign<Turn> for f32` (#987). Schema 77 keeps a selected trait's
 // blanket impl over a parameter `I` bounded `&I: Other`, with each impl of
-// `Other` for `&[T]` (#2079). `driver.rs`, `cargo/toolchain.rs` and
+// `Other` for `&[T]` (#2079). Schema 78 keeps a crate trait's impl that
+// forwards the associated type a parameter's projection names to its own
+// parameter's, with that item (#2060). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 77;
+const PROTOCOL_SCHEMA: u32 = 78;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -315,6 +317,14 @@ struct AnonymousAssociatedSupport {
     parent: DefId,
     method: Symbol,
     disambiguator: u32,
+}
+
+/// Whether `value`, an impl's associated type, is the associated type
+/// `item` of one of the impl's parameters, as `type State = P::State` is.
+fn forwards_item(value: Ty<'_>, item: DefId) -> bool {
+    matches!(value.kind(), ty::Alias(_, alias)
+        if alias.kind == (ty::AliasTyKind::Projection { def_id: item })
+            && matches!(alias.self_ty().kind(), ty::Param(_)))
 }
 
 /// Whether `ty` is an associated type of a type parameter, as `I::Item`
@@ -2383,16 +2393,39 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // Its implementations for `&str`, which no crate type holds and
             // the program's string fills, as iced_test's `impl Selector for
             // &str { type Output = Text; }` gives `S::Output` of
-            // `click("Increment")` (#1678).
+            // `click("Increment")` (#1678). And each one of a type that
+            // forwards the item to the same item of its own parameter, as
+            // `impl<P: Program> Program for Application<P>` gives
+            // `P::State`: the classifier makes it a case whose value that
+            // parameter's item fixes, as an opaque type that fills the
+            // parameter gives it from its bound (#2060).
             for implementation in self.implementations(obligation.trait_id)? {
                 self.budget.edge(1)?;
-                let Some(reference) = self.tcx.impl_opt_trait_ref(implementation.id()) else {
+                let impl_id = implementation.id();
+                let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
                     continue;
                 };
-                if matches!(
-                    reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                    ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
-                ) {
+                let self_ty = reference.instantiate_identity().skip_norm_wip().self_ty();
+                let forwarded = matches!(self_ty.kind(), ty::Adt(..))
+                    && self
+                        .tcx
+                        .impl_item_implementor_ids(impl_id)
+                        .get(&trait_item)
+                        .is_some_and(|value| {
+                            forwards_item(
+                                self.tcx
+                                    .type_of(*value)
+                                    .instantiate_identity()
+                                    .skip_norm_wip(),
+                                trait_item,
+                            )
+                        });
+                if forwarded
+                    || matches!(
+                        self_ty.kind(),
+                        ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
+                    )
+                {
                     implementations.push(implementation);
                 }
             }
@@ -2411,9 +2444,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             });
             for implementation in implementations {
                 let impl_id = implementation.id();
-                // One that passes the item on from a parameter of its own,
-                // as `impl<P: Program> Program for Application<P>` gives
-                // `P::State`, tells nothing of its own.
                 let Some(value) = self.tcx.impl_item_implementor_ids(impl_id).get(&trait_item)
                 else {
                     continue;
@@ -2424,7 +2454,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .instantiate_identity()
                     .skip_norm_wip();
                 if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
-                    && (!matches!(value.kind(), ty::Alias(..)) || forwarding.contains(&impl_id))
+                    && (!matches!(value.kind(), ty::Alias(..))
+                        || forwards_item(value, trait_item)
+                        || forwarding.contains(&impl_id))
                 {
                     self.request_implementation(implementation, obligation.relevance, associated)?;
                 }

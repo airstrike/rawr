@@ -4337,6 +4337,33 @@ impl OpaqueTable {
     }
 }
 
+std::thread_local! {
+    /// The table each opaque type's last value made gave, by the type's
+    /// identity: what a call that makes a value of the type from none it
+    /// takes runs (`registered_opaque`).
+    static OPAQUE_TABLES: RefCell<Vec<([u8; 32], OpaqueTable)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `table`, the table of the opaque type `identity` names, as the one its
+/// calls that take no value of it run.
+#[allow(dead_code)]
+pub fn register_opaque(identity: &[u8; 32], table: OpaqueTable) -> OpaqueTable {
+    OPAQUE_TABLES.with_borrow_mut(|tables| match tables.iter_mut().find(|(known, _)| known == identity) {
+        Some((_, known)) => *known = table,
+        None => tables.push((*identity, table)),
+    });
+    table
+}
+
+/// The table of the opaque type `identity` names, once a value of it was
+/// made.
+#[allow(dead_code)]
+pub fn registered_opaque(identity: &[u8; 32]) -> Result<OpaqueTable, Error> {
+    OPAQUE_TABLES
+        .with_borrow(|tables| tables.iter().find(|(known, _)| known == identity).map(|(_, table)| *table))
+        .ok_or_else(|| Error::Home("rawr doesn't make a value of a type holding an opaque type before a value of the opaque type itself is made yet".into()))
+}
+
 /// The table of `entries`, each a call that takes a value of `T`'s type.
 #[allow(dead_code)]
 pub fn opaque_table<T: 'static, const N: usize>(
@@ -8991,7 +9018,12 @@ fn render_source(
                 let body = &mut rendered[*index].body;
                 render_adapter(plan, plans, profile, facade.as_ref(), body)?;
                 for matcher in matchers(plan) {
-                    render_matcher(plan, matcher, body)?;
+                    match made_entry(plan, Made::Variant(Some(matcher)), plans)? {
+                        Some((key, index)) => {
+                            render_made_dispatch(&matcher.name(plan), &key, index, body)?;
+                        }
+                        None => render_matcher(plan, matcher, body)?,
+                    }
                 }
                 render_store(plan, body)?;
                 render_field_lender(plan, body)?;
@@ -12063,6 +12095,11 @@ fn render_adapter(
         )
         .map_err(encoding);
     }
+    // A call that makes a value of a type holding an opaque type it can't
+    // name runs what its producer compiled for it.
+    if let Some((key, index)) = made_entry(plan, Made::of(plan, None), cohort)? {
+        return render_made_dispatch(&name, &key, index, output);
+    }
     // A call that takes a value whose type holds an opaque `impl Trait`
     // type runs what the call that made the value compiled for it.
     if let Some((position, key, operand)) = opaque_operand(plan)? {
@@ -12130,9 +12167,19 @@ fn render_adapter(
             } else {
                 "arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>"
             };
+            // The table of the values the call made, once it made one: the
+            // body below names its own types where the call's are declared
+            // in its body, as the closures a program's slots are, so its
+            // table is the one for a value only before any is made.
+            let produced = format!("{}_PRODUCED", name.to_uppercase());
             writeln!(
                 output,
-                "pub(super) fn {name}_opaque() -> OpaqueTable {{
+                "static {produced}: std::sync::OnceLock<OpaqueTable> = std::sync::OnceLock::new();
+
+pub(super) fn {name}_opaque() -> OpaqueTable {{
+    if let Some(table) = {produced}.get() {{
+        return *table;
+    }}
     let mut witness = std::marker::PhantomData;
     let _ = |{inputs}| -> Result<Dynamic, Error> {{
     let _ = &mut *arguments;"
@@ -12150,7 +12197,9 @@ fn render_adapter(
                     .replace("__RAWR_WITNESS__", "witness")
             )
             .map_err(encoding)?;
-            Some(format!("{name}_opaque()"))
+            Some(format!(
+                "{{ let table = {table}; let _ = {produced}.set(table); table }}"
+            ))
         }
         table => table,
     };
@@ -12906,7 +12955,8 @@ fn find_produced_opaque(plan: &Plan) -> Result<Option<convert::Type>, request::E
 
 /// The call in `cohort` whose adapter compiles the table of the opaque type
 /// `key` for calls that take it inside another type: the first that gives a
-/// value holding it and takes none.
+/// value holding it, takes none and declares it, or where no call declares
+/// it, the first that gives such a value and takes none.
 fn opaque_producer<'p>(
     cohort: &'p [Plan],
     key: &convert::Type,
@@ -12914,14 +12964,173 @@ fn opaque_producer<'p>(
     if let Some(producer) = opaques::producer(cohort, key) {
         return Ok(producer);
     }
+    let mut first = None;
     for plan in cohort {
         if opaque_operand(plan)?.is_none()
             && produced_opaque(plan)?.is_some_and(|produced| same_opaque(&produced, key))
         {
-            return Ok(Some(plan));
+            if declares_opaque(plan, key) {
+                return Ok(Some(plan));
+            }
+            first = first.or(Some(plan));
         }
     }
-    Ok(None)
+    if cohort.iter().any(|plan| declares_opaque(plan, key)) {
+        return Ok(None);
+    }
+    Ok(first)
+}
+
+/// Whether the signature of `plan` declares the opaque type `key`, as
+/// `wrapped(..) -> Wrapper<impl SomeTrait>` does, where a generic
+/// `pipe::<T>()` at a type that holds it only names it.
+fn declares_opaque(plan: &Plan, key: &convert::Type) -> bool {
+    let convert::Type::Nominal { definition, .. } = key else {
+        return false;
+    };
+    let (Operation::Function { signature, .. } | Operation::Method { signature, .. }) =
+        plan.operation()
+    else {
+        return false;
+    };
+    signature
+        .opaques()
+        .iter()
+        .any(|opaque| opaque.definition() == definition.as_bytes())
+}
+
+/// What a call in an opaque type's table that takes no value of a type
+/// holding it at a handle is ([`opaque_made`]).
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Made {
+    /// A generic call that makes such a value from what holds none, as
+    /// `pipe::<Signal<Wrapper<impl SomeTrait>>>()`.
+    Call,
+    /// A variant of an enum at such a type: its constructor, or one of its
+    /// matchers (`matchers`).
+    Variant(Option<Matcher>),
+}
+
+impl Made {
+    /// The entry of `plan`, for its `matcher` where it has one.
+    fn of(plan: &Plan, matcher: Option<Matcher>) -> Self {
+        match plan.operation() {
+            Operation::EnumVariant { .. } => Self::Variant(matcher),
+            _ => Self::Call,
+        }
+    }
+}
+
+/// The opaque type a value that `plan` makes holds, where it takes no
+/// value of a type that holds it and doesn't declare it: a generic call at
+/// a type that holds it, or a variant of an enum at such a type. Rust
+/// code names it only where rustc knows it, in its producer's table.
+fn made_opaque(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
+    if let Operation::EnumVariant { instance, .. } = plan.operation() {
+        return Ok(instance.iter().find_map(first_opaque).cloned());
+    }
+    if opaque_operand(plan)?.is_some() {
+        return Ok(None);
+    }
+    Ok(produced_opaque(plan)?.filter(|key| !declares_opaque(plan, key)))
+}
+
+/// The calls in `cohort` that make a value holding the opaque type `key`
+/// from no value of it at a handle ([`made_opaque`]), each variant's
+/// constructor followed by its matchers, in a fixed order: each one's
+/// index in the table, after the calls that take such a value
+/// (`opaque_consumers`). None where no call declares it, as a call that
+/// takes a value of another opaque type may, as a builder's method does.
+fn opaque_made<'p>(
+    cohort: &'p [Plan],
+    key: &convert::Type,
+) -> Result<Vec<(&'p Plan, Made)>, request::Error> {
+    if !opaques::declared(cohort, key)
+        .unwrap_or_else(|| cohort.iter().any(|plan| declares_opaque(plan, key)))
+    {
+        return Ok(Vec::new());
+    }
+    let mut made = Vec::new();
+    for plan in opaques::made(cohort, key).map_or_else(|| find_opaque_made(cohort, key), Ok)? {
+        match plan.operation() {
+            Operation::EnumVariant { .. } => {
+                made.push((plan, Made::Variant(None)));
+                made.extend(
+                    matchers(plan)
+                        .into_iter()
+                        .map(|matcher| (plan, Made::Variant(Some(matcher)))),
+                );
+            }
+            _ => made.push((plan, Made::Call)),
+        }
+    }
+    Ok(made)
+}
+
+/// The plans of `cohort` whose [`made_opaque`] is `key`, found from their
+/// signatures.
+fn find_opaque_made<'p>(
+    cohort: &'p [Plan],
+    key: &convert::Type,
+) -> Result<Vec<&'p Plan>, request::Error> {
+    let mut made = Vec::new();
+    for plan in cohort {
+        if made_opaque(plan)?.is_some_and(|opaque| same_opaque(&opaque, key)) {
+            made.push(plan);
+        }
+    }
+    Ok(made)
+}
+
+/// The opaque type whose table holds the entry `made` of `plan`, and its
+/// index there, where `plan` makes a value of an opaque type it can't name
+/// ([`opaque_made`]).
+fn made_entry(
+    plan: &Plan,
+    made: Made,
+    cohort: &[Plan],
+) -> Result<Option<(convert::Type, usize)>, request::Error> {
+    let Some(key) = made_opaque(plan)? else {
+        return Ok(None);
+    };
+    let Some(position) = opaque_made(cohort, &key)?
+        .iter()
+        .position(|(entry, kind)| std::ptr::eq(*entry, plan) && *kind == made)
+    else {
+        return Ok(None);
+    };
+    let index = opaque_consumers(cohort, &key)?.len() + position;
+    Ok(Some((key, index)))
+}
+
+/// The identity a table of the opaque type `key` is registered by
+/// (`register_opaque`): the same for each spelling of the type
+/// (`opaque_key`).
+fn table_identity(key: &convert::Type) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rawr-opaque-table");
+    hasher.update(format!("{:?}", opaque_key(key)).as_bytes());
+    hasher.finalize().into()
+}
+
+/// The adapter `name` of a call in the table of the opaque type `key`
+/// (`made_entry`): it runs the entry `index` of the table the last value
+/// of that type made registered, which needs no value of it to reach.
+fn render_made_dispatch(
+    name: &str,
+    key: &convert::Type,
+    index: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    registered_opaque(&{:?})?.call({index}, arguments)
+}}
+",
+        table_identity(key),
+    )
+    .map_err(request::unwritable)
 }
 
 /// Whether `plan` compiles the table of the opaque type it gives for calls
@@ -13128,12 +13337,14 @@ fn opaque_table_source(
                 // type is invariant in them: the region takes it at its own
                 // lifetime (#2050).
                 let region_body = if holding {
-                    let region_body = region_body.replace(
-                        &format!("take_native(arguments, {position})"),
-                        &format!("take_like(arguments, {position}, _w)"),
-                    );
-                    let only = only_opaque_holes(&operand, &key);
-                    shape_witnesses(&region_body, position, only, Reach::Region)
+                    sheltered(&region_body, |region_body| {
+                        let region_body = region_body.replace(
+                            &format!("take_native(arguments, {position})"),
+                            &format!("take_like(arguments, {position}, _w)"),
+                        );
+                        let only = only_opaque_holes(&operand, &key);
+                        shape_witnesses(&region_body, position, only, Reach::Region)
+                    })
                 } else {
                     region_body
                 };
@@ -13150,50 +13361,77 @@ fn opaque_table_source(
         // program's impl of `labels` delegates to the value it holds, is
         // reached where it is for the call (#913).
         let body = within_lent(&lent, body);
-        // A call that takes the value itself, where it doesn't implement
-        // its trait through its proxy, can't take it from beside what it
-        // borrows.
-        let body = if cell
-            && !forwarded
-            && body.contains(&format!("take_native(arguments, {position})"))
-        {
-            "    Err(Error::Home(\"rawr doesn't move a result that borrows its call's values yet\".into()))".to_owned()
-        } else {
-            body
-        };
-        // A method its proxy can't hold: one that takes the opaque type, or
-        // gives it inside another type, or gives a borrow of the value.
-        let body = if cell && reach.is_none() && proxied(consumer, &key)? {
-            "    Err(Error::Home(\"rawr doesn't call this method on a result that borrows its call's values yet\".into()))".to_owned()
-        } else {
-            body
-        };
-        // The operand is taken at the type of the value this call made, and
-        // so is each other input of that type, as `hover(a, b)` takes two
-        // (#1368).
-        let mut body = body.replace(
-            &format!("take_native(arguments, {position})"),
-            &format!("take_like(arguments, {position}, _w)"),
-        );
-        for other in same_opaque_inputs(consumer, &key)? {
-            body = body.replace(
-                &format!("take_native(arguments, {other})"),
-                &format!("take_like(arguments, {other}, _w)"),
+        let proxied_consumer = proxied(consumer, &key)?;
+        let others = same_opaque_inputs(consumer, &key)?;
+        // What follows reaches this call's operands at the witness's type,
+        // and not those of the calls of another opaque type's table this
+        // call makes (`sheltered`).
+        let body = sheltered(&body, |body| {
+            // A call that takes the value itself, where it doesn't implement
+            // its trait through its proxy, can't take it from beside what it
+            // borrows.
+            let body = if cell
+                && !forwarded
+                && body.contains(&format!("take_native(arguments, {position})"))
+            {
+                "    Err(Error::Home(\"rawr doesn't move a result that borrows its call's values yet\".into()))".to_owned()
+            } else {
+                body
+            };
+            // A method its proxy can't hold: one that takes the opaque type, or
+            // gives it inside another type, or gives a borrow of the value.
+            let body = if cell && reach.is_none() && proxied_consumer {
+                "    Err(Error::Home(\"rawr doesn't call this method on a result that borrows its call's values yet\".into()))".to_owned()
+            } else {
+                body
+            };
+            // The operand is taken at the type of the value this call made, and
+            // so is each other input of that type, as `hover(a, b)` takes two
+            // (#1368).
+            let mut body = body.replace(
+                &format!("take_native(arguments, {position})"),
+                &format!("take_like(arguments, {position}, _w)"),
             );
-        }
-        let body = if holding {
-            shape_witnesses(
-                &body,
-                position,
-                only_opaque_holes(&operand, &key),
-                Reach::Arena,
-            )
-        } else if let Some(around) = &around
-            && only_opaque_holes(&operand, &key)
-        {
-            around.shape(&body, position)
-        } else {
-            body
+            for other in &others {
+                body = body.replace(
+                    &format!("take_native(arguments, {other})"),
+                    &format!("take_like(arguments, {other}, _w)"),
+                );
+            }
+            if holding {
+                shape_witnesses(
+                    &body,
+                    position,
+                    only_opaque_holes(&operand, &key),
+                    Reach::Arena,
+                )
+            } else if let Some(around) = &around
+                && only_opaque_holes(&operand, &key)
+            {
+                around.shape(&body, position)
+            } else {
+                body
+            }
+        });
+        entries.push(format!(
+            "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
+        ));
+    }
+    // Then each call that makes a value of a type holding the opaque type
+    // from none it takes at a handle (`opaque_made`), at the witness's type.
+    let made_entries = opaque_made(cohort, &key)?;
+    let registers = !made_entries.is_empty();
+    for (made, kind) in made_entries {
+        let body = made_entry_body(made, kind, cohort, profile, facade, &returned)?;
+        let body = match &around {
+            Some(around) => {
+                let given = match kind {
+                    Made::Call => concrete_type(&produced_type(made)?),
+                    Made::Variant(_) => None,
+                };
+                around.made(&body, given.as_deref())
+            }
+            None => body,
         };
         entries.push(format!(
             "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
@@ -13225,13 +13463,89 @@ fn opaque_table_source(
     entries.push(format!(
         "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w, &arguments);\n{body}\n}}"
     ));
+    // A table with calls that reach no value of the type is registered
+    // for them, each time it is given (`render_made_dispatch`).
+    let (open, close) = if registers {
+        (
+            format!("register_opaque(&{:?}, ", table_identity(&key)),
+            ")",
+        )
+    } else {
+        (String::new(), "")
+    };
     Ok(Some(format!(
         "{{
         static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();
-        OpaqueTable(TABLE.get_or_init(|| opaque_table(__RAWR_WITNESS__, [{}])))
+        {open}OpaqueTable(TABLE.get_or_init(|| opaque_table(__RAWR_WITNESS__, [{}]))){close}
     }}",
         entries.join(",\n")
     )))
+}
+
+/// The body of the entry `kind` of `plan` in the table of the value of
+/// type `returned` (`opaque_made`), as its adapter's body. A matcher whose
+/// adapter declares items, as one that lends a field through a family
+/// does, can't name the opaque type in them: it refuses the value.
+fn made_entry_body(
+    plan: &Plan,
+    kind: Made,
+    cohort: &[Plan],
+    profile: &crate::profile::Proof,
+    facade: Option<&crate::surface::facade::Plan>,
+    returned: &convert::Type,
+) -> Result<String, request::Error> {
+    if let Made::Variant(Some(matcher)) = kind {
+        let mut rendered = Vec::new();
+        render_matcher(plan, matcher, &mut rendered)?;
+        let rendered = String::from_utf8(rendered).map_err(request::unwritable)?;
+        let body = rendered
+            .split_once('\n')
+            .and_then(|(_, body)| body.trim_end().strip_suffix('}'))
+            .ok_or_else(|| request::drift("a matcher's adapter"))?;
+        let items = body.lines().any(|line| {
+            [
+                "    struct ",
+                "    impl ",
+                "    const ",
+                "    fn ",
+                "    static ",
+            ]
+            .iter()
+            .any(|item| line.starts_with(item))
+        });
+        if items {
+            return Ok("    Err(Error::Home(\"rawr doesn't lend a variant's fields of a value whose type holds an opaque type yet\".into()))".to_owned());
+        }
+        // A matcher that runs another of the variant's runs that one's
+        // entry of the same table.
+        let mut body = body.to_owned();
+        let others = std::iter::once((adapter_name(plan), Made::Variant(None))).chain(
+            matchers(plan)
+                .into_iter()
+                .map(|other| (other.name(plan), Made::Variant(Some(other)))),
+        );
+        for (name, other) in others {
+            if let Some((_, index)) = made_entry(plan, other, cohort)? {
+                body = body.replace(
+                    &format!("{name}(arguments"),
+                    &format!("table.call({index}, arguments"),
+                );
+            }
+        }
+        return Ok(body);
+    }
+    let lent = lent_inputs_of(plan, cohort, profile, facade)?;
+    let mut body = Vec::new();
+    {
+        let _lent = LentArguments::enter(!lent.is_empty());
+        let _producing = OpaqueProducing::enter(None);
+        let _consuming = OpaqueConsuming::enter(true);
+        let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
+        let _cell = OpaqueCell::enter(None);
+        render_adapter_body(plan, cohort, profile, facade, &mut body)?;
+    }
+    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    Ok(within_lent(&lent, body))
 }
 
 /// Where a table's call that takes an operand holding the table's opaque
@@ -21865,10 +22179,62 @@ fn producing_table(ty: &convert::Type, value: &str) -> Option<String> {
     }
     OPAQUE_PRODUCING.with_borrow(|table| {
         table.as_ref().map(|table| {
-            around::witnessed(table, ty)
-                .replace("__RAWR_WITNESS__", &format!("witness_of(&{value})"))
+            let table = around::witnessed(table, ty)
+                .replace("__RAWR_WITNESS__", &format!("witness_of(&{value})"));
+            format!("{SHELTER_OPEN}{table}{SHELTER_CLOSE}")
         })
     })
+}
+
+/// Where a table that a call in another table makes begins and ends
+/// (`sheltered`).
+const SHELTER_OPEN: &str = "/*rawr-table*/";
+const SHELTER_CLOSE: &str = "/*rawr-table-end*/";
+
+/// `body`, a call's body in an opaque type's table, made over by `rewrite`
+/// everywhere but in the tables of other opaque types it makes
+/// (`producing_table`), whose calls are written at their own type's
+/// witness.
+fn sheltered(body: &str, rewrite: impl FnOnce(String) -> String) -> String {
+    let mut kept = Vec::new();
+    let mut open = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(start) = rest.find(SHELTER_OPEN) {
+        let mut depth = 0_usize;
+        let mut at = start;
+        let end = loop {
+            let next_open = rest[at..].find(SHELTER_OPEN).map(|found| at + found);
+            let Some(next_close) = rest[at..].find(SHELTER_CLOSE).map(|found| at + found) else {
+                break None;
+            };
+            match next_open {
+                Some(next_open) if next_open < next_close => {
+                    depth += 1;
+                    at = next_open + SHELTER_OPEN.len();
+                }
+                _ => {
+                    depth -= 1;
+                    at = next_close + SHELTER_CLOSE.len();
+                    if depth == 0 {
+                        break Some(at);
+                    }
+                }
+            }
+        };
+        let Some(end) = end else {
+            break;
+        };
+        open.push_str(&rest[..start]);
+        open.push_str(&format!("__RAWR_SHELTERED_{}__", kept.len()));
+        kept.push(&rest[start..end]);
+        rest = &rest[end..];
+    }
+    open.push_str(rest);
+    let mut made = rewrite(open);
+    for (index, table) in kept.iter().enumerate() {
+        made = made.replacen(&format!("__RAWR_SHELTERED_{index}__"), table, 1);
+    }
+    made
 }
 
 fn render_give(

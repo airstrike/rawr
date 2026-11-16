@@ -77,6 +77,11 @@ pub struct Projection {
     pub(crate) ty: Pattern,
     pub(crate) value: Pattern,
     pub(crate) cases: Box<[(Pattern, Pattern)]>,
+    /// The associated type the bound names, by its trait's definition
+    /// identity and its name, where an opaque type that is `ty` gives it
+    /// from its own bound.
+    #[cfg_attr(feature = "rust-import", serde(default))]
+    pub(crate) associated: Option<([u8; 32], ImmutableString)>,
 }
 
 /// A type in a [`Relation`]: the item's type parameter, an
