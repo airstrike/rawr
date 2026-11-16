@@ -2934,7 +2934,7 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "rawr"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "ahash",
  "annotate-snippets",
@@ -2970,14 +2970,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-canonical"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "rawr-cli"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "anstream",
  "nix 0.27.1",
@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-directory"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "libc",
  "thiserror 2.0.19",
@@ -2998,7 +2998,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-hot"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -3006,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "anstream",
  "fd-lock",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import-cli"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "nix 0.27.1",
  "rawr",
@@ -3053,14 +3053,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-location"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "rawr-toml-edit",
 ]
 
 [[package]]
 name = "rawr-macros"
-version = "0.3.215"
+version = "0.3.216"
 
 [[package]]
 name = "rawr-notify"
@@ -3088,7 +3088,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-play"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "aes",
  "base64",
@@ -3107,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-reload"
-version = "0.3.215"
+version = "0.3.216"
 
 [[package]]
 name = "rawr-snippet"
@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-toml"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "serde_json",
  "thiserror 2.0.19",
@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-watch"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "rawr",
  "rawr-import",
@@ -3150,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-web"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "console_error_panic_hook",
  "getrandom 0.3.4",
@@ -3163,7 +3163,7 @@ dependencies = [
 
 [[package]]
 name = "rawr_codegen"
-version = "0.3.215"
+version = "0.3.216"
 dependencies = [
  "proc-macro2",
  "quote",
