@@ -150,14 +150,17 @@ pub fn run(manifest: &str, source: &str) -> Result<String, JsError> {
 
 /// Compile the package `files` holds, a JSON array of `[path, text]`
 /// pairs, with its crate root at `entry`, and run its `main`, as [`run`]
-/// runs a snippet's, with the same answers.
+/// runs a snippet's, with the same answers. Errors show the package's
+/// paths from `directory`, where the command that serves the page started,
+/// as that command shows them.
 ///
 /// # Errors
 ///
 /// Returns the error installing the bindings gave, or that `files` isn't
 /// such an array.
 #[wasm_bindgen]
-pub fn start(entry: &str, files: &str) -> Result<String, JsError> {
+pub fn start(entry: &str, files: &str, directory: &str) -> Result<String, JsError> {
+    crate::diagnostic::show_paths_from(PathBuf::from(directory));
     let entry = PathBuf::from(entry);
     let mut files = package(files)?;
     let Some(at) = files.iter().position(|(path, _)| *path == entry) else {

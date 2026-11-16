@@ -49,21 +49,24 @@ impl Session {
         rawr_cli::cells::keep("rawr-import", &loaded.cells, &loaded.graph);
         if !loaded.graph.declares_rust_import() {
             return Err(Failure::Usage(
-                "`rawr run --web` runs a program that uses crates from its Cargo.toml, in their \
-                 runner built for a browser; this program uses none",
+                "`rawr run --web` runs a program that uses crates from its Cargo.toml or its \
+                 frontmatter, in their runner built for a browser; this program uses none",
             ));
         }
-        let rawr::project::Target::Project(project) = &loaded.target else {
-            return Err(Failure::Usage(
-                "`rawr run --web` runs a Cargo package's program; give it the package",
-            ));
+        // A package builds in its target directory, a script in its
+        // directory in rawr's area, as `rawr run` builds them.
+        let (location, root) = match &loaded.target {
+            rawr::project::Target::Project(project) => (
+                project.location().to_path_buf(),
+                project.root().as_path().to_path_buf(),
+            ),
+            target @ rawr::project::Target::File(source) => (
+                source.path().to_path_buf(),
+                rawr::package::Graph::root_of(target),
+            ),
         };
-        let entry = project.source().path().to_path_buf();
-        let mut build = Build::new(
-            project.location(),
-            project.root().as_path(),
-            options.out.as_deref(),
-        );
+        let entry = loaded.target.source().path().to_path_buf();
+        let mut build = Build::new(&location, &root, options.out.as_deref());
         let built = build.run();
         let package = Package::read(&entry).map_err(Error::from)?;
         if options.out.is_some() {
@@ -182,8 +185,8 @@ fn builder(
                     handle.send(&Event::Reload);
                 }
                 Ok(Built::Unchanged) => {}
-                // The build said why.
-                Err(Error::Build) => {}
+                // The build said why, in the terminal.
+                Err(Error::Build) => handle.send(&Event::Unbuilt),
                 Err(error) => {
                     eprintln!(
                         "{}: {error}",

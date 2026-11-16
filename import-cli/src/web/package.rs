@@ -22,10 +22,18 @@ impl Package {
         })
     }
 
-    /// The program as the page starts it: `{"entry":..,"files":[..]}`.
+    /// The program as the page starts it:
+    /// `{"entry":..,"files":[..],"directory":..}`, with the directory the
+    /// page's errors show the files' paths from: this command's, as
+    /// `rawr run` shows them.
     #[must_use]
     pub(super) fn program(&self) -> Value {
-        json!({ "entry": self.entry.to_string_lossy(), "files": self.files() })
+        let directory = std::env::current_dir().unwrap_or_default();
+        json!({
+            "entry": self.entry.to_string_lossy(),
+            "files": self.files(),
+            "directory": directory.to_string_lossy(),
+        })
     }
 
     /// The files as the page's universe takes them, `[path, text]` pairs.
@@ -76,6 +84,28 @@ mod tests {
         );
         assert_eq!(program["entry"], path(source.join("main.rs")));
         assert_eq!(program["files"][1][1], "// rawr\nmod view;\nfn main() {}\n");
+        assert_eq!(
+            program["directory"],
+            path(std::env::current_dir().expect("a current directory"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A cargo script is its own package, its manifest in its frontmatter,
+    /// whatever sits beside it: the page gets the script alone.
+    #[test]
+    fn a_script_is_its_own_package() {
+        let root = std::env::temp_dir().join(format!("rawr-web-script-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
+        std::fs::write(root.join("other.rs"), "fn other() {}\n").unwrap();
+        let script = root.join("script.rs");
+        let text = "---\n[dependencies]\nitoa = \"1\"\n---\n// rawr\nfn main() {}\n";
+        std::fs::write(&script, text).unwrap();
+        let program = Package::read(&script).expect("the script reads").program();
+        let path = script.to_string_lossy().into_owned();
+        assert_eq!(program["files"], serde_json::json!([[path, text]]));
+        assert_eq!(program["entry"], path);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

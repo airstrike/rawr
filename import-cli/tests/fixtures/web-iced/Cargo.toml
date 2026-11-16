@@ -1,0 +1,14 @@
+# A program that draws in a browser through iced's web shell, for
+# `rawr run --web`: iced puts its canvas in the page and draws with WebGPU,
+# WebGL2 or tiny-skia, whichever the page has.
+[package]
+name = "web-iced"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["wgpu", "tiny-skia", "webgl", "fira-sans", "web-colors"] }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

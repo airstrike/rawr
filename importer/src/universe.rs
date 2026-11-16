@@ -19,9 +19,8 @@
 //! A caller that takes the runner elsewhere, as ?play's image and the
 //! browser's universe do, names a directory in `RAWR_UNIVERSE_OUT`. Each
 //! runner `rawr-import` builds or reuses is then written there as `runner`
-//! (#1752), beside the `Cargo.lock` it was built from, which names the
-//! `wasm-bindgen` a browser's runner links. A project's runner is written
-//! there too, as `rawr run --web` takes it. Where rawr keeps the runner
+//! (#1752). A project's runner is written there too, as `rawr run --web`
+//! takes it. Where rawr keeps the runner
 //! itself is rawr's own business.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -76,9 +75,8 @@ pub fn delivers() -> bool {
 }
 
 /// Write `built`'s runner to the directory [`deliver_into`] named, as
-/// [`RUNNER`], beside the `Cargo.lock` it was built from as [`LOCK`], and
-/// give the runner's path. A process that named none writes nothing. Each
-/// file is replaced whole, so a reader never sees part of one.
+/// [`RUNNER`], and give its path. A process that named none writes
+/// nothing. The file is replaced whole, so a reader never sees part of it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn deliver<B>(
     built: &crate::runner::Manifest<crate::runner::Built, B>,
@@ -86,20 +84,12 @@ pub fn deliver<B>(
     let Some(directory) = DESTINATION.get() else {
         return Ok(None);
     };
-    if let Some(lock) = built.files.iter().find(|file| file.path() == LOCK) {
-        replace(directory, LOCK, |partial| {
-            std::fs::write(partial, lock.bytes())
-        })?;
-    }
     let executable = built.artifact().executable();
     replace(directory, RUNNER, |partial| {
         std::fs::copy(executable, partial).map(drop)
     })
     .map(Some)
 }
-
-/// The name of the lock beside a runner [`deliver`] writes.
-pub const LOCK: &str = "Cargo.lock";
 
 /// Write `directory`'s file `name` whole with `write`, which writes a
 /// partial file it is renamed from, and give its path.

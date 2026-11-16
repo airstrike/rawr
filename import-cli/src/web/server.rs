@@ -26,6 +26,9 @@ pub(super) enum Event {
     Files(Value),
     /// A new runner, which the page loads and runs the program on.
     Reload,
+    /// The runner a save asked for didn't build: the program runs its
+    /// last code, and the terminal says why.
+    Unbuilt,
 }
 
 /// What the page told the server.
@@ -126,6 +129,7 @@ impl Handle {
         let message = match event {
             Event::Files(files) => format!("event: files\ndata: {files}\n\n"),
             Event::Reload => "event: reload\ndata: {}\n\n".to_owned(),
+            Event::Unbuilt => "event: unbuilt\ndata: {}\n\n".to_owned(),
         };
         lock(&self.shared.listeners)
             .retain_mut(|listener| listener.write_all(message.as_bytes()).is_ok());

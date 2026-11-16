@@ -21,8 +21,8 @@ pub(crate) enum Error {
     /// The build ended well but left no runner where it was asked to.
     #[error("the runner's build wrote no runner to {}", .0.display())]
     Missing(PathBuf),
-    /// The runner's `Cargo.lock` names no wasm-bindgen.
-    #[error("the runner's Cargo.lock at {} names no `wasm-bindgen`", .0.display())]
+    /// The runner names no wasm-bindgen it links.
+    #[error("the runner {} names no `wasm-bindgen` it links", .0.display())]
     Unlinked(PathBuf),
     /// wasm-bindgen's CLI at the version the runner links didn't install.
     #[error("wasm-bindgen-cli {0} didn't install")]
