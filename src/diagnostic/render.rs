@@ -97,12 +97,26 @@ pub fn render_with(report: &Report, color: Color) -> String {
     output
 }
 
+/// The directory a process with no current directory of its own shows
+/// paths from ([`show_paths_from`]).
+static SHOWN_FROM: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Show paths from `directory` in what this process renders when it has no
+/// current directory of its own: a module in a page, which runs a program
+/// for a command started in `directory`, shows them as that command would.
+/// The first directory named holds.
+pub fn show_paths_from(directory: std::path::PathBuf) {
+    let _ = SHOWN_FROM.set(directory);
+}
+
 /// `file` as rustc and cargo show a path: from the current directory when
 /// it is under it.
 fn shown(file: &str) -> std::borrow::Cow<'_, str> {
     let path = std::path::Path::new(file);
-    let relative = std::env::current_dir()
-        .ok()
+    let current = std::env::current_dir().ok();
+    let relative = current
+        .as_deref()
+        .or_else(|| SHOWN_FROM.get().map(std::path::PathBuf::as_path))
         .and_then(|directory| Some(path.strip_prefix(directory).ok()?.to_str()?.to_owned()))
         .filter(|relative| !relative.is_empty());
     match relative {

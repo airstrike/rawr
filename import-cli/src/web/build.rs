@@ -2,12 +2,12 @@
 //!
 //! This executable builds the runner again in a process of its own, with
 //! Cargo's target set to wasm32: `run` of a runner for a target this
-//! machine can't run builds it and ends (#1753), and writes it, with the
-//! `Cargo.lock` it was built from, to the directory `RAWR_UNIVERSE_OUT`
-//! names (#1752). Its own output says what it builds and why it fails, as
-//! `rawr run`'s does. The build has a Cargo target directory of its own,
-//! under the project's rawr directory, so it shares no units or records with
-//! the project's native build.
+//! machine can't run builds it and ends (#1753), and writes it to the
+//! directory `RAWR_UNIVERSE_OUT` names (#1752). Its own output says what
+//! it builds and why it fails, as `rawr run`'s does. The build has a Cargo
+//! target directory of its own, under the project's rawr directory, so it
+//! shares no units or records with the project's native build. A cargo
+//! script's build directory is shared by every script, for each target.
 //!
 //! wasm-bindgen then turns the runner into `universe_bg.wasm` and the glue
 //! `universe.js` imports, beside rawr-web's page for a project
@@ -36,7 +36,7 @@ pub(super) struct Build {
     location: PathBuf,
     /// The Cargo target directory the build uses.
     cargo: PathBuf,
-    /// Where the build writes the runner and its lock.
+    /// Where the build writes the runner.
     runner: PathBuf,
     /// Where wasm-bindgen writes, before the files move to the page.
     pack: PathBuf,
@@ -138,8 +138,7 @@ impl Build {
 
     /// Pack `runner` with the page, each file replaced whole.
     fn pack(&self, runner: &Path) -> Result<(), Error> {
-        let lock = self.runner.join(rawr_import::universe::LOCK);
-        let tool = bindgen::tool(&lock, &self.home, &self.pack.with_extension("tools"))?;
+        let tool = bindgen::tool(runner, &self.home, &self.pack.with_extension("tools"))?;
         let _ = std::fs::remove_dir_all(&self.pack);
         let mut command = Command::new(&tool);
         command.args([

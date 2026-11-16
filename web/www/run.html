@@ -83,9 +83,13 @@ const answered = (answer, files) => {
     case "restart":
       location.reload();
       return;
+    // A use the runner doesn't cover builds the runner again, and the
+    // page reloads onto it; the program runs its last text meanwhile.
     case "error":
       refused = files;
-      show(answer.text);
+      show(answer.uncovered
+        ? "rawr: the program uses an API its runner doesn't cover yet. The runner builds again, and the page reloads onto it."
+        : answer.text);
       return;
     case "unchanged":
       if (files !== refused) hide();
@@ -106,7 +110,7 @@ if (program.entry) {
   });
   current = JSON.stringify(program.files);
   try {
-    const answer = JSON.parse(glue.start(program.entry, current));
+    const answer = JSON.parse(glue.start(program.entry, current, program.directory ?? ""));
     running = answer.kind === "text";
     answered(answer, current);
   } catch (error) {
@@ -143,6 +147,8 @@ if (program.watch) {
     }
   });
   events.addEventListener("reload", () => location.reload());
+  events.addEventListener("unbuilt", () =>
+    show("rawr: the runner didn't build; the terminal says why. A save builds it again."));
 }
 </script>
 </body>

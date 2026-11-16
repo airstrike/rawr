@@ -78,12 +78,22 @@ pub(super) struct Sources {
 
 impl Sources {
     /// The marked file at `path`, the `Cargo.toml` nearest above it, and
-    /// the Rust files beside and below it.
+    /// the Rust files beside and below it. A cargo script is its own
+    /// package wherever it sits (D608 point 6), its manifest in its
+    /// frontmatter: it is the one file.
     pub(super) fn read(path: &Path) -> Result<Self, Error> {
         let entry = std::path::absolute(path).map_err(|source| Error::Read {
             path: path.to_path_buf(),
             source,
         })?;
+        let (_, text) = read(entry.clone())?;
+        if crate::project::frontmatter::is_script(&text) {
+            return Ok(Self {
+                files: vec![(entry.clone(), text)],
+                entry,
+                on_disk: true,
+            });
+        }
         let directory = entry.parent().unwrap_or(Path::new("/")).to_path_buf();
         let mut files = Vec::new();
         if let Some(manifest) = directory
