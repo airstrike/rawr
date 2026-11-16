@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.221",
+  "version": "0.3.222",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A save that only moves an async function a suspended future waits in, such as a line added above it, keeps the program running with its state. A restart for an edited async block names the block.","issues":[2126]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.222",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"A save that only moves an async function a suspended future waits in, such as a line added above it, keeps the program running with its state. A restart for an edited async block names the block.","issues":[2126]}
+        ]
+      },
       {
         "version": "0.3.221",
         "date": "2026-11-16",
@@ -4614,7 +4616,7 @@
     {"issue":2123,"title":"`rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a…","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed","category":"Divergences from rustc"},
-    {"issue":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed","category":"Platforms"},
+    {"issue":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed","category":"Platforms","release":"0.3.222"},
     {"issue":2127,"title":"A native rawr run program whose script runs only as async steps, such as a tokio main loop, restarts on every save","state":"open","category":"Platforms"},
     {"issue":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"open","category":"Divergences from rustc"},
     {"issue":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open","category":"Divergences from rustc"}
