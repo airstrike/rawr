@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-15",
+  "updated": "2026-11-16",
   "version": "0.3.216",
   "examples": {
     "running": 56,
@@ -13,7 +13,9 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"Runner builds no longer wait for each other when rawr's shared runtime is already built, so several `rawr run` or `rawr test` builds on one machine run side by side.","issues":[2094]},
-        {"text":"A crate trait's method reaches a slice through a blanket impl bounded on `&I`, as rayon's `par_iter()` does on a slice, `Vec` or array with `use rayon::prelude::*;`. A crate type that derives `Clone` and holds a boxed script closure, as rayon's `Map`, no longer fails the runner build.","issues":[2079,2064]}
+        {"text":"A crate trait's method reaches a slice through a blanket impl bounded on `&I`, as rayon's `par_iter()` does on a slice, `Vec` or array with `use rayon::prelude::*;`. A crate type that derives `Clone` and holds a boxed script closure, as rayon's `Map`, no longer fails the runner build.","issues":[2079,2064]},
+        {"text":"iced_test Emulator tests build and run under `rawr test` as under `cargo test`: a program's events, channels and presets are compiled where rustc knows the program's type, including a type a builder method gives.","issues":[2060,2078]},
+        {"text":"Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration.","issues":[2077]}
       ]
     },
     "releases": [
@@ -4502,7 +4504,7 @@
     {"issue":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed","category":"No glue (D593)","release":"0.3.216"},
-    {"issue":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"open","category":"No glue (D593)"},
+    {"issue":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"closed","category":"No glue (D593)"},
     {"issue":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
     {"issue":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open","category":"Divergences from rustc"},
     {"issue":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
@@ -4519,8 +4521,8 @@
     {"issue":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2075,"title":"A call on a value holding an opaque wrapper type reaches each operand through a function generic over the opaque type","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2076,"title":"A crate trait provided method whose type parameter shares its impl parameter name fails E0403","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
-    {"issue":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"open","category":"Divergences from rustc"},
-    {"issue":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"open","category":"No glue (D593)"},
+    {"issue":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"closed","category":"Divergences from rustc"},
+    {"issue":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"closed","category":"No glue (D593)"},
     {"issue":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"closed","category":"Divergences from rustc"},
     {"issue":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
     {"issue":2081,"title":"Split the embeddable engine from the `rawr` crate name, so an app run under `rawr run` can depend on the engine as is","state":"open","category":"Importer"},
@@ -4540,7 +4542,10 @@
     {"issue":2095,"title":"A crate trait implemented directly for [T] or &[T] gives a slice no method","state":"open","category":"Divergences from rustc"},
     {"issue":2096,"title":"A provided or generic method through a blanket impl slice application is rejected","state":"open","category":"Divergences from rustc"},
     {"issue":2097,"title":"A slice member receiver borrow ends at the call in the borrow checker","state":"open","category":"Divergences from rustc"},
-    {"issue":2098,"title":"container_family Clone check reads the spelled arguments, not their types","state":"open","category":"Divergences from rustc"}
+    {"issue":2098,"title":"container_family Clone check reads the spelled arguments, not their types","state":"open","category":"Divergences from rustc"},
+    {"issue":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"open","category":"Divergences from rustc"},
+    {"issue":2100,"title":"A variant's lending matchers at an enum holding an opaque type refuse the value","state":"open","category":"No glue (D593)"},
+    {"issue":2101,"title":"Reduce the opaque-table builder-chain case to a crossing fixture","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5026,8 +5031,8 @@
           "name": "Per-example gaps",
           "start": 47,
           "size": 6,
-          "state": "next",
-          "note": "2026-11-14: fixes merged for changelog, color_palette, custom_shader, delineate, download_progress, editor, game_of_life, loading_spinners, screenshot, scrollable, websocket and ferris; each starts under rawr but isn't driven against cargo yet. Left: gallery (#1985), pokedex (#1986), todos (#249), tour (#1987, #1988), integration (#1991, #1992), markdown (#83), exit's redraw (#1946), the stale runner build script after a reinstall (#1984).",
+          "state": "now",
+          "note": "2026-11-16: headless parity ('/Users/andy/projects/rawr/scripts/cargo.mjs' test vs rawr test) agrees for counter and tour with the Emulator half; styling's upstream test matches. Left: todos' Emulator half (false E0061 on an impl Trait value's method).",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"retired"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"closed"},
@@ -5218,7 +5223,7 @@
             {"number":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"closed"},
             {"number":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed"},
             {"number":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed"},
-            {"number":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"open"},
+            {"number":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"closed"},
             {"number":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"closed"},
             {"number":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open"},
             {"number":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"closed"},
@@ -5230,14 +5235,17 @@
             {"number":2069,"title":"Headless parity check of iced examples: cargo test vs rawr test (scripts/iced-parity)","state":"closed"},
             {"number":2070,"title":"Native values a view borrows out of any slot stay in runner-life pins until the next &mut; tie the hold to the borrower","state":"open"},
             {"number":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open"},
-            {"number":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"open"},
-            {"number":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"open"},
+            {"number":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"closed"},
+            {"number":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"closed"},
             {"number":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"closed"},
             {"number":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"closed"},
             {"number":2095,"title":"A crate trait implemented directly for [T] or &[T] gives a slice no method","state":"open"},
             {"number":2096,"title":"A provided or generic method through a blanket impl slice application is rejected","state":"open"},
             {"number":2097,"title":"A slice member receiver borrow ends at the call in the borrow checker","state":"open"},
-            {"number":2098,"title":"container_family Clone check reads the spelled arguments, not their types","state":"open"}
+            {"number":2098,"title":"container_family Clone check reads the spelled arguments, not their types","state":"open"},
+            {"number":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"open"},
+            {"number":2100,"title":"A variant's lending matchers at an enum holding an opaque type refuse the value","state":"open"},
+            {"number":2101,"title":"Reduce the opaque-table builder-chain case to a crossing fixture","state":"open"}
           ],
           "milestone": "0.3"
         },
