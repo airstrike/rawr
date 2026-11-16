@@ -2866,6 +2866,21 @@ fn a_script_impl_gives_native_code_a_reference_to_a_crate_value_it_holds() {
     assert_eq!(rawr, "lent dusk true\nagain noon true\nowned dawn true");
 }
 
+/// #2099: a method call on a value of a script function's `impl Tune`
+/// result sees only `Tune`'s methods, as rustc does, so `notes()` is
+/// `Tune::notes(&self)` and not the hidden `Tuner`'s inherent builder
+/// `notes(self, ..)` of the same name, by value and through a reference.
+/// The output is `cargo run`'s.
+#[test]
+fn a_method_of_an_opaque_result_is_its_bound_s_and_not_the_hidden_type_s() {
+    let (rawr, cargo) = both_printed("tuned.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "by value [\"do\", \"re\"]\nlent 2 do-re over silence\nrebuilt [\"mi\"] mi over silence"
+    );
+}
+
 /// #2013: a program's impl of a crate trait whose method gives `impl
 /// Shape<T> + 'a` gives a crate type holding another crate function's
 /// opaque output, as markdown's `Viewer::code_block` gives `Hover<impl

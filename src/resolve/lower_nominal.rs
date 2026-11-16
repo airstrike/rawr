@@ -61,6 +61,8 @@ mod mutability;
 mod names;
 mod naming;
 mod op;
+#[cfg(feature = "rust-import")]
+mod opaque_bound;
 mod operator;
 mod origin;
 mod overflow;
@@ -672,6 +674,12 @@ struct Parser<'a> {
     /// `simulator(counter.view())` takes it.
     #[cfg(feature = "rust-import")]
     opaque_values: Vec<host_signature::OpaqueValue>,
+    /// The crate trait a value of an `impl Trait` a program's call gives is
+    /// known by, by the value's span, and by each local that holds such a
+    /// value or a borrow of one, with the local's declaration: rustc sees
+    /// only the bound's methods on it (`opaque_bound`).
+    #[cfg(feature = "rust-import")]
+    opaque_bounds: std::cell::RefCell<opaque_bound::Bounds>,
     /// The crate trait each `Trait::method(receiver, ..)` call names, by
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
@@ -1024,6 +1032,8 @@ impl<'a> Parser<'a> {
             path_outputs: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             opaque_values: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            opaque_bounds: std::cell::RefCell::default(),
             spliced_traits: BTreeMap::new(),
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),

@@ -1661,6 +1661,11 @@ impl<'a> Parser<'a> {
                 .or(Some(definition.output())),
             &substitution,
         );
+        #[cfg(feature = "rust-import")]
+        self.note_opaque_bound(
+            definition.lifetimes().written_output.as_deref(),
+            span(owner_span.start(), end),
+        );
         let kept = self.inference.resolve(&kept);
         self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
         Ok(ParsedExpr {

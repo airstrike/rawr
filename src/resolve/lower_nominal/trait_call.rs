@@ -1400,7 +1400,7 @@ impl<'a> Parser<'a> {
         let start = value.span.start();
         let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
         let mut inputs = Vec::with_capacity(arguments.len() + 1);
-        self.move_local(&mut value)?;
+        self.take_self_member_receiver(&mut value, &items)?;
         inputs.push(value);
         for mut argument in arguments {
             self.move_local(&mut argument)?;
@@ -1408,6 +1408,62 @@ impl<'a> Parser<'a> {
         }
         self.call_host_function(&items, owner, inputs, span(start, end))
             .map(Ok)
+    }
+
+    /// `value` as the receiver of a trait's method over its `Self`
+    /// (`surface::member`) that `items` declare: borrowed for a `&self` or
+    /// `&mut self` method, as a method call autorefs it, and taken for a
+    /// `self` one, as a move or copy does.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn take_self_member_receiver(
+        &mut self,
+        value: &mut ParsedExpr,
+        items: &[crate::host::item::Definition],
+    ) -> Result<(), Error> {
+        let borrowed =
+            items.first().and_then(
+                |item| match item.signature().parameters().first()?.shape() {
+                    crate::host::type_ref::Shape::Reference { mutable, .. } => Some(*mutable),
+                    _ => None,
+                },
+            );
+        match borrowed {
+            Some(mutable) if !matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) => {
+                self.borrow_receiver(value, mutable);
+                Ok(())
+            }
+            Some(_) => Ok(()),
+            None => self.move_local(value),
+        }
+    }
+
+    /// `value` borrowed, `&value` or `&mut value`, as a method call's
+    /// autoref borrows its receiver: a place where it is, else the
+    /// temporary, as `&` of an operand does (`parse_operand`).
+    #[cfg(feature = "rust-import")]
+    fn borrow_receiver(&mut self, value: &mut ParsedExpr, mutable: bool) {
+        let ty = self.inference.resolve(&value.ty);
+        if value.lvalue.is_some() || self.flow().is_place(value.span) {
+            let inner = self.may_hold_borrow(&ty);
+            let reference = borrows::is_reference(&ty);
+            self.flow().borrow(
+                value.span.start(),
+                value.span,
+                value.span,
+                mutable,
+                inner,
+                reference,
+            );
+        } else if mutable {
+            self.borrow_temporary_mut(value, value.span);
+        } else {
+            self.borrow_temporary(value, value.span);
+        }
+        value.ty = Ty::Reference {
+            mutable,
+            target: Box::new(ty),
+        };
+        value.lvalue = None;
     }
 
     /// The path of the trait's method over its `Self` (`surface::member`)

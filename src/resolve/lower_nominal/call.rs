@@ -1449,6 +1449,11 @@ impl<'a> Parser<'a> {
                     .or(function.definition.output.as_ref()),
                 &substitution,
             );
+            #[cfg(feature = "rust-import")]
+            self.note_opaque_bound(
+                function.definition.lifetimes.written_output.as_deref(),
+                call,
+            );
             witnesses = self.witness_arguments(&function.definition.generics, &substitution, call);
             let kept = self.inference.resolve(&output);
             if let Some(summary) = &summary {
