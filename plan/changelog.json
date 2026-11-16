@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A type that only a diverging expression gives (`loop {}`, `panic!()`, `todo!()`) is `!` once the body is read, as in rustc's edition 2024. `tokio::spawn(async move { loop { .. } })`, `id(loop {})` and a closure returning `panic!()` check where they gave E0282, and `!` fails a bound as it does in rustc (`!: Default`).","issues":[2128]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.224",
+      "date": "2026-11-16",
+      "entries": [
+        {"text":"A type that only a diverging expression gives (`loop {}`, `panic!()`, `todo!()`) is `!` once the body is read, as in rustc's edition 2024. `tokio::spawn(async move { loop { .. } })`, `id(loop {})` and a closure returning `panic!()` check where they gave E0282, and `!` fails a bound as it does in rustc (`!: Default`).","issues":[2128]}
+      ]
+    },
     {
       "version": "0.3.223",
       "date": "2026-11-16",
