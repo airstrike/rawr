@@ -3,9 +3,9 @@
   "updated": "2026-11-16",
   "version": "0.3.216",
   "examples": {
-    "running": 56,
+    "running": 54,
     "total": 56,
-    "note": "Driven over rawr mcp against cargo (no OS tools), 2026-11-14: all 56 iced examples behave as cargo does; markdown last, since #2023. system_information's hot-reload save still fails (#2004)."
+    "note": "Headless parity, 2026-11-16: cargo test and rawr test agree on 54 of 56 iced examples, the iced_test Emulator half included. Left: arc's simulator frame and markdown's Emulator build."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -4555,7 +4555,8 @@
     {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"open","category":"Divergences from rustc"},
     {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open","category":"Divergences from rustc"},
     {"issue":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open","category":"Divergences from rustc"},
-    {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"}
+    {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"},
+    {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5261,7 +5262,8 @@
             {"number":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open"},
             {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open"},
             {"number":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open"},
-            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"}
+            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"},
+            {"number":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open"}
           ],
           "milestone": "0.3"
         },
