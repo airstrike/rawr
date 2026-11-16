@@ -150,6 +150,9 @@ node --input-type=module -e '
     // fail to compile, so its 422 is its right answer.
     for (const match of found) {
       const [whole, attributes, html] = match;
+      // A data-where="browser" block runs in the universe of the page, and
+      // its Run never reaches /play/run.
+      if (attributes.includes("data-where=\"browser\"")) continue;
       const after = page.slice(match.index + whole.length);
       const strip = after.slice(0, after.indexOf("</div>", after.indexOf("<div class=\"run\"")));
       const body = JSON.stringify({ code: text(html) });
