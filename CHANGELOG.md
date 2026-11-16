@@ -16,6 +16,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `.into()` of a `&[u8]` or `Vec<u8>` fills a crate field of type `Cow<'static, [u8]>`, as `Settings { fonts: vec![FONT.into()], .. }` does, and a program struct can hold a `Cow` field. (#2063)
 - A call that takes a value holding the type a crate function returned around an opaque type, such as a sender of events of `Wrapper<impl Trait>`, builds under `rawr run` and `rawr test`. (#2075; part of #2060)
 - A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`). (#2076; part of #2064)
+- A crate trait's provided `map` takes a closure of the impl's own item, and `collect()` into a `Result` fixes the closure's error type from the crate's impl for `Result`, as rustc infers it. (#2080; part of #2064)
+- An unannotated closure given to an opaque program's builder method, such as `.subscription(|state| ..)` or `.scale_factor(|_| ..)`, takes its input from the program's `State` binding again instead of panicking the import. (#2084; part of #2073)
+- rawr-import-cli's integration suite keeps fixture lanes, the shared rawr home and started slots between runs, and replaces a slot only when its stamp (the fixture's files and the rawr-import that ran it) no longer matches. This amends how #2045 cleaned up: only stale parts go. (#2085)
+- A crate's callable value fills a callable parameter again, a crate method returning a `Cow` inside a scope frame compiles again, and a second run of an unchanged project writes nothing to `target/`. (#2086)
 
 ## 0.3.215 (2026-11-15)
 

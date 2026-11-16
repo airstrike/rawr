@@ -22,7 +22,11 @@
         {"text":"A builder chain whose methods take and return `&mut Self`, as tokio's `runtime::Builder::new_current_thread().enable_time().build()`, runs on a temporary or a local, for crate types without `Clone`.","issues":[2061]},
         {"text":"`.into()` of a `&[u8]` or `Vec<u8>` fills a crate field of type `Cow<'static, [u8]>`, as `Settings { fonts: vec![FONT.into()], .. }` does, and a program struct can hold a `Cow` field.","issues":[2063]},
         {"text":"A call that takes a value holding the type a crate function returned around an opaque type, such as a sender of events of `Wrapper<impl Trait>`, builds under `rawr run` and `rawr test`.","issues":[2075],"refs":[2060]},
-        {"text":"A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`).","issues":[2076],"refs":[2064]}
+        {"text":"A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`).","issues":[2076],"refs":[2064]},
+        {"text":"A crate trait's provided `map` takes a closure of the impl's own item, and `collect()` into a `Result` fixes the closure's error type from the crate's impl for `Result`, as rustc infers it.","issues":[2080],"refs":[2064]},
+        {"text":"An unannotated closure given to an opaque program's builder method, such as `.subscription(|state| ..)` or `.scale_factor(|_| ..)`, takes its input from the program's `State` binding again instead of panicking the import.","issues":[2084],"refs":[2073]},
+        {"text":"rawr-import-cli's integration suite keeps fixture lanes, the shared rawr home and started slots between runs, and replaces a slot only when its stamp (the fixture's files and the rawr-import that ran it) no longer matches. This amends how #2045 cleaned up: only stale parts go.","issues":[2085]},
+        {"text":"A crate's callable value fills a callable parameter again, a crate method returning a `Cow` inside a scope frame compiles again, and a second run of an unchanged project writes nothing to `target/`.","issues":[2086]}
       ]
     },
     "releases": [
@@ -4510,7 +4514,13 @@
     {"issue":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"open","category":"Divergences from rustc"},
     {"issue":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"open","category":"No glue (D593)"},
     {"issue":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"open","category":"Divergences from rustc"},
-    {"issue":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"closed","category":"Divergences from rustc"},
+    {"issue":2081,"title":"Split the embeddable engine from the `rawr` crate name, so an app run under `rawr run` can depend on the engine as is","state":"open","category":"Importer"},
+    {"issue":2082,"title":"std::process::Command doesn't run: a build or deploy script can't spawn a process","state":"open","category":"Divergences from rustc"},
+    {"issue":2083,"title":"A frontmatter script inside a Cargo workspace fails with 'Cargo build directory differs after metadata'","state":"open","category":"Importer"},
+    {"issue":2084,"title":"A generic impl's method settled its opaque type's associated-type arguments without the impl's parameters","state":"open","category":"No glue (D593)"},
+    {"issue":2085,"title":"The integration suite deleted its warm fixture builds at exit, so every full run started cold","state":"open","category":"Health"},
+    {"issue":2086,"title":"Boxed callables spelled two ways, a Cow output annotated as String, and an unchanged run rewriting its target record","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5203,7 +5213,7 @@
             {"number":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"open"},
             {"number":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"open"},
             {"number":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"open"},
-            {"number":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"open"}
+            {"number":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"closed"}
           ],
           "milestone": "0.3"
         },
@@ -5706,7 +5716,8 @@
             {"number":1612,"title":"The runner's handle identity names u64::from, which a crate trait's own from makes ambiguous (E0034)","state":"closed"},
             {"number":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"closed"},
             {"number":1627,"title":"A marked module that names tracing only through another crate's re-export fails with unknown member Level::le","state":"closed"},
-            {"number":1724,"title":"31 rawr lib tests fail on main: account Carrier errors, layout sizes, a missing native binding, rustc-wording drift","state":"closed"}
+            {"number":1724,"title":"31 rawr lib tests fail on main: account Carrier errors, layout sizes, a missing native binding, rustc-wording drift","state":"closed"},
+            {"number":2082,"title":"std::process::Command doesn't run: a build or deploy script can't spawn a process","state":"open"}
           ]
         },
         {
@@ -5996,7 +6007,9 @@
             {"number":2052,"title":"Retire the fixed-path runner build: the cache entry, its pins and the no-chain path in Manifest::build","state":"open"},
             {"number":2053,"title":"rawr-import runner_dag tests each build all of rawr in a fresh directory under the system temp dir","state":"open"},
             {"number":2056,"title":"A project whose target/ is a symlink is refused as a Rawr-owned cache path","state":"open"},
-            {"number":2071,"title":"The rawr home's formats/<N>/inventories and bindings are pruned only by idle age (5.2 GB and 3.0 GB here)","state":"open"}
+            {"number":2071,"title":"The rawr home's formats/<N>/inventories and bindings are pruned only by idle age (5.2 GB and 3.0 GB here)","state":"open"},
+            {"number":2081,"title":"Split the embeddable engine from the `rawr` crate name, so an app run under `rawr run` can depend on the engine as is","state":"open"},
+            {"number":2083,"title":"A frontmatter script inside a Cargo workspace fails with 'Cargo build directory differs after metadata'","state":"open"}
           ]
         }
       ]

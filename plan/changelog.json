@@ -15,7 +15,11 @@
       {"text":"A builder chain whose methods take and return `&mut Self`, as tokio's `runtime::Builder::new_current_thread().enable_time().build()`, runs on a temporary or a local, for crate types without `Clone`.","issues":[2061]},
       {"text":"`.into()` of a `&[u8]` or `Vec<u8>` fills a crate field of type `Cow<'static, [u8]>`, as `Settings { fonts: vec![FONT.into()], .. }` does, and a program struct can hold a `Cow` field.","issues":[2063]},
       {"text":"A call that takes a value holding the type a crate function returned around an opaque type, such as a sender of events of `Wrapper<impl Trait>`, builds under `rawr run` and `rawr test`.","issues":[2075],"refs":[2060]},
-      {"text":"A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`).","issues":[2076],"refs":[2064]}
+      {"text":"A crate trait's provided method whose type parameter shares a name with its impl's is callable, and a missing method on a slice of an imported type names the slice as rustc does (`[Theme]`).","issues":[2076],"refs":[2064]},
+      {"text":"A crate trait's provided `map` takes a closure of the impl's own item, and `collect()` into a `Result` fixes the closure's error type from the crate's impl for `Result`, as rustc infers it.","issues":[2080],"refs":[2064]},
+      {"text":"An unannotated closure given to an opaque program's builder method, such as `.subscription(|state| ..)` or `.scale_factor(|_| ..)`, takes its input from the program's `State` binding again instead of panicking the import.","issues":[2084],"refs":[2073]},
+      {"text":"rawr-import-cli's integration suite keeps fixture lanes, the shared rawr home and started slots between runs, and replaces a slot only when its stamp (the fixture's files and the rawr-import that ran it) no longer matches. This amends how #2045 cleaned up: only stale parts go.","issues":[2085]},
+      {"text":"A crate's callable value fills a callable parameter again, a crate method returning a `Cow` inside a scope frame compiles again, and a second run of an unchanged project writes nothing to `target/`.","issues":[2086]}
     ]
   },
   "releases": [
