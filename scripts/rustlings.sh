@@ -262,6 +262,11 @@ exercise() {
 }
 
 cd "$package" || exit 2
+# A cold rawr home compiles rawr's runtime for the toolchain and the
+# package's bindings on its first run. That one-time cost isn't the program's,
+# so one untimed run pays it before the timed ones.
+first=$(ls solutions/*/*.rs | head -1)
+(cd "$(dirname "$first")" && rawr run "$package/$first") >/dev/null 2>&1 </dev/null || true
 for source in solutions/*/*.rs; do
     [[ " $kinds " == *" solutions "* ]] || break
     name=$(basename "$(dirname "$source")")/$(basename "$source" .rs)

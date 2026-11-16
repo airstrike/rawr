@@ -2123,6 +2123,7 @@
     {"t":"T2121","issue":2121,"title":"T2121: rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open","category":"Platforms","labels":["platform"],"gantt":{"group":"play","row":"browser-wasm-bindings"},"decisions":[],"commit":null,"release":null},
     {"t":"T2122","issue":2122,"title":"T2122: rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":{"group":"play","row":"browser-wasm-bindings"},"decisions":[],"commit":null,"release":null},
     {"t":"T2123","issue":2123,"title":"T2123: `rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a…","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"c5b3ec7ae","release":null},
-    {"t":"T2124","issue":2124,"title":"T2124: `rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"c5b3ec7ae","release":null}
+    {"t":"T2124","issue":2124,"title":"T2124: `rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"c5b3ec7ae","release":null},
+    {"t":"T2125","issue":2125,"title":"T2125: On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null}
   ]
 }

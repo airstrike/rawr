@@ -4597,7 +4597,8 @@
     {"issue":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open","category":"Platforms"},
     {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"},
     {"issue":2123,"title":"`rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a…","state":"closed","category":"Platforms"},
-    {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms"}
+    {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms"},
+    {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5309,7 +5310,8 @@
             {"number":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open"},
             {"number":2114,"title":"`.is_err()` on a crate Result whose error is a type parameter's associated type crashes the generator","state":"open"},
             {"number":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open"},
-            {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed"}
+            {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed"},
+            {"number":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"open"}
           ],
           "milestone": "0.3"
         },
