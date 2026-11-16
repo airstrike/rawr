@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Runner builds no longer wait for each other when rawr's shared runtime is already built, so several `rawr run` or `rawr test` builds on one machine run side by side.","issues":[2094]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.216",
@@ -4522,7 +4527,15 @@
     {"issue":2083,"title":"A frontmatter script inside a Cargo workspace fails with 'Cargo build directory differs after metadata'","state":"open","category":"Importer"},
     {"issue":2084,"title":"A generic impl's method settled its opaque type's associated-type arguments without the impl's parameters","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2085,"title":"The integration suite deleted its warm fixture builds at exit, so every full run started cold","state":"closed","category":"Health","release":"0.3.216"},
-    {"issue":2086,"title":"Boxed callables spelled two ways, a Cow output annotated as String, and an unchanged run rewriting its target record","state":"closed","category":"No glue (D593)","release":"0.3.216"}
+    {"issue":2086,"title":"Boxed callables spelled two ways, a Cow output annotated as String, and an unchanged run rewriting its target record","state":"closed","category":"No glue (D593)","release":"0.3.216"},
+    {"issue":2087,"title":"std::path::Path::new does not run, and PathBuf has no exists or set_extension (E0599)","state":"open","category":"Divergences from rustc"},
+    {"issue":2088,"title":"std::process::ExitCode does not run, so fn main() -> ExitCode fails","state":"open","category":"Divergences from rustc"},
+    {"issue":2089,"title":"writeln! into std::io::stdout().lock() is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2090,"title":"str::matches, match_indices and replacen do not run","state":"open","category":"Divergences from rustc"},
+    {"issue":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":2092,"title":"A frontmatter script outside any workspace fails to build serde_json or regex","state":"open","category":"Importer"},
+    {"issue":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open","category":"Divergences from rustc"},
+    {"issue":2094,"title":"Runner builds wait for each other: runtime::ensure asks for the exclusive lock while running builds hold shared leases","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5719,7 +5732,14 @@
             {"number":1622,"title":"A std trait's scalar impl members were extracted without their impls (implementation-owner-cardinality)","state":"closed"},
             {"number":1627,"title":"A marked module that names tracing only through another crate's re-export fails with unknown member Level::le","state":"closed"},
             {"number":1724,"title":"31 rawr lib tests fail on main: account Carrier errors, layout sizes, a missing native binding, rustc-wording drift","state":"closed"},
-            {"number":2082,"title":"std::process::Command doesn't run: a build or deploy script can't spawn a process","state":"open"}
+            {"number":2082,"title":"std::process::Command doesn't run: a build or deploy script can't spawn a process","state":"open"},
+            {"number":2087,"title":"std::path::Path::new does not run, and PathBuf has no exists or set_extension (E0599)","state":"open"},
+            {"number":2088,"title":"std::process::ExitCode does not run, so fn main() -> ExitCode fails","state":"open"},
+            {"number":2089,"title":"writeln! into std::io::stdout().lock() is refused","state":"open"},
+            {"number":2090,"title":"str::matches, match_indices and replacen do not run","state":"open"},
+            {"number":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"open"},
+            {"number":2092,"title":"A frontmatter script outside any workspace fails to build serde_json or regex","state":"open"},
+            {"number":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open"}
           ]
         },
         {

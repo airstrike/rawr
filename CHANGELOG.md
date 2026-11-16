@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- Runner builds no longer wait for each other when rawr's shared runtime is already built, so several `rawr run` or `rawr test` builds on one machine run side by side. (#2094)
 
 ## 0.3.216 (2026-11-15)
 
