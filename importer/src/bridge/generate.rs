@@ -16032,9 +16032,17 @@ fn render_scoped_receiver(
     let call = format!("lend(arguments.arena, || {call})");
     // An output only a parameter of the call's names, as `collect<C>(self)
     // -> C` gives, is spelled as the arena's call spells it, when it holds
-    // no borrow of the region: rustc reads the parameter from it.
+    // no borrow of the region: rustc reads the parameter from it. An output
+    // the crate names concretely is its own type, which its spelling may
+    // differ from, as a `Cow<'_, str>` is spelled `String` and converted
+    // after the call.
     let call = match concrete_type(&returned) {
-        Some(ty) if !by_family && !carries_lifetime(&returned) && !names_inferred(&ty) => {
+        Some(ty)
+            if names_parameter(signature.output())
+                && !by_family
+                && !carries_lifetime(&returned)
+                && !names_inferred(&ty) =>
+        {
             format!("{{ let output: {ty} = {call}; output }}")
         }
         _ => call,
@@ -25181,11 +25189,7 @@ fn spelled_scoped(ty: &convert::Type, opaque: &mut Option<OpaqueSpelling<'_>>) -
                 .iter()
                 .map(|ty| spelled_scoped(ty, opaque))
                 .collect::<Option<Vec<_>>>()?;
-            Some(format!(
-                "Box<dyn Fn({}) -> {} + Send + Sync>",
-                inputs.join(", "),
-                spelled_scoped(output, opaque)?
-            ))
+            Some(callable_box(&inputs, &spelled_scoped(output, opaque)?))
         }
         convert::Type::Nominal {
             definition,
@@ -27346,8 +27350,9 @@ fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
 }
 
 /// The Rust type a value of the opaque `impl Fn(A..) -> B` type `ty` is
-/// held as: `Box<dyn Fn(A..) -> B + Send>`, which a call boxes it as where
-/// it gives one, and which a call that takes a callable takes as itself.
+/// held as: `Box<dyn Fn(A..) -> B + Send + Sync>` ([`callable_box`]),
+/// which a call boxes it as where it gives one, and which a call that takes
+/// a callable takes as itself.
 /// `None` when `ty` is no such type, or its inputs or output have no name.
 fn boxed_callable_type(ty: &convert::Type) -> Option<String> {
     let convert::Type::Nominal {
@@ -27367,9 +27372,15 @@ fn boxed_callable_type(ty: &convert::Type) -> Option<String> {
     Some(callable_box(&inputs, &argument(output)?))
 }
 
-/// `Box<dyn Fn(A..) -> B + Send>` of `inputs` and `output`, spelled.
+/// `Box<dyn Fn(A..) -> B + Send + Sync>` of `inputs` and `output`,
+/// spelled: the one box a script closure, a crate's own callable value and
+/// a call that takes either are held as, so each fills the others and a
+/// crate's `F: Fn + Send + Sync` bound holds of it.
 fn callable_box(inputs: &[String], output: &str) -> String {
-    format!("Box<dyn Fn({}) -> {output} + Send>", inputs.join(", "))
+    format!(
+        "Box<dyn Fn({}) -> {output} + Send + Sync>",
+        inputs.join(", ")
+    )
 }
 
 /// The boxed callable a call's callable parameter `call` takes where a
@@ -27532,11 +27543,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 .iter()
                 .map(concrete_type)
                 .collect::<Option<Vec<_>>>()?;
-            format!(
-                "Box<dyn Fn({}) -> {} + Send + Sync>",
-                inputs.join(", "),
-                concrete_type(output)?
-            )
+            callable_box(&inputs, &concrete_type(output)?)
         }
         // A program's iterator where a crate takes one.
         ty if let Some(item) = items_element(ty) => {

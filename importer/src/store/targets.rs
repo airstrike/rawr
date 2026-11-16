@@ -57,8 +57,8 @@ impl Target {
 
 /// Record `references` as `target`'s generation in `project`, bound in
 /// `order`, in place of the target's earlier record, then drop the records
-/// beyond the project's [`KEPT`] bound most recently. The caller holds the
-/// project lease.
+/// beyond the project's [`KEPT`] bound most recently. A record that already
+/// holds these references is left as it is. The caller holds the project lease.
 pub(super) fn record(
     store: &Path,
     project: Digest,
@@ -68,6 +68,17 @@ pub(super) fn record(
 ) -> Result<(), Error> {
     let directory = project_directory(store, project);
     fs::create_dir_all(&directory).map_err(io("create the target records", &directory))?;
+    let path = directory.join(target.file_name());
+    // A bind of the generation the target already records, as a run of an
+    // unchanged project makes, writes nothing: the record roots it already.
+    // Its order stays the one it was first bound in.
+    if fs::read(&path)
+        .ok()
+        .and_then(|recorded| decode(&recorded))
+        .is_some_and(|(_, recorded)| recorded == references)
+    {
+        return Ok(());
+    }
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(HEADER_BYTES + references.len() * Reference::encoded_bytes())
@@ -84,7 +95,6 @@ pub(super) fn record(
     for reference in references {
         reference.encode(&mut bytes);
     }
-    let path = directory.join(target.file_name());
     let staged = directory.join(format!(".{}-{}", target.file_name(), std::process::id()));
     fs::write(&staged, &bytes).map_err(io("write a target record", &staged))?;
     fs::rename(&staged, &path).map_err(io("publish a target record", &path))?;
