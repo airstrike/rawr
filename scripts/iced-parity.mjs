@@ -69,6 +69,12 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const scripts = path.join(here, "iced-parity");
+// Cargo goes through scripts/cargo.mjs, which records the units each run
+// uses and removes the test builds a newer run of the same example
+// superseded, so the shared target keeps what the examples use and nothing
+// stale. It is set before the workers start, as they run from the
+// top-level await below.
+const cargoWrapper = path.join(path.dirname(fileURLToPath(import.meta.url)), "cargo.mjs");
 const checkout = path.resolve(
   execFileSync("git", ["-C", here, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
     encoding: "utf8",
@@ -420,12 +426,6 @@ function testEnv(dir) {
     ICED_TEST_BACKEND: backend(dir),
   };
 }
-
-// Cargo goes through scripts/cargo.mjs, which records the units each run
-// uses and removes the test builds a newer run of the same example
-// superseded, so the shared target keeps what the examples use and nothing
-// stale.
-const cargoWrapper = path.join(path.dirname(fileURLToPath(import.meta.url)), "cargo.mjs");
 
 function capture(command, args, dir) {
   const [program, programArgs] =

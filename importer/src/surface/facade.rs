@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 67;
+const SCHEMA: u32 = 68;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1374,6 +1374,24 @@ impl Plan {
                         continue;
                     };
                     let path = super::scalar::path(&relative, scalar, associated.name());
+                    let Some(mut item) = item(&path, associated)? else {
+                        continue;
+                    };
+                    item.made_mut().kind = ItemKind::Function;
+                    let mut items = std::mem::take(&mut facade.items).into_vec();
+                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                    items.push(item);
+                    facade.items = items.into_boxed_slice();
+                }
+                // The members a blanket impl's application to slices gives,
+                // each a function of the slice's borrow beside the trait
+                // (`surface::slice`).
+                for associated in outcome
+                    .implementations()
+                    .flat_map(crate::classify::ImplementationOutcome::associated)
+                    .filter(|associated| super::slice::is_member(associated.representability()))
+                {
+                    let path = super::slice::path(&relative, associated.name());
                     let Some(mut item) = item(&path, associated)? else {
                         continue;
                     };

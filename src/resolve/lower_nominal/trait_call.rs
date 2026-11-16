@@ -1557,6 +1557,56 @@ impl<'a> Parser<'a> {
         self.call_host_function(&items, owner, inputs, span(start, end))
     }
 
+    /// The path of the member `member` that a blanket impl of a crate's
+    /// trait this source imports by name gives a slice through its bound's
+    /// impl for `&[T]` (`surface::slice`), as `use rayon::prelude::*;`
+    /// gives `[T]` its `par_iter`. `None` when no such trait has the member.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn scoped_slice_member(&self, member: &str) -> Option<String> {
+        self.models
+            .imports_in_scope()
+            .filter(|binding| matches!(binding.target, item::Import::Module))
+            .map(|binding| rawr_import::surface::slice::path(&binding.qualified, member))
+            .find(|path| self.models.host_items(path).is_some())
+    }
+
+    /// `receiver.member(..)` of the member at `path` a crate's trait gives
+    /// the slice `receiver` of `element`s (`scoped_slice_member`): a call of
+    /// the function the facade declares for it, whose first input is a
+    /// shared borrow of the slice, as rustc's autoref and unsizing make of
+    /// an array, a `Vec` or a borrowed slice.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn slice_member_call(
+        &mut self,
+        mut receiver: ParsedExpr,
+        element: Ty,
+        path: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let items = self
+            .models
+            .host_items(path)
+            .expect("a scoped slice member has items")
+            .to_vec();
+        let owner = self.models.item_owner(path).cloned();
+        let start = receiver.span.start();
+        let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
+        self.call_on_place(&receiver);
+        receiver.ty = Ty::Reference {
+            mutable: false,
+            target: Box::new(Ty::Array {
+                element: Box::new(element),
+                kind: sequence::Kind::Slice,
+            }),
+        };
+        let mut inputs = Vec::with_capacity(arguments.len() + 1);
+        inputs.push(receiver);
+        for mut argument in arguments {
+            self.move_local(&mut argument)?;
+            inputs.push(argument);
+        }
+        self.call_host_function(&items, owner, inputs, span(start, end))
+    }
+
     /// `Trait::f::<T>(..)`'s turbofish, given to `f`'s own parameters
     /// `generics` in `substitution`, as rustc's E0107 counts them.
     pub(super) fn apply_trait_turbofish(
