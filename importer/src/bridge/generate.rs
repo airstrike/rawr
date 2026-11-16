@@ -3752,6 +3752,26 @@ pub fn reach_lent_like<T: 'static>(_witness: std::marker::PhantomData<T>) -> Rea
     reach_lent::<T>
 }
 
+/// [`reach_some`] at the type `witness` names.
+#[allow(dead_code)]
+pub fn reach_some_like<T: 'static>(_witness: std::marker::PhantomData<T>) -> Reach {
+    reach_some::<T>
+}
+
+/// [`reach_lent`] of what the `Some` of an `Option<&T>` holds.
+#[allow(dead_code)]
+pub fn reach_some<T: 'static>(
+    value: Dynamic,
+    mutable: bool,
+    visit: &mut dyn FnMut(Reached<'_>),
+) -> Result<(), Error> {
+    let inner = value
+        .read_lock::<Option<Dynamic>>()
+        .and_then(|option| option.clone())
+        .ok_or(Error::TypeMismatch)?;
+    reach_lent::<T>(inner, mutable, visit)
+}
+
 #[allow(dead_code)]
 pub fn reach_lent<T: 'static>(
     value: Dynamic,
@@ -3776,6 +3796,19 @@ pub fn reach_lent<T: 'static>(
         }
         return __rawr_internal::scope::with_ref::<LenderF<T>, _>(nonce, |value| visit(Reached::Shared(value)))
             .map_err(|error| Error::Lent(std::any::type_name::<T>(), error));
+    }
+    // An element of a slice native code lends, as a lent slice's `find`
+    // gives one, is reached where it is.
+    if let Some(place) = __rawr_internal::place::get(&value) {
+        return __rawr_internal::place::reach_as::<T, _>(&place, mutable, |mut access| {
+            if mutable {
+                visit(Reached::Mutable(access.write()?));
+            } else {
+                visit(Reached::Shared(access.read()));
+            }
+            Ok(())
+        })
+        .map_err(|error| Error::Value(error.to_string()));
     }
     // A marked value native code lent whole is reached by that lend, so
     // native code is given its own reference back, as rustc reborrows it
@@ -4081,6 +4114,65 @@ pub fn reach_lender<T: 'static>(
     })
 }
 
+/// The type `T` of the receiver a lent slice borrows, written once where
+/// a table of a type that holds an opaque one writes it at its witness
+/// (`around`), and sent with the closures that reach the receiver whatever
+/// `T` holds.
+pub struct Lends<T>(std::marker::PhantomData<fn() -> T>);
+
+impl<T> Clone for Lends<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Lends<T> {}
+
+/// The receiver type `T` of a lent slice.
+#[allow(dead_code)]
+pub fn lends<T>() -> Lends<T> {
+    Lends(std::marker::PhantomData)
+}
+
+/// [`lends`] at the type `witness` names.
+#[allow(dead_code)]
+pub fn lends_like<T>(_witness: std::marker::PhantomData<T>) -> Lends<T> {
+    Lends(std::marker::PhantomData)
+}
+
+impl<T: 'static> Lends<T> {
+    /// [`reach_lender`] of a `T`.
+    #[allow(dead_code)]
+    pub fn reach(
+        self,
+        lender: &Lender,
+        visit: &mut dyn FnMut(&T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
+    ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
+        reach_lender(lender, visit)
+    }
+
+    /// [`share_lender`] of a `T`.
+    #[allow(dead_code)]
+    pub fn share(
+        self,
+        lender: &Lender,
+        arena: &mut dyn Any,
+    ) -> Result<std::rc::Rc<dyn Any>, Box<__rawr_internal::EvalAltResult>> {
+        share_lender::<T>(lender, arena)
+    }
+
+    /// The slice `slice` lends of `receiver`, a `T` [`Self::share`]
+    /// shared, held past one operation (`place::slice::SliceHold`).
+    #[allow(dead_code)]
+    pub fn hold<E: 'static>(
+        self,
+        receiver: std::rc::Rc<dyn Any>,
+        slice: impl Fn(&T) -> &[E] + 'static,
+    ) -> __rawr_internal::place::slice::SliceHold<E> {
+        __rawr_internal::place::slice::SliceHold::of(receiver, slice)
+    }
+}
+
 /// Reach the value `lender` names mutably, for the scope a pattern through
 /// `&mut T` lends its fields to. A value in a slot is leased for the
 /// scope, so the arena is free while the fields are lent, every other use
@@ -4135,18 +4227,62 @@ pub fn with_lent_arguments(
     lendable: &[(usize, bool, Reach)],
     body: &mut dyn FnMut(&mut Arguments<'_, '_, '_>, &mut LentArguments<'_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, Error> {
-    let found: Vec<_> = lendable
+    // An element of a slice a crate value lends is reached first: the value
+    // it reaches is then claimed, and another argument that borrows that
+    // value shares the claim, as Rust's shared borrows do.
+    let (placed, found): (Vec<_>, Vec<_>) = found_lent(arguments, lendable)
+        .into_iter()
+        .partition(|(_, _, value, _)| is_placed(value));
+    if placed.is_empty() {
+        return nest_lent(arguments, &found, &mut Vec::new(), body);
+    }
+    nest_lent(arguments, &placed, &mut Vec::new(), &mut |arguments, reached| {
+        let found: Vec<_> = found_lent(arguments, lendable)
+            .into_iter()
+            .filter(|(index, ..)| !placed.iter().any(|(at, ..)| at == index))
+            .collect();
+        let mut carried: Vec<(usize, Option<Reached<'_>>)> = reached
+            .iter_mut()
+            .map(|(index, value)| (*index, value.as_mut().map(Reached::reborrow)))
+            .collect();
+        nest_lent(arguments, &found, &mut carried, body)
+    })
+}
+
+/// The arguments at `lendable` that are values native code lends, each
+/// with how to reach it.
+fn found_lent(
+    arguments: &Arguments<'_, '_, '_>,
+    lendable: &[(usize, bool, Reach)],
+) -> Vec<(usize, bool, Dynamic, Reach)> {
+    let lent = |value: &Dynamic| {
+        value.is::<__rawr_internal::scope::Lent>()
+            || __rawr_internal::place::get(value).is_some()
+            || lender_nonce(value).is_some()
+            || __rawr_internal::island::lends_whole(value)
+    };
+    lendable
         .iter()
         .filter_map(|&(index, mutable, reach)| {
             let value = arguments.values.get(index)?;
-            (value.is::<__rawr_internal::scope::Lent>()
-                || __rawr_internal::place::get(value).is_some()
-                || lender_nonce(value).is_some()
-                || __rawr_internal::island::lends_whole(value))
-                .then(|| (index, mutable, (**value).clone(), reach))
+            // Or the `Some` of an `Option<&T>` holds one (`reach_some`).
+            let some = || {
+                value
+                    .read_lock::<Option<Dynamic>>()
+                    .is_some_and(|option| option.as_ref().is_some_and(lent))
+            };
+            (lent(value) || some()).then(|| (index, mutable, (**value).clone(), reach))
         })
-        .collect();
-    nest_lent(arguments, &found, &mut Vec::new(), body)
+        .collect()
+}
+
+/// Whether `value` is an element of a slice a crate value lends, or the
+/// `Some` of an `Option<&T>` holds one.
+fn is_placed(value: &Dynamic) -> bool {
+    __rawr_internal::place::get(value).is_some()
+        || value
+            .read_lock::<Option<Dynamic>>()
+            .is_some_and(|option| option.as_ref().and_then(__rawr_internal::place::get).is_some())
 }
 
 /// Run `body` with the `&[T]` argument at `index` reached where it is,
@@ -4289,6 +4425,29 @@ pub fn nest_lent(
         return body(arguments, reached);
     };
     let mut result = None;
+    // An element of a slice a crate value lends, as a lent slice's `find`
+    // gives one, reaches that value where the arena holds it: the arena is
+    // lent while it is reached, and the call takes it back inside.
+    if is_placed(value) {
+        let Arguments { values, arena } = arguments;
+        lend(arena, || {
+            reach(value.clone(), *mutable, &mut |value| {
+                let mut inner: Vec<(usize, Option<Reached<'_>>)> = reached
+                    .iter_mut()
+                    .map(|(index, value)| (*index, value.as_mut().map(Reached::reborrow)))
+                    .collect();
+                inner.push((*index, Some(value)));
+                result = Some(
+                    __rawr_internal::island::lend::with(|arena: &mut Arena| {
+                        let mut arguments = Arguments { values: &mut **values, arena };
+                        nest_lent(&mut arguments, rest, &mut inner, body)
+                    })
+                    .unwrap_or(Err(Error::Stale)),
+                );
+            })
+        })?;
+        return result.unwrap_or_else(|| Err(Error::Value("native argument was not reached".into())));
+    }
     reach(value.clone(), *mutable, &mut |value| {
         let mut inner: Vec<(usize, Option<Reached<'_>>)> = reached
             .iter_mut()
@@ -12383,6 +12542,20 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
     }
     let mut lent = Vec::new();
     for (index, input) in runtime_inputs(signature, offset) {
+        // An `Option<&T>` of a crate value, as one a lent slice's `find`
+        // gives: what its `Some` holds is reached where it is.
+        if let convert::Type::Option(inner) = input
+            && let convert::Type::Borrowed { mutable: false, ty } = &**inner
+            && let ty = substituted(ty, signature, substitutions)?
+            && matches!(ty, convert::Type::Nominal { .. })
+            && !carries_lifetime(&ty)
+            && !is_value(&ty)
+            && counted_element(&ty).is_none()
+            && let Some(rust) = concrete_type(&ty)
+        {
+            lent.push((index, false, format!("reach_some::<{rust}>")));
+            continue;
+        }
         let convert::Type::Borrowed { mutable, ty } = input else {
             continue;
         };
@@ -14053,6 +14226,31 @@ fn render_adapter_body(
             output
                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
                 .map_err(request::unwritable)?;
+        }
+        Operation::Function {
+            signature,
+            substitutions,
+            constants,
+            functions,
+            mappers,
+            container_parameters,
+            associated,
+            call: None,
+            ..
+        } if replay.is_none()
+            && functions.is_empty()
+            && mappers.is_empty()
+            && lent_slice_of_input(signature, substitutions).is_some() =>
+        {
+            render_lent_slice_of_input(
+                plan,
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                *associated,
+                output,
+            )?;
         }
         Operation::Function {
             signature,
@@ -17566,8 +17764,34 @@ fn lent_slice(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
 ) -> Option<convert::Type> {
-    if !signature.inputs().is_empty() || signature.guard().is_some() || signature.scope().is_some()
-    {
+    if !signature.inputs().is_empty() {
+        return None;
+    }
+    lent_output_slice(signature, substitutions)
+}
+
+/// The element of the `&[T]` a function lends from its one input, a shared
+/// borrow, as a trait's `&self` method over its `Self` is called, when the
+/// slice is lent in place as [`lent_slice`]'s is; and the type the input
+/// borrows.
+fn lent_slice_of_input(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Option<(convert::Type, convert::Type)> {
+    let [convert::Type::Borrowed { mutable: false, ty }] = signature.inputs() else {
+        return None;
+    };
+    let element = lent_output_slice(signature, substitutions)?;
+    Some((element, instantiated(ty, signature, substitutions)?))
+}
+
+/// The element of a `&[T]` output a call lends in place, for
+/// [`lent_slice`] and [`lent_slice_of_input`].
+fn lent_output_slice(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Option<convert::Type> {
+    if signature.guard().is_some() || signature.scope().is_some() {
         return None;
     }
     let convert::Type::Borrowed { mutable: false, ty } =
@@ -17589,7 +17813,7 @@ fn lent_slice(
     ) && !is_value(&element)
         && !is_duration(&element)
         && !is_facade_value(&element)
-        && place::available(&element))
+        && place::lendable(&element))
     .then_some(*element)
 }
 
@@ -17634,7 +17858,6 @@ fn render_lent_slice(
 ) -> Result<(), request::Error> {
     let element = lent_slice(signature, substitutions)
         .ok_or_else(|| request::drift("a lent slice's element"))?;
-    let policy = place::policy(&element)?;
     let mut container = Vec::new();
     render_container_path(
         path,
@@ -17658,11 +17881,62 @@ fn render_lent_slice(
     )?;
     call.write_all(b")").map_err(request::unwritable)?;
     let call = String::from_utf8(call).map_err(request::unwritable)?;
+    render_lender_slice(&element, &container, &call, output)
+}
+
+/// A function's `&[T]` lent in place from its one input
+/// (`lent_slice_of_input`), as a `&self` method's is
+/// ([`render_lent_slice`]): the call is made again on the input it borrows
+/// at each operation.
+fn render_lent_slice_of_input(
+    plan: &Plan,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    associated: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let (element, lender) = lent_slice_of_input(signature, substitutions)
+        .ok_or_else(|| request::drift("a lent slice's element"))?;
+    let container =
+        concrete_type(&lender).ok_or_else(|| request::drift("a lent slice's lender type"))?;
+    let mut call = Vec::new();
+    render_function_path(
+        plan,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        associated,
+        &mut call,
+    )?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b"(receiver)").map_err(request::unwritable)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    render_lender_slice(&element, &container, &call, output)
+}
+
+/// The body that lends a slice of `element`s in place, which `call` gives
+/// from a `receiver: &container` the adapter's first argument names.
+fn render_lender_slice(
+    element: &convert::Type,
+    container: &str,
+    call: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let policy = place::policy(element)?;
     // A call whose output keeps the slice borrowed holds it past one
-    // operation: the receiver is shared from its slot, and the method lends
-    // the slice of that (`place::slice::held`).
-    let item =
-        concrete_type(&element).ok_or_else(|| request::drift("a lent slice's element type"))?;
+    // operation: the receiver is shared from its slot, and the call lends
+    // the slice of that (`place::slice::held`). The receiver's type is
+    // written once, in `lends`, which a table of a type holding an opaque
+    // one writes at its witness (`around`).
     writeln!(
         output,
         "    let witness = output_witness().ok_or(Error::Stale)?;
@@ -17671,15 +17945,13 @@ fn render_lent_slice(
         None => Lender::Handle(native_handle(arguments, 0, false)?),
     }};
     let held = lender.clone();
+    let lends = lends::<{container}>();
     __rawr_internal::place::slice::lent_by_holding::<{policy}>(
         &witness,
-        move |visit| reach_lender::<{container}>(&lender, &mut |receiver| visit({call})),
+        move |visit| lends.reach(&lender, &mut |receiver| visit({call})),
         move |arena| {{
-            let receiver = share_lender::<{container}>(&held, arena)?;
-            Ok(__rawr_internal::place::slice::SliceHold::<{item}>::new(receiver, |receiver| {{
-                let receiver = receiver.downcast_ref::<{container}>()?;
-                Some({call})
-            }}))
+            let receiver = lends.share(&held, arena)?;
+            Ok(lends.hold(receiver, |receiver| {call}))
         }},
     )
     .map_err(|error| Error::Value(error.to_string()))"
@@ -20817,11 +21089,41 @@ fn render_take_input(
             1,
         )
     {
+        let take = format!(
+            "{{ let value_1 = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {} }}",
+            lease.take
+        );
+        let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
+        // The `Some` of an `Option<&T>` that is a value native code lends,
+        // as an element of a lent slice, is reached where it is
+        // (`reach_some`).
+        if !future
+            && LENT_ARGUMENTS.get()
+            && let convert::Type::Option(inner) = &lending
+            && let convert::Type::Borrowed { mutable: false, ty } = &**inner
+            && matches!(**ty, convert::Type::Nominal { .. })
+            && !carries_lifetime(ty)
+            && let Some(rust) = concrete_type(ty)
+        {
+            return writeln!(
+                output,
+                "    #[allow(unused_mut)]
+    let mut argument_{local}_held: {held};
+    let argument_{local}: Option<&{rust}> = match lent_argument(lent, {index}) {{
+        Some(value) => Some(value.shared::<{rust}>().ok_or(Error::Lent({rust:?}, __rawr_internal::scope::Error::Mismatch))?),
+        None => {{
+            argument_{local}_held = {take};
+            {borrow}
+        }}
+    }};",
+                held = lease.held,
+            )
+            .map_err(request::unwritable);
+        }
         writeln!(
             output,
-            "    #[allow(unused_mut)]\n    let mut argument_{local}_held: {held} = {{ let value_1 = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {take} }};",
+            "    #[allow(unused_mut)]\n    let mut argument_{local}_held: {held} = {take};",
             held = lease.held,
-            take = lease.take,
         )
         .map_err(request::unwritable)?;
         // A future borrows it again inside itself (`future_borrows`), and
@@ -20829,7 +21131,6 @@ fn render_take_input(
         if future {
             return Ok(());
         }
-        let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
         return writeln!(output, "    let argument_{local} = {borrow};")
             .map_err(request::unwritable);
     }

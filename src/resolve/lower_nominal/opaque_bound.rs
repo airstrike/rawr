@@ -16,6 +16,11 @@ pub(super) struct Bounds {
     /// By the local's name, with the declaration it was bound at, so a later
     /// local of the name is apart.
     locals: BTreeMap<ImmutableString, (Span, ImmutableString)>,
+    /// The member positions `bound_method` spliced the trait's method at.
+    /// A macro's body takes its call's position for each of its tokens, so
+    /// a later member there is at the same position, and is the trait's
+    /// only when its own receiver has the bound.
+    spliced: BTreeSet<Position>,
 }
 
 impl Parser<'_> {
@@ -78,7 +83,13 @@ impl Parser<'_> {
     /// known by a trait that has `member`: the trait's method, as
     /// `Trait::member(&value, ..)` names it.
     pub(super) fn bound_method(&mut self, value: &ParsedExpr, member: &str, member_span: Span) {
-        if self.spliced_traits.contains_key(&member_span.start()) {
+        let at = member_span.start();
+        // A splice this made for an earlier member at the position holds
+        // for that member alone.
+        if self.opaque_bounds.borrow_mut().spliced.remove(&at) {
+            self.spliced_traits.remove(&at);
+        }
+        if self.spliced_traits.contains_key(&at) {
             return;
         }
         let Some(bound) = self.opaque_bound(value) else {
@@ -86,7 +97,8 @@ impl Parser<'_> {
         };
         let path = rawr_import::surface::member::path(&bound, member);
         if self.models.host_items(&path).is_some() {
-            self.spliced_traits.insert(member_span.start(), bound);
+            self.spliced_traits.insert(at, bound);
+            self.opaque_bounds.borrow_mut().spliced.insert(at);
         }
     }
 }

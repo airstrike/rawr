@@ -2885,6 +2885,23 @@ fn a_method_of_an_opaque_result_is_its_bound_s_and_not_the_hidden_type_s() {
     );
 }
 
+/// #2102: a crate trait's `&self` method that lends a slice of a type
+/// naming the trait's associated types, on a script function's `impl
+/// Staged` result, lends the slice in place though its elements don't
+/// clone and hold the program's own `Board`, and an element `find` gives
+/// crosses back as `Option<&Stage<..>>`.
+/// In a macro's body, whose tokens share one position, only the member of
+/// the `impl Staged` value is the trait's. The output is `cargo run`'s.
+#[test]
+fn a_trait_method_lends_a_slice_of_its_associated_types_in_place() {
+    let (rawr, cargo) = both_printed("staged.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "stages 2\nfound Some(\"full\")\nstarted (2, 2)\nmissing (1, 2)\ncounted (2, 1)"
+    );
+}
+
 /// #2013: a program's impl of a crate trait whose method gives `impl
 /// Shape<T> + 'a` gives a crate type holding another crate function's
 /// opaque output, as markdown's `Viewer::code_block` gives `Hover<impl

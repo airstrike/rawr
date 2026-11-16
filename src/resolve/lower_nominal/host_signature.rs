@@ -669,9 +669,13 @@ impl<'a> Parser<'a> {
             parameters.extend(names.into_iter().zip(types));
         }
         let resolved_receiver = receiver.map(|ty| self.inference.resolve(ty));
-        let host_receiver = resolved_receiver.as_ref().map(|ty| match ty {
-            Ty::Reference { target, .. } => target.as_ref(),
-            ty => ty,
+        // Through each borrow, as autoderef reaches the type of a closure's
+        // `&&T` item.
+        let host_receiver = resolved_receiver.as_ref().map(|mut ty| {
+            while let Ty::Reference { target, .. } = ty {
+                ty = target.as_ref();
+            }
+            ty
         });
         if let Some(Ty::Host { proof, arguments }) = host_receiver {
             let definition = match proof.definition.identity().imported() {
