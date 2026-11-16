@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.216",
+  "version": "0.3.217",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,20 +9,22 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Runner builds no longer wait for each other when rawr's shared runtime is already built, so several `rawr run` or `rawr test` builds on one machine run side by side.","issues":[2094]},
-        {"text":"A crate trait's method reaches a slice through a blanket impl bounded on `&I`, as rayon's `par_iter()` does on a slice, `Vec` or array with `use rayon::prelude::*;`. A crate type that derives `Clone` and holds a boxed script closure, as rayon's `Map`, no longer fails the runner build.","issues":[2079,2064]},
-        {"text":"iced_test Emulator tests build and run under `rawr test` as under `cargo test`: a program's events, channels and presets are compiled where rustc knows the program's type, including a type a builder method gives.","issues":[2060,2078]},
-        {"text":"Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration.","issues":[2077]},
-        {"text":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name.","issues":[2105],"refs":[2099]},
-        {"text":"A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`.","issues":[2102]},
-        {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]},
-        {"text":"A glob import in a marked module brings in what its parent's own globs and imports bind, such as a native module the grandparent declares, as rustc does.","issues":[2110]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.217",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"Runner builds no longer wait for each other when rawr's shared runtime is already built, so several `rawr run` or `rawr test` builds on one machine run side by side.","issues":[2094]},
+          {"text":"A crate trait's method reaches a slice through a blanket impl bounded on `&I`, as rayon's `par_iter()` does on a slice, `Vec` or array with `use rayon::prelude::*;`. A crate type that derives `Clone` and holds a boxed script closure, as rayon's `Map`, no longer fails the runner build.","issues":[2079,2064]},
+          {"text":"iced_test Emulator tests build and run under `rawr test` as under `cargo test`: a program's events, channels and presets are compiled where rustc knows the program's type, including a type a builder method gives.","issues":[2060,2078]},
+          {"text":"Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration.","issues":[2077]},
+          {"text":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name.","issues":[2105],"refs":[2099]},
+          {"text":"A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`.","issues":[2102]},
+          {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]},
+          {"text":"A glob import in a marked module brings in what its parent's own globs and imports bind, such as a native module the grandparent declares, as rustc does.","issues":[2110]}
+        ]
+      },
       {
         "version": "0.3.216",
         "date": "2026-11-15",
@@ -4508,11 +4510,11 @@
     {"issue":2057,"title":"rawr test panics: an adapter reached a lent value or a region value as a type it does not hold (editor, tooltip)","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2058,"title":"rawr test panics: a value native code gave a script function cannot cross: Stale (geometry)","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2059,"title":"False runtime E0502 \"a view still borrows it\" in update after the simulator that borrowed the state dropped","state":"closed","category":"No glue (D593)","release":"0.3.216"},
-    {"issue":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"closed","category":"No glue (D593)"},
+    {"issue":2060,"title":"Generated adapters name an opaque program as iced::Application<_> (E0283), so no iced_test Emulator test builds","state":"closed","category":"No glue (D593)","release":"0.3.217"},
     {"issue":2061,"title":"E0507 on a builder chain whose methods return &mut Self: tokio Builder::new_current_thread().enable_time().build()","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
     {"issue":2062,"title":"Code that panics natively with no reactor running (tokio::time::sleep outside a runtime) passes under rawr","state":"open","category":"Divergences from rustc"},
     {"issue":2063,"title":"A &static [u8] into() a Cow<static, [u8]> is rejected (E0277): [u8] has no From<&[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
-    {"issue":2064,"title":"rayon prelude par_iter on a slice is not found (E0599)","state":"closed","category":"No glue (D593)"},
+    {"issue":2064,"title":"rayon prelude par_iter on a slice is not found (E0599)","state":"closed","category":"No glue (D593)","release":"0.3.217"},
     {"issue":2065,"title":"futures StreamExt::next is not taken as a Future: block_on(receiver.next()) fails E0308","state":"open","category":"No glue (D593)"},
     {"issue":2066,"title":"Associated-type projections of an imported trait are unknown member, and << after a generic argument lexes as a shift","state":"open","category":"Divergences from rustc"},
     {"issue":2067,"title":"An imported trait path call with Self inferred resolves to an unrelated default; <T as Trait>::f() is unsupported","state":"open","category":"Divergences from rustc"},
@@ -4525,9 +4527,9 @@
     {"issue":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2075,"title":"A call on a value holding an opaque wrapper type reaches each operand through a function generic over the opaque type","state":"closed","category":"No glue (D593)","release":"0.3.216"},
     {"issue":2076,"title":"A crate trait provided method whose type parameter shares its impl parameter name fails E0403","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
-    {"issue":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"closed","category":"Divergences from rustc"},
-    {"issue":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"closed","category":"No glue (D593)"},
-    {"issue":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"closed","category":"Divergences from rustc"},
+    {"issue":2077,"title":"A loop moving a match binding whose type holds an opaque type reports a false E0382","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
+    {"issue":2078,"title":"Enum variant code and generic producers at an opaque type are compiled outside the producing call table","state":"closed","category":"No glue (D593)","release":"0.3.217"},
+    {"issue":2079,"title":"A trait method on a slice through a blanket impl bounded on &I is not resolved","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
     {"issue":2080,"title":"A crate closure parameter whose input is Self::Item is refused","state":"closed","category":"Divergences from rustc","release":"0.3.216"},
     {"issue":2081,"title":"Split the embeddable engine from the `rawr` crate name, so an app run under `rawr run` can depend on the engine as is","state":"open","category":"Importer"},
     {"issue":2082,"title":"std::process::Command doesn't run: a build or deploy script can't spawn a process","state":"open","category":"Divergences from rustc"},
@@ -4542,7 +4544,7 @@
     {"issue":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"open","category":"Divergences from rustc"},
     {"issue":2092,"title":"A frontmatter script outside any workspace fails to build serde_json or regex","state":"open","category":"Importer"},
     {"issue":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open","category":"Divergences from rustc"},
-    {"issue":2094,"title":"Runner builds wait for each other: runtime::ensure asks for the exclusive lock while running builds hold shared leases","state":"open","category":"Health"},
+    {"issue":2094,"title":"Runner builds wait for each other: runtime::ensure asks for the exclusive lock while running builds hold shared leases","state":"closed","category":"Health","release":"0.3.217"},
     {"issue":2095,"title":"A crate trait implemented directly for [T] or &[T] gives a slice no method","state":"open","category":"Divergences from rustc"},
     {"issue":2096,"title":"A provided or generic method through a blanket impl slice application is rejected","state":"open","category":"Divergences from rustc"},
     {"issue":2097,"title":"A slice member receiver borrow ends at the call in the borrow checker","state":"open","category":"Divergences from rustc"},
@@ -4550,15 +4552,15 @@
     {"issue":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"open","category":"Divergences from rustc"},
     {"issue":2100,"title":"A variant's lending matchers at an enum holding an opaque type refuse the value","state":"open","category":"No glue (D593)"},
     {"issue":2101,"title":"Reduce the opaque-table builder-chain case to a crossing fixture","state":"open","category":"No glue (D593)"},
-    {"issue":2102,"title":"A trait method whose output is a slice of an element naming the trait's associated types is refused (SliceType)","state":"closed","category":"Divergences from rustc"},
+    {"issue":2102,"title":"A trait method whose output is a slice of an element naming the trait's associated types is refused (SliceType)","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
     {"issue":2103,"title":"A crate method parameter `impl IntoIterator<Item = &'static str>` is refused as borrowing a type that can't be lent yet","state":"open","category":"Divergences from rustc"},
     {"issue":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open","category":"Divergences from rustc"},
-    {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"open","category":"Divergences from rustc"},
+    {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
     {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open","category":"Divergences from rustc"},
     {"issue":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open","category":"Divergences from rustc"},
     {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"},
     {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"},
-    {"issue":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed","category":"Divergences from rustc"},
+    {"issue":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
     {"issue":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [

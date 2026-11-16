@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.217 (2026-11-16)
+
 - Runner builds no longer wait for each other when rawr's shared runtime is already built, so several `rawr run` or `rawr test` builds on one machine run side by side. (#2094)
 - A crate trait's method reaches a slice through a blanket impl bounded on `&I`, as rayon's `par_iter()` does on a slice, `Vec` or array with `use rayon::prelude::*;`. A crate type that derives `Clone` and holds a boxed script closure, as rayon's `Map`, no longer fails the runner build. (#2079, #2064)
 - iced_test Emulator tests build and run under `rawr test` as under `cargo test`: a program's events, channels and presets are compiled where rustc knows the program's type, including a type a builder method gives. (#2060, #2078)
