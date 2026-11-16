@@ -16,7 +16,9 @@
         {"text":"A crate trait's method reaches a slice through a blanket impl bounded on `&I`, as rayon's `par_iter()` does on a slice, `Vec` or array with `use rayon::prelude::*;`. A crate type that derives `Clone` and holds a boxed script closure, as rayon's `Map`, no longer fails the runner build.","issues":[2079,2064]},
         {"text":"iced_test Emulator tests build and run under `rawr test` as under `cargo test`: a program's events, channels and presets are compiled where rustc knows the program's type, including a type a builder method gives.","issues":[2060,2078]},
         {"text":"Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration.","issues":[2077]},
-        {"text":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name.","issues":[2105],"refs":[2099]}
+        {"text":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name.","issues":[2105],"refs":[2099]},
+        {"text":"A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`.","issues":[2102]},
+        {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]}
       ]
     },
     "releases": [
@@ -4547,10 +4549,13 @@
     {"issue":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"open","category":"Divergences from rustc"},
     {"issue":2100,"title":"A variant's lending matchers at an enum holding an opaque type refuse the value","state":"open","category":"No glue (D593)"},
     {"issue":2101,"title":"Reduce the opaque-table builder-chain case to a crossing fixture","state":"open","category":"No glue (D593)"},
-    {"issue":2102,"title":"A trait method whose output is a slice of an element naming the trait's associated types is refused (SliceType)","state":"open","category":"Divergences from rustc"},
+    {"issue":2102,"title":"A trait method whose output is a slice of an element naming the trait's associated types is refused (SliceType)","state":"closed","category":"Divergences from rustc"},
     {"issue":2103,"title":"A crate method parameter `impl IntoIterator<Item = &'static str>` is refused as borrowing a type that can't be lent yet","state":"open","category":"Divergences from rustc"},
     {"issue":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open","category":"Divergences from rustc"},
-    {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"open","category":"Divergences from rustc"}
+    {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"open","category":"Divergences from rustc"},
+    {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open","category":"Divergences from rustc"},
+    {"issue":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open","category":"Divergences from rustc"},
+    {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5037,7 +5042,7 @@
           "start": 47,
           "size": 6,
           "state": "now",
-          "note": "2026-11-16: headless parity ('/Users/andy/projects/rawr/scripts/cargo.mjs' test vs rawr test) agrees for counter and tour with the Emulator half; styling's upstream test matches. Left: todos' Emulator half (false E0061 on an impl Trait value's method).",
+          "note": "2026-11-16: headless parity ('/Users/andy/projects/rawr/scripts/cargo.mjs' test vs rawr test, Emulator half included) agrees for counter, tour and todos; styling's upstream test matches.",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"retired"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"closed"},
@@ -5251,9 +5256,12 @@
             {"number":2099,"title":"A method call on a script fn's `impl Trait` value resolves to the hidden type's inherent method (false E0061)","state":"open"},
             {"number":2100,"title":"A variant's lending matchers at an enum holding an opaque type refuse the value","state":"open"},
             {"number":2101,"title":"Reduce the opaque-table builder-chain case to a crossing fixture","state":"open"},
-            {"number":2102,"title":"A trait method whose output is a slice of an element naming the trait's associated types is refused (SliceType)","state":"open"},
+            {"number":2102,"title":"A trait method whose output is a slice of an element naming the trait's associated types is refused (SliceType)","state":"closed"},
             {"number":2103,"title":"A crate method parameter `impl IntoIterator<Item = &'static str>` is refused as borrowing a type that can't be lent yet","state":"open"},
-            {"number":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open"}
+            {"number":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open"},
+            {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open"},
+            {"number":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open"},
+            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"}
           ],
           "milestone": "0.3"
         },

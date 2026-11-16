@@ -10,6 +10,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - iced_test Emulator tests build and run under `rawr test` as under `cargo test`: a program's events, channels and presets are compiled where rustc knows the program's type, including a type a builder method gives. (#2060, #2078)
 - Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration. (#2077)
 - A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name. (#2105; part of #2099)
+- A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`. (#2102)
+- A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments. (#2102)
 
 ## 0.3.216 (2026-11-15)
 
