@@ -57,6 +57,11 @@ pub(crate) struct Callable {
     /// A trait impl's function for a builtin or a crate's type, which other
     /// functions call as a helper too: its source evidence is theirs.
     helper: bool,
+    /// An `async fn` or method: its body runs as an async block, one of
+    /// its closures, as Rust desugars it.
+    // Only a reload's refusal reads it, in a rust-import sync build.
+    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    asynchronous: bool,
 }
 
 struct Locations {
@@ -274,6 +279,7 @@ impl Executable {
                     signature: None,
                     locations: None,
                     helper: false,
+                    asynchronous: false,
                 },
             );
         }
@@ -372,6 +378,15 @@ impl Executable {
         let module: &crate::Module = self.ast.as_ref();
         let function = module.get_script_fn(name, callable.arity)?;
         function.machine.as_ref().map(|machine| machine.body())
+    }
+
+    /// Whether the closure `step` names is written by an `async fn` or
+    /// method of this program: its body, or an async block inside it.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn in_async_fn(&self, step: &item::Key) -> bool {
+        self.callables
+            .iter()
+            .any(|(key, callable)| callable.asynchronous && key.writes(step))
     }
 
     pub(crate) fn related_callable(&self, key: &item::Key) -> Option<&Callable> {
@@ -586,6 +601,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                         signature: Some(super::signatures::Signature::from_resolved(function)),
                         locations: None,
                         helper: false,
+                        asynchronous: function.body.asynchronous,
                     },
                 );
             }
@@ -626,6 +642,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                             signature: None,
                             locations: None,
                             helper: false,
+                            asynchronous: false,
                         },
                     );
                 }
@@ -667,6 +684,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                 signature: None,
                 locations: None,
                 helper: false,
+                asynchronous: definition.asynchronous(),
             },
         );
     }
@@ -703,6 +721,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                 signature: None,
                 locations: None,
                 helper: true,
+                asynchronous: definition.asynchronous(),
             },
         );
     }

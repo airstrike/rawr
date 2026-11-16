@@ -1765,16 +1765,29 @@ pub fn refusal(
 }
 
 /// Why `candidate` can't resume each suspended future: the body of an
-/// async function one waits in changed, or went.
+/// async function one waits in changed, or went. Of the bodies that
+/// changed, it names the innermost: a body another awaits first suspends
+/// after the one awaiting it.
 #[cfg(feature = "sync")]
 fn suspension(candidate: &crate::reload::Candidate) -> Option<String> {
     crate::future::suspended()
         .into_iter()
+        .rev()
         .find(|(step, body)| candidate.machine_body(step.key()) != Some(*body))
         .map(|(step, _)| {
-            let name = step.key().name();
-            let name = name.find("{closure#").map_or(name, |at| &name[..at]);
-            format!("`{name}`, which a suspended future waits in, changed")
+            let key = step.key();
+            let name = key.name();
+            let at = name.find("{closure#").unwrap_or(name.len());
+            let function = &name[..at];
+            // An `async fn`'s body is one of its closures, as Rust
+            // desugars it; any other is an async block.
+            if at == name.len() || candidate.in_async_fn(key) {
+                format!("`{function}`, which a suspended future waits in, changed")
+            } else {
+                format!(
+                    "an async block in `{function}`, which a suspended future waits in, changed"
+                )
+            }
         })
 }
 

@@ -183,6 +183,8 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     // A suspended future resumes in a save that left its function as it
     // was, and one that changed it restarts the program (#2117).
     a_suspended_future_restarts_only_for_an_edit_to_its_function(&universe);
+    a_suspended_future_resumes_where_it_waited_after_its_function_moves(&universe);
+    a_restart_for_an_edited_async_block_names_the_block(&universe);
 }
 
 /// A snippet's statements outside any function, as ?play runs them, call
@@ -379,6 +381,81 @@ fn a_suspended_future_restarts_only_for_an_edit_to_its_function(universe: &Unive
     drop(waiting);
     let edited = summed.replace("value + 1", "value + 3");
     assert_eq!(program.replace_now(edited.as_str()), Outcome::Swapped);
+}
+
+/// A future suspended in `wait` resumes at its `.await` after a save that
+/// adds a line to a function above it, which moves `wait` down the file:
+/// it goes on from the point it waited at, with the locals it held (#2126).
+fn a_suspended_future_resumes_where_it_waited_after_its_function_moves(universe: &Universe) {
+    let entry = PathBuf::from("/universe-moving/src/main.rs");
+    let text = WAITING.replacen(
+        "// rawr\n",
+        "// rawr\npub fn before(a: i64) -> i64 {\n    a\n}\n",
+        1,
+    );
+    let program = universe.program(entry, text.as_str(), Vec::new()).unwrap();
+    let mut opened = false;
+    let gate = future::Future::native(move || {
+        Box::pin(std::future::poll_fn(move |cx| {
+            if std::mem::replace(&mut opened, true) {
+                let output: future::Finish = Box::new(|| Ok(Dynamic::from(41_i64)));
+                std::task::Poll::Ready(output)
+            } else {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }))
+    });
+    let mut waiting = program
+        .call("wait", &mut [Dynamic::from(gate)])
+        .unwrap()
+        .cast::<future::Future>()
+        .into_script();
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.poll_output(&mut cx).is_pending());
+
+    let moved = text.replace("    a\n}", "    let b = a;\n    b\n}");
+    assert_eq!(program.replace_now(moved.as_str()), Outcome::Swapped);
+    let std::task::Poll::Ready(output) = waiting.poll_output(&mut cx) else {
+        panic!("the gate opens at the second poll");
+    };
+    assert_eq!(output.unwrap().as_int(), Ok(42));
+}
+
+const SPAWNING: &str = "// rawr
+pub fn spawn(gate: rawr::future::Future<i64>) -> impl std::future::Future<Output = i64> {
+    async move {
+        let value = gate.await;
+        value + 1
+    }
+}
+
+fn main() {}
+";
+
+/// A future suspended in an async block that a function which isn't
+/// async returns: a save that changes the block restarts the program, and
+/// the reason says the future waits in the block, not in the function.
+fn a_restart_for_an_edited_async_block_names_the_block(universe: &Universe) {
+    let entry = PathBuf::from("/universe-spawning/src/main.rs");
+    let program = universe.program(entry, SPAWNING, Vec::new()).unwrap();
+    let gate = future::Future::native(|| Box::pin(std::future::pending()));
+    let mut waiting = program
+        .call("spawn", &mut [Dynamic::from(gate)])
+        .unwrap()
+        .cast::<future::Future>()
+        .into_script();
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.poll_output(&mut cx).is_pending());
+
+    let edited = SPAWNING.replace("value + 1", "value + 2");
+    assert_eq!(
+        program.replace_now(edited.as_str()),
+        Outcome::Restarting {
+            reason: "an async block in `spawn`, which a suspended future waits in, changed"
+                .to_owned()
+        }
+    );
 }
 
 const TALLY: &str = "// rawr

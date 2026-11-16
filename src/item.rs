@@ -92,6 +92,20 @@ impl Key {
         }
     }
 
+    /// Whether `closure` is one of the closures this callable writes, as
+    /// [`Self::closure`] keys them.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn writes(&self, closure: &Self) -> bool {
+        closure.package() == self.package()
+            && closure.modules() == self.modules()
+            && closure.owner == self.owner
+            && closure.path.block() == self.path.block()
+            && closure
+                .name()
+                .strip_prefix(self.name())
+                .is_some_and(|rest| rest.starts_with("{closure#"))
+    }
+
     /// Return the canonical package component.
     #[must_use]
     pub fn package(&self) -> &str {
