@@ -3,9 +3,9 @@
   "updated": "2026-11-16",
   "version": "0.3.216",
   "examples": {
-    "running": 54,
+    "running": 56,
     "total": 56,
-    "note": "Headless parity, 2026-11-16: cargo test and rawr test agree on 54 of 56 iced examples, the iced_test Emulator half included. Left: arc's simulator frame and markdown's Emulator build."
+    "note": "Headless parity, 2026-11-16: cargo test and rawr test agree on all 56 iced examples, the iced_test Emulator half included. arc's frame is drawn from elapsed wall-clock time; a fixed-time sweep reproduces both runners' hashes (#2111)."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
@@ -18,7 +18,8 @@
         {"text":"Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration.","issues":[2077]},
         {"text":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name.","issues":[2105],"refs":[2099]},
         {"text":"A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`.","issues":[2102]},
-        {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]}
+        {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]},
+        {"text":"A glob import in a marked module brings in what its parent's own globs and imports bind, such as a native module the grandparent declares, as rustc does.","issues":[2110]}
       ]
     },
     "releases": [
@@ -4556,7 +4557,9 @@
     {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open","category":"Divergences from rustc"},
     {"issue":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open","category":"Divergences from rustc"},
     {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"},
-    {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"}
+    {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"},
+    {"issue":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed","category":"Divergences from rustc"},
+    {"issue":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5043,7 +5046,7 @@
           "start": 47,
           "size": 6,
           "state": "now",
-          "note": "2026-11-16: headless parity ('/Users/andy/projects/rawr/scripts/cargo.mjs' test vs rawr test, Emulator half included) agrees for counter, tour and todos; styling's upstream test matches.",
+          "note": "2026-11-16: headless parity ('/Users/andy/projects/rawr/scripts/cargo.mjs' test vs rawr test, Emulator half included) agrees on all 56 iced examples. Open gaps found on the way stay on this row.",
           "issues": [
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"retired"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"closed"},
@@ -5263,7 +5266,9 @@
             {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open"},
             {"number":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open"},
             {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"},
-            {"number":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open"}
+            {"number":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open"},
+            {"number":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed"},
+            {"number":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open"}
           ],
           "milestone": "0.3"
         },

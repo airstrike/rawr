@@ -11,7 +11,8 @@
       {"text":"Moving a value bound by a crate enum's pattern inside a loop is no longer reported as a use of a value moved in a previous iteration.","issues":[2077]},
       {"text":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name.","issues":[2105],"refs":[2099]},
       {"text":"A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`.","issues":[2102]},
-      {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]}
+      {"text":"A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments.","issues":[2102]},
+      {"text":"A glob import in a marked module brings in what its parent's own globs and imports bind, such as a native module the grandparent declares, as rustc does.","issues":[2110]}
     ]
   },
   "releases": [

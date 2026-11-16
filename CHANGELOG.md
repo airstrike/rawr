@@ -12,6 +12,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the trait's method as rustc does, even where the value's type has an inherent method of the same name. (#2105; part of #2099)
 - A crate trait's `&self` method that lends a slice of values naming the trait's associated types, as `presets(&self) -> &[Preset<Self::State, Self::Message>]`, works on an `impl Trait` value. The slice is lent in place even when its elements don't clone or hold the program's own types, and an element `find` gives passes back to a crate function as `Option<&T>`. (#2102)
 - A crate method called on a closure's `&&T` item, as in `.iter().find(|p| p.name() == ..)` over a generic crate type, is called at that type's arguments. (#2102)
+- A glob import in a marked module brings in what its parent's own globs and imports bind, such as a native module the grandparent declares, as rustc does. (#2110)
 
 ## 0.3.216 (2026-11-15)
 
