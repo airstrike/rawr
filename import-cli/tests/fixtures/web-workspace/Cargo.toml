@@ -1,0 +1,12 @@
+# A workspace whose member inherits its edition and a renamed dependency,
+# for `rawr run --web`: the page compiles the member as Cargo resolves it.
+[workspace]
+members = ["app"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+digits = { package = "itoa", version = "1" }

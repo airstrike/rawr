@@ -179,6 +179,10 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     a_held_value_keeps_its_fields_across_saves_that_add_reorder_and_remove(&universe);
     a_new_field_without_a_default_refuses_a_save_a_held_value_would_take(&universe);
     a_held_value_in_a_removed_variant_refuses_the_save(&universe);
+
+    // A suspended future resumes in a save that left its function as it
+    // was, and one that changed it restarts the program (#2117).
+    a_suspended_future_restarts_only_for_an_edit_to_its_function(&universe);
 }
 
 /// A snippet's statements outside any function, as ?play runs them, call
@@ -329,6 +333,52 @@ fn a_save_that_changes_a_type_nothing_holds_or_makes_swaps_in(universe: &Univers
     assert_eq!(total(&program, 2, 3), 5);
     let said = outcomes.try_iter().collect::<Vec<_>>();
     assert_eq!(said, [Outcome::Queued, Outcome::Swapped]);
+}
+
+const WAITING: &str = "// rawr
+pub async fn wait(gate: rawr::future::Future<i64>) -> i64 {
+    let value = gate.await;
+    value + 1
+}
+
+pub fn total(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn main() {}
+";
+
+/// A future suspended in `wait`, awaiting a native future that never
+/// ends, keeps its frame across a save that leaves `wait` as it was. A
+/// save that changes `wait` can't resume it, and restarts the program.
+fn a_suspended_future_restarts_only_for_an_edit_to_its_function(universe: &Universe) {
+    let entry = PathBuf::from("/universe-waiting/src/main.rs");
+    let program = universe.program(entry, WAITING, Vec::new()).unwrap();
+    let gate = future::Future::native(|| Box::pin(std::future::pending()));
+    let mut waiting = program
+        .call("wait", &mut [Dynamic::from(gate)])
+        .unwrap()
+        .cast::<future::Future>()
+        .into_script();
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.poll_output(&mut cx).is_pending());
+
+    let summed = WAITING.replace("a + b", "a + b + 1");
+    assert_eq!(program.replace_now(summed.as_str()), Outcome::Swapped);
+    assert_eq!(total(&program, 2, 3), 6);
+    let edited = summed.replace("value + 1", "value + 2");
+    assert_eq!(
+        program.replace_now(edited.as_str()),
+        Outcome::Restarting {
+            reason: "`wait`, which a suspended future waits in, changed".to_owned()
+        }
+    );
+    assert_eq!(total(&program, 2, 3), 6);
+
+    // Once the future is gone, nothing waits in `wait`.
+    drop(waiting);
+    let edited = summed.replace("value + 1", "value + 3");
+    assert_eq!(program.replace_now(edited.as_str()), Outcome::Swapped);
 }
 
 const TALLY: &str = "// rawr

@@ -20,7 +20,7 @@ use std::process::Command;
 use super::{bindgen, Error};
 
 /// The target a page's runner is built for.
-const TARGET: &str = "wasm32-unknown-unknown";
+pub(super) const TARGET: &str = "wasm32-unknown-unknown";
 
 /// rawr-web's page for a project, which runs its runner.
 const PAGE: &str = include_str!("../../../web/www/run.html");

@@ -134,6 +134,8 @@ struct Built {
     manifest: PathBuf,
     target: Target,
     mode: Mode,
+    /// The platform Cargo was asked to build for, the host's when `None`.
+    platform: Option<Box<str>>,
     selection: features::Selection,
     inputs: Inputs,
     unit: Unit,
@@ -477,6 +479,18 @@ impl Unit {
     /// test profile, with the process's feature flags
     /// ([`features::Selection::selected`]).
     pub fn of(package: &Package, target: &Target, mode: Mode) -> Result<Self, Error> {
+        Self::on(package, target, mode, None)
+    }
+
+    /// What `target` of `package` builds with for `platform`, as `cargo
+    /// build --target <platform>` builds it, or on the host when `platform`
+    /// is `None`, as [`Unit::of`] says.
+    pub fn on(
+        package: &Package,
+        target: &Target,
+        mode: Mode,
+        platform: Option<&str>,
+    ) -> Result<Self, Error> {
         let selection = features::Selection::selected();
         let files = || {
             let mut files = vec![
@@ -495,6 +509,7 @@ impl Unit {
                 kept.manifest == package.manifest
                     && kept.target == *target
                     && kept.mode == mode
+                    && kept.platform.as_deref() == platform
                     && kept.selection == selection
                     && kept.inputs == now
             })
@@ -502,17 +517,21 @@ impl Unit {
         if let Some(unit) = kept {
             return Ok(unit);
         }
-        let unit = Self::ask(package, target, mode, &selection)?;
+        let unit = Self::ask(package, target, mode, platform, &selection)?;
         // Cargo may have written the lockfile, so the inputs are read after.
         let inputs = Inputs::read(files(), Vec::new());
         let mut built = lock(&BUILT);
         built.retain(|kept| {
-            !(kept.manifest == package.manifest && kept.target == *target && kept.mode == mode)
+            !(kept.manifest == package.manifest
+                && kept.target == *target
+                && kept.mode == mode
+                && kept.platform.as_deref() == platform)
         });
         built.push(Built {
             manifest: package.manifest.clone(),
             target: target.clone(),
             mode,
+            platform: platform.map(Box::from),
             selection,
             inputs,
             unit: unit.clone(),
@@ -577,6 +596,7 @@ impl Unit {
         package: &Package,
         target: &Target,
         mode: Mode,
+        platform: Option<&str>,
         selection: &features::Selection,
     ) -> Result<Self, Error> {
         let mut command = cargo();
@@ -591,6 +611,9 @@ impl Unit {
             .arg("--manifest-path")
             .arg(&package.manifest)
             .args(selection.flags());
+        if let Some(platform) = platform {
+            command.args(["--target", platform]);
+        }
         match target.kind {
             Kind::Library => command.arg("--lib"),
             Kind::Binary => command.args(["--bin", &target.name]),

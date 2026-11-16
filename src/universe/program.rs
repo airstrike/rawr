@@ -10,6 +10,7 @@ use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use super::{compile, Error, Outcome, Universe};
 use crate::host::runtime::Registry;
 use crate::package::snapshot::Snapshot;
+use crate::project::cargo::features::Enabled;
 use crate::{future, island, reload, Dynamic, Engine, Shared};
 
 thread_local! {
@@ -55,6 +56,8 @@ struct State {
     entry: PathBuf,
     /// Whether a reload rereads the package from disk.
     on_disk: bool,
+    /// The features and options its `cfg(..)`s read.
+    features: Enabled,
     current: Mutex<Current>,
     /// Who hears each outcome ([`Program::outcomes`]).
     listeners: Mutex<Vec<mpsc::Sender<Outcome>>>,
@@ -74,6 +77,9 @@ pub(super) struct Sources {
     entry: PathBuf,
     files: Vec<(PathBuf, Box<str>)>,
     on_disk: bool,
+    /// The features and options its `cfg(..)`s read: the host's, unless
+    /// the caller says what Cargo resolved for the package.
+    features: Enabled,
 }
 
 impl Sources {
@@ -92,6 +98,7 @@ impl Sources {
                 files: vec![(entry.clone(), text)],
                 entry,
                 on_disk: true,
+                features: Enabled::default(),
             });
         }
         let directory = entry.parent().unwrap_or(Path::new("/")).to_path_buf();
@@ -108,6 +115,7 @@ impl Sources {
             entry,
             files: sorted(files),
             on_disk: true,
+            features: Enabled::default(),
         })
     }
 
@@ -129,7 +137,14 @@ impl Sources {
             entry,
             files: sorted(files),
             on_disk: false,
+            features: Enabled::default(),
         }
+    }
+
+    /// These sources with `features` for their `cfg(..)`s: the ones Cargo
+    /// resolved for the package where it really builds.
+    pub(super) fn with_features(self, features: Enabled) -> Self {
+        Self { features, ..self }
     }
 }
 
@@ -141,8 +156,9 @@ impl Program {
             entry,
             files,
             on_disk,
+            features,
         } = sources;
-        let snapshot = Snapshot::new(entry.clone(), files.clone())?;
+        let snapshot = Snapshot::new(entry.clone(), files.clone())?.with_features(features.clone());
         let candidate = compile(&universe.engine, &snapshot)?;
         let generation = candidate.generation().clone();
         let bootstrap = bind(&universe.engine, candidate, universe.bind_runtime())?;
@@ -153,6 +169,7 @@ impl Program {
                 engine: universe.engine.clone(),
                 entry,
                 on_disk,
+                features,
                 current: Mutex::new(Current {
                     files,
                     generation,
@@ -342,7 +359,8 @@ impl State {
             },
         };
         let snapshot = Snapshot::new(self.entry.clone(), files.to_vec())
-            .map_err(|error| failed(error.into()))?;
+            .map_err(|error| failed(error.into()))?
+            .with_features(self.features.clone());
         let candidate = compile(&self.engine, &snapshot).map_err(failed)?;
         if let Some(reason) = island::refusal(&current.generation, &candidate) {
             return Err(Outcome::Restarting { reason });

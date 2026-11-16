@@ -7,7 +7,10 @@
   files, which the running program takes in place with its state kept
   (#1455), and for a new runner, which it reloads for. It reports what each
   start and reload did, and what the program writes, to the server, which
-  says it in the terminal. An error shows over the program too.
+  says it in the terminal. An error shows over the program too. A save the
+  running program can't take in place, as an edit to the function a
+  suspended future waits in, runs it in a fresh instance, and the page
+  says why it restarted (#2117).
 
   iced's web shell puts its canvas in place of `#iced`, and a terminal
   backend that draws into the page appends its rows to the body.
@@ -33,6 +36,7 @@ body:has(> div > pre) #rawr-report { background: #3a1212f2; }
   background: #2a1010f2; color: #fbe3e3; white-space: pre-wrap;
 }
 #rawr-report[hidden] { display: none; }
+#rawr-report.note { background: #10202af2; color: #dcecf5; }
 </style>
 </head>
 <body>
@@ -45,11 +49,33 @@ const box = document.getElementById("rawr-report");
 const ANSI = /\x1b\[[0-9;]*m/g;
 const show = (text) => {
   box.textContent = text.replace(ANSI, "");
+  box.classList.remove("note");
   box.hidden = false;
 };
 const hide = () => {
   box.hidden = true;
   box.textContent = "";
+  box.classList.remove("note");
+};
+
+// Why the page restarted the program, kept across the reload that does it.
+const RESTARTED = "rawr-restarted";
+const remembered = (() => {
+  try {
+    const reason = sessionStorage.getItem(RESTARTED);
+    sessionStorage.removeItem(RESTARTED);
+    return reason;
+  } catch {
+    return null;
+  }
+})();
+const restart = (reason) => {
+  running = false;
+  try {
+    sessionStorage.setItem(RESTARTED, reason);
+  } catch {}
+  // The report reaches the terminal before the page goes.
+  sent.then(() => location.reload());
 };
 
 // Reports go one at a time, so the terminal says them in order.
@@ -81,7 +107,7 @@ const answered = (answer, files) => {
   report("/answer", answer);
   switch (answer.kind) {
     case "restart":
-      location.reload();
+      restart(answer.reason);
       return;
     // A use the runner doesn't cover builds the runner again, and the
     // page reloads onto it; the program runs its last text meanwhile.
@@ -110,9 +136,14 @@ if (program.entry) {
   });
   current = JSON.stringify(program.files);
   try {
-    const answer = JSON.parse(glue.start(program.entry, current, program.directory ?? ""));
+    const answer = JSON.parse(glue.start(program.entry, current, program.directory ?? "", JSON.stringify(program.cfg ?? [])));
     running = answer.kind === "text";
     answered(answer, current);
+    if (remembered && running && box.hidden) {
+      show(`rawr: ${remembered}; the program restarted`);
+      box.classList.add("note");
+      setTimeout(() => box.classList.contains("note") && hide(), 5000);
+    }
   } catch (error) {
     panicked(error);
   }

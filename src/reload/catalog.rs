@@ -31,6 +31,11 @@ impl Catalog {
         self.executable.items()
     }
 
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn machine_body(&self, key: &crate::item::Key) -> Option<u64> {
+        self.executable.machine_body(key)
+    }
+
     /// Return the immutable executable generation owned by this catalog.
     pub(crate) const fn generation(&self) -> program::GenerationId {
         self.executable.generation()

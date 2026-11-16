@@ -125,6 +125,14 @@ impl Candidate {
         self.catalog.items()
     }
 
+    /// The body hash of the async function `key` names, as its state
+    /// machine has it: a frame suspended in another body can't resume in
+    /// this generation.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn machine_body(&self, key: &crate::item::Key) -> Option<u64> {
+        self.catalog.machine_body(key)
+    }
+
     /// Return this candidate's immutable metadata proof.
     #[must_use]
     pub const fn generation(&self) -> &Arc<Generation> {

@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+digits.workspace = true
+
+[features]
+default = ["loud"]
+loud = []
