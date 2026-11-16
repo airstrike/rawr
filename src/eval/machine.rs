@@ -39,6 +39,15 @@ pub(crate) struct Machine {
     body: u64,
 }
 
+impl Machine {
+    /// The hash of the body it was lowered from: a frame suspended in a
+    /// machine of another hash can't resume in this one.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) const fn body(&self) -> u64 {
+        self.body
+    }
+}
+
 impl fmt::Debug for Machine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Machine({} blocks)", self.blocks.len())
@@ -883,6 +892,14 @@ impl Frame {
 
     fn take(&self) -> Option<Saved> {
         crate::func::waited_write(&self.0).take()
+    }
+
+    /// The hash of the body this frame suspended in, while it hasn't
+    /// resumed: it resumes only in a machine of the same one.
+    pub(crate) fn body(&self) -> Option<u64> {
+        crate::func::waited_read(&self.0)
+            .as_ref()
+            .map(|saved| saved.machine.body)
     }
 }
 

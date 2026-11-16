@@ -1702,6 +1702,9 @@ fn main_text(text: &str) -> Option<String> {
 ///   longer rebinds: `main` never runs again to give a new one.
 /// - A program that never called from native code into script code: no
 ///   entry would ever admit the new generation.
+/// - An async function a suspended future waits in, whose body changed:
+///   its frame can't resume in the new body, and runs it from its start
+///   only in a fresh program (#2117).
 #[cfg(feature = "sync")]
 #[must_use]
 pub fn refusal(
@@ -1728,6 +1731,9 @@ pub fn refusal(
         != main_text(candidate.source().entry_source().text())
     {
         return Some("`main` changed".to_owned());
+    }
+    if let Some(reason) = suspension(candidate) {
+        return Some(reason);
     }
     let held = crate::future::held();
     if held.is_empty() {
@@ -1756,6 +1762,20 @@ pub fn refusal(
         }
     }
     None
+}
+
+/// Why `candidate` can't resume each suspended future: the body of an
+/// async function one waits in changed, or went.
+#[cfg(feature = "sync")]
+fn suspension(candidate: &crate::reload::Candidate) -> Option<String> {
+    crate::future::suspended()
+        .into_iter()
+        .find(|(step, body)| candidate.machine_body(step.key()) != Some(*body))
+        .map(|(step, _)| {
+            let name = step.key().name();
+            let name = name.find("{closure#").map_or(name, |at| &name[..at]);
+            format!("`{name}`, which a suspended future waits in, changed")
+        })
 }
 
 /// What still depends on a script type a save removed or changed the

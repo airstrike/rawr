@@ -473,6 +473,8 @@ struct Step {
     input: Option<Dynamic>,
     state: State,
     waker: Option<Waker>,
+    /// Whether [`SUSPENDED`] lists it: from its first suspension on.
+    listed: bool,
 }
 
 enum State {
@@ -499,6 +501,7 @@ impl Stepper {
                 input: None,
                 state: State::Idle,
                 waker: None,
+                listed: false,
             })),
             awaiting: None,
             program,
@@ -613,7 +616,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Run one step of the body in `shared` by `invoke`, which calls the step
 /// function in the program: `None` when no program runs here.
 fn run(
-    shared: &Mutex<Step>,
+    shared: &Arc<Mutex<Step>>,
     invoke: impl FnOnce(&item::Value, &mut [Dynamic]) -> Option<RawrResultOf<Dynamic>>,
 ) {
     let (step, argument) = {
@@ -653,6 +656,10 @@ fn run(
             Poll::Ready(value) => State::Done(Ok(value)),
             Poll::Pending { future, frame } => {
                 state.frame = Some(frame);
+                if !state.listed {
+                    state.listed = true;
+                    suspend(shared);
+                }
                 match future.try_cast::<Future>() {
                     Some(future) => State::Awaiting(future),
                     None => State::Done(Err(failure(
@@ -666,6 +673,52 @@ fn run(
         state.step = None;
         state.frame = None;
     }
+}
+
+/// Each async body that has suspended, while its future lives: a reload
+/// that changed the function one waits in can't resume it (#2117).
+#[cfg(feature = "sync")]
+static SUSPENDED: Mutex<Vec<std::sync::Weak<Mutex<Step>>>> = Mutex::new(Vec::new());
+
+#[cfg(not(feature = "sync"))]
+thread_local! {
+    static SUSPENDED: RefCell<Vec<std::sync::Weak<Mutex<Step>>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn with_suspended<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Mutex<Step>>>) -> R) -> R {
+    #[cfg(feature = "sync")]
+    return work(&mut lock(&SUSPENDED));
+    #[cfg(not(feature = "sync"))]
+    return SUSPENDED.with_borrow_mut(work);
+}
+
+/// List the body in `shared`, which suspended for the first time. A full
+/// list first lets go of the bodies that ended, so listing one costs a
+/// push.
+fn suspend(shared: &Arc<Mutex<Step>>) {
+    with_suspended(|all| {
+        if all.len() == all.capacity() {
+            all.retain(|step| step.strong_count() > 0);
+        }
+        all.push(Arc::downgrade(shared));
+    });
+}
+
+/// The step function of each async body suspended now, with the hash of
+/// the body it waits in: it resumes only in a generation whose function
+/// has the same one.
+pub fn suspended() -> Vec<(item::Value, u64)> {
+    let steps: Vec<_> = with_suspended(|all| {
+        all.retain(|step| step.strong_count() > 0);
+        all.iter().filter_map(std::sync::Weak::upgrade).collect()
+    });
+    steps
+        .iter()
+        .filter_map(|shared| {
+            let step = lock(shared);
+            Some((step.step.clone()?, step.frame.as_ref()?.body()?))
+        })
+        .collect()
 }
 
 /// A native output made a Rawr value on the owner thread.

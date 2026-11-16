@@ -360,6 +360,20 @@ impl Executable {
         &self.projection_requirements
     }
 
+    /// The body hash of the async function `key` names, lowered into a
+    /// state machine: `None` for a function that never awaits, or one this
+    /// program doesn't have.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn machine_body(&self, key: &item::Key) -> Option<u64> {
+        let callable = self.callables.get(key)?;
+        let Dispatch::Function(name) = &callable.dispatch else {
+            return None;
+        };
+        let module: &crate::Module = self.ast.as_ref();
+        let function = module.get_script_fn(name, callable.arity)?;
+        function.machine.as_ref().map(|machine| machine.body())
+    }
+
     pub(crate) fn related_callable(&self, key: &item::Key) -> Option<&Callable> {
         let mut candidates = self
             .callables
