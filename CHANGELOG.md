@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.218 (2026-11-16)
+
 - The landing page's ratatui snippet runs in your browser as an app. It draws with ratzilla's DomBackend and awaits its keys, which reach it only while its frame has focus. (#1384, #1184)
 - A crate method that lends a closure `&mut` of a type with a lifetime and returns a borrow of its receiver takes a script closure. ratatui's `Terminal::draw(|frame| ..)?` is one. (#2112; part of #1457)
 - A future waiting at an `.await` keeps running after an edit that left its own function unchanged. (#2113)
