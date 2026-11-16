@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"The landing page's ratatui snippet runs in your browser as an app. It draws with ratzilla's DomBackend and awaits its keys, which reach it only while its frame has focus.","issues":[1384,1184]},
+      {"text":"A crate method that lends a closure `&mut` of a type with a lifetime and returns a borrow of its receiver takes a script closure. ratatui's `Terminal::draw(|frame| ..)?` is one.","issues":[2112],"refs":[1457]},
+      {"text":"A future waiting at an `.await` keeps running after an edit that left its own function unchanged.","issues":[2113]}
+    ]
   },
   "releases": [
     {

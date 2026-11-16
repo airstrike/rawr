@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The landing page's ratatui snippet runs in your browser as an app. It draws with ratzilla's DomBackend and awaits its keys, which reach it only while its frame has focus.","issues":[1384,1184]},
+        {"text":"A crate method that lends a closure `&mut` of a type with a lifetime and returns a borrow of its receiver takes a script closure. ratatui's `Terminal::draw(|frame| ..)?` is one.","issues":[2112],"refs":[1457]},
+        {"text":"A future waiting at an `.await` keeps running after an edit that left its own function unchanged.","issues":[2113]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.217",
@@ -3635,7 +3642,7 @@
     {"issue":1181,"title":"rawr-web prints u128 and i128 as their type names","state":"closed","category":"Platforms","release":"0.3.172"},
     {"issue":1182,"title":"rawr-web traps on Instant::now","state":"closed","category":"Platforms","release":"0.3.172"},
     {"issue":1183,"title":"A snippet rejects an inner attribute at its top","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1184,"title":"ratatui snippets run in the browser","state":"open","category":"Platforms"},
+    {"issue":1184,"title":"ratatui snippets run in the browser","state":"closed","category":"Platforms"},
     {"issue":1185,"title":"A marked module can't name items of the native crate root it lives in (`crate::Message`)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1186,"title":"A workspace root bin with member path dependencies fails: 'complete package membership witness is unavailable'","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1187,"title":"Run opaque iterators and inherent methods' opaque members","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3835,7 +3842,7 @@
     {"issue":1381,"title":"A package with no file directly in src/ gets one watch root per input subdirectory instead of…","state":"open","category":"Health"},
     {"issue":1382,"title":"`rawr check` spun for minutes on a thousand-package workspace: install rescanned every prior…","state":"closed","category":"Health"},
     {"issue":1383,"title":"`rawr check` no longer spins for minutes on a thousand-package workspace while counting facade roots","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open","category":"Health"},
+    {"issue":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"closed","category":"Health"},
     {"issue":1385,"title":"The landing page warms its snippets after load so Run answers at once","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1386,"title":"Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open","category":"Importer"},
@@ -4561,7 +4568,14 @@
     {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"},
     {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"},
     {"issue":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
-    {"issue":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open","category":"Divergences from rustc"}
+    {"issue":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open","category":"Divergences from rustc"},
+    {"issue":2112,"title":"A crate method that lends a closure `&mut` of a type with a lifetime and returns a borrow of its…","state":"open","category":"No glue (D593)"},
+    {"issue":2113,"title":"A future waiting at an `.await` keeps running after an edit that left its own function unchanged","state":"open","category":"Platforms"},
+    {"issue":2114,"title":"`.is_err()` on a crate Result whose error is a type parameter's associated type crashes the generator","state":"open","category":"No glue (D593)"},
+    {"issue":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open","category":"No glue (D593)"},
+    {"issue":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open","category":"Platforms"},
+    {"issue":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open","category":"Platforms"},
+    {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5270,7 +5284,10 @@
             {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"},
             {"number":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open"},
             {"number":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed"},
-            {"number":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open"}
+            {"number":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open"},
+            {"number":2114,"title":"`.is_err()` on a crate Result whose error is a type parameter's associated type crashes the generator","state":"open"},
+            {"number":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open"},
+            {"number":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -6243,10 +6260,10 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "?play's universe builds for wasm32 and runs in the browser (#1448). elevato.rs runs on it. The playground runs iced snippets in the browser, drawn in the output pane and taking clicks (#435), and an edit reloads in place with its state kept (#1455). A runner for wasm32 builds without starting (#1753). Next: ratatui on the landing page (#1384).",
+          "note": "?play's universe builds for wasm32 and runs in the browser (#1448). elevato.rs runs on it. The playground runs iced snippets in the browser, drawn in the output pane and taking clicks (#435), and an edit reloads in place with its state kept (#1455). A runner for wasm32 builds without starting (#1753). The landing page's ratatui snippet runs in the browser and takes keys while focused (#1384).",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"closed"},
-            {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"open"},
+            {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"closed"},
             {"number":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open"},
             {"number":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"closed"},
             {"number":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open"},
@@ -6279,7 +6296,9 @@
             {"number":1752,"title":"A universe-runner build gives no stable path to its wasm module, so a web build can ship a stale one","state":"closed"},
             {"number":1753,"title":"rawr-import run of a wasm32 universe runner builds it, then fails trying to start it","state":"closed"},
             {"number":2027,"title":"The browser universe stopped building and covering after #1940, #326 and #1850","state":"closed"},
-            {"number":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open"}
+            {"number":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open"},
+            {"number":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open"},
+            {"number":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open"}
           ]
         },
         {
