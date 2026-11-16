@@ -287,7 +287,7 @@ struct Reach {
 }
 
 /// The calls a table's entry makes that reach a value at its type.
-const REACHES: [Reach; 9] = [
+const REACHES: [Reach; 11] = [
     Reach {
         turbofish: "arguments.arena.held::<",
         after: "(",
@@ -341,6 +341,18 @@ const REACHES: [Reach; 9] = [
         after: "(",
         inferred: true,
         like: "mutable_at(arguments.arena, {w}, ",
+    },
+    Reach {
+        turbofish: "reach_some::<",
+        after: "",
+        inferred: false,
+        like: "reach_some_like({w})",
+    },
+    Reach {
+        turbofish: "lends::<",
+        after: "()",
+        inferred: false,
+        like: "lends_like({w})",
     },
 ];
 

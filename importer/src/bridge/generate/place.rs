@@ -109,6 +109,24 @@ pub(super) fn available(ty: &convert::Type) -> bool {
     }
 }
 
+/// Whether a crate value of `ty` that a slice lends is reached in place
+/// ([`available`]), or `ty` is a crate type whose arguments are the
+/// program's own types beside those, as `Item<State, Message>` of a
+/// program's `State`: its element is the Rust value the runner holds them
+/// in, and its descriptor doesn't check those arguments (`policy`).
+pub(super) fn lendable(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Nominal { arguments, .. } => {
+            super::std_value(ty).is_none()
+                && !super::carries_lifetime(ty)
+                && arguments.iter().all(|argument| {
+                    matches!(argument, convert::Type::Script { .. }) || available(argument)
+                })
+        }
+        ty => available(ty),
+    }
+}
+
 pub(super) fn around(
     places: &[(usize, bool, String)],
     witnesses: &str,
@@ -193,6 +211,12 @@ pub(super) fn policy(ty: &convert::Type) -> Result<String, request::Error> {
         } if !super::carries_lifetime(ty) => {
             let mut accepts = format!("witness.is_imported(&{:?})", definition.as_bytes());
             for (at, argument) in arguments.iter().enumerate() {
+                // A program's own type is held as the one Rust type the
+                // runner names it by (`lendable`), which reaching the
+                // element as its concrete type checks.
+                if matches!(argument, convert::Type::Script { .. }) {
+                    continue;
+                }
                 let descriptor = policy(argument)?;
                 accepts.push_str(&format!(
                     " && witness.argument_witness({at}).is_some_and(|witness| <{descriptor} as __rawr_internal::place::Policy>::accepts(&witness))"

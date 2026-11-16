@@ -39,6 +39,7 @@ pub mod shown;
 pub mod signatures;
 pub mod simulator;
 pub mod spans;
+pub mod staged;
 pub mod stock;
 pub mod styled;
 pub mod tuned;

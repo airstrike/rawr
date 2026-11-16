@@ -27,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 241;
+const CLASSIFIER_VERSION: u32 = 252;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10443,6 +10443,25 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             _ if matches!(rewritten, model::Type::Never) => {
                 Ok(representability::convert::Type::Never)
             }
+            // A trait's `&self` method over its `Self` (`self_receiver`)
+            // whose one input is that receiver and whose `&[T]` it lends:
+            // lent in place as a method's is below, whatever `T` is, so a
+            // slice of elements that don't clone is borrowed where it is.
+            model::Receiver::None
+                if self.self_receiver.get()
+                    && let Some(element) = self_lent_slice(signature, &rewritten) =>
+            {
+                self.convert_value(element).map(|element| {
+                    representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(representability::convert::Type::Sequence {
+                            element: Box::new(element),
+                            owned: false,
+                            length: None,
+                        }),
+                    }
+                })
+            }
             model::Receiver::None | model::Receiver::Value { .. } => {
                 self.convert_output(&rewritten, rewrite)
             }
@@ -13785,7 +13804,8 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
 /// reads the method: an output that names it borrows the receiver for the
 /// call, as the method's does. An output of a crate type or an opaque one
 /// that names it keeps the borrow past the call, which a function's input
-/// can't lend so.
+/// can't lend so. A `&[T]` it lends is lent in place whatever `T` names
+/// (`self_lent_slice`): each operation on it calls the function again.
 fn receiver_input_binder_is_exact(signature: &model::Signature) -> bool {
     let mut binders = signature.binders();
     let (Some(declared), None) = (binders.next(), binders.next()) else {
@@ -13799,8 +13819,42 @@ fn receiver_input_binder_is_exact(signature: &model::Signature) -> bool {
                 ..
             }) if binder == declared && *index == binder.index()
         )
-        && !matches!(signature.output(), model::Type::Definition { .. })
-        && !names_opaque(signature.output())
+        && (self_lent_slice(signature, signature.output()).is_some()
+            || (!matches!(signature.output(), model::Type::Definition { .. })
+                && !names_opaque(signature.output())))
+}
+
+/// The element of the `&[T]` `output` a trait's method over its `Self`
+/// lends from its one input, the method's `&self` at the lifetime the
+/// output borrows at, as `fn items(&self) -> &[Item<Self::A>]` reads.
+fn self_lent_slice<'a>(
+    signature: &model::Signature,
+    output: &'a model::Type,
+) -> Option<&'a model::Type> {
+    let mut inputs = signature.inputs();
+    let (
+        Some(model::Type::Reference {
+            lifetime: lent @ model::Lifetime::Late { .. },
+            mutability: model::Mutability::Shared,
+            ..
+        }),
+        None,
+    ) = (inputs.next(), inputs.next())
+    else {
+        return None;
+    };
+    match output {
+        model::Type::Reference {
+            lifetime,
+            mutability: model::Mutability::Shared,
+            ty,
+        } if lifetime == lent
+            && let model::Type::Slice(element) = &**ty =>
+        {
+            Some(element)
+        }
+        _ => None,
+    }
 }
 
 /// A method whose output may borrow its receiver and whose other own

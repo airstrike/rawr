@@ -220,14 +220,26 @@ type Hold<T> = dyn Fn(&mut dyn Any) -> RawrResultOf<SliceHold<T>>;
 /// hold the receiver ([`SliceHold::reach`]). No element is copied.
 pub struct SliceHold<T: 'static> {
     receiver: std::rc::Rc<dyn Any>,
-    slice: fn(&dyn Any) -> Option<&[T]>,
+    slice: Box<Sliced<T>>,
 }
 
+/// The slice a receiver of its type lends ([`SliceHold::of`]), `None`
+/// for a receiver of another type.
+type Sliced<T> = dyn Fn(&dyn Any) -> Option<&[T]>;
+
 impl<T: 'static> SliceHold<T> {
-    /// `receiver`, whose slice `slice` lends.
+    /// `receiver`, a `C`, whose slice `slice` lends. `C` may be a type no
+    /// path names, as one that holds an opaque type is, which `slice`'s
+    /// input infers.
     #[must_use]
-    pub fn new(receiver: std::rc::Rc<dyn Any>, slice: fn(&dyn Any) -> Option<&[T]>) -> Self {
-        Self { receiver, slice }
+    pub fn of<C: 'static>(
+        receiver: std::rc::Rc<dyn Any>,
+        slice: impl Fn(&C) -> &[T] + 'static,
+    ) -> Self {
+        Self {
+            receiver,
+            slice: Box::new(move |receiver| receiver.downcast_ref::<C>().map(&slice)),
+        }
     }
 
     /// The slice, borrowed for as long as `pins`, which hold the receiver;
