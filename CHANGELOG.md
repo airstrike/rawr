@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.223 (2026-11-16)
+
 - An async `main` keeps running across a save under `rawr run`. The new code takes over the next time one of its futures resumes, such as a timer loop at its next tick, and the futures keep their locals. An edit to `main`, or to the body of an async function or block a future waits in, restarts the program with a one-line reason. (#2127)
 
 ## 0.3.222 (2026-11-16)

@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"An async `main` keeps running across a save under `rawr run`. The new code takes over the next time one of its futures resumes, such as a timer loop at its next tick, and the futures keep their locals. An edit to `main`, or to the body of an async function or block a future waits in, restarts the program with a one-line reason.","issues":[2127]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.223",
+      "date": "2026-11-16",
+      "entries": [
+        {"text":"An async `main` keeps running across a save under `rawr run`. The new code takes over the next time one of its futures resumes, such as a timer loop at its next tick, and the futures keep their locals. An edit to `main`, or to the body of an async function or block a future waits in, restarts the program with a one-line reason.","issues":[2127]}
+      ]
+    },
     {
       "version": "0.3.222",
       "date": "2026-11-16",
