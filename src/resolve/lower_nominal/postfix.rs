@@ -1329,19 +1329,25 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if has_host {
-                // `Trait::method(value, ..)`: the trait's method over its
-                // `Self`, which rustc selects the impl for, as `column!`'s
+                // `Trait::method(value, ..)` where the crate gives the
+                // value's type no such member of its own, as `column!`'s
                 // `Widget::_boxed(widget.map(f))` of a `Map`, whose impl
-                // declares parameters its type does not have. It is the
-                // trait's even where the type has an inherent method of the
-                // name, which rustc's path names apart.
+                // declares parameters its type does not have, or only an
+                // inherent namesake (`spliced_namesake`): the trait's method
+                // over its `Self`, which rustc selects the impl for. The
+                // type's own member of the impl gives its output at the
+                // type's own types, as a projection of `Self` is.
                 #[cfg(feature = "rust-import")]
-                match self.spliced_trait_call(value, &member, member_span)? {
-                    Ok(called) => {
-                        value = called;
-                        continue;
+                if !self.host_has_member(&value.ty, &member)
+                    || self.spliced_namesake(&value.ty, &member, member_span)
+                {
+                    match self.spliced_trait_call(value, &member, member_span)? {
+                        Ok(called) => {
+                            value = called;
+                            continue;
+                        }
+                        Err(back) => value = back,
                     }
-                    Err(back) => value = back,
                 }
                 value = self.parse_host_method(value, member, member_span)?;
                 continue;

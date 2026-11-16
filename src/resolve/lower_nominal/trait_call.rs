@@ -1476,6 +1476,53 @@ impl<'a> Parser<'a> {
         self.models.host_items(&path).is_some().then_some(path)
     }
 
+    /// Whether the member `member` of the type `ty` is only a namesake of
+    /// the method of the trait `Trait::method(value, ..)` spliced at
+    /// `member_span` names, as an inherent builder `notes(self, notes)` is
+    /// of a trait's `notes(&self)`: its receiver or its arity is not the
+    /// trait method's, so it is no impl of it, and the call is the trait's.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn spliced_namesake(&self, ty: &Ty, member: &str, member_span: Span) -> bool {
+        let Some(trait_items) = self
+            .spliced_trait_member(member, member_span)
+            .and_then(|path| self.models.host_items(&path))
+        else {
+            return false;
+        };
+        let resolved = match self.inference.resolve(ty) {
+            Ty::Reference { target, .. } => self.inference.resolve(&target),
+            ty => ty,
+        };
+        let Some(own) = resolved
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(&resolved, member))
+            .and_then(|definition| {
+                self.models
+                    .host_items(&format!("{}::{member}", definition.path()))
+            })
+        else {
+            return false;
+        };
+        // The trait's method over its `Self` takes the receiver first.
+        let shape = |item: &crate::host::item::Definition| {
+            let parameters = item.signature().parameters();
+            let receiver = match parameters.first().map(|parameter| parameter.shape()) {
+                Some(crate::host::type_ref::Shape::Reference { mutable: true, .. }) => {
+                    receiver::Mode::Mutable
+                }
+                Some(crate::host::type_ref::Shape::Reference { .. }) => receiver::Mode::Shared,
+                _ => receiver::Mode::Owned,
+            };
+            (Some(receiver), parameters.len().saturating_sub(1))
+        };
+        !own.iter().any(|item| {
+            trait_items.iter().any(|declared| {
+                shape(declared) == (item.receiver(), item.signature().parameters().len())
+            })
+        })
+    }
+
     /// The path of the method `member` over its `Self` (`surface::member`)
     /// of a crate's trait this source imports by name, as Rust finds a
     /// method of a trait in scope.
