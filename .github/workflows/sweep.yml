@@ -53,12 +53,12 @@ jobs:
         run: |
           cargo build --release --locked -p rawr-cli -p rawr-import-cli
           cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver
-          mkdir tools
-          cp target/release/rawr target/release/rawr-import target/release/rawr-import-driver tools/
+          mkdir "$RUNNER_TEMP/bin"
+          cp target/release/rawr target/release/rawr-import target/release/rawr-import-driver "$RUNNER_TEMP/bin"/
       - uses: actions/upload-artifact@v4
         with:
           name: tools
-          path: tools
+          path: ${{ runner.temp }}/bin
           retention-days: 2
 
   iced:
@@ -90,11 +90,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: tools
-          path: tools
+          path: ${{ runner.temp }}/bin
       - name: Put the tools on PATH
         run: |
-          chmod +x tools/*
-          echo "$PWD/tools" >> "$GITHUB_PATH"
+          chmod +x "$RUNNER_TEMP"/bin/*
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Make the examples
         run: |
           git clone --quiet --filter=blob:none https://github.com/iced-rs/iced "$RUNNER_TEMP/iced"
@@ -140,14 +140,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: tools
-          path: tools
+          path: ${{ runner.temp }}/bin
       - name: Get rustlings
         run: |
-          chmod +x tools/*
+          chmod +x "$RUNNER_TEMP"/bin/*
           git clone --quiet https://github.com/rust-lang/rustlings target/rustlings
           git -C target/rustlings checkout --quiet "$RUSTLINGS_REV"
       - name: Run rustlings under cargo and rawr
-        run: RAWR_BIN="$PWD/tools" scripts/rustlings.sh | tee target/rustlings-summary.txt
+        run: RAWR_BIN="$RUNNER_TEMP/bin" scripts/rustlings.sh | tee target/rustlings-summary.txt
       - name: Show what differs
         if: always()
         run: |

@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost and reloads each save there with its state kept. Compile errors show on the page and in the terminal, and a save that uses a crate API the runner doesn't cover builds the runner again. `--out <dir>` writes the page's files instead of serving them. (#2119; part of #1395, #1387)
 
 ## 0.3.218 (2026-11-16)
 

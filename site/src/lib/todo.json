@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost and reloads each save there with its state kept. Compile errors show on the page and in the terminal, and a save that uses a crate API the runner doesn't cover builds the runner again. `--out <dir>` writes the page's files instead of serving them.","issues":[2119],"refs":[1395,1387]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.218",
@@ -4577,7 +4582,11 @@
     {"issue":2115,"title":"A generic impl method on Terminal<B> renders Terminal<_> and fails (E0283) when several types meet the bound","state":"open","category":"No glue (D593)"},
     {"issue":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open","category":"Platforms"},
     {"issue":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open","category":"Platforms"},
-    {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed","category":"Health"}
+    {"issue":2118,"title":"rawr-import's lib tests don't compile with test-fixtures: BuildProduct and Stored::into_bytes are out of reach","state":"closed","category":"Health"},
+    {"issue":2119,"title":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost…","state":"closed","category":"Platforms"},
+    {"issue":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"open","category":"Platforms"},
+    {"issue":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open","category":"Platforms"},
+    {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -6300,7 +6309,10 @@
             {"number":2027,"title":"The browser universe stopped building and covering after #1940, #326 and #1850","state":"closed"},
             {"number":2028,"title":"A universe build reuses a stale preparation when rawr-import's lowering changes but its version and sources don't","state":"open"},
             {"number":2116,"title":"ratzilla's DomBackend drops its key handler when the page resizes","state":"open"},
-            {"number":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open"}
+            {"number":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"open"},
+            {"number":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"open"},
+            {"number":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"open"},
+            {"number":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open"}
           ]
         },
         {
