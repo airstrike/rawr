@@ -42,16 +42,23 @@ impl Users {
         self.lines.iter().any(|line| installed(line))
     }
 
+    /// Whether [`Users::enroll`] would leave the file as it is: `executable`
+    /// is recorded as it is now, or is a build's output, which is never
+    /// recorded.
+    pub(crate) fn holds(&self, executable: &Path) -> bool {
+        line(executable).is_none_or(|user| self.lines.contains(&user))
+    }
+
     /// Record `executable` among the users, dropping users that are gone or
     /// replaced. The caller holds the entry's exclusive lock. One read and
-    /// no write when it is already recorded.
+    /// no write when it [`Users::holds`] it.
     pub(crate) fn enroll(self, executable: &Path) {
+        if self.holds(executable) {
+            return;
+        }
         let Some(user) = line(executable) else {
             return;
         };
-        if self.lines.contains(&user) {
-            return;
-        }
         let mut text = String::new();
         for kept in self.lines.iter().filter(|line| installed(line)) {
             text.push_str(kept);
