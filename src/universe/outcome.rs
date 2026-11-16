@@ -21,6 +21,13 @@ pub enum Outcome {
         /// The error, as rustc renders it.
         message: String,
     },
+    /// The new text uses a crate's API at a place the running bindings
+    /// don't cover. The program keeps running the last good text; bindings
+    /// generated for the new text run it, after a restart.
+    Uncovered {
+        /// The error Rust gives at the use, as rustc renders it.
+        message: String,
+    },
     /// The new text can't replace the running one in this process, for
     /// `reason`, such as a script type whose fields changed (D553.6). The
     /// program keeps running the last good text until it starts again.
@@ -37,6 +44,7 @@ impl fmt::Display for Outcome {
             Self::Queued => f.write_str("queued"),
             Self::Swapped => f.write_str("swapped"),
             Self::Failed { message } => write!(f, "failed: {message}"),
+            Self::Uncovered { message } => write!(f, "uncovered: {message}"),
             Self::Restarting { reason } => write!(f, "restarting: {reason}"),
         }
     }

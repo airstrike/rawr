@@ -19,7 +19,10 @@
 //! A caller that takes the runner elsewhere, as ?play's image and the
 //! browser's universe do, names a directory in `RAWR_UNIVERSE_OUT`. Each
 //! runner `rawr-import` builds or reuses is then written there as `runner`
-//! (#1752). Where rawr keeps the runner itself is rawr's own business.
+//! (#1752), beside the `Cargo.lock` it was built from, which names the
+//! `wasm-bindgen` a browser's runner links. A project's runner is written
+//! there too, as `rawr run --web` takes it. Where rawr keeps the runner
+//! itself is rawr's own business.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -64,9 +67,18 @@ pub fn deliver_into(directory: &Path) {
     let _ = DESTINATION.set(directory);
 }
 
+/// Whether a caller takes this process's runners from a directory
+/// [`deliver_into`] named.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn delivers() -> bool {
+    DESTINATION.get().is_some()
+}
+
 /// Write `built`'s runner to the directory [`deliver_into`] named, as
-/// [`RUNNER`], and give its path. A process that named none writes nothing.
-/// The file is replaced whole, so a reader never sees part of a runner.
+/// [`RUNNER`], beside the `Cargo.lock` it was built from as [`LOCK`], and
+/// give the runner's path. A process that named none writes nothing. Each
+/// file is replaced whole, so a reader never sees part of one.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn deliver<B>(
     built: &crate::runner::Manifest<crate::runner::Built, B>,
@@ -74,13 +86,36 @@ pub fn deliver<B>(
     let Some(directory) = DESTINATION.get() else {
         return Ok(None);
     };
-    let path = directory.join(RUNNER);
-    let partial = directory.join(format!(".{RUNNER}.{}", std::process::id()));
+    if let Some(lock) = built.files.iter().find(|file| file.path() == LOCK) {
+        replace(directory, LOCK, |partial| {
+            std::fs::write(partial, lock.bytes())
+        })?;
+    }
+    let executable = built.artifact().executable();
+    replace(directory, RUNNER, |partial| {
+        std::fs::copy(executable, partial).map(drop)
+    })
+    .map(Some)
+}
+
+/// The name of the lock beside a runner [`deliver`] writes.
+pub const LOCK: &str = "Cargo.lock";
+
+/// Write `directory`'s file `name` whole with `write`, which writes a
+/// partial file it is renamed from, and give its path.
+#[cfg(not(target_arch = "wasm32"))]
+fn replace(
+    directory: &Path,
+    name: &str,
+    write: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<PathBuf, Error> {
+    let path = directory.join(name);
+    let partial = directory.join(format!(".{name}.{}", std::process::id()));
     let written = std::fs::create_dir_all(directory)
-        .and_then(|()| std::fs::copy(built.artifact().executable(), &partial))
-        .and_then(|_| std::fs::rename(&partial, &path));
+        .and_then(|()| write(&partial))
+        .and_then(|()| std::fs::rename(&partial, &path));
     match written {
-        Ok(()) => Ok(Some(path)),
+        Ok(()) => Ok(path),
         Err(source) => {
             let _ = std::fs::remove_file(&partial);
             Err(Error { path, source })

@@ -1,0 +1,16 @@
+# A program that draws in a browser through a crate's web backend, for
+# `rawr run --web`: ratatui draws through ratzilla's DOM backend, and the
+# program's loop awaits its keys on the page's one thread.
+[package]
+name = "web-counter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["std"] }
+ratzilla = "0.3"
+tokio = { version = "1", features = ["sync"] }
+wasm-bindgen-futures = "0.4"
+
+[workspace]

@@ -22,6 +22,7 @@ pub mod layer;
 pub mod mcp;
 pub mod new;
 pub mod supervise;
+pub mod web;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -55,6 +56,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             path,
             program,
         }) => self::program(check, path.as_ref(), &arguments, &program),
+        Ok(Request::Web { path, .. }) => on_web(path.as_ref(), &arguments),
         Ok(Request::Test { path, options }) => test(path.as_ref(), &arguments, &options),
         Ok(Request::Doctor { path }) => doctor(path.as_ref(), &arguments),
         Ok(Request::New(New::Help)) => {
@@ -201,6 +203,12 @@ enum Request {
         /// What follows `--`, for the program.
         program: Vec<OsString>,
     },
+    /// `rawr run --web [path]`: run the program in a browser, on a page
+    /// the binary that serves it serves.
+    Web {
+        path: Option<PathBuf>,
+        options: web::Options,
+    },
     /// `rawr test [path] [filter] [-- options]`: run the program's tests,
     /// with libtest's filter and options.
     Test {
@@ -345,15 +353,30 @@ fn parse(arguments: &[OsString]) -> Result<Request, String> {
     };
     if runs {
         let (arguments, program) = split_program_arguments(arguments);
-        return match parse_command(arguments)? {
-            Request::Program {
-                check: false, path, ..
-            } => Ok(Request::Program {
+        let (web, arguments) = web::Options::take(arguments)?;
+        return match (parse_command(&arguments)?, web) {
+            (
+                Request::Program {
+                    check: false, path, ..
+                },
+                Some(options),
+            ) if program.is_empty() => Ok(Request::Web { path, options }),
+            (Request::Program { check: false, .. }, Some(_)) => {
+                Err("`--web` takes no program arguments: the page runs the program".to_owned())
+            }
+            (
+                Request::Program {
+                    check: false, path, ..
+                },
+                None,
+            ) => Ok(Request::Program {
                 check: false,
                 path,
                 program,
             }),
-            request => Ok(request),
+            (Request::Help, _) => Ok(Request::Help),
+            (request, None) => Ok(request),
+            (_, Some(_)) => Err("`--web` runs with `rawr run`".to_owned()),
         };
     }
     parse_command(arguments)
@@ -444,6 +467,9 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr run --bin <name>         Run a binary of the package, as `cargo run --bin`\n  \
          rawr run --features <list>    Enable features, as `cargo run --features`; also\n                                \
          `--no-default-features` and `--all-features`, for run, check and test\n  \
+         rawr run --web [path] [--port <port>]\n                                \
+         Run the program in a browser: its crates and runner are built\n                                \
+         for wasm32 and its page is served here; a save reloads it\n  \
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
@@ -501,6 +527,24 @@ fn program(
 ) -> ExitCode {
     match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments)) {
         Ok(Served::Base(loaded)) => on_base(*loaded, check, program),
+        Ok(Served::Handed(code)) => code,
+        Err(report) => failure(&report),
+    }
+}
+
+/// `rawr run --web`: load the program once and hand it to the binary that
+/// serves it, which builds its runner for a browser and serves its page. A
+/// program on the base language links no crates, so no runner is built.
+fn on_web(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
+    match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments)) {
+        Ok(Served::Base(_)) => {
+            eprintln!(
+                "{}: `rawr run --web` runs a program that uses crates from its Cargo.toml, in \
+                 their runner built for a browser; this program uses none",
+                color::label(color::Level::Error)
+            );
+            ExitCode::FAILURE
+        }
         Ok(Served::Handed(code)) => code,
         Err(report) => failure(&report),
     }
@@ -970,6 +1014,32 @@ mod tests {
         assert_eq!(request(&["--version"]), Ok(Request::Version));
         assert!(request(&["run", "a", "b"]).is_err());
         assert!(request(&["--bogus"]).is_err());
+    }
+
+    /// `rawr run --web` takes the program's path and the page's options,
+    /// and no program arguments.
+    #[test]
+    fn rawr_run_web_takes_a_path_and_the_pages_options() {
+        assert_eq!(
+            request(&["run", "--web", "app", "--port", "8001"]),
+            Ok(Request::Web {
+                path: Some(PathBuf::from("app")),
+                options: crate::web::Options {
+                    out: None,
+                    port: Some(8001),
+                },
+            })
+        );
+        assert_eq!(
+            request(&["run", "--web"]),
+            Ok(Request::Web {
+                path: None,
+                options: crate::web::Options::default(),
+            })
+        );
+        assert_eq!(request(&["run", "--web", "--help"]), Ok(Request::Help));
+        assert!(request(&["run", "--web", "--", "a"]).is_err());
+        assert!(request(&["run", "--port", "8001"]).is_err());
     }
 
     #[test]

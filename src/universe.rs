@@ -150,16 +150,30 @@ impl Universe {
     }
 }
 
+/// The files [`Universe::load`] reads for the marked file at `path`: the
+/// `Cargo.toml` nearest above it and the Rust files beside and below it,
+/// in path order. A caller that runs the program somewhere else, as a
+/// page does, hands it these as [`Universe::program`]'s files.
+///
+/// # Errors
+///
+/// Returns the error reading a file gave.
+pub fn package_files(path: &Path) -> Result<Vec<(PathBuf, Box<str>)>, Error> {
+    program::Sources::read(path).map(program::Sources::into_files)
+}
+
 /// Compile `snapshot` against `engine`'s bindings alone, as a universe
-/// runner compiles a snippet: a native call they don't cover is the
-/// program's compile error.
+/// runner compiles a snippet: a native call they don't cover is
+/// [`Error::Uncovered`], at the place the program makes it.
 fn compile(
     engine: &Shared<Engine>,
     snapshot: &package::snapshot::Snapshot,
 ) -> Result<crate::reload::Candidate, Error> {
-    let compiled = engine
-        .compile_package_snapshot_covered(snapshot)
-        .map_err(Error::compile)?;
-    let (candidate, _, _) = compiled.into_parts();
-    Ok(candidate)
+    match engine.compile_covered(snapshot).map_err(Error::compile)? {
+        Ok(compiled) => {
+            let (candidate, _, _) = compiled.into_parts();
+            Ok(candidate)
+        }
+        Err(unbound) => Err(Error::Uncovered(Box::new(unbound.error()))),
+    }
 }

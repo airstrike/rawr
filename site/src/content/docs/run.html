@@ -65,6 +65,14 @@ fn main() {}</code></pre></div>
 <p>A crate with Rust dependencies runs its marked code in rawr-import&rsquo;s runner. The runner gets the same features, and its native modules build with them, so the crate prints what <code>cargo run</code> prints under each flag.</p>
 <div class="block"><pre><code>rawr run --no-default-features --features fast</code></pre></div>
 
+<h2 id="web">In a browser</h2>
+<p><code>rawr run --web</code> runs a crate in a browser. The crate uses crates from its <code>Cargo.toml</code> that draw into a page, such as iced on its web shell, or ratatui through ratzilla&rsquo;s DOM backend:</p>
+<div class="block"><pre><code>rawr run --web
+rawr: the program runs at http://127.0.0.1:7878/</code></pre></div>
+<p>rawr builds the crate&rsquo;s dependencies, their bindings and its runner for <code>wasm32-unknown-unknown</code>, as <code>cargo build --target wasm32-unknown-unknown</code> would. The build goes in <code>target/rawr/web</code>, apart from the native build. The toolchain needs that target, so run <code>rustup target add wasm32-unknown-unknown</code> once. Then <code>wasm-bindgen</code> packs the runner with the page. rawr uses the <code>wasm-bindgen</code> on your <code>PATH</code> when its version is the one the runner links. Otherwise it installs that version once in rawr&rsquo;s home.</p>
+<p>The page runs the crate&rsquo;s marked files against the runner. When you save, rawr sends the new text to the page. The running program takes it in place and keeps its state, as <code>rawr run</code> does. A compile error shows over the program and in the terminal, and the program keeps running its last good code. What the program prints shows in the terminal and in the browser&rsquo;s console. A save that calls an API of a crate the runner doesn&rsquo;t cover yet builds the runner again, and then the page restarts on it.</p>
+<p>A browser tab has one thread. So a program there awaits its input in an <code>async</code> loop, through <code>wasm_bindgen_futures::spawn_local</code>, and never blocks on it. <code>--port &lt;port&gt;</code> picks the port, and <code>--out &lt;dir&gt;</code> writes the page&rsquo;s files to <code>dir</code> for any static server.</p>
+
 <h2 id="scripts">Scripts</h2>
 <p>A <code>.rs</code> file with a frontmatter block is a cargo script wherever it sits. rawr runs it as a file of its own, as cargo does. Inside a Cargo package it still doesn&rsquo;t use the package&rsquo;s <code>Cargo.toml</code>.</p>
 <p>A script may declare dependencies in its frontmatter, as under <code>cargo -Zscript</code>. rawr-import runs it the way it runs a crate with dependencies, and the script prints what it prints under cargo.</p>
