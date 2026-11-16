@@ -26,7 +26,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 233;
+const CLASSIFIER_VERSION: u32 = 234;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -445,10 +445,11 @@ struct Shared<'graph> {
     /// The arguments each opaque type a function gives takes for the
     /// associated types its bounds bind, by the opaque type's definition:
     /// those the function's own output takes where its classification
-    /// converts it. A binding's value converts or not by where the type is
-    /// named, as a borrow inside it is held only in a type argument
-    /// (`held_borrow`), so each other use takes these, the ones the facade
-    /// declares the type with, whatever is classified first (`bound`).
+    /// converts it, for a function classified alone (`classified_alone`).
+    /// A binding's value converts or not by where the type is named, as a
+    /// borrow inside it is held only in a type argument (`held_borrow`), so
+    /// each other use takes these, the ones the facade declares the type
+    /// with, whatever is classified first (`bound`).
     bound: std::sync::OnceLock<BTreeMap<api::identity::Definition, OpaqueBound>>,
 }
 
@@ -988,9 +989,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .map(|(_, definition, excluded, _)| (*definition, *excluded))
                 .collect::<Vec<_>>(),
         );
+        // A method of an impl that declares type parameters is classified
+        // in its impl, where they are declared (`classify_associated`):
+        // its own classification names them as nothing, so a binding such
+        // as `impl Program<State = P::State>` doesn't convert there, and
+        // the impl's conversion settles what the type binds.
         let bound = settled(
             &by_index
                 .iter()
+                .filter(|(_, definition, ..)| self.classified_alone(definition))
                 .map(|(_, definition, _, bound)| (*definition, *bound))
                 .collect::<Vec<_>>(),
         );
@@ -1061,6 +1068,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .and_then(|defined| defined.get(id))
             .cloned()
             .or_else(|| self.opaque_excluded.borrow().get(id).cloned())
+    }
+
+    /// Whether `definition`'s own classification is the plan its uses
+    /// take: a free function's, or a method's of an impl that declares no
+    /// type parameters (`plan_evidence`). A method of an impl that declares
+    /// some is classified in its impl, at the impl's parameters.
+    fn classified_alone(&self, definition: &model::Definition) -> bool {
+        match definition.owner() {
+            model::Owner::Free => true,
+            model::Owner::Implementation(owner) => self
+                .graph
+                .implementation_index(owner)
+                .and_then(|index| self.graph.implementations().nth(index))
+                .is_some_and(|implementation| lifetime_only(implementation.generics())),
+            model::Owner::Definition(_) => false,
+        }
     }
 
     /// The arguments the opaque type `id` takes for the associated types
