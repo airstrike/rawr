@@ -38,6 +38,7 @@ pub(crate) struct Facts {
 pub(crate) struct Partition {
     pub(crate) unit: identity::Unit,
     pub(crate) native_unit: Box<str>,
+    #[serde(with = "crate::hex")]
     pub(crate) native_inputs: [u8; 32],
     pub(crate) compiler: Box<str>,
     pub(crate) target: Box<str>,
@@ -213,7 +214,8 @@ pub(super) type RelativeExport = (Box<[Box<str>]>, identity::Namespace, identity
 /// 2: an entry keeps the nightly's build-script outputs (#403).
 /// 3: identities order by their definition-path hash first (#1851).
 /// 4: each unit is written once, in a table beside the entry (#2153).
-const ENTRY_SCHEMA: u32 = 4;
+/// 8: digests are written as hex digits (#2170).
+const ENTRY_SCHEMA: u32 = 8;
 
 /// One crate's complete intrinsic facts, shared per machine under a key the
 /// crate's own native inputs set before any nightly build (D609.3). Its
@@ -222,6 +224,7 @@ const ENTRY_SCHEMA: u32 = 4;
 #[derive(Deserialize, Serialize)]
 pub struct Entry {
     schema: u32,
+    #[serde(with = "crate::hex")]
     key: [u8; 32],
     crate_name: Box<str>,
     exports: Box<[RelativeExport]>,

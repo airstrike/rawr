@@ -32,6 +32,7 @@ pub struct Arguments {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Slot {
     position: u32,
+    #[serde(with = "crate::hex")]
     key: [u8; 32],
 }
 
@@ -463,16 +464,23 @@ pub struct EventMapper {
 /// converted by the closed profile replay. It grants no facade projection.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct EventProjection {
+    #[serde(with = "crate::hex")]
     profile: [u8; 32],
     profile_version: u32,
+    #[serde(with = "crate::hex")]
     profile_rules: [u8; 32],
+    #[serde(with = "crate::hex")]
     profile_source: [u8; 32],
+    #[serde(with = "crate::hex")]
     profile_projection: [u8; 32],
     source: super::identity::Definition,
     target: super::identity::Definition,
     widget: super::identity::Implementation,
+    #[serde(with = "crate::hex")]
     message: [u8; 32],
+    #[serde(with = "crate::hex")]
     invocation: [u8; 32],
+    #[serde(with = "crate::hex")]
     selector: [u8; 32],
 }
 

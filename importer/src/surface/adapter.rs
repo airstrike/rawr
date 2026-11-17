@@ -14,6 +14,7 @@ use super::Error;
 #[derive(Deserialize, Serialize)]
 pub(crate) struct Plan {
     identity: EntryIdentity,
+    #[serde(with = "crate::hex::option")]
     selector: Option<[u8; 32]>,
     /// The definition the selector selects in, which every export alias
     /// of it shares: a field's or variant's type.
@@ -35,7 +36,7 @@ pub(crate) struct Plan {
 
 /// Stable private identity for one generated table entry.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub(crate) struct EntryIdentity([u8; 32]);
+pub(crate) struct EntryIdentity(#[serde(with = "crate::hex")] [u8; 32]);
 
 /// The closed Phase-3 operation payload after selecting one structural member.
 #[derive(Deserialize, Serialize)]

@@ -23,6 +23,7 @@ pub mod classify;
 pub mod contract;
 mod error;
 pub mod expand;
+mod hex;
 pub mod limits;
 pub mod node_parts;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]

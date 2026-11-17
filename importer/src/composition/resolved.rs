@@ -21,11 +21,15 @@ const DOMAIN: &[u8] = b"rawr.surface.resolved/v1";
 /// Everything a warm launch needs that classification would otherwise derive.
 #[derive(Deserialize, Serialize)]
 struct Header {
+    #[serde(with = "crate::hex")]
     contract: [u8; 32],
+    #[serde(with = "crate::hex")]
     api: [u8; 32],
+    #[serde(with = "crate::hex")]
     semantic: [u8; 32],
     items: u64,
     bytes: u64,
+    #[serde(with = "crate::hex")]
     demand: [u8; 32],
 }
 

@@ -29,7 +29,7 @@ pub mod scalar;
 pub mod slice;
 pub mod text;
 
-pub(crate) const SURFACE_SCHEMA: u32 = 4;
+pub(crate) const SURFACE_SCHEMA: u32 = 8;
 
 fn has_unresolved_structural_parameters(
     representability: &crate::classify::representability::Representability,
@@ -112,7 +112,7 @@ impl Serialize for Snapshot {
     where
         S: serde::Serializer,
     {
-        self.0.serialize(serializer)
+        crate::hex::serialize(&self.0, serializer)
     }
 }
 
@@ -297,6 +297,7 @@ impl<'contract> Accepted<'contract> {
 #[derive(Serialize)]
 struct Canonical<'a> {
     schema: u32,
+    #[serde(with = "crate::hex")]
     contract: &'a [u8; 32],
     snapshot: Snapshot,
     entries: &'a [Entry],
@@ -309,7 +310,9 @@ struct Canonical<'a> {
 #[serde(deny_unknown_fields)]
 struct StoredCanonical {
     schema: u32,
+    #[serde(with = "crate::hex")]
     contract: [u8; 32],
+    #[serde(with = "crate::hex")]
     snapshot: [u8; 32],
     entries: Box<[Entry]>,
     builders: Box<[builder::Plan]>,
@@ -320,6 +323,7 @@ struct StoredCanonical {
 #[derive(Serialize)]
 struct SurfaceCanonical<'a> {
     schema: u32,
+    #[serde(with = "crate::hex")]
     contract: &'a [u8; 32],
     entries: UniqueIdentities<'a>,
     builders: &'a [builder::Plan],
