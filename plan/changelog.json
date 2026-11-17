@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A stored API writes each definition, implementation and export once, and each compiler unit once in a table, so counter's API value is 30 MB rather than 156 MB.","issues":[2166,2167]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.238",
+      "date": "2026-11-17",
+      "entries": [
+        {"text":"A stored API writes each definition, implementation and export once, and each compiler unit once in a table, so counter's API value is 30 MB rather than 156 MB.","issues":[2166,2167]}
+      ]
+    },
     {
       "version": "0.3.237",
       "date": "2026-11-17",
