@@ -462,6 +462,58 @@ async fn main() {
     assert_eq!(ran(main), "got 9\nslept\nsum 3\n");
 }
 
+/// A `select!` branch's precondition (`, if condition`) is evaluated before
+/// any future is polled, and a false one disables the branch, whose future
+/// is never polled (#2140): a ready branch left out, a lone branch reaching
+/// `else`, and a loop that stops receiving once its channel ends. The
+/// output is `cargo run`'s.
+#[test]
+fn select_skips_a_branch_whose_precondition_is_false() {
+    let main = r#"// rawr
+use std::cell::Cell;
+use std::time::Duration;
+
+async fn counted(polls: &Cell<u32>, value: i32) -> i32 {
+    polls.set(polls.get() + 1);
+    value
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let polls = Cell::new(0);
+    let ready = false;
+    let picked = tokio::select! {
+        v = counted(&polls, 1), if ready => v,
+        v = async { tokio::time::sleep(Duration::from_millis(5)).await; 2 } => v,
+    };
+    println!("{picked} {}", polls.get());
+    let picked = tokio::select! {
+        v = counted(&polls, 8), if ready => v,
+        else => 9,
+    };
+    println!("{picked} {}", polls.get());
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<i32>(4);
+    tx.send(1).await.unwrap();
+    tx.send(2).await.unwrap();
+    drop(tx);
+    let (mut open, mut sum, mut ticks) = (true, 0, 0);
+    loop {
+        tokio::select! {
+            biased;
+            got = rx.recv(), if open => match got {
+                Some(n) => sum += n,
+                None => open = false,
+            },
+            _ = tokio::time::sleep(Duration::from_millis(1)), if ticks < 2 => ticks += 1,
+            else => break,
+        }
+    }
+    println!("{sum} {ticks} {open}");
+}
+"#;
+    assert_eq!(ran(main), "2 0\n9 0\n3 2 false\n");
+}
+
 /// Program structs a crate decodes on one of tokio's worker threads, as
 /// reqwest's `Response::json()` decodes iced's pokedex's `Entry` (D740.3):
 /// nested `Deserialize` structs with a `Vec` field, defined in an async

@@ -481,3 +481,54 @@ fn main() {
         .compile_unit(unit, evidence)
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// A `mod` in a block is a module of the enclosing one, as rustc reads it:
+/// its items are its own, its `use super::*;` reaches the enclosing
+/// module's items, and its private function is rustc's E0603 from the
+/// block.
+#[test]
+fn a_module_in_a_block_sees_the_enclosing_module() {
+    let output = printed(
+        r#"
+const BASE: i32 = 10;
+
+fn main() {
+    let total = {
+        mod helper {
+            use super::*;
+            pub fn f() -> i32 {
+                g() + inner::h() + BASE
+            }
+            fn g() -> i32 {
+                1
+            }
+            pub mod inner {
+                pub fn h() -> i32 {
+                    super::g() + 1
+                }
+            }
+        }
+        helper::f()
+    };
+    println!("{total}");
+}
+"#,
+    );
+    assert_eq!(output, "13\n");
+    let report = rejected(
+        r#"
+fn main() {
+    mod helper {
+        fn g() -> i32 {
+            1
+        }
+    }
+    println!("{}", helper::g());
+}
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0603]: function `g` is private\n"),
+        "{report}"
+    );
+}

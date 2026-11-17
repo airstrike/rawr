@@ -4,8 +4,6 @@
 use super::*;
 
 impl<'a> Parser<'a> {
-    /// Whether a `struct`, `enum`, `impl`, `trait` or `type` item, or an
-    /// attribute, starts here in a body.
     /// The program's own macro `name` names at `at`: the innermost block's
     /// that defines one so far, else the one textual scope makes visible.
     pub(super) fn program_macro(
@@ -45,12 +43,14 @@ impl<'a> Parser<'a> {
             && matches!(self.peek_second(), Token::Bang)
     }
 
+    /// Whether a `struct`, `enum`, `impl`, `trait`, `type` or `mod` item,
+    /// or an attribute, starts here in a body.
     pub(super) fn nested_item_ahead(&mut self) -> bool {
         if self.attribute_ahead() {
             return true;
         }
         match self.peek() {
-            Token::Struct | Token::Enum | Token::Impl => true,
+            Token::Struct | Token::Enum | Token::Impl | Token::Mod => true,
             Token::Identifier(name) if name.as_str() == "unsafe" => {
                 matches!(self.peek_second(), Token::Impl)
             }
@@ -220,7 +220,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
+    /// A `struct`, `enum`, `impl`, `trait`, `type` or `mod` item inside a body,
     /// with its attributes: the item parser hoisted it to the file's items,
     /// so its tokens are passed over here. A statement's attributes have no
     /// effect and are passed over too, except a `#[cfg(..)]` that is false,
