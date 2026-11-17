@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"`rawr run --web` runs a program with no dependencies, such as one marked .rs file, in the browser and reloads its saves there. Every such program shares one runner of rawr and std, built once per rawr version, and the page shows what the program prints.","issues":[2122]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.226",
+      "date": "2026-11-16",
+      "entries": [
+        {"text":"`rawr run --web` runs a program with no dependencies, such as one marked .rs file, in the browser and reloads its saves there. Every such program shares one runner of rawr and std, built once per rawr version, and the page shows what the program prints.","issues":[2122]}
+      ]
+    },
     {
       "version": "0.3.225",
       "date": "2026-11-16",
