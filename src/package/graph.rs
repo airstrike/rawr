@@ -163,9 +163,10 @@ pub(crate) struct Unit {
 #[derive(Debug)]
 pub struct Graph {
     packages: Box<[Package]>,
-    sources: Box<[source::Source]>,
-    #[allow(dead_code)]
-    units: Box<[Unit]>,
+    /// Each source, as many as loading read and as the graph's expansions
+    /// add (`item_macro`).
+    sources: Vec<source::Source>,
+    units: Vec<Unit>,
     entry_package: Id,
     entry_source: source::Id,
     /// Each crate derive whose expansion was loaded beside its item, by the
@@ -175,6 +176,11 @@ pub struct Graph {
     /// (#1040), with the derives that are due again.
     #[cfg(feature = "rust-import")]
     stale: Vec<rawr_import::expand::Item>,
+    /// The encoded calls of dependencies' proc macros among the modules'
+    /// items with no expansion yet (`item_macro`), which rustc expands in
+    /// one run.
+    #[cfg(feature = "rust-import")]
+    unexpanded: Vec<Box<[u8]>>,
     /// A host's one in-memory file ([`Graph::load_parsed`]), whose paths
     /// may start at any crate the host registered, as no manifest names
     /// its dependencies.
@@ -756,8 +762,8 @@ impl Graph {
     pub(crate) fn into_parts(self) -> Parts {
         (
             self.packages,
-            self.sources,
-            self.units,
+            self.sources.into_boxed_slice(),
+            self.units.into_boxed_slice(),
             self.entry_package,
             self.entry_source,
         )
@@ -881,13 +887,15 @@ impl<'a> Builder<'a> {
         let entry_source = self.packages[entry_package.0].source;
         Ok(Graph {
             packages: self.packages.into_boxed_slice(),
-            sources: self.sources.into_boxed_slice(),
-            units: self.units.into_boxed_slice(),
+            sources: self.sources,
+            units: self.units,
             entry_package,
             entry_source,
             expanded: self.expanded,
             #[cfg(feature = "rust-import")]
             stale: self.stale,
+            #[cfg(feature = "rust-import")]
+            unexpanded: Vec::new(),
             hosted: false,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             rawr: None,
@@ -909,13 +917,15 @@ impl<'a> Builder<'a> {
         let entry_source = self.packages[entry_package.0].source;
         Ok(Graph {
             packages: self.packages.into_boxed_slice(),
-            sources: self.sources.into_boxed_slice(),
-            units: self.units.into_boxed_slice(),
+            sources: self.sources,
+            units: self.units,
             entry_package,
             entry_source,
             expanded: self.expanded,
             #[cfg(feature = "rust-import")]
             stale: self.stale,
+            #[cfg(feature = "rust-import")]
+            unexpanded: Vec::new(),
             hosted,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             rawr: None,

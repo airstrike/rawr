@@ -126,6 +126,32 @@ impl Unit {
         }
     }
 
+    /// Read `syntax`, the tokens of an expansion laid out of a call at
+    /// `at` (on the file's own lines), as the innermost body that holds the
+    /// call reads its own, so the resolver reads the paths among them as
+    /// that body's.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn extend_body(&mut self, at: Position, syntax: &item::BodySyntax) {
+        let body = self
+            .items
+            .iter_mut()
+            .flat_map(|parsed| match parsed {
+                item::Parsed::Function(function) => std::slice::from_mut(function),
+                item::Parsed::Impl(item::Impl { functions, .. })
+                | item::Parsed::Trait(item::Trait { functions, .. }) => &mut functions[..],
+                item::Parsed::Module(_)
+                | item::Parsed::Use(_)
+                | item::Parsed::Struct(_)
+                | item::Parsed::Enum(_)
+                | item::Parsed::TypeAlias(_) => &mut [],
+            })
+            .filter(|function| crate::resolve::block::contains(function.body_span, at))
+            .max_by_key(|function| function.body_span.start());
+        if let Some(function) = body {
+            function.body_syntax = function.body_syntax.followed_by(syntax);
+        }
+    }
+
     /// The calls of crates' macros among the items, taken to expand.
     #[cfg(feature = "rust-import")]
     pub(crate) fn take_calls(&mut self) -> Vec<item::MacroCall> {

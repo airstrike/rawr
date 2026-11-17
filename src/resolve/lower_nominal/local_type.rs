@@ -384,6 +384,9 @@ impl<'a> Parser<'a> {
             if let Some(model) = self.models.qualified_owner(name_span) {
                 return Ok(model.ty());
             }
+            if let Some(alias) = self.models.qualified_alias(name_span).cloned() {
+                return self.parse_alias_type(name, name_span, &alias);
+            }
             // `std::rc::Weak<T>` or `sync::Weak<T>`.
             if self.models.get(&first).is_none()
                 && let Some(weak) = counted::std_weak(&name)

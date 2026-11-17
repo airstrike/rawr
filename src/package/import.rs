@@ -230,6 +230,7 @@ impl crate::Engine {
         // A dependency's macro called where an item goes expands first,
         // its items laid out after their source's text.
         let expanded = graph.expand_crate_macros(&registry);
+        let unexpanded = graph.unexpanded_calls();
         let sources = graph.diagnostic_sources();
         let resolved = expanded.and_then(|()| crate::resolve::package::resolve(graph, &registry));
         let mut program = match resolved {
@@ -242,12 +243,14 @@ impl crate::Engine {
                     return Err(super::Error::resolution(sources.clone(), failure)
                         .with_rust_application(call));
                 }
-                // rustc expands a crate macro's call first (#1125).
+                // rustc expands a crate macro's call first, with every
+                // other the graph found (#1125).
                 if matches!(
                     failure.error,
                     crate::resolve::Error::MacroExpansionRequired { .. }
                 ) {
-                    return Err(super::Error::resolution(sources.clone(), failure));
+                    return Err(super::Error::resolution(sources.clone(), failure)
+                        .with_rust_macro_calls(unexpanded));
                 }
                 if let Some(report) = imported_resolution_report(&failure, &sources, &paths)
                     .map_err(super::Error::diagnostic)?

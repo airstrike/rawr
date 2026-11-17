@@ -1,6 +1,7 @@
 //! A call of a dependency's macro where an item goes, among a module's
-//! items or a block's statements: rustc expands it before it resolves a
-//! name, and the items it expands to are that module's or that block's.
+//! items or a block's statements, or used as a block's expression: rustc
+//! expands it before it resolves a name, and the items it expands to are
+//! that module's, that block's or the call's own.
 //!
 //! The parse leaves these calls as they are (`item::MacroCall`), since
 //! which crate's macro a path names, and what kind, is known only once the
@@ -21,27 +22,36 @@ use crate::{host, ImmutableString};
 const CALL_LIMIT: usize = 65_536;
 
 impl super::Graph {
-    /// Expand each call of a dependency's macro where an item goes, now
-    /// that `host` holds the dependencies' facades, and lay out the items
-    /// each expands to where it is.
+    /// Expand each call of a dependency's macro in the program's modules
+    /// and blocks, now that `host` holds the dependencies' facades, and lay
+    /// out what each expands to where it is: a block's expression's when
+    /// its rules may expand to an item or a path, as the program's own
+    /// macros' are. An inline `mod` among the items an expansion makes
+    /// loads as a module of the unit's, whose calls expand in turn.
     ///
     /// # Errors
     ///
     /// A module's call of a proc macro rustc has not expanded yet, which it
-    /// expands before the program is checked again (#1125), and a module's
-    /// call whose expansion does not parse as items.
+    /// expands before the program is checked again (#1125), with every
+    /// other such call the graph holds ([`Self::unexpanded_calls`]), and a
+    /// module's call whose expansion does not parse as items.
     pub(crate) fn expand_crate_macros(&mut self, host: &host::Registry) -> Result<(), Failure> {
         if self.hosted {
             return Ok(());
         }
         let project = self.entry_package().root().to_path_buf();
-        for index in 0..self.units.len() {
+        #[cfg(feature = "rust-import")]
+        let mut unexpanded = None;
+        // The units an inline `mod` adds are expanded in turn.
+        let mut index = 0;
+        while index < self.units.len() {
             let source = self.units[index].source;
             let Some(package) = self
                 .packages
                 .iter()
                 .find(|package| package.name() == self.sources[source.index()].package())
             else {
+                index += 1;
                 continue;
             };
             let prelude = crate::resolve::extern_prelude::Prelude::of(package, &project);
@@ -49,6 +59,8 @@ impl super::Graph {
             let parsed = &mut self.units[index].parsed;
             let mut calls = parsed.take_calls();
             let mut laid = false;
+            // Where the items the first expansion adds start.
+            let mut added = None;
             let mut taken = 0;
             while taken < calls.len() {
                 let call = calls[taken].clone();
@@ -68,6 +80,10 @@ impl super::Graph {
                 let Some(path) = crate_path(parsed, &call, &prelude) else {
                     continue;
                 };
+                // A macro Rawr writes itself, by its name, is the lowering's.
+                if crate::resolve::tokio_macro(&path, host).is_some() {
+                    continue;
+                }
                 let name = call.path.last().cloned().unwrap_or_default();
                 let rules = host
                     .overloads(&path)
@@ -93,25 +109,37 @@ impl super::Graph {
                             krate: rules.krate(),
                         }
                     }
+                    // An expression's proc macro is the lowering's to ask
+                    // rustc for in its place.
                     #[cfg(feature = "rust-import")]
-                    None if prelude.crate_macro(host, &path) => {
+                    None if !call.expression && prelude.crate_macro(host, &path) => {
                         match expansion_kept(parsed, &call, &path, &project) {
                             Ok(text) => kept = text,
                             // A block's call is the lowering's to ask for,
                             // with the body's other calls (#2151).
                             Err(_) if call.scope.is_some() => continue,
+                            // rustc expands every module's call the graph
+                            // holds in one run.
                             Err(missed) => {
-                                return Err(Failure {
+                                if let crate::resolve::Error::MacroExpansionRequired {
+                                    call, ..
+                                } = &missed
+                                {
+                                    self.unexpanded.push(call.clone());
+                                }
+                                unexpanded.get_or_insert(Failure {
                                     primary: source,
                                     secondary: None,
                                     error: missed,
                                 });
+                                continue;
                             }
                         }
                         Expansion::Text(&kept)
                     }
                     None => continue,
                 };
+                let first = parsed.items().len();
                 let nested =
                     crate::parser::item::lay_out_call(parsed, &call, &name, &expansion, &features)
                         .map_err(|error| Failure {
@@ -124,14 +152,98 @@ impl super::Graph {
                                 at: call.span,
                             },
                         })?;
-                laid |= nested.is_some();
-                calls.extend(nested.into_iter().flatten());
+                if let Some(nested) = nested {
+                    laid = true;
+                    added.get_or_insert(first);
+                    calls.extend(nested);
+                }
             }
             if laid {
                 let text = self.units[index].parsed.source().text().to_owned();
                 let expansions = self.units[index].parsed.expansions().into();
                 self.sources[source.index()].expand(&text, expansions);
             }
+            if let Some(first) = added {
+                self.load_inline_modules(index, first, &features)?;
+            }
+            index += 1;
+        }
+        #[cfg(feature = "rust-import")]
+        if let Some(failure) = unexpanded {
+            return Err(failure);
+        }
+        Ok(())
+    }
+
+    /// Every call of a dependency's proc macro among the modules' items
+    /// that [`Self::expand_crate_macros`] found no expansion for, encoded
+    /// as `resolve::Error::MacroExpansionRequired` holds it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn unexpanded_calls(&self) -> Vec<Box<[u8]>> {
+        self.unexpanded.clone()
+    }
+
+    /// Load each inline `mod name { .. }` among the items of the unit at
+    /// `index` from its `first` on as a module of the unit's, as loading
+    /// does a written one: a source of the text inside its braces, where
+    /// the unit's text has it, parsed with `features` enabled, and the
+    /// inline modules among its own items in turn.
+    fn load_inline_modules(
+        &mut self,
+        index: usize,
+        first: usize,
+        features: &crate::project::cargo::features::Enabled,
+    ) -> Result<(), Failure> {
+        let parent = self.units[index].source;
+        let items = self.units[index].parsed.items();
+        // A block's module is named by its segment, as the resolver names
+        // it (`resolve::block::module_segment`).
+        let ordinals = crate::resolve::block::ordinals(items);
+        let declared = items
+            .iter()
+            .zip(ordinals)
+            .skip(first)
+            .filter_map(|(item, ordinal)| match item {
+                crate::item::Parsed::Module(module) => Some((
+                    module.inline?,
+                    module.span,
+                    crate::resolve::block::module_segment(&module.name.text, ordinal),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (inline, span, segment) in declared {
+            let failed = |message: String| Failure {
+                primary: parent,
+                secondary: None,
+                error: crate::resolve::Error::Syntax {
+                    message: message.into(),
+                    label: ImmutableString::new(),
+                    help: None,
+                    at: span,
+                },
+            };
+            let around = &self.sources[parent.index()];
+            let mut modules = around.modules().to_vec();
+            modules.push(segment);
+            let id = crate::package::source::Id::from_index(self.sources.len());
+            let mut source = crate::package::source::Source::new(
+                id,
+                around.path().to_path_buf(),
+                around.package().into(),
+                modules.into_boxed_slice(),
+                super::keep_span(around.expanded_text(), inline),
+            )
+            .map_err(|error| failed(error.to_string()))?;
+            let parsed = crate::Engine::new_raw()
+                .parse_unit_with(source.text(), features)
+                .map_err(|error| failed(error.0.to_string()))?;
+            if !parsed.expansions().is_empty() {
+                source.expand(parsed.source().text(), parsed.expansions().into());
+            }
+            self.sources.push(source);
+            self.units.push(super::Unit { source: id, parsed });
+            self.load_inline_modules(self.units.len() - 1, 0, features)?;
         }
         Ok(())
     }

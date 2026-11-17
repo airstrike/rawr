@@ -684,9 +684,10 @@ pub struct Module {
     pub inline: Option<Span>,
 }
 
-/// A call of a crate's macro where an item goes, among a module's items or
-/// a block's statements, which the parse leaves as it is: its expansion is
-/// known once the crate's facade is (`package::item_macro`).
+/// A call of a crate's macro in a module's items or in a block, where an
+/// item goes or used as an expression, which the parse leaves as it is:
+/// its expansion is known once the crate's facade is
+/// (`package::item_macro`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MacroCall {
     /// The macro's path as written.
@@ -699,6 +700,9 @@ pub(crate) struct MacroCall {
     pub(crate) span: Span,
     /// The block whose statement it is, `None` among a module's items.
     pub(crate) scope: Option<Span>,
+    /// Whether it is a block's expression rather than its statement: the
+    /// items it expands to are the call's own, not its block's.
+    pub(crate) expression: bool,
 }
 
 /// A `macro_rules!` definition among a module's items. Its rules are read
@@ -1125,6 +1129,13 @@ pub(crate) enum BodyTokenKind {
 impl BodySyntax {
     pub(crate) fn new(tokens: Vec<BodyToken>) -> Self {
         Self(tokens.into())
+    }
+
+    /// These tokens with `more` after them, as a body's own are followed
+    /// by those of the expansions laid out of its calls.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn followed_by(&self, more: &Self) -> Self {
+        Self(self.0.iter().chain(more.0.iter()).cloned().collect())
     }
 
     pub(crate) fn tokens(&self) -> &[BodyToken] {

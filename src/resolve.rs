@@ -91,6 +91,9 @@ pub struct Program {
     std_traits: BTreeMap<ImmutableString, item::Trait>,
     qualified_functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
     qualified_owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
+    /// The type alias a body's path names through a module, by the path's
+    /// span.
+    qualified_aliases: BTreeMap<(program::source::Id, Span), type_ref::Alias>,
     qualified_pattern_owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
     /// Qualified expression paths into a `.rs` module, by path span,
     /// spelled through the app's crate name.
@@ -745,6 +748,7 @@ fn resolve_with_evidence_and_namespace(
         std_traits,
         qualified_functions: BTreeMap::new(),
         qualified_owners: BTreeMap::new(),
+        qualified_aliases: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
         qualified_traits: BTreeMap::new(),

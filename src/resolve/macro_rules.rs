@@ -109,6 +109,15 @@ struct Bound {
     trees: Vec<Tree>,
 }
 
+/// One repetition of a rule's matcher as a call matched it: the
+/// metavariables inside it, the indices of the repetitions around it and
+/// how many times it matched there.
+struct Repeated {
+    names: Box<[ImmutableString]>,
+    indices: Vec<usize>,
+    count: usize,
+}
+
 /// A token of an expansion, and whether the macro's own body wrote it
 /// (rather than the caller, through a metavariable).
 type Output = Vec<(Token, Position, bool)>;
@@ -117,6 +126,10 @@ type Output = Vec<(Token, Position, bool)>;
 /// furthest stopped, which rustc names when no rule matches.
 struct State {
     bound: Vec<Bound>,
+    /// How many times each repetition matched, at its indices: an
+    /// iteration whose own repetitions matched nothing binds nothing, so
+    /// the bindings alone can't count it.
+    repeated: Vec<Repeated>,
     /// The furthest stop: a token, or `None` for the call's end.
     stop: Option<(Position, Option<Token>)>,
     /// What closes the trees being matched: the call (`None`), or the
@@ -466,11 +479,13 @@ impl Rules {
     ) -> Result<Vec<(Token, Position)>, Failure> {
         let mut state = State {
             bound: Vec::new(),
+            repeated: Vec::new(),
             stop: None,
             end: (end, None),
         };
         for rule in &self.rules {
             state.bound.clear();
+            state.repeated.clear();
             if !matches(
                 &rule.matcher,
                 input,
@@ -482,6 +497,7 @@ impl Rules {
             }
             let transcription = Transcription {
                 bound: &state.bound,
+                repeated: &state.repeated,
                 depths: &rule.depths,
                 krate,
                 at,
@@ -640,7 +656,7 @@ fn matches(
         },
         Pattern::Group(delimiter, inner) => match input.first() {
             Some(Tree::Group(found, _, contents, close)) if found == delimiter => {
-                let mark = state.bound.len();
+                let mark = (state.bound.len(), state.repeated.len());
                 let outer =
                     std::mem::replace(&mut state.end, (*close, Some(delimiters(*delimiter).1)));
                 let within = matches(inner, contents, indices, state, &mut |rest, _, state| {
@@ -650,7 +666,8 @@ fn matches(
                 if within && matches(rest, &input[1..], indices, state, then) {
                     return true;
                 }
-                state.bound.truncate(mark);
+                state.bound.truncate(mark.0);
+                state.repeated.truncate(mark.1);
                 false
             }
             _ => {
@@ -712,7 +729,7 @@ fn repeat(
             },
         };
         if let Some(after) = after {
-            let mark = state.bound.len();
+            let mark = (state.bound.len(), state.repeated.len());
             indices.push(count);
             let found = matches(
                 inner,
@@ -744,11 +761,26 @@ fn repeat(
             if found {
                 return true;
             }
-            state.bound.truncate(mark);
+            state.bound.truncate(mark.0);
+            state.repeated.truncate(mark.1);
         }
     }
     let least = usize::from(op == Op::Plus);
-    count >= least && matches(rest, input, indices, state, then)
+    if count < least {
+        return false;
+    }
+    let mut names = Vec::new();
+    collect_depths(inner, 0, &mut names);
+    state.repeated.push(Repeated {
+        names: names.into_iter().map(|(name, _)| name).collect(),
+        indices: indices.clone(),
+        count,
+    });
+    if matches(rest, input, indices, state, then) {
+        return true;
+    }
+    state.repeated.pop();
+    false
 }
 
 fn is_literal(token: &Token) -> bool {
@@ -896,6 +928,7 @@ fn fragment_length(fragment: Fragment, input: &[Tree]) -> Option<usize> {
 
 struct Transcription<'a> {
     bound: &'a [Bound],
+    repeated: &'a [Repeated],
     depths: &'a [(ImmutableString, usize)],
     krate: &'a str,
     at: Position,
@@ -982,7 +1015,8 @@ impl Transcription<'_> {
     }
 
     /// The number of iterations of a repetition over `inner` at `indices`:
-    /// the matches of the metavariables inside it that repeat deeper.
+    /// how many times the matcher's repetition of each metavariable inside
+    /// it that repeats deeper matched there.
     fn count(&self, inner: &[Tree], indices: &[usize]) -> Result<usize, ImmutableString> {
         let mut names = BTreeSet::new();
         variables(inner, &mut names);
@@ -995,12 +1029,13 @@ impl Transcription<'_> {
                 continue;
             }
             let found = self
-                .bound
+                .repeated
                 .iter()
-                .filter(|bound| bound.name.as_str() == name && bound.indices.starts_with(indices))
-                .map(|bound| bound.indices[indices.len()] + 1)
-                .max()
-                .unwrap_or(0);
+                .find(|repeated| {
+                    repeated.indices == indices
+                        && repeated.names.iter().any(|named| named.as_str() == name)
+                })
+                .map_or(0, |repeated| repeated.count);
             match count {
                 Some(count) if count != found => {
                     return Err(format!(

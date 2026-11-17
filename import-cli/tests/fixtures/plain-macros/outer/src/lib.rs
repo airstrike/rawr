@@ -1,8 +1,11 @@
 //! The program's only dependency. It re-exports `inner`'s macros, whose
-//! `$crate` is `inner`, a crate the program does not name, and has a macro
-//! of its own whose `$crate` path is a hidden item.
+//! `$crate` is `inner`, a crate the program does not name, and std's
+//! `IntoIterator`, whose module is private, and has macros of its own: one
+//! whose `$crate` path is a hidden item, and one whose block declares a
+//! module.
 
 pub use inner::{counter, list, measured, scaled, total, written, List, Measure};
+pub use std::iter::IntoIterator;
 
 #[doc(hidden)]
 pub use inner::__private;
@@ -27,6 +30,23 @@ macro_rules! offset_twice {
     ($value:expr) => {
         $crate::__added!($value, 200)
     };
+}
+
+/// How many values it is given, counted in a type its block's module
+/// declares.
+#[macro_export]
+macro_rules! tally {
+    ($($value:expr),* $(,)?) => {{
+        mod __tally {
+            pub(super) type Count = u32;
+        }
+        let mut count: __tally::Count = 0;
+        $(
+            let _ = $value;
+            count += 1;
+        )*
+        count
+    }};
 }
 
 #[doc(hidden)]
