@@ -290,6 +290,70 @@ pub enum Type {
 }
 
 impl Type {
+    /// The type with each `Parameter(index)` replaced by what `given` gives
+    /// for it, or `None` when `given` gives nothing for one.
+    #[must_use]
+    pub fn with_parameters(&self, given: &impl Fn(u32) -> Option<Self>) -> Option<Self> {
+        let one = |ty: &Self| ty.with_parameters(given).map(Box::new);
+        let all = |types: &[Self]| {
+            types
+                .iter()
+                .map(|ty| ty.with_parameters(given))
+                .collect::<Option<Box<[_]>>>()
+        };
+        Some(match self {
+            Self::Parameter(index) => given(*index)?,
+            Self::Nominal {
+                definition,
+                arguments,
+            } => Self::Nominal {
+                definition: *definition,
+                arguments: all(arguments)?,
+            },
+            Self::Option(element) => Self::Option(one(element)?),
+            Self::Result(ok, err) => Self::Result(one(ok)?, one(err)?),
+            Self::Sequence {
+                element,
+                owned,
+                length,
+            } => Self::Sequence {
+                element: one(element)?,
+                owned: *owned,
+                length: *length,
+            },
+            Self::ConstArray { element, parameter } => Self::ConstArray {
+                element: one(element)?,
+                parameter: *parameter,
+            },
+            Self::Tuple(members) => Self::Tuple(all(members)?),
+            Self::Borrowed { mutable, ty } => Self::Borrowed {
+                mutable: *mutable,
+                ty: one(ty)?,
+            },
+            Self::Range(element) => Self::Range(one(element)?),
+            Self::FunctionItem { input, output } => Self::FunctionItem {
+                input: one(input)?,
+                output: one(output)?,
+            },
+            Self::ProfileMessage { mapper, payload } => Self::ProfileMessage {
+                mapper: *mapper,
+                payload: one(payload)?,
+            },
+            Self::Script {
+                path,
+                arguments,
+                holder,
+            } => Self::Script {
+                path: path.clone(),
+                arguments: all(arguments)?,
+                holder: holder.clone(),
+            },
+            Self::Unit | Self::Never | Self::Builtin(_) | Self::Inferred | Self::Object(_) => {
+                self.clone()
+            }
+        })
+    }
+
     /// Whether a value of this type becomes rawr's, or rawr's becomes one,
     /// with no call's arena: it holds no crate value, only rawr's builtins
     /// and std's types rawr holds as its own, as a thread's `io::Result<()>`

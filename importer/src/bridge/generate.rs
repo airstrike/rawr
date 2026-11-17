@@ -3079,6 +3079,7 @@ pub fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::island::arenas(|| Box::new(CallArena::enter()));
     __rawr_internal::island::travels(arrive, depart);
     __rawr_internal::island::outputs(future_output);
+    __rawr_internal::island::awaits(native_future);
     __rawr_internal::host::debug::register::<NativeHandle>();
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();
@@ -3487,6 +3488,26 @@ pub fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Resul
     // captured go with it (`carry`).
     future.carry(|step| carry(step, arguments.arena));
     Ok(future)
+}
+
+/// The core's future of a native value whose type is a future, as tokio's
+/// `JoinHandle<T>` is, from the calls the value carries, made where it was
+/// given: what `.await` runs, which gives it its witness. The value back
+/// when it carries none.
+pub fn native_future(mut value: Dynamic) -> Result<Dynamic, Dynamic> {
+    let handle = value.read_lock::<NativeHandle>().map(|handle| handle.clone());
+    let Some(handle) = handle else {
+        return Err(value);
+    };
+    let made = arena_access(|arena| -> Result<Dynamic, Error> {
+        let table = arena.opaque(&handle)?;
+        let mut values = [&mut value];
+        table.future(&mut Arguments { values: &mut values, arena })
+    });
+    match made {
+        Some(Ok(future)) => Ok(future),
+        _ => Err(value),
+    }
 }
 
 /// Check script values that came back from an erased generic against the
@@ -22676,6 +22697,21 @@ fn render_give(
                 "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
             ),
         },
+        // A crate type that implements `Future`, as tokio's `JoinHandle<T>`:
+        // its value carries the core's future of it, made here at its
+        // type, which `.await` runs and stamps with its own output's
+        // witness (`native_future`).
+        convert::Type::Nominal { .. } if let Some(awaited) = nominal_future_output(ty) => {
+            let mut body = Vec::new();
+            body.write_all(b"    let value = take_like(arguments, 0, _w)?;\n")
+                .map_err(request::unwritable)?;
+            render_give_task(&awaited, "value", "imported", &mut body)?;
+            let body = String::from_utf8(body).map_err(request::unwritable)?;
+            writeln!(
+                output,
+                "    let table = {{\n        static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();\n        OpaqueTable(TABLE.get_or_init(|| opaque_table(witness_of(&{value}), [|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w, &arguments);\n{body}\n}}])))\n    }};\n    let handle = insert_native!(arguments.arena, {value})?;\n    arguments.arena.set_opaque(&handle, table);\n    Ok(Dynamic::from(handle))"
+            )
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
@@ -23490,6 +23526,23 @@ fn render_to_dynamic(
     .map_err(request::unwritable)
 }
 
+/// The `Output` of the crate's `impl Future` for the nominal `ty`, at its
+/// arguments, when its type is a future (`NOMINAL_FUTURES`).
+fn nominal_future_output(ty: &convert::Type) -> Option<convert::Type> {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return None;
+    };
+    NOMINAL_FUTURES.with_borrow(|futures| {
+        futures
+            .get(definition.as_bytes())?
+            .with_parameters(&|index| arguments.get(usize::try_from(index).ok()?).cloned())
+    })
+}
+
 /// A Rust future, which no crate's type names.
 fn is_future(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
@@ -24095,9 +24148,12 @@ fn substitution<'a>(
     let convert::Type::Parameter(index) = ty else {
         return Some(ty);
     };
-    // A script future's output is a `rawr::Value`, whatever type the script
-    // gives it, which comes back checked (D527). The synthetic output of a
-    // callable `impl Into<T>` converts from is the instance's (D551.6).
+    // A script future's output is the instance's type, as a crate's
+    // `JoinHandle<F::Output>` of it is a value of that type's handle, or a
+    // `rawr::Value`, whatever type the script gives it, which comes back
+    // checked, where the instance doesn't name one (D527). The synthetic
+    // output of a callable `impl Into<T>` converts from is the instance's
+    // (D551.6).
     let synthetic = crate::classify::representability::signature::FUTURE_OUTPUT;
     if index & synthetic != 0
         && signature.parameters().iter().any(|parameter| {
@@ -24105,6 +24161,18 @@ fn substitution<'a>(
                 && parameter.kind() == crate::classify::representability::signature::Kind::Future
         })
     {
+        if let Some(given) = signature
+            .parameters()
+            .iter()
+            .filter(|parameter| {
+                parameter.kind() == crate::classify::representability::signature::Kind::Type
+            })
+            .position(|parameter| parameter.index() == *index)
+            .and_then(|position| substitutions.get(position))
+            .filter(|given| concrete_type(given).is_some())
+        {
+            return Some(given);
+        }
         static VALUE: std::sync::OnceLock<convert::Type> = std::sync::OnceLock::new();
         return Some(VALUE.get_or_init(|| convert::Type::Nominal {
             definition: crate::surface::identity::Definition::value(),
@@ -24420,6 +24488,12 @@ thread_local! {
     /// `Core`, by identity: the position of the argument that is their
     /// `Future::Output`.
     static OPAQUE_FUTURES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], u32>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The crate types that implement `Future`, as tokio's `JoinHandle<T>`,
+    /// by identity: each one's `Output`, over the positions of its type
+    /// arguments. A value of one carries the core's future of it, made
+    /// where it was given (`render_give`).
+    static NOMINAL_FUTURES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], convert::Type>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The opaque types that are `impl Fn(A..) -> B`, as iced's
     /// `Function::with` gives, by identity: the positions of the arguments
@@ -27844,6 +27918,18 @@ impl TypePaths {
                 }));
             }
         });
+        NOMINAL_FUTURES.with_borrow_mut(|futures| {
+            futures.clear();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                futures.extend(owner.types().filter_map(|ty| {
+                    ty.future_source()
+                        .map(|output| (*ty.identity(), output.clone()))
+                }));
+            }
+        });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
             for owner in facade
@@ -27979,6 +28065,7 @@ impl Drop for TypePaths {
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         OPAQUE_FUTURES.with_borrow_mut(std::collections::BTreeMap::clear);
+        NOMINAL_FUTURES.with_borrow_mut(std::collections::BTreeMap::clear);
         OPAQUE_CALLABLES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);

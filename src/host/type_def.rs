@@ -60,6 +60,10 @@ struct Generics {
     /// parameter that is its value: `application(..)`'s `impl Program<State
     /// = S>` gives `P::State` to a call its value fills `P` of.
     associated: Box<[Associated]>,
+    /// The `Output` of the crate's `impl Future` for the type, over its
+    /// parameters, as `Result<T, JoinError>` of tokio's `JoinHandle<T>`:
+    /// what `.await` on a value of it gives.
+    future: Option<host::type_ref::Type>,
     /// How many type arguments a path may write that the type drops, as
     /// `canvas::Geometry<Renderer>` writes the defaulted parameter of an
     /// alias whose type names none of them.
@@ -441,6 +445,7 @@ impl Definition {
                 Box::new(Generics {
                     defaults,
                     associated: Box::default(),
+                    future: None,
                     dropped: 0,
                 })
             }),
@@ -555,6 +560,21 @@ impl Definition {
             self.generics.get_or_insert_default().associated = associated;
         }
         self
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_future(mut self, future: Option<host::type_ref::Type>) -> Self {
+        if future.is_some() {
+            self.generics.get_or_insert_default().future = future;
+        }
+        self
+    }
+
+    /// The `Output` of the crate's `impl Future` for the type, over its
+    /// parameters, when the type is a future.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn future(&self) -> Option<&host::type_ref::Type> {
+        self.generics.as_ref()?.future.as_ref()
     }
 
     /// The parameter that is the value of the associated type `name` of

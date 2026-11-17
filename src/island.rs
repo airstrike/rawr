@@ -238,6 +238,28 @@ pub(crate) fn output(value: Dynamic) -> Dynamic {
     }
 }
 
+/// The core's future of a native value whose type is a future, as tokio's
+/// `JoinHandle<T>` is, made by the calls the value carries, which takes the
+/// witness of the `.await` that runs it (`host::runtime::Unwitnessed`);
+/// the value back when it carries none.
+pub type Await = fn(Dynamic) -> Result<Dynamic, Dynamic>;
+
+static AWAIT: OnceLock<Await> = OnceLock::new();
+
+/// Name how the runner makes the core's future of a native value that is
+/// awaited. Set once.
+pub fn awaits(awaited: Await) {
+    let _ = AWAIT.set(awaited);
+}
+
+/// What [`awaits`] makes of `value`; the value back without a runner.
+pub(crate) fn awaited(value: Dynamic) -> Result<Dynamic, Dynamic> {
+    match AWAIT.get() {
+        Some(awaited) => awaited(value),
+        None => Err(value),
+    }
+}
+
 /// Where the native value a script value holds is, lent to native code in
 /// place for as long as `pins` are kept; `None` when it holds none, and
 /// `Err` when it can't be lent so long. Without pins, only a value that

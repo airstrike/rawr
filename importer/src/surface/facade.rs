@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 69;
+const SCHEMA: u32 = 71;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -654,6 +654,15 @@ struct TypeBody {
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// The `Output` of the crate's `impl Future` for the native type, over
+    /// its parameters: what `.await` on a value of it gives (#2132).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    future: Option<Type>,
+    /// The same `Output` as the bridge converts it, over the positions of
+    /// the type's parameters: the runner makes the core's future of a value
+    /// of the type from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    future_source: Option<representability::convert::Type>,
     /// Whether the crate implements `std::error::Error` for the native
     /// type (#1451).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1830,6 +1839,8 @@ impl Plan {
                                 covariant: false,
                                 given: Box::default(),
                                 iterator,
+                                future: None,
+                                future_source: None,
                                 error: false,
                                 opaque: true,
                                 layout: None,
@@ -2387,6 +2398,8 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
                 covariant: false,
                 given: Box::default(),
                 iterator: false,
+                future: None,
+                future_source: None,
                 error: false,
                 opaque: false,
                 associated: Box::default(),
@@ -2475,6 +2488,8 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                     covariant: false,
                     given: Box::default(),
                     iterator: false,
+                    future: None,
+                    future_source: None,
                     error: false,
                     opaque: false,
                     associated: Box::default(),
@@ -2529,6 +2544,8 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
             covariant: false,
             given: Box::default(),
             iterator: false,
+            future: None,
+            future_source: None,
             error: false,
             opaque: false,
             associated: Box::default(),
@@ -2686,6 +2703,8 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                     covariant: false,
                     given: Box::default(),
                     iterator: false,
+                    future: None,
+                    future_source: None,
                     error: false,
                     opaque: false,
                     layout: None,
@@ -3806,6 +3825,16 @@ impl TypeDefinition {
     pub fn iterator(&self) -> bool {
         self.body.iterator
     }
+    /// Return the `Output` of the crate's `impl Future` for the native
+    /// type, over its parameters, when it is a future.
+    pub fn future(&self) -> Option<&Type> {
+        self.body.future.as_ref()
+    }
+    /// Return that `Output` as the bridge converts it, over the positions
+    /// of the type's parameters.
+    pub fn future_source(&self) -> Option<&representability::convert::Type> {
+        self.body.future_source.as_ref()
+    }
     /// Return whether the crate implements `std::error::Error` for the
     /// native type.
     pub fn error(&self) -> bool {
@@ -4183,6 +4212,23 @@ fn written_type_definition(
         Representability::Enum(plan) => plan.error(),
         _ => false,
     };
+    let (future, parameters_of) = match outcome.representability() {
+        Representability::Struct(plan) => (plan.future(), plan.parameters()),
+        Representability::Enum(plan) => (plan.future(), plan.parameters()),
+        _ => (None, &[][..]),
+    };
+    // The bridge's `Output` names each parameter by its position, as a
+    // value's type gives its arguments.
+    let future_source = future.and_then(|output| {
+        output.with_parameters(&|index| {
+            parameters_of
+                .iter()
+                .position(|parameter| parameter.index() == index)
+                .and_then(|position| u32::try_from(position).ok())
+                .map(representability::convert::Type::Parameter)
+        })
+    });
+    let future = future.map(|output| ty(output, parameters_of)).transpose()?;
     let layout = match outcome.representability() {
         Representability::Struct(plan) => plan.layout().cloned(),
         _ => None,
@@ -4293,6 +4339,8 @@ fn written_type_definition(
             covariant: borrowing.2,
             given,
             iterator: borrowing.1,
+            future,
+            future_source,
             error,
             opaque: false,
             associated: Box::default(),

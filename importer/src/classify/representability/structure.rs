@@ -72,6 +72,11 @@ pub struct Plan {
     /// by its `next` (D558 slice 2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// The `Output` of the crate's `impl Future` for the type, over its own
+    /// parameters, as `Result<T, JoinError>` of tokio's `JoinHandle<T>`:
+    /// `.await` on a value of it gives that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    future: Option<super::convert::Type>,
     /// The crate implements `PartialOrd` for the type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     partial_ord: bool,
@@ -184,6 +189,7 @@ impl Plan {
             covariant: false,
             given: Vec::new(),
             iterator: false,
+            future: None,
             partial_ord: false,
             ord: false,
             error: false,
@@ -388,6 +394,20 @@ impl Plan {
     #[must_use]
     pub const fn iterator(&self) -> bool {
         self.iterator
+    }
+
+    /// The plan, with the `Output` of the crate's `impl Future` for the
+    /// type.
+    pub(crate) fn with_future(mut self, future: Option<super::convert::Type>) -> Self {
+        self.future = future;
+        self
+    }
+
+    /// The `Output` of the crate's `impl Future` for the type, over its own
+    /// parameters, when it is a future.
+    #[must_use]
+    pub const fn future(&self) -> Option<&super::convert::Type> {
+        self.future.as_ref()
     }
 
     /// Drop the public fields `keep` refuses. A struct that lost one has no

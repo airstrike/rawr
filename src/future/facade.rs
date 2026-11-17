@@ -13,6 +13,11 @@ pub const ROOT: &str = "rawr";
 pub const FUTURE: &str = "rawr::future::Future";
 /// The function an async body's step function is passed to.
 pub const SCRIPT: &str = "rawr::future::script";
+/// The function `.await` on a crate value whose type is a future passes
+/// the value to first, relative to the facade's root.
+const AWAITED: &str = "future::__awaited";
+/// That function, qualified.
+pub const AWAITED_PATH: &str = "rawr::future::__awaited";
 /// The most futures `join!` takes.
 pub const MOST_FUTURES: usize = 5;
 
@@ -53,6 +58,15 @@ pub fn definition() -> Result<facade::Definition, host::Error> {
         "future::script",
         script.finish(),
     )?)?;
+
+    // `.await` on a crate value whose type is a future, as tokio's
+    // `JoinHandle<T>`: the core's future of its `Output`.
+    let mut awaited = signature::Builder::new();
+    awaited.type_parameter("Value", &[])?;
+    awaited.type_parameter("Output", &[])?;
+    awaited.parameter(Type::parameter("Value")?);
+    awaited.output(future(Type::parameter("Output")?)?);
+    builder.item(item::Definition::function(AWAITED, awaited.finish())?)?;
 
     const NAMES: [&str; MOST_FUTURES] = ["A", "B", "C", "D", "F"];
     for count in 2..=MOST_FUTURES {
@@ -108,6 +122,35 @@ pub fn runtime() -> Result<host::runtime::Facade, host::Error> {
             Ok(Dynamic::from(super::Future::script(step)))
         })
         .expect("the rawr bindings declare `future::script` once");
+    builder
+        .bind_with_context(AWAITED_PATH, |call, args| {
+            let [value] = args else {
+                return Err(error("`rawr::future::__awaited` takes one value"));
+            };
+            let actual = value.type_name();
+            let not_future = || error(format!("expected a future, found `{actual}`"));
+            #[cfg(feature = "rust-import")]
+            let made = crate::island::awaited(value.take()).map_err(|_| not_future())?;
+            #[cfg(not(feature = "rust-import"))]
+            let made = value.take();
+            // The future takes the witness of this call's output, whose
+            // argument its output is checked as.
+            let made = match made.try_cast_result::<host::runtime::Unwitnessed>() {
+                Ok(pending) => {
+                    let witness = call
+                        .output_witness()
+                        .map_err(|source| error(source.to_string()))?;
+                    pending.witness(witness).ok_or_else(not_future)?
+                }
+                Err(made) => made,
+            };
+            if made.is::<super::Future>() {
+                Ok(made)
+            } else {
+                Err(not_future())
+            }
+        })
+        .expect("the rawr bindings declare `future::__awaited` once");
     for count in 2..=MOST_FUTURES {
         builder
             .bind_with_context(join_path(count), |_call, args| {

@@ -378,7 +378,7 @@ impl<'a> Parser<'a> {
                 source: whole,
             });
         }
-        let Some(output) = self.task_output(&future.ty) else {
+        let Some(output) = self.awaited_output(&future.ty, whole)? else {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "`.await` on a value that is not a future".into(),
                 source: whole,
@@ -387,6 +387,11 @@ impl<'a> Parser<'a> {
         // `.await` takes the future, as Rust's `IntoFuture` does.
         let mut future = future;
         self.move_local(&mut future)?;
+        // A crate value whose type is a future is awaited as the core's
+        // future of its `Output`.
+        if self.task_output(&future.ty).is_none() {
+            future = self.core_future(future, &output, whole)?;
+        }
         let mut source = origin::Fragment::plain(format!("{}(", crate::eval::machine::AWAIT));
         source.push(future.rendered_source());
         source.push_text(")");
@@ -402,6 +407,68 @@ impl<'a> Parser<'a> {
         self.last_type = block.ty;
         self.last_expression = Some((start, block.span));
         Ok(())
+    }
+
+    /// What `.await` on a value of `ty` gives: the core future's output, or
+    /// the `Output` of a crate type's `impl Future` at the value's type
+    /// arguments, as `Result<T, JoinError>` of tokio's `JoinHandle<T>`.
+    /// The runner makes the core's future of a crate value where it is
+    /// awaited (`core_future`).
+    pub(super) fn awaited_output(&mut self, ty: &Ty, span: Span) -> Result<Option<Ty>, Error> {
+        if let Some(output) = self.task_output(ty) {
+            return Ok(Some(output));
+        }
+        #[cfg(feature = "rust-import")]
+        if let Ty::Host { proof, arguments } = self.inference.resolve(ty)
+            && let Some(output) = proof.definition.future()
+        {
+            let definition = proof.definition.clone();
+            let mut parameters = definition
+                .parameters()
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect::<BTreeMap<_, _>>();
+            let output = output.clone();
+            let path = definition.path().as_str().to_string();
+            return self
+                .instantiate_host_type(
+                    &output,
+                    &mut parameters,
+                    &path,
+                    span,
+                    proof.owner.as_ref(),
+                    Some(&definition),
+                )
+                .map(Some);
+        }
+        #[cfg(not(feature = "rust-import"))]
+        let _ = span;
+        Ok(None)
+    }
+
+    /// The core's future of `value`, a crate value whose type is a future
+    /// of `output`, which the runner makes of it from the calls it carries.
+    pub(super) fn core_future(
+        &mut self,
+        value: ParsedExpr,
+        output: &Ty,
+        span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let items = self
+            .models
+            .host_items(crate::future::facade::AWAITED_PATH)
+            .map(<[_]>::to_vec)
+            .ok_or_else(|| self.unsupported("a crate's future in a program without async"))?;
+        let owner = self
+            .models
+            .item_owner(crate::future::facade::AWAITED_PATH)
+            .cloned();
+        let future = self.call_host_function(&items, owner, vec![value], span)?;
+        if let Some(made) = self.task_output(&future.ty) {
+            self.require_type(output, &made, span)?;
+        }
+        Ok(future)
     }
 
     /// The output of the core's future, which `.await` gives.

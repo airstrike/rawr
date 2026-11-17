@@ -2462,6 +2462,7 @@ fn build(
             parameters,
             Box::default(),
             associated,
+            None,
             shape,
             0,
             allocation,
@@ -2652,6 +2653,18 @@ fn build(
             Representability::Struct(plan) => plan.dropped() as usize,
             _ => 0,
         };
+        // What `.await` on a value of the type gives, when it is a future.
+        let future = match entry.outcome.representability() {
+            Representability::Struct(plan) => plan
+                .future()
+                .map(|output| types.convert(output, plan.parameters(), allocation))
+                .transpose()?,
+            Representability::Enum(plan) => plan
+                .future()
+                .map(|output| types.convert(output, plan.parameters(), allocation))
+                .transpose()?,
+            _ => None,
+        };
         builder.imported_opaque_type(
             entry.relative.as_ref(),
             imported_identity(entry.definition),
@@ -2659,6 +2672,7 @@ fn build(
             parameters,
             defaults,
             Box::default(),
+            future,
             shape,
             dropped,
             allocation,

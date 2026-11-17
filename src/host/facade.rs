@@ -947,6 +947,7 @@ impl Builder {
             parameters,
             defaults,
             Box::default(),
+            None,
             shape,
             0,
             allocation,
@@ -966,6 +967,7 @@ impl Builder {
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         associated: Box<[host::type_def::Associated]>,
+        future: Option<host::type_ref::Type>,
         shape: crate::Shared<host::type_def::Shape>,
         dropped: usize,
         allocation: &mut impl host::ImportAllocation,
@@ -982,6 +984,7 @@ impl Builder {
             shape,
         )?
         .with_associated(associated)
+        .with_future(future)
         .with_dropped(dropped);
         self.insert_type(definition)?;
         Ok(self)

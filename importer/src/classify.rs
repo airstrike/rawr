@@ -27,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 255;
+const CLASSIFIER_VERSION: u32 = 256;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -8616,6 +8616,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             self.implements_for_any(definition, "Iterator"),
         )
         .with_given(given_parameters(generics))
+        .with_future(
+            instance
+                .is_none()
+                .then(|| self.own_future_output(definition, generics))
+                .flatten(),
+        )
         .with_unsupported(unsupported)
         .with_layout(fields.layout().cloned())
         .with_drops(self.implements_for_any(definition, "Drop")))
@@ -9541,7 +9547,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
         )
-        .with_given(given_parameters(generics)))
+        .with_given(given_parameters(generics))
+        .with_future(self.own_future_output(definition, generics)))
     }
 
     fn constant(
@@ -11872,6 +11879,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let Some(output) = self.future_type_output(ty) else {
             return self.convert_value(ty);
         };
+        // A crate's own type that implements `Future`, as tokio's
+        // `JoinHandle<T>`, is a value of that type, with its own methods,
+        // and `.await` on it gives its `Output` (the plan's `future`).
+        if let model::Type::Definition { id, .. } = ty
+            && self.nominal_future(id)
+            && let Ok(value) = self.convert_value(ty)
+        {
+            return Ok(value);
+        }
         // What the future gives is a value the bridge gives Rawr, as a
         // plain output is: a crate's `async fn list() -> Result<(Self,
         // Vec<Contribution>), Error>` gives a tuple holding a `Vec`. A
@@ -11898,6 +11914,56 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
             _ => None,
         }
+    }
+
+    /// Whether the struct or enum `id` is a future whose plan gives its
+    /// `Output` (`own_future_output`).
+    fn nominal_future(&self, id: &api::identity::Definition) -> bool {
+        let Some(index) = self.graph.definition_index(id) else {
+            return false;
+        };
+        let Some(definition) = self.graph.definitions().nth(index) else {
+            return false;
+        };
+        match definition.kind() {
+            model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
+                self.own_future_output(index, generics).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// The `Output` of the crate's `impl Future` for the struct or enum at
+    /// `definition`, over the type's own parameters, as `Result<T,
+    /// JoinError>` of `impl<T> Future for JoinHandle<T>`. `None` when the
+    /// type is no future, or its output is no value Rawr holds.
+    fn own_future_output(
+        &self,
+        definition: usize,
+        generics: &model::Generics,
+    ) -> Option<representability::convert::Type> {
+        let id = self.graph.definitions().nth(definition)?.id();
+        let mut arguments = Vec::new();
+        for parameter in generics.parameters() {
+            arguments.push(match parameter.kind() {
+                model::ParameterKind::Lifetime { .. } => {
+                    model::Argument::Lifetime(model::Lifetime::Static)
+                }
+                model::ParameterKind::Type { .. } => {
+                    model::Argument::Type(model::Type::Parameter {
+                        owner: parameter.owner().clone(),
+                        index: parameter.index(),
+                    })
+                }
+                model::ParameterKind::Const { .. } => return None,
+            });
+        }
+        let output = if arguments.is_empty() {
+            self.future_impl_output(id).cloned()
+        } else {
+            self.generic_future_impl_output(id, &arguments)
+        }?;
+        self.convert_field(&output).ok()
     }
 
     /// The `Output` of a generic type's `impl<T> Future for Type<T>`, with

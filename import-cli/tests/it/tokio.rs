@@ -282,6 +282,67 @@ fn a_spawned_script_future_runs_unawaited_and_its_handle_gives_its_value() {
     }
 }
 
+/// A crate's type that implements `Future` is a value of that type, as
+/// rustc holds it (#2132): tokio's `JoinHandle<T>` keeps `abort` and
+/// `is_finished`, a program's function names it as its output, `Sleep`
+/// keeps `is_elapsed`, and each is awaited, or joined by `join!`, as the
+/// core's future of its `Output`, a script struct's among them. The output
+/// is `cargo run`'s.
+#[test]
+fn a_crates_future_type_keeps_its_methods_and_is_awaited() {
+    let main = r#"// rawr
+use std::time::Duration;
+
+#[derive(Debug)]
+struct Point {
+    x: i32,
+    label: String,
+}
+
+fn blocking() -> tokio::task::JoinHandle<bool> {
+    tokio::task::spawn_blocking(|| true)
+}
+
+#[tokio::main]
+async fn main() {
+    let slow = tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        1
+    });
+    println!("finished {}", slow.is_finished());
+    slow.abort();
+    println!("cancelled {}", slow.await.unwrap_err().is_cancelled());
+    println!("blocking {}", blocking().await.unwrap());
+    let point = tokio::spawn(async { Point { x: 3, label: String::from("p") } });
+    let point = point.await.unwrap();
+    println!("point {} {} {:?}", point.x, point.label, point);
+    let sleep = tokio::time::sleep(Duration::from_millis(1));
+    println!("elapsed {}", sleep.is_elapsed());
+    sleep.await;
+    let (a, b) = tokio::join!(tokio::spawn(async { 1 }), tokio::spawn(async { 2 }));
+    println!("joined {} {}", a.unwrap(), b.unwrap());
+}
+"#;
+    let root = SPAWN.lease(&[("src/main.rs", main)]);
+    let run = crate::support::rawr_import()
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "finished false\ncancelled true\nblocking true\n\
+         point 3 p Point { x: 3, label: \"p\" }\nelapsed false\njoined 1 2\n"
+    );
+}
+
 /// Program structs a crate decodes on one of tokio's worker threads, as
 /// reqwest's `Response::json()` decodes iced's pokedex's `Entry` (D740.3):
 /// nested `Deserialize` structs with a `Vec` field, defined in an async
