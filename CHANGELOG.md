@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.243 (2026-11-17)
+
 - A program's `&mut Context<'_>` crosses into crate functions, such as tokio's `poll_budget_available`, and the `Poll<T>` a crate gives comes back as std's `Poll`. (#2175; part of #1152)
 - `Future::poll` polls a crate future, such as tokio's `Sleep` or `JoinHandle`, where it is, so it keeps its own methods. `Poll` is `Copy`, `Clone` and `Debug` as std's is and supports `map`, and `Box::pin` pins a future to poll by hand. (#2176; part of #1152)
 
