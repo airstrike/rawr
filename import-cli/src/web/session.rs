@@ -16,6 +16,7 @@ use rawr::project::cargo::features::Enabled;
 
 use serde_json::{json, Value};
 
+use super::base;
 use super::build::{self, Build, Built};
 use super::error::Failure;
 use super::package::Package;
@@ -52,15 +53,15 @@ impl Session {
     ) -> Result<Option<Self>, Failure> {
         let loaded = rawr_cli::base::load(path, rawr_cli::base::Build::Program)?;
         rawr_cli::cells::keep("rawr-import", &loaded.cells, &loaded.graph);
-        if !loaded.graph.declares_rust_import() {
-            return Err(Failure::Usage(
-                "`rawr run --web` runs a program that uses crates from its Cargo.toml or its \
-                 frontmatter, in their runner built for a browser; this program uses none",
-            ));
-        }
         // A package builds in its target directory, a script in its
-        // directory in rawr's area, as `rawr run` builds them.
+        // directory in rawr's area, as `rawr run` builds them. A program
+        // that uses no crates runs on the runner of rawr and std that every
+        // such program shares.
         let (location, root) = match &loaded.target {
+            _ if !loaded.graph.declares_rust_import() => {
+                let package = base::package(&build::home())?;
+                (package.clone(), package)
+            }
             rawr::project::Target::Project(project) => (
                 project.location().to_path_buf(),
                 project.root().as_path().to_path_buf(),

@@ -459,6 +459,16 @@ mod tests {
             .find(|known| known.manifest.name == manifest.name)
             .expect("rawr's catalog lists rawr-import");
         assert_eq!(known.manifest, manifest);
+        // `rawr run --web` comes here for a program no binary claims, as
+        // one with no dependencies; `rawr run` of it stays with rawr.
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+        assert!(manifest.provides(&words(&["run", "app.rs", "--web"])));
+        assert!(!manifest.provides(&words(&["run", "app.rs"])));
         assert!(known
             .install
             .iter()

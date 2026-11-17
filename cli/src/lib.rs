@@ -534,16 +534,17 @@ fn program(
 
 /// `rawr run --web`: load the program once and hand it to the binary that
 /// serves it, which builds its runner for a browser and serves its page. A
-/// program on the base language links no crates, so no runner is built.
+/// program on the base language goes to the binary that provides `rawr run
+/// --web`, which runs it on a runner of rawr and std alone.
 fn on_web(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
     match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments)) {
         Ok(Served::Base(_)) => {
-            eprintln!(
-                "{}: `rawr run --web` runs a program that uses crates from its Cargo.toml, in \
-                 their runner built for a browser; this program uses none",
-                color::label(color::Level::Error)
-            );
-            ExitCode::FAILURE
+            let mut run = Vec::with_capacity(arguments.len() + 1);
+            if arguments.first().is_none_or(|word| word != "run") {
+                run.push(OsString::from("run"));
+            }
+            run.extend_from_slice(arguments);
+            forward(&run)
         }
         Ok(Served::Handed(code)) => code,
         Err(report) => failure(&report),

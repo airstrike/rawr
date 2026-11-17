@@ -67,16 +67,22 @@ pub(super) enum Built {
     Unchanged,
 }
 
+/// rawr's home, where wasm-bindgen's CLI is installed and the runner of
+/// programs with no dependencies is built.
+pub(super) fn home() -> PathBuf {
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")))
+        .unwrap_or_default();
+    rawr_import::store::home(&cargo_home)
+}
+
 impl Build {
     /// The build of the program at `location`, whose package's root is
     /// `root`, with its page in `site`, or in the project's rawr directory.
     pub(super) fn new(location: &Path, root: &Path, site: Option<&Path>) -> Self {
         let target = rawr_cli::cells::target_directory(root);
         let web = rawr_location::rawr_directory_in(&target, root).join("web");
-        let cargo_home = std::env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")))
-            .unwrap_or_default();
         let names = if site.is_some() {
             Names::Removed
         } else {
@@ -88,7 +94,7 @@ impl Build {
             runner: web.join("runner"),
             pack: web.join("pack"),
             site: site.map_or_else(|| web.join("site"), Path::to_path_buf),
-            home: rawr_import::store::home(&cargo_home),
+            home: home(),
             names,
             packed: None,
         }

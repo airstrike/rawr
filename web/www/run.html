@@ -13,7 +13,9 @@
   says why it restarted (#2117).
 
   iced's web shell puts its canvas in place of `#iced`, and a terminal
-  backend that draws into the page appends its rows to the body.
+  backend that draws into the page appends its rows to the body. What the
+  program writes shows in `#rawr-output`, as a terminal shows it, until
+  something else draws in the page.
 -->
 <html lang="en">
 <head>
@@ -36,16 +38,20 @@ body:has(> div > pre) #rawr-report { background: #3a1212f2; }
   background: #2a1010f2; color: #fbe3e3; white-space: pre-wrap;
 }
 #rawr-report[hidden] { display: none; }
+#rawr-output { padding: 12px 16px; white-space: pre-wrap; }
+#rawr-output:empty, body:has(> canvas) #rawr-output, body:has(> div > pre) #rawr-output { display: none; }
 #rawr-report.note { background: #10202af2; color: #dcecf5; }
 </style>
 </head>
 <body>
+<pre id="rawr-output"></pre>
 <div id="iced"></div>
 <pre id="rawr-report" hidden></pre>
 <script type="module">
 import init, * as glue from "./universe.js";
 
 const box = document.getElementById("rawr-report");
+const output = document.getElementById("rawr-output");
 const ANSI = /\x1b\[[0-9;]*m/g;
 const show = (text) => {
   box.textContent = text.replace(ANSI, "");
@@ -132,6 +138,7 @@ if (program.entry) {
   await init({ module_or_path: "universe_bg.wasm" });
   glue.set_output((stream, text) => {
     (stream === "stderr" ? console.error : console.log)(text.replace(/\n$/, ""));
+    output.append(text.replace(ANSI, ""));
     report("/output", { stream, text });
   });
   current = JSON.stringify(program.files);
