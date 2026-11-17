@@ -5343,6 +5343,12 @@ fn resolve_trait(
             site.record(&error);
             return Err(error);
         }
+        // A crate macro's `$crate::Trait` names a crate the program may not
+        // name, through its hidden segment: the trait is a crate's, which
+        // the next pass demands.
+        if host::path::is_hidden(&qualified) {
+            return Err(error);
+        }
     }
     Err(Error::UnsupportedNominalSyntax {
         construct: "an `impl` of a trait path that names no crate or std trait".into(),

@@ -16,6 +16,9 @@ pub struct Source {
     package: ImmutableString,
     modules: Box<[ImmutableString]>,
     diagnostic: diagnostic::Source,
+    /// How long the file's own text is, which the diagnostic's text holds
+    /// first, before the expansions laid out after it.
+    file: usize,
 }
 
 impl Id {
@@ -37,12 +40,14 @@ impl Source {
         text: String,
     ) -> Result<Self, diagnostic::Error> {
         let diagnostic = diagnostic::Source::new(path.to_string_lossy().into_owned(), text)?;
+        let file = diagnostic.text().len();
         Ok(Self {
             id,
             path,
             package,
             modules,
             diagnostic,
+            file,
         })
     }
 
@@ -60,12 +65,14 @@ impl Source {
     ) -> Result<Self, diagnostic::Error> {
         let diagnostic =
             diagnostic::Source::expansion(path.to_string_lossy().into_owned(), text, origin)?;
+        let file = diagnostic.text().len();
         Ok(Self {
             id,
             path,
             package,
             modules,
             diagnostic,
+            file,
         })
     }
 
@@ -96,7 +103,19 @@ impl Source {
     /// Return the exact retained UTF-8 source text.
     #[must_use]
     pub fn text(&self) -> &str {
+        &self.diagnostic.text()[..self.file]
+    }
+
+    /// The file's text with the expansions of the macro calls among its
+    /// items laid out after it, which their items' positions are in.
+    pub(crate) fn expanded_text(&self) -> &str {
         self.diagnostic.text()
+    }
+
+    /// Lay out `expansions` after the file's text: `text` is the file's
+    /// with them after it, as its parse gives it.
+    pub(crate) fn expand(&mut self, text: &str, expansions: Box<[diagnostic::source::Expansion]>) {
+        self.diagnostic = self.diagnostic.with_expansions(text, expansions);
     }
 
     pub(crate) const fn diagnostic(&self) -> &diagnostic::Source {

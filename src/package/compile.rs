@@ -67,9 +67,11 @@ pub(crate) fn snapshot(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::AST, Error> {
-    let graph = engine.load_snapshot_kept(snapshot)?;
+    let mut graph = engine.load_snapshot_kept(snapshot)?;
+    let expanded = graph.expand_crate_macros(&engine.host_registry);
     let sources = graph.diagnostic_sources();
-    let program = resolve::package::resolve(graph, &engine.host_registry)
+    let program = expanded
+        .and_then(|()| resolve::package::resolve(graph, &engine.host_registry))
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     snapshot_executable(engine, program, &sources).map(program::Executable::into_hosted_ast)
 }
@@ -81,7 +83,8 @@ pub(crate) fn snapshot_generation_plain(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::reload::Candidate, Error> {
-    let graph = engine.load_snapshot_kept(snapshot)?;
+    let mut graph = engine.load_snapshot_kept(snapshot)?;
+    let expanded = graph.expand_crate_macros(&engine.host_registry);
     let sources = graph.diagnostic_sources();
     let source = crate::reload::source::Graph::from_package(&graph);
     // A crate built for its tests runs them in place of its `main`.
@@ -90,7 +93,8 @@ pub(crate) fn snapshot_generation_plain(
         .features()
         .test()
         .then(|| super::test::Declared::of(&graph));
-    let program = resolve::package::resolve(graph, &engine.host_registry)
+    let program = expanded
+        .and_then(|()| resolve::package::resolve(graph, &engine.host_registry))
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     let executable = snapshot_executable(engine, program, &sources)?;
     let tests = declared.map(|declared| super::test::Declared::compiled_in(declared, &executable));

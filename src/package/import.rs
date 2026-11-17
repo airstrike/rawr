@@ -188,7 +188,7 @@ impl crate::Engine {
         let target = crate::project::Target::discover(snapshot.entry())
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        let graph = match cells {
+        let mut graph = match cells {
             Some(cells) => super::Graph::load_with_cells(self, &target, cells)?,
             None => super::Graph::load(self, &target)?,
         };
@@ -200,7 +200,6 @@ impl crate::Engine {
         }
         took("loading");
 
-        let sources = graph.diagnostic_sources();
         let mut allocation = contract
             .allocation(limits)
             .map_err(Error::from)
@@ -228,7 +227,12 @@ impl crate::Engine {
             .installed(contract, applications, &mut allocation, kept)
             .map_err(super::Error::import)?;
         took("installing");
-        let mut program = match crate::resolve::package::resolve(graph, &registry) {
+        // A dependency's macro called where an item goes expands first,
+        // its items laid out after their source's text.
+        let expanded = graph.expand_crate_macros(&registry);
+        let sources = graph.diagnostic_sources();
+        let resolved = expanded.and_then(|()| crate::resolve::package::resolve(graph, &registry));
+        let mut program = match resolved {
             Ok(program) => program,
             Err(failure) => {
                 if let crate::resolve::Error::ImportedApplicationRequired { call, .. } =

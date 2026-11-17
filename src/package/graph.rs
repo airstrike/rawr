@@ -1,5 +1,8 @@
 //! Canonical static source/package graph construction.
 
+#[cfg(feature = "rust-import")]
+mod item_macro;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -818,6 +821,10 @@ struct Builder<'a> {
     packages: Vec<Package>,
     module_targets: BTreeMap<PathBuf, error::Label>,
     active_modules: Vec<PathBuf>,
+    /// The program's own macros of the modules around the one being
+    /// loaded that are in its textual scope: those defined before its
+    /// `mod` item, which a call where an item goes may name.
+    inherited: Vec<crate::Shared<crate::resolve::macro_rules::Rules>>,
     expanded: BTreeMap<(source::Id, Span), ImmutableString>,
     #[cfg(feature = "rust-import")]
     stale: Vec<rawr_import::expand::Item>,
@@ -843,6 +850,7 @@ impl<'a> Builder<'a> {
             packages: Vec::new(),
             module_targets: BTreeMap::new(),
             active_modules: Vec::new(),
+            inherited: Vec::new(),
             expanded: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             stale: Vec::new(),
@@ -1414,7 +1422,7 @@ impl<'a> Builder<'a> {
         declaration: Option<error::Label>,
     ) -> Result<source::Id, Error> {
         let id = source::Id::from_index(self.sources.len());
-        let source = source::Source::new(
+        let mut source = source::Source::new(
             id,
             canonical.clone(),
             package_name.into(),
@@ -1428,24 +1436,33 @@ impl<'a> Builder<'a> {
             .entry
             .take()
             .filter(|_| *features == crate::project::cargo::features::Enabled::default());
-        let parsed = match (entry, self.cells) {
+        // A module that may call the macros of the modules around it is
+        // parsed with them, which its cell, keyed by its text, doesn't hold.
+        let cells = self.cells.filter(|_| self.inherited.is_empty());
+        let parse = || {
+            crate::parser::item::inheriting(&self.inherited, || {
+                self.engine.parse_unit_with(source.text(), features)
+            })
+            .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))
+        };
+        let parsed = match (entry, cells) {
             (Some(parsed), _) => parsed,
             (None, Some(cells)) => match cells.get(&canonical, source.text(), features) {
                 Some(parsed) => parsed,
                 None => {
-                    let parsed = self
-                        .engine
-                        .parse_unit_with(source.text(), features)
-                        .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
+                    let parsed = parse()?;
                     cells.parsed(&canonical, source.text(), features, &parsed);
                     parsed
                 }
             },
-            (None, None) => self
-                .engine
-                .parse_unit_with(source.text(), features)
-                .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?,
+            (None, None) => parse()?,
         };
+        // The items of the macro calls among the items are on lines laid
+        // out after the file's, which the source holds for its reports.
+        if !parsed.expansions().is_empty() {
+            source.expand(parsed.source().text(), parsed.expansions().into());
+            self.evidence[evidence] = source.diagnostic().clone();
+        }
         // A block's module is named by its segment
         // (`resolve::block::module_segment`), so that each block's module
         // of a name is a module of its own.
@@ -1468,7 +1485,19 @@ impl<'a> Builder<'a> {
                 | item::Parsed::TypeAlias(_) => None,
             })
             .collect::<Vec<_>>();
-        let file_text = source.text().to_string();
+        let file_text = source.expanded_text().to_string();
+        // The module's own macros, where each definition ends, for the
+        // modules it declares after them.
+        let defined = parsed
+            .macros()
+            .iter()
+            .filter_map(|definition| {
+                let rules =
+                    crate::resolve::macro_rules::Rules::parse(definition.span.text(&file_text))
+                        .ok()?;
+                Some((definition.span.end(), crate::Shared::new(rules)))
+            })
+            .collect::<Vec<_>>();
         #[cfg(feature = "rust-import")]
         let derived = derived_items(&file_text, parsed.items());
         #[cfg(feature = "rust-import")]
@@ -1488,9 +1517,17 @@ impl<'a> Builder<'a> {
             }),
         );
 
+        let around = self.inherited.clone();
         for (module, segment) in declarations {
             let mut child_modules = modules.to_vec();
             child_modules.push(segment.clone());
+            self.inherited = around.clone();
+            self.inherited.extend(
+                defined
+                    .iter()
+                    .filter(|(end, _)| *end <= module.span.start())
+                    .map(|(_, rules)| rules.clone()),
+            );
             let label = error::Label {
                 source: evidence,
                 span: module.span,
@@ -1549,6 +1586,7 @@ impl<'a> Builder<'a> {
             }
         }
 
+        self.inherited = around;
         self.active_modules.pop();
         Ok(id)
     }

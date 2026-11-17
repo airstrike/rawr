@@ -24,6 +24,12 @@ pub struct Unit {
     inner_attributes: Box<[item::Attribute]>,
     /// The `macro_rules!` definitions among the items, in source order.
     macros: Box<[item::MacroRules]>,
+    /// Where the expansions of the macro calls among the items are laid
+    /// out, on lines of `source` past the file's.
+    expansions: Box<[crate::diagnostic::source::Expansion]>,
+    /// The calls of crates' macros where an item goes, which the parse
+    /// leaves as they are.
+    calls: Box<[item::MacroCall]>,
     /// Where the first statement outside the items starts, when there is one.
     statements: Option<Position>,
     /// The source with the items blanked: the statements, which the checker
@@ -44,6 +50,8 @@ impl Unit {
             imports: Box::default(),
             inner_attributes: Box::default(),
             macros: Box::default(),
+            expansions: Box::default(),
+            calls: Box::default(),
             statements,
             script_source,
         }
@@ -62,6 +70,66 @@ impl Unit {
     pub(crate) fn with_macros(mut self, macros: Box<[item::MacroRules]>) -> Self {
         self.macros = macros;
         self
+    }
+
+    pub(crate) fn with_expansions(
+        mut self,
+        expansions: Box<[crate::diagnostic::source::Expansion]>,
+    ) -> Self {
+        self.expansions = expansions;
+        self
+    }
+
+    pub(crate) fn with_calls(mut self, calls: Box<[item::MacroCall]>) -> Self {
+        self.calls = calls;
+        self
+    }
+
+    /// The calls of crates' macros where an item goes, which the parse
+    /// leaves as they are.
+    pub(crate) fn calls(&self) -> &[item::MacroCall] {
+        &self.calls
+    }
+
+    /// Where the expansions of the macro calls among the items are laid
+    /// out, past the file's lines.
+    pub(crate) fn expansions(&self) -> &[crate::diagnostic::source::Expansion] {
+        &self.expansions
+    }
+
+    /// This unit with what a call among its items expands to laid out
+    /// after its text: `text` is the unit's with that after it, which holds
+    /// `expansions`, the call's `items` join the unit's, and `masked` is
+    /// what its script no longer holds, as the call.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn lay_out(
+        &mut self,
+        text: String,
+        expansions: Box<[crate::diagnostic::source::Expansion]>,
+        items: Vec<item::Parsed>,
+        masked: &[crate::Span],
+    ) {
+        let mut imports = self.imports.to_vec();
+        imports.extend(items.iter().filter_map(|item| match item {
+            item::Parsed::Use(used) => Some(used.clone()),
+            _ => None,
+        }));
+        imports.sort_by_key(|used| used.span.start());
+        self.imports = imports.into_boxed_slice();
+        self.items = self.items.iter().cloned().chain(items).collect();
+        self.source = source::Map::new(text);
+        self.expansions = expansions;
+        if !masked.is_empty() {
+            self.script_source =
+                source::Map::new(self.script_source.as_str()).without(masked.iter().copied());
+            self.statements = crate::parser::first_statement(&self.script_source);
+        }
+    }
+
+    /// The calls of crates' macros among the items, taken to expand.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn take_calls(&mut self) -> Vec<item::MacroCall> {
+        std::mem::take(&mut self.calls).into_vec()
     }
 
     /// This unit with `items` after its own, which its text doesn't hold.

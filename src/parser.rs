@@ -3,6 +3,7 @@
 #[cfg(feature = "syntax")]
 mod disabled;
 pub(crate) mod item;
+mod item_macro;
 
 use crate::api::options::LangOptions;
 use crate::ast::{
@@ -524,7 +525,6 @@ impl Engine {
         source: &str,
         features: &crate::project::cargo::features::Enabled,
     ) -> ParseResult<crate::parse::Unit> {
-        let source = crate::source::Map::new(source);
         let item::ParsedFile {
             items,
             masked,
@@ -532,7 +532,15 @@ impl Engine {
             imports,
             inner_attributes,
             macros,
-        } = item::parse(self, features, source.text())?;
+            expanded,
+            calls,
+        } = item::parse(self, features, source)?;
+        // The expansions of the calls among the items are laid out after
+        // the file's text, which their items' positions are in.
+        let (source, expansions) = match expanded {
+            Some((text, expansions)) => (crate::source::Map::new(&text), expansions),
+            None => (crate::source::Map::new(source), Box::default()),
+        };
         #[cfg(feature = "syntax")]
         if let Some(error) = disabled::error(&source, disabled) {
             return Err(error);
@@ -546,23 +554,14 @@ impl Engine {
                 .chain(masked)
                 .chain(macros.iter().map(|definition| definition.header.span)),
         );
-        // The statements outside the items are typed Rust, which the
-        // checker reads when it lowers them. Here it is enough to know
-        // where the first one starts.
-        let statements = {
-            let inputs = [script_source.as_str()];
-            let (mut stream, control) = self.lex_raw(&inputs, None);
-            control.borrow_mut().rust = true;
-            match stream.next() {
-                Some((Token::EOF, _)) | None => None,
-                Some((_, position)) => Some(position),
-            }
-        };
+        let statements = first_statement(&script_source);
 
         Ok(
             crate::parse::Unit::new(source, items, statements, script_source)
                 .with_scope(imports, inner_attributes)
-                .with_macros(macros),
+                .with_macros(macros)
+                .with_expansions(expansions)
+                .with_calls(calls),
         )
     }
 
@@ -3486,5 +3485,20 @@ impl Engine {
             lib,
             optimization_level,
         ))
+    }
+}
+
+/// Where the first statement of `script`, the text a unit's items leave,
+/// starts, when there is one. The statements are typed Rust, which the
+/// checker reads when it lowers them; here it is enough to know where the
+/// first one starts.
+pub(crate) fn first_statement(script: &str) -> Option<Position> {
+    let engine = Engine::new_raw();
+    let inputs = [script];
+    let (mut stream, control) = engine.lex_raw(&inputs, None);
+    control.borrow_mut().rust = true;
+    match stream.next() {
+        Some((Token::EOF, _)) | None => None,
+        Some((_, position)) => Some(position),
     }
 }

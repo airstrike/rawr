@@ -1809,6 +1809,42 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     );
 }
 
+/// A dependency's `macro_rules!` call where an item goes declares the
+/// items it expands to in its module or block, as rustc does (#2183): a
+/// struct, its inherent impl and an impl of the crate's trait through
+/// `$crate`.
+#[test]
+fn a_dependencys_macro_call_in_item_position_declares_its_items() {
+    const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
+    let root = crate::support::fresh("plain-item-macros");
+    copy(Path::new(MACROS), &root);
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\n\
+         use outer::Measure;\n\
+         \n\
+         outer::counter!(Ticks, 3);\n\
+         \n\
+         fn main() {\n\
+         \x20   let ticks = Ticks::START.next();\n\
+         \x20   println!(\"{} {ticks:?} {}\", ticks.get(), ticks.measure());\n\
+         \x20   outer::counter!(Laps, 8);\n\
+         \x20   println!(\"{}\", Laps::START.next().get());\n\
+         }\n",
+    )
+    .unwrap();
+
+    let run = rawr_import(&root, &["run"]);
+
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "4 Ticks(4) 40\n9\n");
+}
+
 /// `rawr test` of a program with a Rust dependency runs its tests in its
 /// runner, built as `cargo test` builds them, and reports what `cargo
 /// test` reports: each test's result, a failure's output and panic, and

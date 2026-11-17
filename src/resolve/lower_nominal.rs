@@ -282,12 +282,12 @@ use surface::{
     method_without_call, range_inclusive_element, range_type_id, unnamed_signature_type, unpassable,
 };
 use time::{time_code, time_method};
-pub(crate) use tokens::lex_rust;
 use tokens::{
     argument_count, assignment_token, point_span, source_full_span, source_span, span,
     split_arguments, split_first_argument, standard_function, stringify_tokens, template_tokens,
-    text_end, token_text, without_borrow, without_reference, without_references, Continuation,
+    text_end, without_borrow, without_reference, without_references, Continuation,
 };
+pub(crate) use tokens::{lex_rust, token_text};
 #[cfg(feature = "rust-import")]
 use ty::uninstantiated_call;
 use ty::{

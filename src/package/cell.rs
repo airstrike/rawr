@@ -229,7 +229,9 @@ impl Cells {
 
     fn encode(&self, text: &str, features: &Enabled, unit: &parse::Unit) -> Option<Vec<u8>> {
         let (items, statements, script_source) = unit.parts();
-        if statements.is_some() {
+        // A cell holds the file's own text; what its macro calls expand to
+        // is laid out after it, or comes once a crate's facade is known.
+        if statements.is_some() || !unit.expansions().is_empty() || !unit.calls().is_empty() {
             return None;
         }
         let mut writer = Writer(Vec::with_capacity(text.len() * 2));

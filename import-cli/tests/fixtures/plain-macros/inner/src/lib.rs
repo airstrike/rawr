@@ -88,6 +88,34 @@ impl Measure for List {
     }
 }
 
+/// A counter type and its methods, declared where the call is, as a
+/// bitflags-style crate declares a program's types.
+#[macro_export]
+macro_rules! counter {
+    ($name:ident, $start:expr) => {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub struct $name(i64);
+
+        impl $name {
+            pub const START: Self = Self($start);
+
+            pub fn next(self) -> Self {
+                Self(self.0 + 1)
+            }
+
+            pub fn get(self) -> i64 {
+                self.0
+            }
+        }
+
+        impl $crate::Measure for $name {
+            fn measure(&self) -> i64 {
+                self.0 * 10
+            }
+        }
+    };
+}
+
 /// The measure of a list, as `$crate::Measure::measure(&list)`.
 #[macro_export]
 macro_rules! measured {

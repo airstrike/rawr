@@ -27,7 +27,7 @@ impl Map {
 
     /// The text with everything outside `spans` blanked, lines kept, so
     /// each position in it is the source's.
-    #[cfg(feature = "syntax")]
+    #[cfg(any(feature = "syntax", feature = "rust-import"))]
     pub(crate) fn only(&self, spans: impl IntoIterator<Item = Span>) -> String {
         self.masked(spans, false)
     }

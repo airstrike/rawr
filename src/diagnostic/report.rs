@@ -341,6 +341,23 @@ impl Builder {
             }
             None => (source, span),
         };
+        // A position in the expansion of a call among the items is the
+        // call's, with rustc's note naming the macro.
+        let span = match source.expansion_at(span.start()) {
+            Some(expansion) => {
+                let note: ImmutableString = format!(
+                    "this error originates in the macro `{}` (in Nightly builds, run with -Z \
+                     macro-backtrace for more info)",
+                    expansion.name
+                )
+                .into();
+                if !self.report.notes.contains(&note) {
+                    self.report.notes.push(note);
+                }
+                expansion.call
+            }
+            None => span,
+        };
         // A span of tokens a macro expansion made from one written token
         // can run past the written one's line: it starts where they were
         // written.
