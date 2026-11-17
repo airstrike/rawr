@@ -213,6 +213,12 @@ impl Prepared {
         &self.demand
     }
 
+    /// Retire the values of the demand rounds this preparation's final
+    /// demand superseded, for a check that binds nothing (#2168).
+    pub fn retire_superseded_rounds(&self) -> Result<(), rawr_import::node::Error> {
+        self.request.retire_superseded_rounds()
+    }
+
     /// Take the shared bindings to settle after the runner builds.
     pub fn take_settlement(&mut self) -> rawr_import::bindings::Settlement {
         std::mem::take(&mut self.settlement)

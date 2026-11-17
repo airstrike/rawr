@@ -14,6 +14,7 @@ use crate::contract::{self, Classified, Contract};
 pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod kept;
+mod layout;
 pub mod representability;
 mod slice;
 pub mod std_binding;
@@ -27,7 +28,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 261;
+const CLASSIFIER_VERSION: u32 = 264;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -173,7 +174,26 @@ pub struct SupportOutcomes<'a> {
     remaining: usize,
 }
 
-struct CanonicalSupport<'a>(&'a SupportLedger);
+/// The support ledger as the store writes it, its edges in `order`
+/// (`layout`).
+struct CanonicalSupport<'a> {
+    ledger: &'a SupportLedger,
+    order: &'a layout::Order,
+}
+
+/// The definition plans as the store writes them, in `order` (`layout`).
+struct CanonicalDefinitions<'a> {
+    plans: &'a [DefinitionPlan],
+    order: &'a layout::Order,
+}
+
+/// Outcome or implementation records as the store writes them, each list
+/// of implementation ledgers in the order `implementations` gives
+/// (`layout`).
+struct Laid<'a, T: ?Sized> {
+    records: &'a T,
+    implementations: &'a layout::Implementations,
+}
 
 /// One exact implementation ledger nested under the export that retained it.
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -190,6 +210,9 @@ pub struct ImplementationOutcome<'contract> {
     definitions: &'contract [DefinitionPlan],
 }
 
+/// The classification as the store writes it: support, definition plans
+/// and each outcome's implementation ledgers in source order (`layout`),
+/// outcomes in export order.
 #[derive(Serialize)]
 struct Canonical<'a> {
     semantic_api: &'a [u8; 32],
@@ -197,8 +220,8 @@ struct Canonical<'a> {
     classifier: u32,
     compiler_abi: u32,
     support: CanonicalSupport<'a>,
-    definitions: &'a [DefinitionPlan],
-    outcomes: &'a [OutcomeRecord],
+    definitions: CanonicalDefinitions<'a>,
+    outcomes: Laid<'a, [OutcomeRecord]>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -4387,6 +4410,26 @@ impl SupportLedger {
         })
     }
 
+    /// The outcome `edge`, one of this ledger's edges, records.
+    fn outcome(&self, edge: &SupportEdge) -> Option<SupportOutcome<'_>> {
+        let provenance = self.groups.get(edge.group as usize)?.provenance;
+        let Some(rejection) = edge.rejection else {
+            return Some(SupportOutcome::Complete {
+                definition: edge.definition,
+                provenance,
+            });
+        };
+        let rejection = self
+            .rejections
+            .get(rejection.get().checked_sub(1)? as usize)?;
+        Some(SupportOutcome::Rejected {
+            definition: edge.definition,
+            provenance,
+            reason: &rejection.reason,
+            span: &rejection.span,
+        })
+    }
+
     pub(crate) const fn len(&self) -> usize {
         self.edges.len()
     }
@@ -4411,23 +4454,7 @@ impl<'a> Iterator for SupportOutcomes<'a> {
             }
             debug_assert!(self.remaining > 0);
             self.remaining -= 1;
-            let provenance = self.ledger.groups.get(edge.group as usize)?.provenance;
-            let Some(rejection) = edge.rejection else {
-                return Some(SupportOutcome::Complete {
-                    definition: edge.definition,
-                    provenance,
-                });
-            };
-            let rejection = self
-                .ledger
-                .rejections
-                .get(rejection.get().checked_sub(1)? as usize)?;
-            return Some(SupportOutcome::Rejected {
-                definition: edge.definition,
-                provenance,
-                reason: &rejection.reason,
-                span: &rejection.span,
-            });
+            return self.ledger.outcome(edge);
         }
         None
     }
@@ -4448,9 +4475,32 @@ impl Serialize for CanonicalSupport<'_> {
     where
         S: Serializer,
     {
-        let mut sequence = serializer.serialize_seq(Some(self.0.edges.len()))?;
-        for outcome in self.0.outcomes() {
+        let mut sequence = serializer.serialize_seq(Some(self.order.indices().len()))?;
+        for index in self.order.indices() {
+            let outcome = self
+                .ledger
+                .edges
+                .get(index)
+                .and_then(|edge| self.ledger.outcome(edge))
+                .ok_or_else(|| serde::ser::Error::custom("support order names no edge"))?;
             sequence.serialize_element(&outcome)?;
+        }
+        sequence.end()
+    }
+}
+
+impl Serialize for CanonicalDefinitions<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.order.indices().len()))?;
+        for index in self.order.indices() {
+            let plan = self
+                .plans
+                .get(index)
+                .ok_or_else(|| serde::ser::Error::custom("definition order names no plan"))?;
+            sequence.serialize_element(plan)?;
         }
         sequence.end()
     }
@@ -4468,36 +4518,47 @@ impl Serialize for DefinitionPlan {
     }
 }
 
-impl Serialize for OutcomeRecord {
+impl Serialize for Laid<'_, OutcomeRecord> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
+        let record = self.records;
         let mut state = serializer.serialize_struct("Outcome", 10)?;
-        state.serialize_field("export", &self.export)?;
-        state.serialize_field("identity", &self.identity)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("origin", &self.origin)?;
-        let definition = match &self.evidence {
+        state.serialize_field("export", &record.export)?;
+        state.serialize_field("identity", &record.identity)?;
+        state.serialize_field("name", &record.name)?;
+        state.serialize_field("origin", &record.origin)?;
+        let definition = match &record.evidence {
             OutcomeEvidence::Plan { definition, .. } => Some(definition),
             OutcomeEvidence::Inline(_) => None,
         };
         state.serialize_field("definition_plan", &definition)?;
-        let inline = match &self.evidence {
+        let inline = match &record.evidence {
             OutcomeEvidence::Plan { .. } => None,
             OutcomeEvidence::Inline(representability) => Some(representability.as_ref()),
         };
         state.serialize_field("representability", &inline)?;
-        state.serialize_field("implementations", &self.implementations)?;
-        match &self.variant {
+        let implementations = self
+            .implementations
+            .order(&record.implementations)
+            .map_err(serde::ser::Error::custom)?;
+        state.serialize_field(
+            "implementations",
+            &Laid {
+                records: implementations.as_slice(),
+                implementations: self.implementations,
+            },
+        )?;
+        match &record.variant {
             Some(variant) => state.serialize_field("variant", variant)?,
             None => state.skip_field("variant")?,
         }
-        match &self.member {
+        match &record.member {
             Some(member) => state.serialize_field("member", member)?,
             None => state.skip_field("member")?,
         }
-        match &self.outputs {
+        match &record.outputs {
             Some(outputs) => state.serialize_field("outputs", outputs)?,
             None => state.skip_field("outputs")?,
         }
@@ -4528,15 +4589,53 @@ impl<'contract> ImplementationOutcome<'contract> {
     }
 }
 
-impl Serialize for ImplementationRecord {
+impl Serialize for Laid<'_, [OutcomeRecord]> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.records.len()))?;
+        for records in self.records {
+            sequence.serialize_element(&Laid {
+                records,
+                implementations: self.implementations,
+            })?;
+        }
+        sequence.end()
+    }
+}
+
+impl Serialize for Laid<'_, [&ImplementationRecord]> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.records.len()))?;
+        for &records in self.records {
+            sequence.serialize_element(&Laid {
+                records,
+                implementations: self.implementations,
+            })?;
+        }
+        sequence.end()
+    }
+}
+
+impl Serialize for Laid<'_, ImplementationRecord> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("ImplementationOutcome", 3)?;
-        state.serialize_field("identity", &self.identity)?;
-        state.serialize_field("span", &self.span)?;
-        state.serialize_field("associated", &self.associated)?;
+        state.serialize_field("identity", &self.records.identity)?;
+        state.serialize_field("span", &self.records.span)?;
+        state.serialize_field(
+            "associated",
+            &Laid {
+                records: &*self.records.associated,
+                implementations: self.implementations,
+            },
+        )?;
         state.end()
     }
 }
@@ -4638,14 +4737,29 @@ impl<P: api::Phase> api::Graph<P> {
                 return Err(Error::Cardinality);
             }
             enforce_nameability(&context, &definitions, &mut outcomes)?;
+            let support_order = layout::support(self)?;
+            let definition_order = layout::definitions(self, &definitions)?;
+            let implementations = layout::Implementations::of(self)?;
+            // Graph order already: what a read of the stored outcomes
+            // restores (`layout`).
+            implementations.restore(&mut outcomes);
             let canonical_value = Canonical {
                 semantic_api: &semantic_api,
                 schema: policy.schema,
                 classifier: policy.classifier,
                 compiler_abi: policy.compiler_abi,
-                support: CanonicalSupport(&context.support),
-                definitions: &definitions,
-                outcomes: &outcomes,
+                support: CanonicalSupport {
+                    ledger: &context.support,
+                    order: &support_order,
+                },
+                definitions: CanonicalDefinitions {
+                    plans: &definitions,
+                    order: &definition_order,
+                },
+                outcomes: Laid {
+                    records: outcomes.as_slice(),
+                    implementations: &implementations,
+                },
             };
             let mut measured = Measured {
                 bytes: 0,
@@ -4738,8 +4852,11 @@ impl ClassifiedParts {
         policy: &Policy,
     ) -> Result<Self, Error> {
         (|| {
-            let stored: StoredCanonical =
+            let mut stored: StoredCanonical =
                 serde_json::from_slice(bytes).map_err(|_| Error::Canonical)?;
+            // The plans are stored in source order (`layout`) and kept in
+            // digest order.
+            stored.definitions.sort_unstable();
             if stored.semantic_api != *graph.semantic_fingerprint().as_bytes()
                 || stored.schema != policy.schema
                 || stored.classifier != policy.classifier
@@ -4758,6 +4875,7 @@ impl ClassifiedParts {
             for outcome in stored.outcomes {
                 outcomes.push(outcome.into_record(&definitions)?);
             }
+            layout::Implementations::of(graph)?.restore(&mut outcomes);
             let outcomes = outcomes.into_boxed_slice();
             let support = SupportLedger::decode(stored.support, graph)?;
             let retained =
@@ -4890,7 +5008,23 @@ impl SupportLedger {
         rejections
             .try_reserve_exact(stored.len())
             .map_err(|_| Error::Allocation)?;
-        for (outcome, expected) in stored.into_vec().into_iter().zip(graph.support()) {
+        // The edges are stored in source order (`layout`) and kept in the
+        // graph's.
+        let mut placed = Vec::new();
+        placed
+            .try_reserve_exact(stored.len())
+            .map_err(|_| Error::Allocation)?;
+        placed.resize_with(stored.len(), || None);
+        for (outcome, index) in stored
+            .into_vec()
+            .into_iter()
+            .zip(layout::support(graph)?.indices())
+        {
+            let slot = placed.get_mut(index).ok_or(Error::Canonical)?;
+            *slot = Some(outcome);
+        }
+        for (outcome, expected) in placed.into_iter().zip(graph.support()) {
+            let outcome = outcome.ok_or(Error::Canonical)?;
             let expected_definition = graph.surface_definition(expected.id());
             let expected_provenance = match expected.role() {
                 ledger::SupportRole::Definition => {
@@ -17191,11 +17325,21 @@ mod tests {
                 ..
             } if span.file() == "fixture/src/lib.rs" && span.byte_range().start == 88
         ));
+        let order = super::layout::support(contract.raw_graph()).expect("support orders");
+        let logical = contract.support().collect::<Vec<_>>();
         assert_eq!(
-            serde_json::to_value(CanonicalSupport(contract.support_ledger()))
-                .expect("streamed support serializes"),
-            serde_json::to_value(contract.support().collect::<Vec<_>>())
-                .expect("logical support sequence serializes")
+            serde_json::to_value(CanonicalSupport {
+                ledger: contract.support_ledger(),
+                order: &order,
+            })
+            .expect("streamed support serializes"),
+            serde_json::to_value(
+                order
+                    .indices()
+                    .map(|index| logical[index])
+                    .collect::<Vec<_>>()
+            )
+            .expect("logical support sequence serializes")
         );
 
         let support_items = contract.support().len();

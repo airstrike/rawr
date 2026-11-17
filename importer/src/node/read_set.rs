@@ -603,6 +603,11 @@ where
 }
 
 impl Fragment {
+    /// The fragment's entries: its node's and every transitive parent's.
+    pub(crate) const fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
     /// Compare an exact authenticated entry without granting current authority.
     pub(crate) fn contains_entry(&self, expected: &Entry) -> bool {
         self.entries.binary_search(expected).is_ok()

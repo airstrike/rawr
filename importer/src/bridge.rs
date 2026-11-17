@@ -231,6 +231,21 @@ pub(crate) fn rendering_key<B: crate::surface::Runner>(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<B> GenerationRequestKey<B> {
+    /// Once a check that binds nothing settles on this request, its final
+    /// demand, retire the values of the demand rounds before it that
+    /// nothing reaches, as a bind retires them (#2168). What the request's
+    /// profile reads is the demand's closure, and it stays.
+    pub fn retire_superseded_rounds(&self) -> Result<(), crate::node::Error> {
+        let (context, settled) = match &self.profile {
+            profile::Profile::Current(proof) => match proof.node_chain() {
+                Some(chain) => (chain.context(), chain.current_parent().read_set().entries()),
+                None => return Ok(()),
+            },
+            profile::Profile::Historical(pair) => (&pair.context, pair.retention.entries()),
+        };
+        context.open_store()?.retire_settled(settled)
+    }
+
     /// Borrow the exact cache lookup identity without generating owned files.
     #[must_use]
     pub const fn build_request_key(&self) -> BuildRequestKey {
