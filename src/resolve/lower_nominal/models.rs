@@ -83,6 +83,9 @@ pub(super) struct Tables {
     pub(super) by_identity: BTreeMap<type_def::Identity, Nominal>,
     pub(super) qualified_functions: BTreeMap<(crate::program::source::Id, Span), crate::item::Key>,
     pub(super) qualified_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
+    /// The type alias a body's path names through a module, by the path's
+    /// span.
+    pub(super) qualified_aliases: BTreeMap<(crate::program::source::Id, Span), type_ref::Alias>,
     pub(super) qualified_pattern_owners:
         BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     pub(super) qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
@@ -928,6 +931,7 @@ impl Models {
             by_identity,
             qualified_functions: program.qualified_functions.clone(),
             qualified_owners: program.qualified_owners.clone(),
+            qualified_aliases: program.qualified_aliases.clone(),
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
             qualified_traits: program.qualified_traits.clone(),
@@ -1130,6 +1134,11 @@ impl Models {
 
     pub(super) fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
         self.aliases.get(&(self.context, name.into()))
+    }
+
+    /// The type alias the path at `span` names through a module.
+    pub(super) fn qualified_alias(&self, span: Span) -> Option<&type_ref::Alias> {
+        self.qualified_aliases.get(&(self.context, span))
     }
 
     pub(super) fn qualified_owner(&self, span: Span) -> Option<&Nominal> {

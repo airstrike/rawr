@@ -176,7 +176,7 @@ pub(crate) fn lay_out_call(
     let skipped = SKIPPED.replace(outer_skipped);
     MACROS.set(outer_macros);
     let calls = CALLS.replace(outer_calls);
-    let (Some((text, expansions)), Some(mut items)) = (expanded, parsed?) else {
+    let (Some((text, expansions)), Some((mut items, syntax))) = (expanded, parsed?) else {
         return Ok(None);
     };
     attribute_text(&text, &mut items, &mut []);
@@ -188,19 +188,25 @@ pub(crate) fn lay_out_call(
         masked.push(call.span);
     }
     masked.extend(super::item_macro::laid_out(&expansions));
+    // A block's call is read where its body is written.
+    let site = crate::resolve::macros::sites(&expansions, call.span).last();
     unit.lay_out(text, expansions, items, &masked);
+    if let (Some(syntax), Some(site)) = (syntax, site) {
+        unit.extend_body(site.start(), &syntax);
+    }
     Ok(Some(calls))
 }
 
-/// The items `call`'s expansion holds, laid out after `source`'s text:
-/// `None` when it holds none.
+/// The items `call`'s expansion holds, laid out after `source`'s text,
+/// and for a block's call the syntax of its tokens, which its body reads:
+/// `None` when nothing stays laid out.
 #[cfg(feature = "rust-import")]
 fn lay_out_items(
     source: &crate::source::Map,
     call: &crate::item::MacroCall,
     name: &str,
     expansion: &Expansion<'_>,
-) -> ParseResult<Option<Vec<crate::item::Parsed>>> {
+) -> ParseResult<Option<(Vec<crate::item::Parsed>, Option<crate::item::BodySyntax>)>> {
     let braced = call.scope.is_some();
     let laid = match expansion {
         Expansion::Rules { rules, krate } => {
@@ -218,7 +224,9 @@ fn lay_out_items(
                 .into_iter()
                 .filter(|(token, _)| *token != Token::EOF),
             );
-            super::item_macro::lay_out(rules, &tokens, krate, braced, false)
+            // A block's call that expands to no item and no path is the
+            // lowering's to expand, as a program macro's is.
+            super::item_macro::lay_out(rules, &tokens, krate, braced, braced)
         }
         Expansion::Text(text) => Some(super::item_macro::place(text, call.span, name, braced)),
     };
@@ -244,31 +252,41 @@ fn lay_out_items(
             .into_err(call.span.start()));
         }
         SKIPPED.with_borrow_mut(|skipped| skipped.extend(masked));
-        return Ok(Some(items.into_vec()));
+        return Ok(Some((items.into_vec(), None)));
     };
     let parsed = match input.next() {
         Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
         _ => None,
     };
+    // An expansion that holds an item, a crate macro's call or a path
+    // stays laid out, as a program macro's does (`body_macro`): the
+    // lowering reads the call from its tokens.
+    let calls = CALLS.with_borrow(|calls| !calls.is_empty());
     let held = NESTED.with_borrow_mut(|nested| match parsed {
-        Some((braces, _)) if !nested.is_empty() => {
-            declare_expanded(nested, braces, Some(scope));
-            true
+        Some((braces, syntax)) if !nested.is_empty() || calls || names_path(&syntax) => {
+            // A statement's items are its block's; an expression's are the
+            // call's own.
+            let block = if call.expression { call.span } else { scope };
+            declare_expanded(nested, braces, Some(block));
+            Some(syntax)
         }
         _ => {
             nested.clear();
-            false
+            None
         }
     });
-    if !held {
-        super::item_macro::take_back(mark);
-    }
     CALLS.with_borrow_mut(|calls| {
+        if held.is_none() {
+            calls.clear();
+        }
         for nested in calls.iter_mut() {
             nested.scope.get_or_insert(scope);
         }
     });
-    Ok(held.then(Vec::new))
+    if held.is_none() {
+        super::item_macro::take_back(mark);
+    }
+    Ok(held.map(|syntax| (Vec::new(), Some(syntax))))
 }
 
 /// What `parse` gives, the program's own macros `inherited` naming theirs
@@ -618,6 +636,7 @@ fn crate_call(
         group,
         span: Span::new(at, end),
         scope: None,
+        expression: false,
     })
 }
 
@@ -5549,11 +5568,7 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) -> Option<crate::it
         _ => None,
     };
     let Some(rules) = rules else {
-        // A crate's macro where a statement goes: the graph expands it
-        // once its facade is known. An expression's is the lowering's.
-        if !statement {
-            return None;
-        }
+        // A crate's macro: the graph expands it once its facade is known.
         let (_, open) = &tokens[bang + 1];
         let (last, last_at) = &tokens[bang - 1];
         let group = Span::new(*open, after(*close, 1));
@@ -5570,6 +5585,7 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) -> Option<crate::it
                 group,
                 span,
                 scope: None,
+                expression: !statement,
             });
         });
         return None;

@@ -106,6 +106,7 @@ impl Target {
 struct ResolvedQualifiedCalls {
     functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
     owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
+    aliases: BTreeMap<(program::source::Id, Span), type_ref::Alias>,
     rust: BTreeMap<(program::source::Id, Span), Box<[ImmutableString]>>,
     traits: BTreeMap<(program::source::Id, Span), ImmutableString>,
 }
@@ -730,6 +731,7 @@ impl<'a> Resolver<'a> {
             )?;
             resolved.functions.extend(found.functions);
             resolved.owners.extend(found.owners);
+            resolved.aliases.extend(found.aliases);
             resolved.rust.extend(found.rust);
             resolved.traits.extend(found.traits);
         }
@@ -821,6 +823,11 @@ impl<'a> Resolver<'a> {
                     Target::Type(type_ref::Target::Script { identity, .. }) => {
                         resolved.owners.insert((source, call.path_span), identity);
                     }
+                    // A qualified type alias, as `m::Mask` in a `let`
+                    // annotation: the alias its module declares.
+                    Target::Type(type_ref::Target::Alias(alias)) => {
+                        resolved.aliases.insert((source, call.path_span), alias);
+                    }
                     // `<T as home::Shape>::size(..)`'s trait.
                     Target::Trait(address) => {
                         let known = self.known_trait_name(address);
@@ -891,7 +898,6 @@ impl<'a> Resolver<'a> {
     fn resolve(mut self) -> Result<Program, Failure> {
         super::std_trait::begin();
         self.validate_exports()?;
-        let qualified_calls = self.resolve_qualified_calls()?;
         let qualified_pattern_owners = self.resolve_qualified_pattern_owners()?;
         let mut shells = Vec::new();
         let mut scripts = Vec::new();
@@ -917,6 +923,8 @@ impl<'a> Resolver<'a> {
         );
 
         self.resolve_aliases()?;
+        // After the aliases, whose targets a qualified path to one reads.
+        let qualified_calls = self.resolve_qualified_calls()?;
         let trait_names = self.source_trait_names();
         let prelude = self.prelude();
         let mut aliases = BTreeMap::new();
@@ -1057,6 +1065,7 @@ impl<'a> Resolver<'a> {
             std_traits,
             qualified_functions: qualified_calls.functions,
             qualified_owners: qualified_calls.owners,
+            qualified_aliases: qualified_calls.aliases,
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
             qualified_traits: qualified_calls.traits,

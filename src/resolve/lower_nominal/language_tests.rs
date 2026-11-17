@@ -9117,6 +9117,46 @@ fn language_paths_with_a_leading_path_separator() {
     assert!(error.contains("names an outside crate"), "{error}");
 }
 
+/// A pattern's path may start with `::`, which names an outside crate, as
+/// a macro's `$crate` writes core's.
+#[test]
+fn language_a_pattern_path_with_a_leading_path_separator() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            match 1.cmp(&2) {
+                ::std::cmp::Ordering::Less => 4,
+                ::std::cmp::Ordering::Equal | ::std::cmp::Ordering::Greater => 0,
+            }
+        }
+        run()
+    "#);
+    assert_eq!(value, 4);
+}
+
+/// A type alias named through its module, a file's or a block's, is its
+/// target where a type goes.
+#[test]
+fn language_a_type_alias_named_through_its_module() {
+    let value = run(r#"
+        mod units {
+            pub type Count = i64;
+        }
+        pub fn run() -> i64 {
+            let n: units::Count = 3;
+            let m = {
+                mod inner {
+                    pub(super) type Mask = u8;
+                }
+                let mask: inner::Mask = 4;
+                mask as i64
+            };
+            n + m
+        }
+        run()
+    "#);
+    assert_eq!(value, 7);
+}
+
 #[test]
 fn language_builtin_default_calls() {
     let value = run(r#"

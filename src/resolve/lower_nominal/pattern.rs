@@ -1056,6 +1056,27 @@ impl<'a> Parser<'a> {
         if self.splice_macro_ahead(super::expand::Place::Pattern)? {
             return self.parse_pattern_syntax();
         }
+        // `::core::task::Poll::Ready(t)`: a leading `::` names an outside
+        // crate, which no `use` shadows, as a type's does.
+        if matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::Identifier(_))
+        {
+            let start = self.next().1;
+            let Token::Identifier(head) = self.peek() else {
+                unreachable!("an identifier after `::`");
+            };
+            let head = ImmutableString::from(head.as_str());
+            if matches!(head.as_str(), "crate" | "Self")
+                || !matches!(self.peek_second(), Token::DoubleColon)
+            {
+                let reference = span(start, text_end(self.position(), &head));
+                return Err(crate::resolve::not_a_crate(&head, reference));
+            }
+            let outer = self.models.global_head.replace(head);
+            let pattern = self.parse_pattern_no_alt();
+            self.models.global_head = outer;
+            return pattern;
+        }
         let start = self.position();
         // `todo!()` where a pattern goes: std's panicking macros expand to
         // a call, which no pattern is (E0532).

@@ -516,6 +516,34 @@ pub(crate) fn any(path: &str) -> Option<Path> {
         .find_map(|namespace| self::path(path, namespace))
 }
 
+/// The shortest stable path through `std` that names `definition`, as
+/// `std::future::IntoFuture` names `core::future::into_future::IntoFuture`,
+/// whose module is private: what a program writes for the item. The
+/// definition's crate may be written as any of std's, as a re-export
+/// through `std` writes core's.
+pub(crate) fn public_path(definition: &str) -> Option<&'static str> {
+    let (root, rest) = definition.split_once("::")?;
+    if !is_root(root) {
+        return None;
+    }
+    Table::get()
+        .paths
+        .from("std::")
+        .iter()
+        .take_while(|line| line.starts_with("std::"))
+        .map(|line| path_line(line))
+        .filter(|found| {
+            found
+                .definition
+                .split_once("::")
+                .is_some_and(|(_, defined)| defined == rest)
+                && found.stability == Stability::Stable
+                && !found.path.starts_with("std::prelude::")
+        })
+        .map(|found| found.path)
+        .min_by_key(|path| path.len())
+}
+
 /// Whether `path` is a module.
 pub(crate) fn is_module(path: &str) -> bool {
     self::path(path, Namespace::Type).is_some_and(|found| found.kind == "mod")

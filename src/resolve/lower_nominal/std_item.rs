@@ -735,6 +735,18 @@ impl<'a> Parser<'a> {
         if !crate::std_table::is_root(std.split("::").next()?) || *std == *qualified {
             return None;
         }
+        // An item defined in a private module, or a member of one, goes by
+        // a path std writes.
+        let std = match crate::std_table::any(&std) {
+            None => std::iter::once(std.len())
+                .chain(std.rmatch_indices("::").map(|(end, _)| end))
+                .find_map(|end| {
+                    let public = crate::std_table::public_path(&std[..end])?;
+                    Some(ImmutableString::from(format!("{public}{}", &std[end..])))
+                })
+                .unwrap_or(std),
+            Some(_) => std,
+        };
         // A variant of a std enum Rawr represents, as `std::result::Result::
         // Ok`, goes by the enum's own name: `Result::Ok`.
         let spelled = |path: &str| {

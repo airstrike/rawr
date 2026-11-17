@@ -1845,6 +1845,38 @@ fn a_dependencys_macro_call_in_item_position_declares_its_items() {
     assert_eq!(text(&run.stdout), "4 Ticks(4) 40\n9\n");
 }
 
+/// A dependency's `macro_rules!` call used as an expression is laid out
+/// as one where an item goes is (#2196): the `mod` its block declares
+/// loads as a module, whose type alias a `let` names through it (#2189).
+/// A path through the crate's re-export of a std trait whose module is
+/// private names the trait's function.
+#[test]
+fn a_dependencys_macro_used_as_an_expression_declares_its_blocks_items() {
+    const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
+    let root = crate::support::fresh("plain-expression-macros");
+    copy(Path::new(MACROS), &root);
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\n\
+         fn main() {\n\
+         \x20   let tally = outer::tally!(5, 6, 7);\n\
+         \x20   let items = outer::IntoIterator::into_iter(vec![1, 2]).count();\n\
+         \x20   println!(\"{tally} {items}\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    let run = rawr_import(&root, &["run"]);
+
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "3 2\n");
+}
+
 /// `rawr test` of a program with a Rust dependency runs its tests in its
 /// runner, built as `cargo test` builds them, and reports what `cargo
 /// test` reports: each test's result, a failure's output and panic, and

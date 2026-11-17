@@ -91,6 +91,29 @@ fn main() {
     assert_eq!(printed(source), "10\n0\n[1, 2, 3]\na = 1\nb = 5\n3 12\n");
 }
 
+/// A repetition whose metavariables all repeat again inside it runs once
+/// for each time it matched, those whose own repetition matched nothing
+/// too, as rustc counts them.
+#[test]
+fn a_repetition_counts_its_iterations_whose_own_repetitions_matched_nothing() {
+    let source = r#"
+macro_rules! widths {
+    ($( ( $($x:expr),* ) )*) => {{
+        let mut widths: Vec<usize> = Vec::new();
+        $(
+            let row: Vec<i64> = vec![$($x),*];
+            widths.push(row.len());
+        )*
+        widths
+    }};
+}
+fn main() {
+    println!("{:?}", widths!(() (1, 2) ()));
+}
+"#;
+    assert_eq!(printed(source), "[0, 2, 0]\n");
+}
+
 #[test]
 fn a_macros_locals_are_its_own_and_a_callers_names_are_the_callers() {
     let source = r#"
