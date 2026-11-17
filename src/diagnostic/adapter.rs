@@ -1224,6 +1224,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::ExpansionRequired { owner, .. } => {
             format!("the derives on `{owner}` have not been expanded")
         }
+        resolve::Error::MacroExpansionRequired { path, .. } => {
+            format!("the call of `{path}!` has not been expanded")
+        }
         resolve::Error::DuplicateMember { owner, member, .. } if owner.is_empty() => {
             format!("the name `{member}` is already used for a generic parameter")
         }

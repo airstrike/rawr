@@ -895,6 +895,59 @@ impl Build {
         self.evidence.probe_directories(graph, allocation)
     }
 
+    /// Each dependency in `declared` (its alias and package id) that is a
+    /// proc-macro crate, as rustc names it to expand a program's call of
+    /// one of its macros (#1125): the alias, the library the build compiled
+    /// for the host, and that library's digest. A proc macro has no API to
+    /// extract, so no other part of the build names it.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn macro_libraries(
+        &self,
+        declared: &BTreeMap<&str, &str>,
+    ) -> Box<[crate::expand::Extern]> {
+        const RESOURCE: &str = "proc-macro library";
+        let mut libraries = Vec::new();
+        for (alias, package) in declared {
+            let mut outputs = self
+                .evidence
+                .artifacts
+                .iter()
+                .filter(|artifact| {
+                    *artifact.key.package_id == **package
+                        && artifact
+                            .key
+                            .target_kinds
+                            .iter()
+                            .any(|kind| &**kind == "proc-macro")
+                })
+                .flat_map(|artifact| &artifact.outputs)
+                .filter(|output| {
+                    output
+                        .extension()
+                        .is_some_and(|extension| extension == std::env::consts::DLL_EXTENSION)
+                });
+            let (Some(library), None) = (outputs.next(), outputs.next()) else {
+                continue;
+            };
+            let Some(path) = library.to_str() else {
+                continue;
+            };
+            let Ok(metadata) = fs::metadata(library) else {
+                continue;
+            };
+            let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+            let Ok(digest) = freshness_digest(RESOURCE, library, length) else {
+                continue;
+            };
+            libraries.push((
+                Box::from(*alias),
+                Box::from(path),
+                crate::extract::engine::hex(&digest).into_boxed_str(),
+            ));
+        }
+        libraries.into_boxed_slice()
+    }
+
     /// Index `graph`'s units and the canonical paths of their artifacts
     /// once, for the closure of every crate an extraction plan binds
     /// (#1846).

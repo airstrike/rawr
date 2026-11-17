@@ -204,10 +204,11 @@ pub(crate) struct Capture {
     expansion: Expansion,
 }
 
-/// What a derive's expansion needs of the probe's build (#593): the target,
-/// where the selected crates' own dependencies are, and each selected
-/// crate's artifact by the aliases the program names it by. It is no part
-/// of the API ledger.
+/// What a macro's expansion needs of the probe's build (#593, #1125): the
+/// target, where the selected crates' own dependencies are, and each
+/// selected crate's artifact by the aliases the program names it by, a
+/// direct proc-macro dependency's library among them. It is no part of the
+/// API ledger.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Expansion {
     pub(crate) selected_target: Box<str>,
@@ -217,7 +218,12 @@ pub(crate) struct Expansion {
 }
 
 impl Expansion {
-    fn of(selected_target: &str, directories: &[PathBuf], entries: &[Entry<Sealed>]) -> Self {
+    fn of(
+        selected_target: &str,
+        directories: &[PathBuf],
+        entries: &[Entry<Sealed>],
+        macros: Box<[crate::expand::Extern]>,
+    ) -> Self {
         let externs = entries
             .iter()
             .flat_map(|entry| {
@@ -230,6 +236,7 @@ impl Expansion {
                     )
                 })
             })
+            .chain(macros)
             .collect();
         Self {
             selected_target: selected_target.into(),
@@ -1440,6 +1447,7 @@ impl Probe {
             &self.selected_target,
             &self.dependency_directories,
             &self.entries,
+            build.macro_libraries(&metadata.declared_packages()),
         );
         let mut allocation = self.allocation;
         let entries = self.entries;

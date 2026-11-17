@@ -348,6 +348,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::ExpansionRequired { owner, .. } => {
                     write!(f, "The derives on '{owner}' have not been expanded")
                 }
+                crate::resolve::Error::MacroExpansionRequired { path, .. } => {
+                    write!(f, "The call of '{path}!' has not been expanded")
+                }
                 crate::resolve::Error::InvalidDerive {
                     owner,
                     capability,

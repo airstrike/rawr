@@ -340,12 +340,14 @@ impl<'a> Resolver<'a> {
 
         // The crates this package's paths may start with, as rustc's extern
         // prelude has them. None for a host's one in-memory file, whose host
-        // decides what it reaches.
+        // decides what it reaches. The entry package's root is the project
+        // the program is built in.
+        let project = packages[entry_package.index()].root();
         let prelude = packages
             .iter()
             .filter(|_| !hosted)
             .find(|candidate| candidate.name() == package.as_str())
-            .map(super::extern_prelude::Prelude::of);
+            .map(|package| super::extern_prelude::Prelude::of(package, project));
         let mut resolver = Self {
             #[cfg(feature = "rust-import")]
             native: None,

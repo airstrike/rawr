@@ -59,13 +59,17 @@ impl Output {
         let native = resolve::native::Capture::from_graph(&graph, allocation)?;
         let program = resolve::lower_nominal::kept::resolve(engine, graph, native.clone())
             .map_err(|failure| {
-                // A crate derive whose item changed is expanded again
-                // by preparation, as a native miss is answered (#593).
-                let missed = matches!(failure.error, resolve::Error::ExpansionRequired { .. })
-                    || native.matches(
-                        crate::program::source::Id::from_index(failure.primary.index()),
-                        &failure.error,
-                    );
+                // A crate derive whose item changed, or a crate macro's
+                // call an edit made, is expanded by preparation, as a
+                // native miss is answered (#593, #1125).
+                let missed = matches!(
+                    failure.error,
+                    resolve::Error::ExpansionRequired { .. }
+                        | resolve::Error::MacroExpansionRequired { .. }
+                ) || native.matches(
+                    crate::program::source::Id::from_index(failure.primary.index()),
+                    &failure.error,
+                );
                 let error = package::Error::resolution(sources.clone(), failure);
                 if missed {
                     Error::NativeMiss(error)
@@ -98,6 +102,14 @@ impl Output {
                     error = crate::ParseError(Box::new(miss), error.position(), error.2.clone());
                 }
                 let missed = match (&evidence, error.err_type()) {
+                    // A crate macro's call an edit made: preparation
+                    // expands it (#1125).
+                    (
+                        _,
+                        crate::ParseErrorType::Resolution(resolve::Error::MacroExpansionRequired {
+                            ..
+                        }),
+                    ) => true,
                     (
                         resolve::LoweringEvidence::Original(source),
                         crate::ParseErrorType::Resolution(error),

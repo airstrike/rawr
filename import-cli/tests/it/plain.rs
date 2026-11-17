@@ -2022,12 +2022,13 @@ fn a_crates_derive_runs_from_its_expansion() {
 
 /// A direct dependency that is a proc-macro crate, as `rust_decimal_macros`
 /// is, is a host unit Cargo builds as a dylib, with no API to extract: a
-/// native module expands its macro through Cargo's build, and a marked
-/// module beside it runs. It used to fail as if the manifest changed
-/// during the build, and so did a direct `cdylib` or `dylib` dependency
-/// (the proc-macro issue).
+/// native module expands its macro through Cargo's build, a marked module
+/// beside it runs, and a marked module's call of the macro runs rustc's
+/// expansion of it, expanded again when an edit changes its input (#1125).
+/// It used to fail as if the manifest changed during the build, and so did
+/// a direct `cdylib` or `dylib` dependency (the proc-macro issue).
 #[test]
-fn a_direct_proc_macro_dependency_expands_in_native_code() {
+fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
     const PROC_MACRO: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-proc-macro"
@@ -2050,6 +2051,40 @@ fn a_direct_proc_macro_dependency_expands_in_native_code() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "42 value 43\n");
+
+    let scale = |input: &str| {
+        fs::write(
+            root.join("src/scale.rs"),
+            format!(
+                "// rawr\npub fn label(value: i64) -> String {{\n    \
+                 format!(\"value {{}}\", value + numerals::double!({input}))\n}}\n"
+            ),
+        )
+        .unwrap();
+    };
+    scale("3");
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 48\n");
+
+    // A save that changes the call's input expands it again, and the
+    // running program prints the new expansion's value.
+    fs::write(
+        root.join("src/main.rs"),
+        "mod scale;\n\nfn main() {\n    loop {\n        println!(\"{}\", scale::label(42));\n        \
+         std::thread::sleep(std::time::Duration::from_millis(50));\n    }\n}\n",
+    )
+    .unwrap();
+    let mut running = crate::support::start(&root, &[]);
+    running.until(|line| line == "value 48");
+    scale("4");
+    running.until(|line| line == "value 50");
+    drop(running);
 
     // A `cdylib` dependency gets no `--extern` from Cargo, so nothing
     // names it and the check passes. A `dylib` one is an ordinary error
