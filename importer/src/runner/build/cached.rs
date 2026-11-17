@@ -343,14 +343,20 @@ fn compile<B>(
         .ok()
         .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
     let version = runner_version(context);
-    // The project's own lock, which the runner starts from (#1912, #2142).
+    // The project's own lock, which the runner starts from (#1912, #2142),
+    // and rawr's, whose floors a runner that compiles rawr raises it to
+    // (#2144).
     let project_lock = fs::read(workspace.join("Cargo.lock")).ok();
+    let host_lock = crate::host::root()
+        .ok()
+        .and_then(|root| fs::read(root.join("Cargo.lock")).ok());
     let sources = |runtime: Option<&crate::runner::runtime::Runtime>| {
         runner_sources(
             manifest,
             Rewrites {
                 mirrored: mirrored.as_deref(),
                 project_lock: project_lock.as_deref(),
+                host_lock: host_lock.as_deref(),
                 runtime,
                 level: &level,
                 version: version.as_deref(),
@@ -632,6 +638,8 @@ struct Rewrites<'a, 'r> {
     mirrored: Option<&'a str>,
     /// The project's own `Cargo.lock`.
     project_lock: Option<&'a [u8]>,
+    /// Rawr's own `Cargo.lock`, in the host the runner compiles.
+    host_lock: Option<&'a [u8]>,
     /// The shared runtime the runner links, when it can.
     runtime: Option<&'r crate::runner::runtime::Runtime>,
     level: &'r toml_edit::Item,
@@ -654,6 +662,7 @@ fn runner_sources<'a, B>(
     let Rewrites {
         mirrored,
         project_lock,
+        host_lock,
         runtime,
         level,
         version,
@@ -694,9 +703,12 @@ fn runner_sources<'a, B>(
                     // too, and a dependency the lock lacks makes cargo
                     // re-resolve its whole git source at the branch head its
                     // git database names, not the revision the project pins
-                    // (#2142).
+                    // (#2142). Compiling rawr, it takes rawr's version of
+                    // each package the project locks below rawr's floor
+                    // (#2144, `runner::floors`).
                     let base = project_lock.unwrap_or(file.bytes());
-                    runner_lock(base, runtime, version, &without)
+                    let host = host_lock.filter(|_| runtime.is_none());
+                    runner_lock(base, host, runtime, version, &without)
                         .map_or(Cow::Borrowed(base), |text| Cow::Owned(text.into_bytes()))
                 }
                 path => {
@@ -751,11 +763,13 @@ fn runner_manifest(
 }
 
 /// The runner's lockfile `bytes` as Cargo builds them ([`runner_sources`]):
-/// pruned for the shared `runtime`, at `version`, and with each member's
-/// entry filled in but the packages it leaves out (`without`), parsed and
-/// written once. `None` when no rewrite changes it.
+/// raised to the floors of rawr's lock `host`, pruned for the shared
+/// `runtime`, at `version`, and with each member's entry filled in but the
+/// packages it leaves out (`without`), parsed and written once. `None` when
+/// no rewrite changes it.
 fn runner_lock(
     bytes: &[u8],
+    host: Option<&[u8]>,
     runtime: Option<&crate::runner::runtime::Runtime>,
     version: Option<&str>,
     without: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
@@ -764,10 +778,19 @@ fn runner_lock(
         .ok()?
         .parse::<toml_edit::DocumentMut>()
         .ok()?;
+    let raised = host
+        .and_then(|host| {
+            std::str::from_utf8(host)
+                .ok()?
+                .parse::<toml_edit::DocumentMut>()
+                .ok()
+        })
+        .and_then(|host| crate::runner::floors::raise(&mut document, &host));
     let pruned = runtime.and_then(|runtime| runtime.lock(&mut document));
     let versioned = version.and_then(|version| with_version("Cargo.lock", &mut document, version));
     let filled = crate::bridge::generate::member::fill_lock(&mut document, without);
-    (pruned.is_some() || versioned.is_some() || filled.is_some()).then(|| document.to_string())
+    (raised.is_some() || pruned.is_some() || versioned.is_some() || filled.is_some())
+        .then(|| document.to_string())
 }
 
 /// The runner's version for the project of `context`: `0.0.0+<digest>` of
@@ -1454,8 +1477,14 @@ mod tests {
         with_version("Cargo.lock", &mut document, version).unwrap();
         let mut document = reparsed(document);
         crate::bridge::generate::member::fill_lock(&mut document, &without).unwrap();
-        let once = runner_lock(lock.as_bytes(), Some(&runtime), Some(version), &without)
-            .expect("the lock is rewritten");
+        let once = runner_lock(
+            lock.as_bytes(),
+            None,
+            Some(&runtime),
+            Some(version),
+            &without,
+        )
+        .expect("the lock is rewritten");
         assert_eq!(once, document.to_string());
         assert!(!once.contains("smartstring"), "{once}");
 

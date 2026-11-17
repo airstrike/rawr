@@ -11,6 +11,8 @@ pub(crate) use build::EXECUTION_SCHEMA;
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(all(test, feature = "test-fixtures", feature = "rustc-driver"))]
 pub(crate) use build::fixture_build;
+#[cfg(not(target_arch = "wasm32"))]
+mod floors;
 pub mod manifest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mirror;
