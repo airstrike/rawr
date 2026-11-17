@@ -343,6 +343,125 @@ async fn main() {
     );
 }
 
+/// `rawr-import run` on the `tokio-spawn` fixture with `main` as its
+/// `src/main.rs`: its whole output.
+fn ran(main: &str) -> String {
+    let root = SPAWN.lease(&[("src/main.rs", main)]);
+    let run = crate::support::rawr_import()
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert!(
+        run.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    stdout
+}
+
+/// A crate future anywhere in what a call gives is awaited as one (#2135):
+/// a `JoinHandle<i32>` in the `Option` a program's function gives, in a
+/// `Vec` that `collect` makes, out of a channel's `recv`, and in the
+/// `Option<Result<..>>` of `JoinSet::join_next`. The output is `cargo
+/// run`'s.
+#[test]
+fn a_crate_future_nested_in_what_a_call_gives_is_awaited() {
+    let main = r#"// rawr
+use tokio::task::JoinHandle;
+
+fn maybe(spawn: bool) -> Option<JoinHandle<i32>> {
+    spawn.then(|| tokio::spawn(async { 7 }))
+}
+
+#[tokio::main]
+async fn main() {
+    println!("some {}", maybe(true).unwrap().await.unwrap());
+    let handles: Vec<JoinHandle<i32>> = (0..3).map(|n| tokio::spawn(async move { n * 2 })).collect();
+    let mut total = 0;
+    for handle in handles {
+        total += handle.await.unwrap();
+    }
+    println!("total {total}");
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<JoinHandle<i32>>(1);
+    tx.send(tokio::spawn(async { 5 })).await.unwrap();
+    println!("received {}", rx.recv().await.unwrap().await.unwrap());
+    let mut set = tokio::task::JoinSet::new();
+    set.spawn(async { 11 });
+    println!("set {}", set.join_next().await.unwrap().unwrap());
+}
+"#;
+    assert_eq!(ran(main), "some 7\ntotal 6\nreceived 5\nset 11\n");
+}
+
+/// `tokio::time::timeout(d, f)` over `F: IntoFuture` gives `Timeout<
+/// F::IntoFuture>`, which core's `impl<F: Future> IntoFuture for F` makes
+/// `Timeout<F>` (#2136): of an async block, of `Sleep` and of a
+/// `JoinHandle`, each awaited as a `Result` of its future's output. The
+/// output is `cargo run`'s.
+#[test]
+fn timeout_of_a_script_or_crate_future_is_awaited() {
+    let main = r#"// rawr
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    let quick = tokio::time::timeout(Duration::from_secs(5), async { 3 }).await;
+    println!("quick {:?}", quick);
+    let slow = tokio::time::timeout(Duration::from_millis(10), tokio::time::sleep(Duration::from_secs(5))).await;
+    println!("slow {}", slow.is_err());
+    let handle = tokio::spawn(async { 4 });
+    let joined = tokio::time::timeout(Duration::from_secs(5), handle).await;
+    println!("joined {}", joined.unwrap().unwrap());
+}
+"#;
+    assert_eq!(ran(main), "quick Ok(3)\nslow true\njoined 4\n");
+}
+
+/// `select!` of several branches gives the body of the first future to
+/// end, whose pattern binds its output, and drops the others (#1152): a
+/// `Sleep` against a channel's `recv`, two sleeps, and a `biased;` select
+/// in a loop with an `else`. The output is `cargo run`'s.
+#[test]
+fn select_of_several_futures_runs_the_first_to_end() {
+    let main = r#"// rawr
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<i32>(4);
+    tx.send(9).await.unwrap();
+    let got = tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(5)) => -1,
+        value = rx.recv() => value.unwrap(),
+    };
+    println!("got {got}");
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_millis(5)) => println!("slept"),
+        _ = tokio::time::sleep(Duration::from_secs(5)) => println!("late"),
+    }
+    tx.send(1).await.unwrap();
+    tx.send(2).await.unwrap();
+    drop(tx);
+    let mut sum = 0;
+    loop {
+        tokio::select! {
+            biased;
+            Some(value) = rx.recv() => sum += value,
+            else => break,
+        }
+    }
+    println!("sum {sum}");
+}
+"#;
+    assert_eq!(ran(main), "got 9\nslept\nsum 3\n");
+}
+
 /// Program structs a crate decodes on one of tokio's worker threads, as
 /// reqwest's `Response::json()` decodes iced's pokedex's `Entry` (D740.3):
 /// nested `Deserialize` structs with a `Vec` field, defined in an async
