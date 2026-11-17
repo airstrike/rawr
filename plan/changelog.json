@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A stored API writes each re-export hop once, in a table beside its compiler units: counter's API value fell from 30.2 MB to 23.1 MB.","issues":[2169]}
+    ]
   },
   "releases": [
     {
