@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.236 (2026-11-17)
+
 - A cold `rawr run` or `rawr test` of a program with large dependencies stores each crate's API facts about 6.5 times smaller and serializes them once rather than three to five times. pokedex's facts went from 9.1 GB to 1.4 GB, and its cold test from 21m38s to 12m45s in a debug build. (#2153)
 - A `mod` declared in a block is named only in that block, as in rustc: two blocks, or a block and its module, may each declare a module of one name, and using it outside its block is E0433. (#2159; part of #1152)
 

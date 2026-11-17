@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-17",
-  "version": "0.3.235",
+  "version": "0.3.236",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A cold `rawr run` or `rawr test` of a program with large dependencies stores each crate's API facts about 6.5 times smaller and serializes them once rather than three to five times. pokedex's facts went from 9.1 GB to 1.4 GB, and its cold test from 21m38s to 12m45s in a debug build.","issues":[2153]},
-        {"text":"A `mod` declared in a block is named only in that block, as in rustc: two blocks, or a block and its module, may each declare a module of one name, and using it outside its block is E0433.","issues":[2159],"refs":[1152]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.236",
+        "date": "2026-11-17",
+        "entries": [
+          {"text":"A cold `rawr run` or `rawr test` of a program with large dependencies stores each crate's API facts about 6.5 times smaller and serializes them once rather than three to five times. pokedex's facts went from 9.1 GB to 1.4 GB, and its cold test from 21m38s to 12m45s in a debug build.","issues":[2153]},
+          {"text":"A `mod` declared in a block is named only in that block, as in rustc: two blocks, or a block and its module, may each declare a module of one name, and using it outside its block is E0433.","issues":[2159],"refs":[1152]}
+        ]
+      },
       {
         "version": "0.3.235",
         "date": "2026-11-17",
@@ -4756,13 +4758,13 @@
     {"issue":2150,"title":"A crate's function-like macro called in type or pattern position isn't expanded","state":"closed","category":"Divergences from rustc","release":"0.3.233"},
     {"issue":2151,"title":"Crate macro calls are expanded one per check round","state":"closed","category":"Platforms","release":"0.3.233"},
     {"issue":2152,"title":"Kept macro expansions aren't keyed by the macro crate's build, and call expansions are never removed","state":"closed","category":"Platforms","release":"0.3.233"},
-    {"issue":2153,"title":"rawr's cold build of a large iced example's test runner takes about 18 minutes and about 16 GB","state":"closed","category":"Health"},
+    {"issue":2153,"title":"rawr's cold build of a large iced example's test runner takes about 18 minutes and about 16 GB","state":"closed","category":"Health","release":"0.3.236"},
     {"issue":2154,"title":"When an iced example's build fails with no compiler error, the parity harness shows the last…","state":"closed","category":"Health","release":"0.3.232"},
     {"issue":2155,"title":"An unused `use` of a missing macro under a dependency isn't reported","state":"closed","category":"Divergences from rustc","release":"0.3.234"},
     {"issue":2156,"title":"A cached check isn't keyed by the text of crate macro call expansions","state":"closed","category":"Platforms","release":"0.3.234"},
     {"issue":2157,"title":"A `mod` item inside a block expression works as in rustc: its items, `use super::*` reaching the…","state":"closed","category":"Divergences from rustc","release":"0.3.235"},
     {"issue":2158,"title":"A `tokio::select!` branch may have a precondition (`pattern = future, if condition => body`)","state":"closed","category":"Divergences from rustc","release":"0.3.235"},
-    {"issue":2159,"title":"A `mod` in a block is named across the whole enclosing module, not only in its block","state":"closed","category":"Divergences from rustc"},
+    {"issue":2159,"title":"A `mod` in a block is named across the whole enclosing module, not only in its block","state":"closed","category":"Divergences from rustc","release":"0.3.236"},
     {"issue":2160,"title":"Each demand round stores a full API and generic value, and their parts deduplicate poorly","state":"open","category":"Platforms"},
     {"issue":2161,"title":"The extraction driver's protocol output stays in target/rawr after its entries are made","state":"open","category":"Platforms"},
     {"issue":2162,"title":"A promoted inventory entry is kept both in the project and in rawr's home","state":"open","category":"Platforms"},
