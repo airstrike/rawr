@@ -570,3 +570,44 @@ fn lowering_calls_prove_from_their_lexical_import_paths() {
         })
         .expect("proving lowering calls launches no child process");
 }
+
+/// What nothing reaches goes as its producer finishes (#2161, #2162): the
+/// driver's protocol output once the capture's facts hold it, and a
+/// project's entry once rawr's home holds it under its machine-wide key.
+#[test]
+fn a_capture_and_a_promotion_leave_one_copy_of_each_entry() {
+    let _turn = crate::store::test_turn();
+    crate::store::isolate_for_tests();
+    let limits = Limits::standard();
+    let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/one-copy");
+    let _ = std::fs::remove_dir_all(&root);
+    let acquired = capture(&root, &["a"], &native, &limits);
+    let resolution = std::fs::canonicalize(&root)
+        .unwrap()
+        .join("target/rawr/cache/resolution");
+    assert!(resolution.is_dir());
+    assert!(
+        !crate::extract::plan::active(&resolution).exists(),
+        "the protocol output goes once the facts hold it"
+    );
+
+    let (local, home) = (root.join("local"), root.join("home"));
+    let entry = acquired
+        .entries(|_| Some([3; 32]))
+        .into_iter()
+        .next()
+        .unwrap();
+    super::store::publish(&local, &entry).unwrap();
+    let mut settlement = crate::bindings::Settlement::default();
+    settlement.inventory(&root.join("rawr"), &home, &[4; 32], &local, &[], &entry);
+    settlement
+        .settle_with(Some(std::collections::BTreeMap::new()))
+        .unwrap();
+    assert!(super::store::read(&home, &[4; 32]).is_some());
+    assert!(
+        super::store::read(&local, &[3; 32]).is_none(),
+        "the project's copy goes once the home holds the entry"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
