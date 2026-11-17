@@ -304,15 +304,26 @@ impl crate::Engine {
                         misses.extend(hidden_member_misses(contract, unknown));
                     }
                     let (evidence, mut error) = failure.into_parts();
-                    // rustc expands a crate macro's call first, and checking
-                    // again reads its expansion (#1125).
+                    // rustc expands a crate macro's call first, with every
+                    // other the pass found, and checking again reads their
+                    // expansions (#1125, #2151).
                     if matches!(
                         error.err_type(),
                         crate::ParseErrorType::Resolution(
                             crate::resolve::Error::MacroExpansionRequired { .. }
                         )
                     ) {
-                        return Err(super::Error::compilation(sources.clone(), evidence, error));
+                        let calls = unknowns
+                            .iter()
+                            .filter_map(|unknown| match unknown {
+                                crate::resolve::Error::MacroExpansionRequired { call, .. } => {
+                                    Some(call.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        return Err(super::Error::compilation(sources.clone(), evidence, error)
+                            .with_rust_macro_calls(calls));
                     }
                     // A miss a proof may settle is reported and demanded as
                     // the ordinary miss, carrying the call to prove first.

@@ -273,7 +273,16 @@ impl Parser<'_> {
         #[cfg(feature = "rust-import")]
         if let Some((path, taken)) = self.crate_statement_ahead() {
             let path_span = self.take_path(taken);
-            return self.splice_crate_expansion(&path, path_span, Place::Statement);
+            // A call recovered as a miss (`splice_crate_expansion`) is
+            // no statement, nor is the `;` after it.
+            if self
+                .splice_crate_expansion(&path, path_span, Place::Statement)?
+                .is_some()
+                && matches!(self.peek(), Token::SemiColon)
+            {
+                self.next();
+            }
+            return Ok(());
         }
         let (token, position) = self.next();
         let Token::Identifier(name) = token else {
@@ -479,15 +488,18 @@ impl Parser<'_> {
     /// `path!(..)`, `path![..]` or `path! {..}` of a crate's function-like
     /// macro Rawr has no rules for, as a proc macro is, from its `!`:
     /// rustc's expansion of the call, parsed in its place as one
-    /// expression (#1125).
+    /// expression (#1125). A call recovered as a miss reads as `!`, which
+    /// any place takes.
     #[cfg(feature = "rust-import")]
     pub(super) fn expand_crate_macro(
         &mut self,
         path: &str,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        self.splice_crate_expansion(path, name_span, Place::Expression)?;
-        self.parse_primary()
+        match self.splice_crate_expansion(path, name_span, Place::Expression)? {
+            Some(call) => Ok(self.operator_expr(origin::Fragment::from("()"), Ty::Never, call)),
+            None => self.parse_primary(),
+        }
     }
 
     /// Put rustc's expansion of the call of the crate macro at `path`, from
@@ -496,14 +508,22 @@ impl Parser<'_> {
     /// place (`rawr_import::expand::call`), so a call whose input an edit
     /// changed has none yet: it is rustc's to expand, and checking again
     /// reads it. The expansion's tokens are reported at the call, as
-    /// rustc reports a proc macro's.
+    /// rustc reports a proc macro's. The lowering that read an expansion is
+    /// kept while its text is the same (`kept::Read::Expansion`).
+    ///
+    /// In a pass that asks for every miss at once (#662), a call with no
+    /// expansion is kept in `recovered`, so the body goes on to its next
+    /// call and every call the program lacks an expansion of goes to one
+    /// driver run (#2151). In a type or a pattern it is spliced as `_`,
+    /// which either place takes; elsewhere it is spliced as nothing and is
+    /// `Some` of the call's span, which reads as `!`.
     #[cfg(feature = "rust-import")]
     fn splice_crate_expansion(
         &mut self,
         path: &str,
         name_span: Span,
         place: Place,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Span>, Error> {
         use rawr_import::expand::call;
         self.expect(Token::Bang, "'!' after a macro name")?;
         let (open, position) = self.next();
@@ -527,17 +547,34 @@ impl Parser<'_> {
                 Place::Pattern => call::Place::Pattern,
             },
         };
-        let kept =
-            self.models.crates.as_ref().and_then(|crates| {
-                std::fs::read_to_string(call.source_path(crates.project())).ok()
-            });
-        let Some(text) = kept.as_deref().and_then(call::kept) else {
-            return Err(Error::MacroExpansionRequired {
+        let source = self
+            .models
+            .crates
+            .as_ref()
+            .map(|crates| call.source_path(crates.project()));
+        let kept = source
+            .as_ref()
+            .and_then(|source| Some((source, std::fs::read_to_string(source).ok()?)));
+        let Some((source, text)) = kept.filter(|(_, text)| call::kept(text).is_some()) else {
+            let missed = Error::MacroExpansionRequired {
                 path: path.into(),
                 call: serde_json::to_vec(&call).unwrap_or_default().into(),
                 reference: name_span,
-            });
+            };
+            if !self.recover_misses || self.pending_arguments.is_some() {
+                return Err(missed);
+            }
+            self.recovered.push(missed);
+            if matches!(place, Place::Type | Place::Pattern) {
+                self.splice_tokens(vec![(Token::Underscore, name_span.start())]);
+                return Ok(None);
+            }
+            return Ok(Some(span(name_span.start(), end)));
         };
+        rawr_import::expand::kept::name(source);
+        self.models
+            .read(super::kept::Read::expansion(source.clone(), &text));
+        let text = call::kept(&text).unwrap_or_default();
         let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;
         let at = name_span.start();
         let expansion = lex_rust(&crate::Engine::new_raw(), text)
@@ -546,6 +583,6 @@ impl Parser<'_> {
             .map(|(token, _)| (token, at))
             .collect();
         self.splice_expanded(expansion, at, end, place, remaining);
-        Ok(())
+        Ok(None)
     }
 }

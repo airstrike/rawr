@@ -4,7 +4,9 @@
 //! back as source text. Each is kept in the project's `target/rawr/expand/`
 //! at a path named for the call's macro, delimiters, input and place, so a
 //! call an edit changes is a call with no expansion yet, and one an edit
-//! leaves keeps its own.
+//! leaves keeps its own. Its first line names the artifact of the macro's
+//! crate it was expanded against and the call, so a build that changes the
+//! crate expands the call again in its place (`super::kept`, #2152).
 
 use std::path::{Path, PathBuf};
 
@@ -64,7 +66,8 @@ pub struct Call {
     pub place: Place,
 }
 
-/// The first line of an expansion source, before the macro's path.
+/// The first line of an expansion source, before the artifact and the
+/// call.
 const SOURCE_HEADER: &str = "// call ";
 
 impl Call {
@@ -122,6 +125,30 @@ impl Call {
     }
 }
 
+/// The first line of the source of `call`'s expansion against the
+/// artifact whose digest is `artifact`.
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+fn header(call: &Call, artifact: &str) -> String {
+    let call = serde_json::to_string(call).unwrap_or_default();
+    format!("{SOURCE_HEADER}{artifact} {call}\n")
+}
+
+/// The call a kept expansion source `text` is of, and the digest of the
+/// artifact it was expanded against. `None` for a text that is no call's
+/// expansion source.
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+pub(super) fn built(text: &str) -> Option<(Call, &str)> {
+    let (line, _) = text.split_once('\n')?;
+    let (artifact, call) = line.strip_prefix(SOURCE_HEADER)?.split_once(' ')?;
+    Some((serde_json::from_str(call).ok()?, artifact))
+}
+
 /// What a kept expansion source `text` holds after its header: the
 /// expression or the statements the call expanded to. `None` for a text
 /// that is no call's expansion source.
@@ -133,7 +160,7 @@ pub fn kept(text: &str) -> Option<&str> {
 
 /// Expand each of `calls` of the program at `project` against `basis` in
 /// one driver run, keeping each expansion where the program's next load
-/// reads it.
+/// reads it, under the artifact of its macro's crate.
 #[cfg(feature = "rustc-driver")]
 pub fn expand(
     calls: &[Call],
@@ -165,7 +192,8 @@ pub fn expand(
             .ok_or_else(|| crate::Error::Request {
                 reason: format!("the driver wrote no expansion of `{}`", call.text()).into(),
             })?;
-        let mut source = format!("{SOURCE_HEADER}{}\n", call.path);
+        let artifact = basis.artifact(&call.path).unwrap_or_default();
+        let mut source = header(call, artifact);
         for item in &called.items {
             source.push_str(item);
             source.push('\n');
@@ -188,7 +216,7 @@ pub fn expand(
 
 #[cfg(test)]
 mod tests {
-    use super::{kept, Call, Delimiter, Place};
+    use super::{built, header, kept, Call, Delimiter, Place};
 
     fn call(input: &str, place: Place) -> Call {
         Call {
@@ -212,9 +240,16 @@ mod tests {
             call("3", Place::Expression).function(),
             "fn __rawr_expression() {\n    let _ = numerals::double!(3);\n}\n"
         );
+        // Its source names the artifact it was expanded against and the
+        // call, which a build of another artifact expands again.
+        let source = format!(
+            "{}((3) * 2)\n",
+            header(&call("3 + 1", Place::Statements), "a1")
+        );
+        assert_eq!(kept(&source), Some("((3) * 2)\n"));
         assert_eq!(
-            kept("// call numerals::double\n((3) * 2)\n"),
-            Some("((3) * 2)\n")
+            built(&source),
+            Some((call("3 + 1", Place::Statements), "a1"))
         );
         assert_eq!(kept("((3) * 2)\n"), None);
     }

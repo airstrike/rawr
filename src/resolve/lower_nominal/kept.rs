@@ -94,6 +94,16 @@ pub(super) enum Read {
         name: Box<str>,
         value: Option<Box<str>>,
     },
+    /// The kept source of rustc's expansion of a crate macro's call
+    /// (#1125), which a build of another artifact of the macro's crate
+    /// retires (#2152): a lowering that read it is reused only while it
+    /// is there and the same, and each reuse names it, so a passing check
+    /// keeps it (`rawr_import::expand::kept`).
+    Expansion {
+        path: std::path::PathBuf,
+        /// The digest of the text it read.
+        bytes: [u8; 32],
+    },
     /// The fields of the program's struct `identity`, as its schema
     /// writes them: a struct pattern's discards, a derived `Default`'s
     /// fields.
@@ -116,6 +126,14 @@ impl Read {
         Self::File {
             path,
             bytes: Sha256::digest(bytes).into(),
+        }
+    }
+
+    /// The read of `text` from the kept expansion source at `path`.
+    pub(super) fn expansion(path: std::path::PathBuf, text: &str) -> Self {
+        Self::Expansion {
+            path,
+            bytes: Sha256::digest(text).into(),
         }
     }
 
@@ -153,6 +171,14 @@ impl Read {
                 .is_ok_and(|read| <[u8; 32]>::from(Sha256::digest(read)) == *bytes),
             Self::Variable { place, name, value } => {
                 place.variable(&models.access, name).as_deref() == value.as_deref()
+            }
+            Self::Expansion { path, bytes } => {
+                let holds = std::fs::read(path)
+                    .is_ok_and(|read| <[u8; 32]>::from(Sha256::digest(read)) == *bytes);
+                if holds {
+                    rawr_import::expand::kept::name(path);
+                }
+                holds
             }
             Self::Fields { identity, schema } => {
                 models.schema(identity).is_some_and(|now| now == *schema)

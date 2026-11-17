@@ -37,6 +37,10 @@ pub struct Error {
     /// for. Proving it and compiling again may resolve it.
     #[cfg(feature = "rust-import")]
     rust_application: Option<Box<[u8]>>,
+    /// The encoded calls of crates' function-like macros the same pass
+    /// found with no expansion besides the failure's own (#2151).
+    #[cfg(feature = "rust-import")]
+    rust_macro_calls: Vec<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -94,6 +98,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -113,6 +119,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -132,6 +140,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -151,6 +161,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -161,6 +173,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -178,6 +192,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -192,6 +208,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -203,6 +221,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -228,6 +248,8 @@ impl Error {
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
+            #[cfg(feature = "rust-import")]
+            rust_macro_calls: Vec::new(),
         }
     }
 
@@ -276,13 +298,39 @@ impl Error {
             .collect()
     }
 
-    /// The call of a crate's function-like macro this failure needs rustc
-    /// to expand (#1125). Checking again with its expansion kept reads it
-    /// in the call's place.
+    /// Keep `calls`, the encoded calls of crates' macros the same pass
+    /// found with no expansion besides this failure's own (#2151).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_rust_macro_calls(mut self, calls: Vec<Box<[u8]>>) -> Self {
+        self.rust_macro_calls = calls;
+        self
+    }
+
+    /// Every call of a crate's function-like macro this failure needs
+    /// rustc to expand, its own first (#1125, #2151). Checking again with
+    /// their expansions kept reads each in its call's place.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     #[must_use]
-    pub fn rust_macro_call(&self) -> Option<rawr_import::expand::call::Call> {
+    pub fn rust_macro_calls(&self) -> Vec<rawr_import::expand::call::Call> {
+        let Some(own) = self.rust_macro_call() else {
+            return Vec::new();
+        };
+        let mut calls = vec![own];
+        for call in &self.rust_macro_calls {
+            if let Ok(call) = serde_json::from_slice(call)
+                && !calls.contains(&call)
+            {
+                calls.push(call);
+            }
+        }
+        calls
+    }
+
+    /// The call of a crate's function-like macro this failure needs rustc
+    /// to expand (#1125).
+    #[cfg(feature = "rust-import")]
+    fn rust_macro_call(&self) -> Option<rawr_import::expand::call::Call> {
         let error = match &self.kind {
             Kind::Resolution { error, .. } => error,
             Kind::Compilation { error, .. } => match error.err_type() {

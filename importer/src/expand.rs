@@ -1,16 +1,17 @@
 //! A crate derive's expansion for a program's type (#593): rustc expands a
 //! small crate of the derived items, built from the cargo resolution the
 //! program's own run made, and the produced items come back as source text.
-//! Each expansion is computed once and kept in the project's
-//! `target/rawr/expand/`, keyed by the item's text, its derives and the
-//! artifacts they come from.
+//! Each expansion is kept in the project's `target/rawr/expand/`.
 //!
 //! The source loading reads is kept at its item's path and derive, and names
-//! the item text it was expanded from: an edit that changes only the
-//! expansion's bodies, as a `#[serde(rename)]` does, changes that one source
-//! in place, as an edit to a body changes its file (#1040).
+//! the item text it was expanded from and the artifact of the crate its
+//! derive comes from: an edit that changes only the expansion's bodies, as a
+//! `#[serde(rename)]` does, changes that one source in place, as an edit to
+//! a body changes its file (#1040), and a build that changes the crate
+//! retires the source (`kept`, #2152).
 
 pub mod call;
+pub mod kept;
 pub mod request;
 
 use std::path::{Path, PathBuf};
@@ -84,11 +85,15 @@ fn item_digest(text: &str) -> String {
 }
 
 /// An expansion source's text: a line naming the macro `resolved`
-/// (`serde::Serialize`) the items come from and the item text `item` they
-/// were expanded from, then the items.
+/// (`serde::Serialize`) the items come from, the item text `item` they were
+/// expanded from and the digest `artifact` of the macro crate's artifact
+/// they were expanded against, then the items.
 #[must_use]
-pub fn source_text(resolved: &str, item: &str, items: &[String]) -> String {
-    let mut text = format!("{SOURCE_HEADER}{resolved} {}\n", item_digest(item));
+pub fn source_text(resolved: &str, item: &str, artifact: &str, items: &[String]) -> String {
+    let mut text = format!(
+        "{SOURCE_HEADER}{resolved} {} {artifact}\n",
+        item_digest(item)
+    );
     for item in items {
         text.push_str(item);
         text.push('\n');
@@ -113,12 +118,28 @@ pub enum Kept<'a> {
 #[must_use]
 pub fn kept<'a>(text: &'a str, item: &str) -> Option<Kept<'a>> {
     let (line, _) = text.split_once('\n')?;
-    let (resolved, digest) = line.strip_prefix(SOURCE_HEADER)?.split_once(' ')?;
+    let mut words = line.strip_prefix(SOURCE_HEADER)?.split(' ');
+    let (resolved, digest) = (words.next()?, words.next()?);
     Some(if digest == item_digest(item) {
         Kept::Current(resolved)
     } else {
         Kept::Stale(resolved)
     })
+}
+
+/// The macro (`serde::Serialize`) a kept expansion source `text` comes
+/// from, and the digest of the artifact it was expanded against. `None`
+/// for a text that is no derive's expansion source.
+#[cfg_attr(
+    not(feature = "rustc-driver"),
+    allow(dead_code, reason = "only the driver's build runs an expansion")
+)]
+fn built(text: &str) -> Option<(&str, &str)> {
+    let (line, _) = text.split_once('\n')?;
+    let mut words = line.strip_prefix(SOURCE_HEADER)?.split(' ');
+    let resolved = words.next()?;
+    let artifact = words.nth(1)?;
+    Some((resolved, artifact))
 }
 
 /// Keep each of `item`'s derives' expansions in `expanded` as its source
@@ -127,6 +148,7 @@ pub fn kept<'a>(text: &'a str, item: &str) -> Option<Kept<'a>> {
 pub fn keep_sources(
     project: &Path,
     item: &Item,
+    basis: &Basis,
     expanded: &request::Expanded,
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(directory(project))?;
@@ -140,7 +162,8 @@ pub fn keep_sources(
             .unwrap_or_default();
         let path = source_path(project, &item.path, written);
         let staged = path.with_extension(format!("rs.{}", std::process::id()));
-        std::fs::write(&staged, source_text(resolved, &item.text, items))?;
+        let artifact = basis.artifact(resolved).unwrap_or_default();
+        std::fs::write(&staged, source_text(resolved, &item.text, artifact, items))?;
         std::fs::rename(&staged, &path)?;
     }
     Ok(())
@@ -185,29 +208,6 @@ fn crate_source(items: &[&Item]) -> (String, Vec<std::ops::Range<u32>>) {
     (text, spans)
 }
 
-/// The cache key of `item`'s expansion against `basis`, under `protocol`
-/// and `edition`: the item's text, its derives, and the digests of the
-/// artifacts its derives' crates are.
-#[must_use]
-pub fn key(item: &Item, basis: &Basis, protocol: u32, edition: &str) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"rawr.import.expand/v2");
-    digest.update(protocol.to_le_bytes());
-    digest.update(edition.as_bytes());
-    digest.update([0]);
-    digest.update(source(item).as_bytes());
-    for (_, path) in &item.derives {
-        let root = path.split("::").next().unwrap_or_default();
-        for (alias, _, artifact) in basis.externs.iter().filter(|(alias, ..)| **alias == *root) {
-            digest.update(alias.as_bytes());
-            digest.update([0]);
-            digest.update(artifact.as_bytes());
-            digest.update([0]);
-        }
-    }
-    digest.finalize().into()
-}
-
 /// A derive's name as rustc names its expansion, by the path written:
 /// `Serialize` of `serde::Serialize`, and `Save` of a `Save` that a `use`
 /// names `serde::Serialize` by.
@@ -219,14 +219,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The expansion kept at `key` in `directory`, when there is one.
-#[must_use]
-pub fn cached(directory: &Path, key: &[u8; 32], protocol: u32) -> Option<request::Expanded> {
-    let bytes = std::fs::read(directory.join(format!("{}.json", hex(key)))).ok()?;
-    let expanded: request::Expanded = serde_json::from_slice(&bytes).ok()?;
-    (expanded.protocol == protocol).then_some(expanded)
-}
-
 #[cfg_attr(
     not(feature = "rustc-driver"),
     allow(dead_code, reason = "only the driver's build runs an expansion")
@@ -234,6 +226,19 @@ pub fn cached(directory: &Path, key: &[u8; 32], protocol: u32) -> Option<request
 /// Where a project's expansion directory keeps the basis its last
 /// expansion ran against.
 const BASIS: &str = "basis.json";
+
+impl Basis {
+    /// The digest of the artifact of the crate the macro at `path`
+    /// (`serde::Serialize`) comes from, when this basis names it.
+    #[must_use]
+    pub fn artifact(&self, path: &str) -> Option<&str> {
+        let root = path.split("::").next().unwrap_or_default();
+        self.externs
+            .iter()
+            .find(|(alias, ..)| **alias == *root)
+            .map(|(_, _, digest)| &**digest)
+    }
+}
 
 #[cfg(feature = "rustc-driver")]
 impl Basis {
@@ -303,9 +308,8 @@ impl Basis {
     }
 }
 
-/// The expansion of each of `items`, in order: the one kept in the
-/// project's `directory`, else rustc's through `native`'s driver, which
-/// expands every item not kept in one run, and is then kept.
+/// rustc's expansion of each of `items`, in order, through `native`'s
+/// driver, which expands them all in one run.
 #[cfg(feature = "rustc-driver")]
 pub fn expand(
     items: &[Item],
@@ -315,43 +319,8 @@ pub fn expand(
     native: &crate::process::Native,
     limits: &crate::limits::Limits,
 ) -> crate::Result<Vec<request::Expanded>> {
-    let protocol = crate::extract::protocol::SCHEMA;
-    let keys = items
-        .iter()
-        .map(|item| key(item, basis, protocol, edition))
-        .collect::<Vec<_>>();
-    let mut expanded = keys
-        .iter()
-        .map(|key| cached(directory, key, protocol))
-        .collect::<Vec<_>>();
-    let missing = (0..items.len())
-        .filter(|&index| expanded[index].is_none())
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        let pending = missing
-            .iter()
-            .map(|&index| &items[index])
-            .collect::<Vec<_>>();
-        let fresh = run(&pending, basis, edition, directory, native, limits)?;
-        for (&index, one) in missing.iter().zip(fresh) {
-            keep(directory, &keys[index], &one);
-            expanded[index] = Some(one);
-        }
-    }
-    Ok(expanded.into_iter().flatten().collect())
-}
-
-/// Keep `expanded` at `key` in `directory`, where [`cached`] finds it.
-#[cfg(feature = "rustc-driver")]
-fn keep(directory: &Path, key: &[u8; 32], expanded: &request::Expanded) {
-    let name = hex(key);
-    let Ok(bytes) = serde_json::to_vec(expanded) else {
-        return;
-    };
-    let staged = directory.join(format!(".{name}.json.{}", std::process::id()));
-    if std::fs::write(&staged, bytes).is_ok() {
-        let _ = std::fs::rename(&staged, directory.join(format!("{name}.json")));
-    }
+    let items = items.iter().collect::<Vec<_>>();
+    run(&items, basis, edition, directory, native, limits)
 }
 
 /// rustc's expansion of each of `items`, in order, from one driver run over
@@ -496,15 +465,20 @@ fn split(
 #[cfg(test)]
 mod tests {
     use super::{
-        crate_source, kept, key, request, source, source_path, source_text, split, Basis, Item,
-        Kept,
+        built, crate_source, kept, request, source, source_path, source_text, split, Item, Kept,
     };
 
     #[test]
     fn an_expansion_source_names_its_macro_and_its_item_and_follows_it() {
         let item = "struct A;";
-        let text = source_text("serde::Serialize", item, &["impl A for B {}".to_owned()]);
+        let text = source_text(
+            "serde::Serialize",
+            item,
+            "a1",
+            &["impl A for B {}".to_owned()],
+        );
         assert!(text.starts_with("// derive serde::Serialize "), "{text}");
+        assert_eq!(built(&text), Some(("serde::Serialize", "a1")));
         assert!(text.ends_with("\nimpl A for B {}\n"), "{text}");
         assert_eq!(kept(&text, item), Some(Kept::Current("serde::Serialize")));
         // An edit to the item leaves the source stale, not another's.
@@ -529,14 +503,6 @@ mod tests {
             path: "Task".to_owned(),
             text: "#[derive(Debug, Serialize)]\nstruct Task { done: bool }".to_owned(),
             derives: vec![("Serialize".to_owned(), "serde::Serialize".to_owned())],
-        }
-    }
-
-    fn basis(digest: &str) -> Basis {
-        Basis {
-            selected_target: "aarch64-apple-darwin".into(),
-            dependency_directories: Box::default(),
-            externs: Box::new([("serde".into(), "/deps/libserde.rmeta".into(), digest.into())]),
         }
     }
 
@@ -601,27 +567,5 @@ mod tests {
         assert_eq!(derives(0), ["Serialize"]);
         assert_eq!(derives(1), ["Load"]);
         assert!(each.iter().all(|one| one.protocol == 53));
-    }
-
-    #[test]
-    fn the_key_follows_the_item_and_its_derives_artifacts_only() {
-        let item = task();
-        let base = key(&item, &basis("a"), 51, "2024");
-        assert_eq!(base, key(&item, &basis("a"), 51, "2024"));
-        assert_ne!(base, key(&item, &basis("b"), 51, "2024"));
-        assert_ne!(base, key(&item, &basis("a"), 52, "2024"));
-        assert_ne!(base, key(&item, &basis("a"), 51, "2021"));
-        let renamed = Item {
-            text: item.text.replace("done", "finished"),
-            ..item.clone()
-        };
-        assert_ne!(base, key(&renamed, &basis("a"), 51, "2024"));
-        // Another crate's artifact is not this item's input.
-        let mut other = basis("a");
-        other.externs = Box::new([
-            ("serde".into(), "/deps/libserde.rmeta".into(), "a".into()),
-            ("uuid".into(), "/deps/libuuid.rmeta".into(), "z".into()),
-        ]);
-        assert_eq!(base, key(&item, &other, 51, "2024"));
     }
 }

@@ -1573,6 +1573,9 @@ impl<'a> Builder<'a> {
         let Ok(text) = self.read_to_string(&path) else {
             return Ok(());
         };
+        // The check that loads it names it, so a passing one keeps it, as
+        // it does a stale one, which is expanded again in its place.
+        rawr_import::expand::kept::name(&path);
         let resolved = match rawr_import::expand::kept(&text, &derived.text) {
             Some(rawr_import::expand::Kept::Current(resolved)) => ImmutableString::from(resolved),
             // The item changed since it was expanded: the derive is a
