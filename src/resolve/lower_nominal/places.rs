@@ -1451,7 +1451,7 @@ impl Parser<'_> {
                 }
             }
         };
-        self.require_mutable_binding(&lvalue.binding().clone(), subject.span)?;
+        self.require_mutable_place(&lvalue, subject.span)?;
         // `Some(&mut place)` (`optional_element`): the pattern's `Some` is
         // matched on the place.
         let optional = !borrowed

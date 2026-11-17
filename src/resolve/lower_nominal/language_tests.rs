@@ -15405,3 +15405,33 @@ fn language_an_owned_receiver_is_partly_moved_after_its_field_moves_out() {
         assert!(error.contains("E0382"), "{body}: {error}");
     }
 }
+
+#[test]
+fn language_a_mut_destructuring_in_a_closure_binds_the_place() {
+    // `&mut *r` of a `&mut` local the closure captured, one shadowing its
+    // place's local, and a local of the closure's own each bind the place.
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let mut futures = (1, 2);
+            let futures = &mut futures;
+            let mut pair = (3, 4);
+            let r = &mut pair;
+            let mut f = || {
+                let (a, ..) = &mut *futures;
+                *a += 10;
+                let (.., b) = &mut *r;
+                *b += 20;
+                let mut own = (5, 6);
+                let (c, _) = &mut own;
+                *c += 30;
+                own.0
+            };
+            let own = f();
+            format!("{:?} {:?} {}", futures, pair, own)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "(11, 2) (3, 24) 35");
+}
