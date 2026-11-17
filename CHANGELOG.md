@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - The iced parity harness reports an example whose tests can't create iced_test's headless renderer (integration draws only with wgpu, and a GitHub runner has no GPU) as not runnable headless rather than as a mismatch. (#2197)
+- The agent cursor that rawr's input tools show in a program's window travels to each move, click, drag and scroll along a short eased curve of about 200 ms, sending pointer moves along the way so hover follows, and a button goes down only once it has landed. It is drawn as a rounded orange dart with a white outline and a soft shadow, as screenshots show it too. (#2199)
+- The agent cursor that rawr's input tools show in a program's window travels to each move, click, drag and scroll along a short eased curve, sending pointer moves along the way, and a button goes down only once it has landed. It is drawn as a rounded orange dart with a white outline and a soft shadow. (#2199)
+- A dependency's macro_rules! call used as an expression lays out its expansion, so its items are declared and its paths resolve, and an inline mod a dependency macro declares loads as a module whose macro calls expand. (#2196, #2189; part of #1152)
 
 ## 0.3.247 (2026-11-17)
 

@@ -12,7 +12,10 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"The iced parity harness reports an example whose tests can't create iced_test's headless renderer (integration draws only with wgpu, and a GitHub runner has no GPU) as not runnable headless rather than as a mismatch.","issues":[2197]}
+        {"text":"The iced parity harness reports an example whose tests can't create iced_test's headless renderer (integration draws only with wgpu, and a GitHub runner has no GPU) as not runnable headless rather than as a mismatch.","issues":[2197]},
+        {"text":"The agent cursor that rawr's input tools show in a program's window travels to each move, click, drag and scroll along a short eased curve of about 200 ms, sending pointer moves along the way so hover follows, and a button goes down only once it has landed. It is drawn as a rounded orange dart with a white outline and a soft shadow, as screenshots show it too.","issues":[2199]},
+        {"text":"The agent cursor that rawr's input tools show in a program's window travels to each move, click, drag and scroll along a short eased curve, sending pointer moves along the way, and a button goes down only once it has landed. It is drawn as a rounded orange dart with a white outline and a soft shadow.","issues":[2199]},
+        {"text":"A dependency's macro_rules! call used as an expression lays out its expansion, so its items are declared and its paths resolve, and an inline mod a dependency macro declares loads as a module whose macro calls expand.","issues":[2196,2189],"refs":[1152]}
       ]
     },
     "releases": [
@@ -4888,16 +4891,21 @@
     {"issue":2186,"title":"While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown…","state":"closed","category":"Platforms","release":"0.3.245"},
     {"issue":2187,"title":"The landing page's iced, ratatui and plain loop tabs can be linked to: `#iced`, `#ratatui` or…","state":"closed","category":"Platforms","release":"0.3.245"},
     {"issue":2188,"title":"Items in an expression-position macro expansion made during lowering are skipped","state":"open","category":"Divergences from rustc"},
-    {"issue":2189,"title":"An inline mod in a dependency macro's item expansion isn't loaded as a module","state":"open","category":"Divergences from rustc"},
+    {"issue":2189,"title":"An inline mod in a dependency macro's item expansion isn't loaded as a module","state":"closed","category":"Divergences from rustc"},
     {"issue":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open","category":"Divergences from rustc"},
     {"issue":2191,"title":"A call of the program's own `macro_rules!` used as an expression declares the items of the…","state":"closed","category":"Divergences from rustc","release":"0.3.246"},
     {"issue":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"closed","category":"Divergences from rustc","release":"0.3.246"},
     {"issue":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"closed","category":"Divergences from rustc","release":"0.3.246"},
     {"issue":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"closed","category":"Divergences from rustc","release":"0.3.247"},
     {"issue":2195,"title":"iced's integration example still doesn't build on Linux in the parity harness, under cargo either","state":"closed","category":"Health","release":"0.3.247"},
-    {"issue":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"open","category":"Divergences from rustc"},
+    {"issue":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"closed","category":"Divergences from rustc"},
     {"issue":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"closed","category":"Health"},
-    {"issue":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open","category":"Platforms"}
+    {"issue":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open","category":"Platforms"},
+    {"issue":2199,"title":"The agent cursor that rawr's input tools show in a program's window travels to each move, click…","state":"closed","category":"Platforms"},
+    {"issue":2200,"title":"A `&mut` destructuring of a captured reference in a closure is refused or loses its place","state":"open","category":"Divergences from rustc"},
+    {"issue":2201,"title":"A graph-time expansion's locals share one hygiene number","state":"open","category":"Divergences from rustc"},
+    {"issue":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open","category":"Divergences from rustc"},
+    {"issue":2203,"title":"A generic type named through its module in a let annotation isn't read","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5660,15 +5668,19 @@
             {"number":2183,"title":"Items a macro expansion produces in a body or module aren't registered as items","state":"closed"},
             {"number":2184,"title":"A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open"},
             {"number":2188,"title":"Items in an expression-position macro expansion made during lowering are skipped","state":"open"},
-            {"number":2189,"title":"An inline mod in a dependency macro's item expansion isn't loaded as a module","state":"open"},
+            {"number":2189,"title":"An inline mod in a dependency macro's item expansion isn't loaded as a module","state":"closed"},
             {"number":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open"},
             {"number":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"closed"},
             {"number":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"closed"},
             {"number":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"closed"},
             {"number":2195,"title":"iced's integration example still doesn't build on Linux in the parity harness, under cargo either","state":"closed"},
-            {"number":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"open"},
+            {"number":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"closed"},
             {"number":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"closed"},
-            {"number":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open"}
+            {"number":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open"},
+            {"number":2200,"title":"A `&mut` destructuring of a captured reference in a closure is refused or loses its place","state":"open"},
+            {"number":2201,"title":"A graph-time expansion's locals share one hygiene number","state":"open"},
+            {"number":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open"},
+            {"number":2203,"title":"A generic type named through its module in a let annotation isn't read","state":"open"}
           ],
           "milestone": "0.3"
         },
