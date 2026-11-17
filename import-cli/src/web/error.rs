@@ -52,12 +52,11 @@ pub(crate) enum Error {
     },
 }
 
-/// Why `rawr run --web` ended without serving: the program's report, the
-/// command's own error, or a program it can't run in a browser.
+/// Why `rawr run --web` ended without serving: the program's report or the
+/// command's own error.
 pub(crate) enum Failure {
     Report(Box<rawr::diagnostic::Report>),
     Web(Error),
-    Usage(&'static str),
 }
 
 impl Failure {
@@ -66,9 +65,6 @@ impl Failure {
         match self {
             Self::Report(report) => rawr_cli::diagnostic::emit(&report),
             Self::Web(error) => eprintln!("{}: {error}", color::label(color::Level::Error)),
-            Self::Usage(message) => {
-                eprintln!("{}: {message}", color::label(color::Level::Error));
-            }
         }
         ExitCode::FAILURE
     }

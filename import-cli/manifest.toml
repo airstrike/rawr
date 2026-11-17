@@ -1,8 +1,9 @@
 # What `rawr-import --rawr-manifest` prints: the programs `rawr` hands to
 # rawr-import. A program with Rust dependencies in its Cargo.toml, or native
 # modules, runs in a runner that links the rawr crate and those
-# dependencies.
+# dependencies. `rawr run --web` comes here for every program: one with no
+# dependencies runs in the browser on a runner of rawr and std alone.
 format = 1
 name = "rawr-import"
 sections = ["rust"]
-commands = ["cache"]
+commands = ["cache", "run --web"]

@@ -11,7 +11,11 @@
 //! (#1455). The page reports what each reload did, and the terminal says
 //! it as `rawr run` does. A save that uses a crate's API the runner doesn't
 //! cover builds the runner again, and the page restarts on the new one.
+//!
+//! A program that uses no crates runs on one runner of rawr and std alone,
+//! which every such program shares (`base`).
 
+mod base;
 mod bindgen;
 mod build;
 mod error;

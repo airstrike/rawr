@@ -10,7 +10,7 @@
 format = 1
 name = "rawr-import"
 sections = ["rust"]
-commands = ["cache"]
+commands = ["cache", "run --web"]
 install = [
     "curl -LsSf https://rawr.airstrike.fyi/install.sh | sh",
 ]
