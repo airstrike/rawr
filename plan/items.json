@@ -2183,6 +2183,7 @@
     {"t":"T2181","issue":2181,"title":"T2181: The bundle seal flushes each file before it measures its allocation, so a large runner binary on…","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"f6b6ce4c9","release":"0.3.244"},
     {"t":"T2182","issue":2182,"title":"T2182: A crate macro that calls another macro of its own crate through `$crate::`, one the program…","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"a53b9aa2c","release":"0.3.244"},
     {"t":"T2183","issue":2183,"title":"T2183: Items a macro expansion produces in a body or module aren't registered as items","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null},
-    {"t":"T2184","issue":2184,"title":"T2184: A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open","category":"Platforms","labels":["platform"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2184","issue":2184,"title":"T2184: A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open","category":"Platforms","labels":["platform"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null},
+    {"t":"T2185","issue":2185,"title":"T2185: The landing page's ratatui demo keeps drawing after a key press","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"1abc6eb19","release":null}
   ]
 }
