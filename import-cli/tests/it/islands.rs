@@ -31,15 +31,7 @@ fn edit(path: &Path, from: &str, to: &str) {
 
 #[test]
 fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field() {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
+    crate::support::driver();
     let root = ISLANDS.project();
     let physics = root.join("src/physics.rs");
     let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);

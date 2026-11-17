@@ -174,11 +174,7 @@ impl Started {
             fs::read(&file).unwrap().hash(&mut hasher);
         }
         let import = Path::new(env!("CARGO_BIN_EXE_rawr-import"));
-        let driver = import.with_file_name(format!(
-            "rawr-import-driver{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        for program in [import, driver.as_path()] {
+        for program in [import, crate::support::driver()] {
             let metadata = fs::metadata(program).unwrap();
             metadata.len().hash(&mut hasher);
             metadata.modified().unwrap().hash(&mut hasher);

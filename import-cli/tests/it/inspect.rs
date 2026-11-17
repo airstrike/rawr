@@ -59,15 +59,7 @@ fn pause(run: &mut crate::support::Run, events: &Path, count: usize) -> Value {
 
 #[test]
 fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
+    crate::support::driver();
     let root = crate::support::fresh("inspect-dependency");
     let stop = root.join("stop");
     let _ = fs::remove_file(&stop);

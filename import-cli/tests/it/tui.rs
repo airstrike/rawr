@@ -312,6 +312,7 @@ struct Terminal {
 
 impl Terminal {
     fn start(root: &Path) -> Self {
+        crate::support::driver();
         let size = nix::pty::Winsize {
             ws_row: Screen::ROWS as u16,
             ws_col: Screen::COLUMNS as u16,
