@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A demand round rewrites less of the stored classification, because its support, definition plans and implementation ledgers are written in source order: counter's second round writes 30.8 MB of new parts rather than 41.9 MB.","issues":[2165]},
-      {"text":"`rawr check` retires the API, classification, facade and overlay values of the demand rounds its final demand superseded, as a bind does.","issues":[2168]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.239",
+      "date": "2026-11-17",
+      "entries": [
+        {"text":"A demand round rewrites less of the stored classification, because its support, definition plans and implementation ledgers are written in source order: counter's second round writes 30.8 MB of new parts rather than 41.9 MB.","issues":[2165]},
+        {"text":"`rawr check` retires the API, classification, facade and overlay values of the demand rounds its final demand superseded, as a bind does.","issues":[2168]}
+      ]
+    },
     {
       "version": "0.3.238",
       "date": "2026-11-17",
