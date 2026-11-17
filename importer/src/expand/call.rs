@@ -24,6 +24,9 @@ pub enum Place {
     Type,
     /// A pattern.
     Pattern,
+    /// No call: a `use` that binds the macro by name, which rustc resolves
+    /// as it does any `use`, and which expands to nothing (#2155).
+    Use,
 }
 
 /// The delimiters a call's input is in.
@@ -71,6 +74,20 @@ pub struct Call {
 const SOURCE_HEADER: &str = "// call ";
 
 impl Call {
+    /// The `use` that binds the macro at `path`
+    /// (`rust_decimal_macros::dec`) by name, which rustc resolves in the
+    /// small crate whether or not the program calls it, as it reports
+    /// E0432 for a `use` of a path that holds no item (#2155).
+    #[must_use]
+    pub fn used(path: &str) -> Self {
+        Self {
+            path: path.to_owned(),
+            delimiter: Delimiter::Parenthesis,
+            input: String::new(),
+            place: Place::Use,
+        }
+    }
+
     /// The call as Rust writes it: `rust_decimal_macros::dec!(1.5)`.
     fn text(&self) -> String {
         format!(
@@ -98,7 +115,8 @@ impl Call {
     /// back. A call in statement position is one as rustc parses it: in
     /// braces, which keep the last expression it expands to as the body's
     /// value, or in parentheses or brackets before a `;`, which rustc puts
-    /// after the last statement it expands to.
+    /// after the last statement it expands to. A `use` is itself, beside
+    /// a function of no statements.
     #[cfg_attr(
         not(feature = "rustc-driver"),
         allow(dead_code, reason = "only the driver's build runs an expansion")
@@ -113,6 +131,11 @@ impl Call {
             }
             Place::Type => format!("fn __rawr_type() {{\n    let _: {};\n}}\n", self.text()),
             Place::Pattern => format!("fn __rawr_pattern() {{\n    let {};\n}}\n", self.text()),
+            // An empty body, which the driver reads back as no statements.
+            Place::Use => format!(
+                "#[allow(unused_imports)]\nuse {};\nfn __rawr_statements() {{}}\n",
+                self.path
+            ),
             Place::Statements => {
                 let end = if self.delimiter == Delimiter::Brace {
                     ""

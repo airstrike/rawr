@@ -838,7 +838,9 @@ fn prepare_resolving(
         // What a crate derive's expansion runs against: this run's own build.
         // An expansion kept against another build of its macro's crate is
         // retired (#2152): a call's is expanded again in its place, and a
-        // derive's once the program, loaded again, asks for it.
+        // derive's once the program, loaded again, asks for it. The
+        // program's snapshot holds the basis (#2156), so a new one loads the
+        // program again for a snapshot of it.
         let basis = prepared.expansion_basis();
         if let Some(basis) = &basis {
             let retired =
@@ -846,7 +848,7 @@ fn prepare_resolving(
             if !retired.calls.is_empty() {
                 keep_calls(&graph, &retired.calls, Some(basis.clone()), &limits)?;
             }
-            if retired.derives {
+            if retired.basis {
                 return prepare(build, target, None, revision, scope, kept);
             }
         }
