@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.235 (2026-11-17)
+
 - A `mod` item inside a block expression works as in rustc: its items, `use super::*` reaching the enclosing module, and the privacy of its items. A file module in a block is rustc's error. (#2157; part of #1152)
 - A `tokio::select!` branch may have a precondition (`pattern = future, if condition => body`). Every condition is evaluated before any future is polled, and a branch whose condition is false is disabled and its future never polled. (#2158; part of #1152)
 
