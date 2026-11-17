@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A rebuild of a crate whose proc macro a marked module calls checks the program again rather than replaying the check of the old expansion.","issues":[2156]},
+        {"text":"A `use` of a dependency's macro that doesn't exist is rustc's E0432, even when nothing calls it.","issues":[2155]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.233",
@@ -4736,8 +4742,8 @@
     {"issue":2152,"title":"Kept macro expansions aren't keyed by the macro crate's build, and call expansions are never removed","state":"closed","category":"Platforms","release":"0.3.233"},
     {"issue":2153,"title":"rawr's cold build of a large iced example's test runner takes about 18 minutes and about 16 GB","state":"open","category":"Health"},
     {"issue":2154,"title":"When an iced example's build fails with no compiler error, the parity harness shows the last…","state":"closed","category":"Health","release":"0.3.232"},
-    {"issue":2155,"title":"An unused `use` of a missing macro under a dependency isn't reported","state":"open","category":"Divergences from rustc"},
-    {"issue":2156,"title":"A cached check isn't keyed by the text of crate macro call expansions","state":"open","category":"Platforms"}
+    {"issue":2155,"title":"An unused `use` of a missing macro under a dependency isn't reported","state":"closed","category":"Divergences from rustc"},
+    {"issue":2156,"title":"A cached check isn't keyed by the text of crate macro call expansions","state":"closed","category":"Platforms"}
   ],
   "groups": [
     {
@@ -5475,8 +5481,8 @@
             {"number":2151,"title":"Crate macro calls are expanded one per check round","state":"closed"},
             {"number":2152,"title":"Kept macro expansions aren't keyed by the macro crate's build, and call expansions are never removed","state":"closed"},
             {"number":2153,"title":"rawr's cold build of a large iced example's test runner takes about 18 minutes and about 16 GB","state":"open"},
-            {"number":2155,"title":"An unused `use` of a missing macro under a dependency isn't reported","state":"open"},
-            {"number":2156,"title":"A cached check isn't keyed by the text of crate macro call expansions","state":"open"}
+            {"number":2155,"title":"An unused `use` of a missing macro under a dependency isn't reported","state":"closed"},
+            {"number":2156,"title":"A cached check isn't keyed by the text of crate macro call expansions","state":"closed"}
           ],
           "milestone": "0.3"
         },

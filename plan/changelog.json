@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A rebuild of a crate whose proc macro a marked module calls checks the program again rather than replaying the check of the old expansion.","issues":[2156]},
+      {"text":"A `use` of a dependency's macro that doesn't exist is rustc's E0432, even when nothing calls it.","issues":[2155]}
+    ]
   },
   "releases": [
     {

@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A rebuild of a crate whose proc macro a marked module calls checks the program again rather than replaying the check of the old expansion. (#2156)
+- A `use` of a dependency's macro that doesn't exist is rustc's E0432, even when nothing calls it. (#2155)
 
 ## 0.3.233 (2026-11-17)
 
