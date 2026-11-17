@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.228",
+  "version": "0.3.229",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A runner that compiles rawr in the project settles its lock when the project locks an older version of a crate rawr needs. It takes rawr's version of that crate and keeps every other version and git revision the project pins.","issues":[2144]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.229",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"A runner that compiles rawr in the project settles its lock when the project locks an older version of a crate rawr needs. It takes rawr's version of that crate and keeps every other version and git revision the project pins.","issues":[2144]}
+        ]
+      },
       {
         "version": "0.3.228",
         "date": "2026-11-16",
@@ -4686,7 +4688,7 @@
     {"issue":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open","category":"Divergences from rustc"},
     {"issue":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed","category":"Platforms","release":"0.3.228"},
     {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"open","category":"Platforms"},
-    {"issue":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed","category":"Platforms"}
+    {"issue":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed","category":"Platforms","release":"0.3.229"}
   ],
   "groups": [
     {
