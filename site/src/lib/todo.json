@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A program's `&mut Context<'_>` crosses into crate functions, such as tokio's `poll_budget_available`, and the `Poll<T>` a crate gives comes back as std's `Poll`.","issues":[2175],"refs":[1152]},
+        {"text":"`Future::poll` polls a crate future, such as tokio's `Sleep` or `JoinHandle`, where it is, so it keeps its own methods. `Poll` is `Copy`, `Clone` and `Debug` as std's is and supports `map`, and `Box::pin` pins a future to poll by hand.","issues":[2176],"refs":[1152]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.242",
@@ -4827,9 +4833,12 @@
     {"issue":2172,"title":"Marked code polls futures by hand: `std::future::poll_fn`, `Pin::new` and `Pin::new_unchecked`…","state":"closed","category":"Divergences from rustc","release":"0.3.241"},
     {"issue":2173,"title":"A macro path through a crate's hidden $crate segment doesn't resolve to its macro_rules! definition","state":"closed","category":"Divergences from rustc","release":"0.3.242"},
     {"issue":2174,"title":"Type parameters and variants named `_0` don't parse","state":"closed","category":"Divergences from rustc","release":"0.3.242"},
-    {"issue":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"open","category":"Divergences from rustc"},
-    {"issue":2176,"title":"`Future::poll` of a crate future where it sits","state":"open","category":"Divergences from rustc"},
-    {"issue":2177,"title":"When a sealed build bundle's file count or size changes, rawr's error names the total that…","state":"closed","category":"Health","release":"0.3.242"}
+    {"issue":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"closed","category":"Divergences from rustc"},
+    {"issue":2176,"title":"`Future::poll` of a crate future where it sits","state":"closed","category":"Divergences from rustc"},
+    {"issue":2177,"title":"When a sealed build bundle's file count or size changes, rawr's error names the total that…","state":"closed","category":"Health","release":"0.3.242"},
+    {"issue":2178,"title":"`pin!(future)` in marked code","state":"open","category":"Divergences from rustc"},
+    {"issue":2179,"title":"A `Box::pin`ned crate future moved by value still moves its native value","state":"open","category":"Divergences from rustc"},
+    {"issue":2180,"title":"A type's future Output that names an impl parameter fixed by a where clause can't be awaited","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5584,8 +5593,11 @@
             {"number":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open"},
             {"number":2173,"title":"A macro path through a crate's hidden $crate segment doesn't resolve to its macro_rules! definition","state":"closed"},
             {"number":2174,"title":"Type parameters and variants named `_0` don't parse","state":"closed"},
-            {"number":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"open"},
-            {"number":2176,"title":"`Future::poll` of a crate future where it sits","state":"open"}
+            {"number":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"closed"},
+            {"number":2176,"title":"`Future::poll` of a crate future where it sits","state":"closed"},
+            {"number":2178,"title":"`pin!(future)` in marked code","state":"open"},
+            {"number":2179,"title":"A `Box::pin`ned crate future moved by value still moves its native value","state":"open"},
+            {"number":2180,"title":"A type's future Output that names an impl parameter fixed by a where clause can't be awaited","state":"open"}
           ],
           "milestone": "0.3"
         },
