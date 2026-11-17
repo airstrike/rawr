@@ -211,7 +211,29 @@ impl<'a> Parser<'a> {
             | Token::LeftBrace
             | Token::Apostrophe => true,
             Token::Reserved(keyword) => keyword.as_str() == "match",
+            Token::Identifier(_) => self.peek_braced_macro(),
             _ => false,
+        }
+    }
+
+    /// Whether the next tokens are a macro call in braces, `path::name! {
+    /// .. }`, which a statement ends with, as Rust's does.
+    fn peek_braced_macro(&mut self) -> bool {
+        if self.split_angle.is_some() {
+            return false;
+        }
+        let mut ahead = self.input.clone();
+        loop {
+            if !matches!(ahead.next(), Some((Token::Identifier(_), _))) {
+                return false;
+            }
+            match ahead.next() {
+                Some((Token::DoubleColon, _)) => {}
+                Some((Token::Bang, _)) => {
+                    return matches!(ahead.next(), Some((Token::LeftBrace, _)));
+                }
+                _ => return false,
+            }
         }
     }
 
