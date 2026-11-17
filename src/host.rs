@@ -2188,6 +2188,7 @@ mod tests {
     /// A macro's `$crate::name!`, a path through its crate's hidden
     /// segment, names the macro the facade holds at its public path when
     /// the macro's `$crate` reads as that segment, and no other (#2173).
+    #[cfg(feature = "rust-import")]
     #[test]
     fn a_crate_macro_resolves_through_its_hidden_segment() {
         const OWN: &str = "tasks::__rawr_crate_tasks_00000000000000ab";
