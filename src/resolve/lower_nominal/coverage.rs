@@ -509,43 +509,6 @@ impl Pattern {
         }
     }
 
-    pub(super) fn render(&self) -> String {
-        match self {
-            Self::Wildcard => "_".to_string(),
-            Self::Constructor {
-                key: Key::Tuple,
-                payload,
-                ..
-            } => format!(
-                "({})",
-                payload
-                    .iter()
-                    .map(Self::render)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            Self::Constructor {
-                key: Key::Slice { before, rest },
-                payload,
-                ..
-            } => {
-                let mut elements = payload.iter().map(Self::render).collect::<Vec<_>>();
-                if *rest {
-                    elements.insert(*before, "..".into());
-                }
-                format!("[{}]", elements.join(", "))
-            }
-            Self::Constructor { name, payload, .. } => {
-                render_constructor(name, payload, Self::render)
-            }
-            Self::Or(alternatives) => alternatives
-                .iter()
-                .map(Self::render)
-                .collect::<Vec<_>>()
-                .join(" | "),
-        }
-    }
-
     /// The or-free patterns this one matches the union of.
     pub(super) fn alternatives(&self) -> Vec<Self> {
         match self {

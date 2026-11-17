@@ -1211,20 +1211,9 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    /// tokio's `join!(a, b, ..)` and `select! { pattern = future => body,
-    /// .., else => body }`, at the `!`, written again as Rawr code: an
-    /// `.await` on `rawr::future::__join2` or `__select2` (and the others
-    /// for each count, `__biased_select2` after `biased;`), and for
-    /// `select!` a `match` of its output, whose arm for a branch matches
-    /// that branch's `Some` of its pattern. Each branch's future is made in
-    /// order and wrapped in an `async` block that gives `Some` of its
-    /// output when the pattern matches it and `None` when not, as tokio
-    /// tests the output against the pattern without its `ref` and `mut`:
-    /// the core then disables that branch and polls the rest, and once
-    /// every branch is disabled the select ends at its `else`. A branch's
-    /// precondition (`pattern = future, if condition => body`) is bound to
-    /// a local before any future is made, and a false one disables its
-    /// branch before it is polled. `try_join!` is rejected.
+    /// tokio's `join!(a, b, ..)`, at the `!`, written again as Rawr code: an
+    /// `.await` on `rawr::future::__join2` (and the others for each count).
+    /// `try_join!` of more than one future is rejected.
     pub(super) fn parse_tokio_macro(
         &mut self,
         name: &str,
@@ -1233,428 +1222,73 @@ impl<'a> Parser<'a> {
         const MOST: usize = 5;
         let at = start.start();
         let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
-        let reserved = |text: &str| (Token::Reserved(Box::new(text.into())), at);
         let unsupported = |construct: String, end: Position| Error::UnsupportedNominalSyntax {
             construct: construct.into(),
             source: span(at, end),
         };
         self.next();
-        // The futures and, for `select!`, each branch's pattern and body.
         let mut futures = Vec::<Vec<(Token, Position)>>::new();
-        let mut branches = Vec::<(Vec<(Token, Position)>, Vec<(Token, Position)>)>::new();
-        // Each branch's precondition, the tokens after its `, if`.
-        let mut preconditions = Vec::<Option<Vec<(Token, Position)>>>::new();
-        let mut otherwise = None;
-        let mut biased = false;
-        let end;
-        if name == "select" {
-            self.expect(Token::LeftBrace, "'{' after `select!`")?;
-            biased = matches!(self.peek(), Token::Identifier(ref word) if word.as_str() == "biased")
-                && matches!(self.peek_second(), Token::SemiColon);
-            if biased {
-                self.next();
-                self.next();
+        let (tokens, end) = self.take_argument_tokens()?;
+        let mut depth = 0usize;
+        let mut current = Vec::new();
+        for (token, position) in tokens {
+            match token {
+                Token::Comma if depth == 0 => {
+                    futures.push(std::mem::take(&mut current));
+                    continue;
+                }
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
             }
-            loop {
-                if matches!(self.peek(), Token::RightBrace) {
-                    end = self.next().1;
-                    break;
-                }
-                // `pattern = future =>` or `else =>`.
-                let mut pattern = Vec::new();
-                let is_else = matches!(self.peek(), Token::Else);
-                if is_else {
-                    self.next();
-                } else {
-                    let mut depth = 0usize;
-                    loop {
-                        let (token, position) = self.next();
-                        match token {
-                            Token::Equals if depth == 0 => break,
-                            Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
-                            Token::RightParen | Token::RightBracket | Token::RightBrace => {
-                                depth = depth.saturating_sub(1);
-                            }
-                            Token::EOF => {
-                                return Err(unsupported(
-                                    "`=` after a `select!` pattern".into(),
-                                    position,
-                                ));
-                            }
-                            _ => {}
-                        }
-                        pattern.push((token, position));
-                    }
-                }
-                let mut future = Vec::new();
-                let mut precondition = None::<Vec<(Token, Position)>>;
-                let mut depth = 0usize;
-                loop {
-                    let (token, position) = self.next();
-                    match token {
-                        Token::DoubleArrow if depth == 0 => break,
-                        // `pattern = future, if condition =>`: the tokens
-                        // after the `if` are the branch's precondition.
-                        Token::Comma if depth == 0 && precondition.is_none() => {
-                            self.expect(Token::If, "`if` after a `select!` branch's `,`")?;
-                            precondition = Some(Vec::new());
-                            continue;
-                        }
-                        Token::LeftParen
-                        | Token::LeftBracket
-                        | Token::LeftBrace
-                        | Token::MapStart => {
-                            depth += 1;
-                        }
-                        Token::RightParen | Token::RightBracket | Token::RightBrace => {
-                            depth = depth.saturating_sub(1);
-                        }
-                        Token::EOF => {
-                            return Err(unsupported("`=>` in a `select!` branch".into(), position));
-                        }
-                        _ => {}
-                    }
-                    match &mut precondition {
-                        Some(condition) => condition.push((token, position)),
-                        None => future.push((token, position)),
-                    }
-                }
-                // The body: a block, or an expression up to a comma.
-                let mut body = Vec::new();
-                let block = matches!(self.peek(), Token::LeftBrace);
-                let mut depth = 0usize;
-                loop {
-                    match self.peek() {
-                        Token::Comma if depth == 0 => {
-                            self.next();
-                            break;
-                        }
-                        Token::RightBrace if depth == 0 => break,
-                        Token::EOF => {
-                            let position = self.next().1;
-                            return Err(unsupported("'}' to close `select!`".into(), position));
-                        }
-                        _ => {}
-                    }
-                    let (token, position) = self.next();
-                    match token {
-                        Token::LeftParen
-                        | Token::LeftBracket
-                        | Token::LeftBrace
-                        | Token::MapStart => {
-                            depth += 1;
-                        }
-                        Token::RightParen | Token::RightBracket | Token::RightBrace => {
-                            depth = depth.saturating_sub(1);
-                        }
-                        _ => {}
-                    }
-                    body.push((token, position));
-                    if block && depth == 0 {
-                        if matches!(self.peek(), Token::Comma) {
-                            self.next();
-                        }
-                        break;
-                    }
-                }
-                if is_else {
-                    otherwise = Some(body);
-                } else {
-                    futures.push(future);
-                    branches.push((pattern, body));
-                    preconditions.push(precondition);
-                }
-            }
-        } else {
-            let (tokens, close) = self.take_argument_tokens()?;
-            end = close;
-            let mut depth = 0usize;
-            let mut current = Vec::new();
-            for (token, position) in tokens {
-                match token {
-                    Token::Comma if depth == 0 => {
-                        futures.push(std::mem::take(&mut current));
-                        continue;
-                    }
-                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
-                        depth += 1;
-                    }
-                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
-                        depth = depth.saturating_sub(1);
-                    }
-                    _ => {}
-                }
-                current.push((token, position));
-            }
-            if !current.is_empty() {
-                futures.push(current);
-            }
+            current.push((token, position));
+        }
+        if !current.is_empty() {
+            futures.push(current);
         }
         let count = futures.len();
-        let least = if name == "select" { 1 } else { 2 };
-        if count < least || count > MOST {
+        if !(2..=MOST).contains(&count) {
             return Err(unsupported(
-                format!(
-                    "`{name}!` of {count} futures is not supported yet; it takes {least} to {MOST}"
-                ),
+                format!("`{name}!` of {count} futures is not supported yet; it takes 2 to {MOST}"),
                 end,
             ));
         }
-        // The core has `join!` and `select!` (D513.7).
-        if count > 1 && name != "join" && name != "select" {
+        // The core has `join!` (D513.7).
+        if name != "join" {
             return Err(unsupported(
                 format!("`{name}!` of more than one future is not supported yet; `join!` is"),
                 end,
             ));
         }
-        // `(tokio::__join2(a, b).await)`, or the select's `match`.
-        let mut spliced = vec![(Token::LeftParen, at)];
-        // As tokio's, every precondition is evaluated before any branch's
-        // future is made, and a branch whose condition is false is
-        // disabled: its future is made and never polled.
-        let enabled = |index: usize| format!("__rawr_select_enabled{index}");
-        let guarded = preconditions.iter().any(Option::is_some);
-        if guarded {
-            spliced.push((Token::LeftBrace, at));
-            for (index, condition) in preconditions.iter().enumerate() {
-                let Some(condition) = condition else {
-                    continue;
-                };
-                spliced.extend([
-                    (Token::Let, at),
-                    ident(&enabled(index)),
-                    (Token::Equals, at),
-                ]);
-                spliced.push((Token::LeftParen, at));
-                spliced.extend(condition.iter().cloned());
-                spliced.extend([(Token::RightParen, at), (Token::SemiColon, at)]);
-            }
-        }
-        if name == "select" {
-            spliced.push(reserved("match"));
-        }
-        // A lone branch with a precondition is wrapped as each of several
-        // branches is, so a false condition reaches the `else`.
-        let wrapped = count > 1 || guarded;
-        if count == 1 && guarded {
-            let future = futures.pop().into_iter().flatten().collect();
-            let condition = preconditions[0].as_ref().map(|_| enabled(0));
-            spliced.extend(Self::select_branch(
-                future,
-                &branches[0].0,
-                condition.as_deref(),
-                at,
-            ));
-        } else if count == 1 {
-            spliced.push((Token::LeftParen, at));
-            spliced.extend(futures.pop().into_iter().flatten());
-            spliced.push((Token::RightParen, at));
-        } else {
-            spliced.extend([
-                ident("rawr"),
-                (Token::DoubleColon, at),
-                ident("future"),
-                (Token::DoubleColon, at),
-            ]);
-            let order = if biased { "biased_" } else { "" };
-            spliced.extend([
-                ident(&format!("__{order}{name}{count}")),
-                (Token::LeftParen, at),
-            ]);
-            // Each future is an argument as written, so a local moves in:
-            // a select branch's is bound, then awaited in its block.
-            for (index, future) in futures.into_iter().enumerate() {
-                if index > 0 {
-                    spliced.push((Token::Comma, at));
-                }
-                match branches.get(index) {
-                    Some((pattern, _)) => {
-                        let condition = preconditions[index].as_ref().map(|_| enabled(index));
-                        spliced.extend(Self::select_branch(
-                            future,
-                            pattern,
-                            condition.as_deref(),
-                            at,
-                        ));
-                    }
-                    None => spliced.extend(future),
-                }
-            }
-            spliced.push((Token::RightParen, at));
-        }
-        spliced.extend([(Token::Period, at), reserved("await")]);
-        if name == "select" {
-            spliced.push((Token::LeftBrace, at));
-            for (index, (pattern, body)) in branches.into_iter().enumerate() {
-                if count == 1 && !wrapped {
-                    spliced.extend(pattern);
-                } else if count == 1 {
-                    spliced.extend([ident("Some"), (Token::LeftParen, at)]);
-                    spliced.extend(pattern);
-                    spliced.push((Token::RightParen, at));
-                } else {
-                    // `(_, Some(pattern), _)` of the branch's own `Option`.
-                    spliced.push((Token::LeftParen, at));
-                    for position in 0..count {
-                        if position > 0 {
-                            spliced.push((Token::Comma, at));
-                        }
-                        if position != index {
-                            spliced.push((Token::Underscore, at));
-                            continue;
-                        }
-                        spliced.extend([ident("Some"), (Token::LeftParen, at)]);
-                        spliced.extend(pattern.iter().cloned());
-                        spliced.push((Token::RightParen, at));
-                    }
-                    spliced.push((Token::RightParen, at));
-                }
-                spliced.push((Token::DoubleArrow, at));
-                spliced.push((Token::LeftBrace, at));
-                spliced.extend(body);
-                spliced.push((Token::RightBrace, at));
+        // `(rawr::future::__join2(a, b).await)`: each future is an argument
+        // as written, so a local moves in.
+        let mut spliced = vec![
+            (Token::LeftParen, at),
+            ident("rawr"),
+            (Token::DoubleColon, at),
+            ident("future"),
+            (Token::DoubleColon, at),
+            ident(&format!("__{name}{count}")),
+            (Token::LeftParen, at),
+        ];
+        for (index, future) in futures.into_iter().enumerate() {
+            if index > 0 {
                 spliced.push((Token::Comma, at));
             }
-            // Once every branch is disabled, the select ends at the `else`
-            // branch, which panics as tokio's does when there is none.
-            let otherwise = otherwise.unwrap_or_else(|| {
-                vec![
-                    ident("panic"),
-                    (Token::Bang, at),
-                    (Token::LeftParen, at),
-                    (
-                        Token::StringConstant(Box::new(
-                            "all branches are disabled and there is no else branch".into(),
-                        )),
-                        at,
-                    ),
-                    (Token::RightParen, at),
-                ]
-            });
-            spliced.extend([
-                (Token::Underscore, at),
-                (Token::DoubleArrow, at),
-                (Token::LeftBrace, at),
-            ]);
-            spliced.extend(otherwise);
-            spliced.extend([(Token::RightBrace, at), (Token::Comma, at)]);
-            spliced.push((Token::RightBrace, at));
+            spliced.extend(future);
         }
-        if guarded {
-            spliced.push((Token::RightBrace, at));
-        }
-        spliced.push((Token::RightParen, end));
-        self.splice_tokens(spliced);
-        self.parse_primary()
-    }
-}
-
-impl Parser<'_> {
-    /// `{ let branch = future; async move { let out = branch.await; .. } }`
-    /// of a `select!` branch's `future` and `pattern`: the future made where
-    /// the branch is, and awaited as `Some` of its output when `pattern`,
-    /// without its `ref` and `mut`, matches a borrow of it, `None` when not.
-    /// With the local `enabled` of the branch's precondition, a false one
-    /// gives `None` and never polls the future.
-    fn select_branch(
-        future: Vec<(Token, Position)>,
-        pattern: &[(Token, Position)],
-        enabled: Option<&str>,
-        at: Position,
-    ) -> Vec<(Token, Position)> {
-        let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
-        let (branch, out, matched) = (
-            "__rawr_select_branch",
-            "__rawr_select_out",
-            "__rawr_select_matched",
-        );
-        let cleaned: Vec<_> = pattern
-            .iter()
-            .filter(|(token, _)| {
-                !matches!(token, Token::Mut)
-                    && !matches!(token, Token::Identifier(word) if word.as_str() == "ref")
-            })
-            .cloned()
-            .collect();
-        // `_` or a binding matches every output, so it needs no test.
-        let irrefutable = match cleaned.as_slice() {
-            [(Token::Underscore, _)] => true,
-            [(Token::Identifier(word), _)] => word.starts_with(|first: char| first.is_lowercase()),
-            _ => false,
-        };
-        let mut tokens = vec![
-            (Token::LeftBrace, at),
-            (Token::Let, at),
-            ident(branch),
-            (Token::Equals, at),
-        ];
-        tokens.extend(future);
-        tokens.extend([
-            (Token::SemiColon, at),
-            (Token::Reserved(Box::new("async".into())), at),
-            ident("move"),
-            (Token::LeftBrace, at),
-        ]);
-        if let Some(enabled) = enabled {
-            tokens.extend([(Token::If, at), ident(enabled), (Token::LeftBrace, at)]);
-        }
-        let awaited = [
-            ident(branch),
+        spliced.extend([
+            (Token::RightParen, at),
             (Token::Period, at),
             (Token::Reserved(Box::new("await".into())), at),
-        ];
-        if irrefutable {
-            tokens.extend([ident("Some"), (Token::LeftParen, at)]);
-            tokens.extend(awaited);
-            tokens.push((Token::RightParen, at));
-        } else {
-            tokens.extend([(Token::Let, at), ident(out), (Token::Equals, at)]);
-            tokens.extend(awaited);
-            tokens.extend([
-                (Token::SemiColon, at),
-                (Token::Let, at),
-                ident(matched),
-                (Token::Equals, at),
-                (Token::Reserved(Box::new("match".into())), at),
-                (Token::Ampersand, at),
-                ident(out),
-                (Token::LeftBrace, at),
-            ]);
-            tokens.extend(cleaned);
-            tokens.extend([
-                (Token::DoubleArrow, at),
-                (Token::True, at),
-                (Token::Comma, at),
-                (Token::Underscore, at),
-                (Token::DoubleArrow, at),
-                (Token::False, at),
-                (Token::RightBrace, at),
-                (Token::SemiColon, at),
-                (Token::If, at),
-                ident(matched),
-                (Token::LeftBrace, at),
-                ident("Some"),
-                (Token::LeftParen, at),
-                ident(out),
-                (Token::RightParen, at),
-                (Token::RightBrace, at),
-                (Token::Else, at),
-                (Token::LeftBrace, at),
-                ident("None"),
-                (Token::RightBrace, at),
-            ]);
-        }
-        if enabled.is_some() {
-            tokens.extend([
-                (Token::RightBrace, at),
-                (Token::Else, at),
-                (Token::LeftBrace, at),
-                ident("None"),
-                (Token::RightBrace, at),
-            ]);
-        }
-        tokens.extend([(Token::RightBrace, at), (Token::RightBrace, at)]);
-        tokens
+            (Token::RightParen, end),
+        ]);
+        self.splice_tokens(spliced);
+        self.parse_primary()
     }
 }
 

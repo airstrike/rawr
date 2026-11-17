@@ -1347,11 +1347,17 @@ fn language_option_patterns_and_exhaustiveness() {
          pub fn run() -> i64 { 0 } run()",
     );
     assert!(nested.contains("`Some(None)` not covered"), "{nested}");
-    let unreachable = rejected(
+    // An arm the arms before it cover is checked, never runs and is no
+    // error, as rustc only warns of it.
+    let unreachable = run(
         "fn f(x: Option<i64>) -> i64 { match x { Some(_) => 1, None => 0, Some(v) => v } } \
+         pub fn run() -> i64 { f(Some(5)) * 10 + f(None) } run()",
+    );
+    assert_eq!(unreachable, 10);
+    rejected(
+        "fn f(x: Option<i64>) -> i64 { match x { Some(_) => 1, None => 0, Some(v) => v + true } } \
          pub fn run() -> i64 { 0 } run()",
     );
-    assert!(unreachable.contains("unreachable"), "{unreachable}");
     rejected(
         "#[derive(Clone)] enum E { A } \
          fn f(x: i64) -> i64 { match Some(x) { Some(E::A) => 1, _ => 0 } } \
@@ -1633,11 +1639,11 @@ fn language_result_patterns_and_exhaustiveness() {
          pub fn run() -> i64 { 0 } run()",
     );
     assert!(nested.contains("`Ok(None)` not covered"), "{nested}");
-    let unreachable = rejected(
+    let unreachable = run(
         "fn f(x: Result<i64, i64>) -> i64 { match x { Ok(_) => 1, Err(_) => 0, Ok(v) => v } } \
-         pub fn run() -> i64 { 0 } run()",
+         pub fn run() -> i64 { f(Ok(5)) * 10 + f(Err(2)) } run()",
     );
-    assert!(unreachable.contains("unreachable"), "{unreachable}");
+    assert_eq!(unreachable, 10);
     rejected(
         "fn f(x: Option<i64>) -> i64 { match x { Ok(v) => v, _ => 0 } } \
          pub fn run() -> i64 { 0 } run()",
@@ -1877,6 +1883,26 @@ pub fn run() -> i64 {
         .expect_err("Rust rejects `Result<bool, _>` where `Result<i64, String>` is expected");
 }
 
+/// An assignment in parentheses is an expression of type `()`, as an
+/// `expr` fragment a macro transcribes is: `1 => (sum += v)`.
+#[test]
+fn language_parenthesized_assignment_is_unit() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let mut sum = 0;
+            let v = 3;
+            match 1 { 1 => (sum += v), _ => {} }
+            let unit: () = (sum *= 2);
+            let _ = unit;
+            let mut x = 0;
+            (x = 5);
+            sum * 10 + x
+        }
+        run()
+    "#);
+    assert_eq!(value, 65);
+}
+
 #[test]
 fn language_match_catch_all_binding_arm() {
     let value = run(r#"
@@ -1903,11 +1929,12 @@ fn language_match_catch_all_binding_arm() {
         run()
     "#);
     assert_eq!(value, 120 + 300 + 9000 + 1100000 + 5 + 1 + 50000000);
-    let after = rejected(
-        "#[derive(Clone)] enum E { A, B } \
-         fn f(e: E) -> i64 { match e { other => 1, E::A => 2 } } pub fn run() -> i64 { 0 } run()",
-    );
-    assert!(after.contains("unreachable"), "{after}");
+    // Arms after a catch-all never run, and rustc only warns of them.
+    let after = run("#[derive(Clone)] enum E { A, B } \
+         fn f(e: E) -> i64 { match e { other => 1, E::A => 2 } } \
+         fn g(n: i32) -> i64 { match n { v => v as i64, _ => 9 } } \
+         pub fn run() -> i64 { f(E::A) * 100 + f(E::B) * 10 + g(4) } run()");
+    assert_eq!(after, 114);
     rejected(
         "#[derive(Clone)] enum E { A, B } \
          fn f(e: E) -> i64 { match e { E::A => 1, other => 2 }; other } pub fn run() -> i64 { 0 } run()",
