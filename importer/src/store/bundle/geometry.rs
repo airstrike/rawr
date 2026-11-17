@@ -215,6 +215,7 @@ pub(crate) mod seam {
 
     thread_local! {
         static ALLOCATED: RefCell<BTreeMap<(u64, u64), u64>> = const { RefCell::new(BTreeMap::new()) };
+        static DELAYED: RefCell<BTreeMap<(u64, u64), u64>> = const { RefCell::new(BTreeMap::new()) };
     }
 
     #[cfg(unix)]
@@ -234,8 +235,27 @@ pub(crate) mod seam {
         ALLOCATED.with(|map| map.borrow_mut().insert(key(&metadata), bytes));
     }
 
+    /// Report `bytes` allocated for this file once a flush settles it, as
+    /// delayed allocation grows a file's blocks at writeback.
+    pub(crate) fn delay(path: &Path, bytes: u64) {
+        let metadata = fs::symlink_metadata(path).expect("the seam target exists");
+        DELAYED.with(|map| map.borrow_mut().insert(key(&metadata), bytes));
+    }
+
+    /// A flush resolved this file's delayed allocation.
+    pub(crate) fn settle(path: &Path) {
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return;
+        };
+        let key = key(&metadata);
+        if let Some(bytes) = DELAYED.with(|map| map.borrow_mut().remove(&key)) {
+            ALLOCATED.with(|map| map.borrow_mut().insert(key, bytes));
+        }
+    }
+
     pub(crate) fn clear_all() {
         ALLOCATED.with(|map| map.borrow_mut().clear());
+        DELAYED.with(|map| map.borrow_mut().clear());
     }
 
     pub(crate) fn allocated(metadata: &fs::Metadata, measured: u64) -> u64 {
