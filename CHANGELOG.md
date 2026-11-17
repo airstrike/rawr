@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.232 (2026-11-17)
+
 - The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs. (#2148)
 - A marked module can call a dependency's function-like proc macro by its path, such as `rust_decimal_macros::dec!(1.5)`, directly or through a library's re-export. rustc expands the call, and a save that changes its input expands it again. (#1125; part of #1152)
 - When an iced example's build fails with no compiler error, the parity harness shows the last line the build printed rather than "no error line". (#2154; part of #2146)

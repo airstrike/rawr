@@ -4,13 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs.","issues":[2148]},
-      {"text":"A marked module can call a dependency's function-like proc macro by its path, such as `rust_decimal_macros::dec!(1.5)`, directly or through a library's re-export. rustc expands the call, and a save that changes its input expands it again.","issues":[1125],"refs":[1152]},
-      {"text":"When an iced example's build fails with no compiler error, the parity harness shows the last line the build printed rather than \"no error line\".","issues":[2154],"refs":[2146]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.232",
+      "date": "2026-11-17",
+      "entries": [
+        {"text":"The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs.","issues":[2148]},
+        {"text":"A marked module can call a dependency's function-like proc macro by its path, such as `rust_decimal_macros::dec!(1.5)`, directly or through a library's re-export. rustc expands the call, and a save that changes its input expands it again.","issues":[1125],"refs":[1152]},
+        {"text":"When an iced example's build fails with no compiler error, the parity harness shows the last line the build printed rather than \"no error line\".","issues":[2154],"refs":[2146]}
+      ]
+    },
     {
       "version": "0.3.231",
       "date": "2026-11-16",
