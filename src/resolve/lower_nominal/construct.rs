@@ -281,6 +281,13 @@ impl<'a> Parser<'a> {
         let (element, skip) = match (hint, elements.first()) {
             (Some(hint), _) => (hint, 0),
             (None, Some(_)) if let Some(pointer) = self.fn_choice(&types) => (pointer, 0),
+            // An element that never comes, as `vec![return 2]`'s, is
+            // coerced into a variable a later use settles or the fallback
+            // makes `!`, as rustc types the element; another element
+            // settles it here.
+            (None, Some(_)) if types.first() == Some(&Ty::Never) => {
+                (self.inference.fresh_diverging(), 0)
+            }
             (None, Some(first)) => (self.inference.resolve(&first.ty), 1),
             (None, None) => (self.inference.fresh(), 0),
         };
