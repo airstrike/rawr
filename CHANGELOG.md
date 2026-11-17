@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A `&mut` destructuring inside a closure binds the place it names, whether of a `&mut` reference the closure captured, one that shadows its place's local, or the closure's own local. Each was refused with a false E0596 or panicked at run time. (#2200; part of #1152)
 
 ## 0.3.248 (2026-11-17)
 

@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A `&mut` destructuring inside a closure binds the place it names, whether of a `&mut` reference the closure captured, one that shadows its place's local, or the closure's own local. Each was refused with a false E0596 or panicked at run time.","issues":[2200],"refs":[1152]}
+    ]
   },
   "releases": [
     {
