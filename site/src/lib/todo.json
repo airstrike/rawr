@@ -4680,7 +4680,8 @@
     {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"open","category":"Divergences from rustc"},
     {"issue":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open","category":"Divergences from rustc"},
     {"issue":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed","category":"Platforms","release":"0.3.228"},
-    {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"open","category":"Platforms"}
+    {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"open","category":"Platforms"},
+    {"issue":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -5408,7 +5409,8 @@
             {"number":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"open"},
             {"number":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open"},
             {"number":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed"},
-            {"number":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"open"}
+            {"number":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"open"},
+            {"number":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"open"}
           ],
           "milestone": "0.3"
         },
