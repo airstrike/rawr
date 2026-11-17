@@ -502,8 +502,11 @@ function firstError(output) {
   const at = lines.findIndex(
     (line) => /^\s*error(\[E\d+\])?:/.test(line) && !/rawr could not build/.test(line),
   );
+  // A build that stops without a compiler error (a panic, a signal, a rawr
+  // message) is named by the last line it printed that isn't progress.
   if (at < 0) {
-    return "no error line";
+    const last = lines.findLast((line) => line.trim() !== "" && !/^rawr > /.test(line));
+    return last === undefined ? "no output" : `no error line; last: ${last.trim()}`;
   }
   const where = lines.slice(at + 1, at + 3).find((line) => line.includes("-->"));
   const file = where ? ` (${path.basename(where.trim().replace(/^--> /, ""))})` : "";
