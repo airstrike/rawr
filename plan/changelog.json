@@ -4,7 +4,12 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A crate future inside what a call gives, such as a `JoinHandle` in an `Option`, a `Vec`, a channel or from `JoinSet::join_next`, can be awaited.","issues":[2135]},
+      {"text":"`tokio::time::timeout` works on an async block, a `Sleep` or a `JoinHandle`, and its `Timeout` is awaited as a `Result` of the future's output.","issues":[2136]},
+      {"text":"`tokio::select!` takes several branches and runs the body of the first future to finish.","issues":[2138],"refs":[1152]},
+      {"text":"`Some(return)` and similar payloads that never come are settled by later code or fall back to `!`, and a value holding `!` is `Copy`, as rustc reads it.","issues":[2134]}
+    ]
   },
   "releases": [
     {

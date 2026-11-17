@@ -9,7 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate future inside what a call gives, such as a `JoinHandle` in an `Option`, a `Vec`, a channel or from `JoinSet::join_next`, can be awaited.","issues":[2135]},
+        {"text":"`tokio::time::timeout` works on an async block, a `Sleep` or a `JoinHandle`, and its `Timeout` is awaited as a `Result` of the future's output.","issues":[2136]},
+        {"text":"`tokio::select!` takes several branches and runs the body of the first future to finish.","issues":[2138],"refs":[1152]},
+        {"text":"`Some(return)` and similar payloads that never come are settled by later code or fall back to `!`, and a value holding `!` is `Copy`, as rustc reads it.","issues":[2134]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.226",
@@ -4654,10 +4662,14 @@
     {"issue":2131,"title":"`{:?}` of a value whose type holds a diverging variable gives E0282: the piece is rendered before the fallback","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
     {"issue":2132,"title":"The handle `tokio::spawn` returns has no `abort`: E0599 for `Future`","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
     {"issue":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
-    {"issue":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"open","category":"Divergences from rustc"},
-    {"issue":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"open","category":"Divergences from rustc"},
-    {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"open","category":"Divergences from rustc"},
-    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open","category":"Platforms"}
+    {"issue":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"closed","category":"Divergences from rustc"},
+    {"issue":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"closed","category":"Divergences from rustc"},
+    {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"closed","category":"Divergences from rustc"},
+    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open","category":"Platforms"},
+    {"issue":2138,"title":"`tokio::select!` takes several branches and runs the body of the first future to finish","state":"closed","category":"Divergences from rustc"},
+    {"issue":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"open","category":"Divergences from rustc"},
+    {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"open","category":"Divergences from rustc"},
+    {"issue":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5378,9 +5390,12 @@
             {"number":2131,"title":"`{:?}` of a value whose type holds a diverging variable gives E0282: the piece is rendered before the fallback","state":"closed"},
             {"number":2132,"title":"The handle `tokio::spawn` returns has no `abort`: E0599 for `Future`","state":"closed"},
             {"number":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"closed"},
-            {"number":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"open"},
-            {"number":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"open"},
-            {"number":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"open"}
+            {"number":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"closed"},
+            {"number":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"closed"},
+            {"number":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"closed"},
+            {"number":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"open"},
+            {"number":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"open"},
+            {"number":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open"}
           ],
           "milestone": "0.3"
         },
