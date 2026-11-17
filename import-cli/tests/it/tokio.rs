@@ -479,6 +479,64 @@ async fn main() {
     assert_eq!(ran(main), "got 42 after 2 polls\nslept\ncounted 3 true\n");
 }
 
+/// A program's `&mut Context<'_>` crosses into a crate function as a
+/// `Context` of the polling task's waker, and the `Poll<T>` it gives comes
+/// back as the core future's (#2175): tokio's `poll_budget_available`.
+/// `Poll` is `Copy` and `Debug` as std's is, and `map`s its `Ready` value.
+/// The output is `cargo run`'s.
+#[test]
+fn a_context_crosses_into_a_crate_function_and_its_poll_comes_back() {
+    let main = r#"// rawr
+use std::task::{Context, Poll};
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let budget = std::future::poll_fn(|cx: &mut Context<'_>| {
+        let polled = tokio::macros::support::poll_budget_available(cx);
+        Poll::Ready(polled)
+    })
+    .await;
+    println!("budget {budget:?}");
+    let ready: Poll<i32> = Poll::Ready(3);
+    let copy = ready;
+    println!("{:?} {:?} {:?}", ready, copy.map(|n| n + 1), Poll::<i32>::Pending);
+}
+"#;
+    assert_eq!(ran(main), "budget Ready(())\nReady(3) Ready(4) Pending\n");
+}
+
+/// A crate future is polled by hand where it is, through its own `Future`
+/// impl, and keeps its methods (#2176): a pinned `Sleep` still answers
+/// `is_elapsed`, a `JoinHandle` gives its task's output, and a
+/// `Box::pin`ned `Sleep` polls as one. The output is `cargo run`'s.
+#[test]
+fn a_crate_future_is_polled_by_hand_where_it_is() {
+    let main = r#"// rawr
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let mut sleep = tokio::time::sleep(Duration::from_millis(5));
+    let mut polls = 0;
+    std::future::poll_fn(|cx| {
+        polls += 1;
+        Future::poll(unsafe { Pin::new_unchecked(&mut sleep) }, cx)
+    })
+    .await;
+    println!("slept {} after {}", sleep.is_elapsed(), polls > 1);
+    let mut handle = tokio::spawn(async { 4 });
+    let joined = std::future::poll_fn(|cx| Pin::new(&mut handle).poll(cx)).await;
+    println!("joined {}", joined.unwrap());
+    let mut boxed = Box::pin(tokio::time::sleep(Duration::from_millis(1)));
+    std::future::poll_fn(|cx| boxed.as_mut().poll(cx)).await;
+    println!("boxed {}", boxed.is_elapsed());
+}
+"#;
+    assert_eq!(ran(main), "slept true after true\njoined 4\nboxed true\n");
+}
+
 /// `select!` of several branches gives the body of the first future to
 /// end, whose pattern binds its output, and drops the others (#1152): a
 /// `Sleep` against a channel's `recv`, two sleeps, and a `biased;` select

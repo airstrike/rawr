@@ -658,6 +658,19 @@ impl crate::Engine {
     }
 }
 
+/// The core future facade's type a projected identity names, by its path
+/// there: a Rust future, a task's `Context` or its `Poll<T>`.
+fn core_future_type(identity: &[u8; 32]) -> Option<&'static str> {
+    use rawr_import::surface::identity::Definition;
+    [
+        (Definition::future(), "future::Future"),
+        (Definition::context(), "future::Context"),
+        (Definition::poll(), "future::Poll"),
+    ]
+    .into_iter()
+    .find_map(|(definition, path)| (definition.as_bytes() == identity).then_some(path))
+}
+
 /// A crate item's use the program wrote that the build of its dependencies
 /// can't take at the types or arguments it gives, reported at that use in
 /// Rust's terms (D664): the call and the item. Any other failure is the
@@ -4331,9 +4344,8 @@ impl Types {
                 // A program with no host profile: a Rust future is the
                 // core's future (D513.3), and std's `Duration` and `Instant`
                 // Rawr's own.
-                if *definition == rawr_import::surface::identity::Definition::future() {
-                    let future =
-                        crate::future::facade::definition()?.export_type("future::Future")?;
+                if let Some(path) = core_future_type(definition.as_bytes()) {
+                    let future = crate::future::facade::definition()?.export_type(path)?;
                     return Ok(host::type_ref::Type::external(future, converted)?);
                 }
                 // A program's iterator where a crate takes one, as

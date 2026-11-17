@@ -22,6 +22,8 @@ const RC_DOMAIN: &[u8] = b"rawr.identity.rc/v1";
 const ARC_DOMAIN: &[u8] = b"rawr.identity.arc/v1";
 const KEYED_DOMAIN: &[u8] = b"rawr.identity.keyed/v1";
 const JOIN_HANDLE_DOMAIN: &[u8] = b"rawr.identity.join-handle/v1";
+const CONTEXT_DOMAIN: &[u8] = b"rawr.identity.task-context/v1";
+const POLL_DOMAIN: &[u8] = b"rawr.identity.task-poll/v1";
 /// std's keyed collections, which cross as rawr's (#777).
 const KEYED: [&str; 4] = ["HashMap", "HashSet", "BTreeMap", "BTreeSet"];
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
@@ -46,6 +48,8 @@ struct Projected {
     /// `Rc`'s, then `Arc`'s.
     counted: [[u8; 32]; 2],
     join_handle: [u8; 32],
+    context: [u8; 32],
+    poll: [u8; 32],
     /// Each of [`KEYED`]'s, in its order.
     keyed: [[u8; 32]; 4],
     instant: [u8; 32],
@@ -86,6 +90,8 @@ impl Projected {
             boxed: digest(BOX_DOMAIN),
             counted: [digest(RC_DOMAIN), digest(ARC_DOMAIN)],
             join_handle: digest(JOIN_HANDLE_DOMAIN),
+            context: digest(CONTEXT_DOMAIN),
+            poll: digest(POLL_DOMAIN),
             keyed: KEYED.map(|name| named(KEYED_DOMAIN, name)),
             instant: digest(INSTANT_DOMAIN),
             infallible: digest(INFALLIBLE_DOMAIN),
@@ -421,6 +427,22 @@ impl Definition {
         Self(PROJECTED.join_handle)
     }
 
+    /// std's `task::Context`, which crosses as the core future's context,
+    /// the waker of the task that polls: native code is lent a `Context`
+    /// of that waker. It lives in `core`, which no crate's facade declares.
+    #[must_use]
+    pub fn context() -> Self {
+        Self(PROJECTED.context)
+    }
+
+    /// std's `task::Poll<T>`, which crosses as the core future's `Poll`, an
+    /// `Option` of `T` at runtime: `Some` is `Ready`. It lives in `core`,
+    /// which no crate's facade declares.
+    #[must_use]
+    pub fn poll() -> Self {
+        Self(PROJECTED.poll)
+    }
+
     /// std's keyed collection `name` (`HashMap`, `HashSet`, `BTreeMap` or
     /// `BTreeSet`), which crosses as rawr's collection of that kind (#777).
     /// It lives in `std` or `alloc`, which no crate's facade declares.
@@ -508,8 +530,8 @@ impl Definition {
     /// Whether these bytes name a type rawr declares for a Rust value no
     /// imported crate declares: a future, a program's iterator, a duration,
     /// an instant, an inclusive range, a box, an `Rc` or an `Arc`, a keyed
-    /// collection, a thread's `JoinHandle`, `Infallible`, one of std's held
-    /// types or a script value.
+    /// collection, a thread's `JoinHandle`, a task's `Context` or `Poll`,
+    /// `Infallible`, one of std's held types or a script value.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         Self::std_path(bytes).is_some()
@@ -523,6 +545,8 @@ impl Definition {
             || Self::counter(bytes).is_some()
             || Self::keyed_kind(bytes).is_some()
             || *bytes == Self::join_handle().0
+            || *bytes == Self::context().0
+            || *bytes == Self::poll().0
             || *bytes == Self::value().0
     }
 

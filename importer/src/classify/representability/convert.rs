@@ -374,6 +374,10 @@ impl Type {
             Self::Nominal {
                 definition,
                 arguments,
+            } if *definition == Definition::poll() => arguments.iter().all(Self::crosses_by_value),
+            Self::Nominal {
+                definition,
+                arguments,
             } => {
                 arguments.is_empty()
                     && (Definition::std_path(definition.as_bytes()).is_some()

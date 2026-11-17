@@ -1222,7 +1222,8 @@ fn clone_signature_at(
     .with_lent_output(source.lent_output())
     .with_lasting_receiver(source.lasting_receiver())
     .with_detached_future(source.detached_future())
-    .with_assigns(source.assigns()))
+    .with_assigns(source.assigns())
+    .with_pinned_receiver(source.pinned_receiver()))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {

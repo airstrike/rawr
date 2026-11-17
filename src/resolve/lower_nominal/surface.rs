@@ -734,6 +734,12 @@ pub(super) fn host_surface_definition(
         return Some(Definition::authenticated(*identity.as_bytes()));
     }
     let path = definition.path();
+    // A task's `Context` and `Poll`, the core future's own.
+    match path.as_str() {
+        crate::future::facade::CONTEXT => return Some(Definition::context()),
+        crate::future::facade::POLL => return Some(Definition::poll()),
+        _ => {}
+    }
     let std = Definition::std(
         path.strip_prefix(crate::std_facade::ROOT)?
             .strip_prefix("::")?,

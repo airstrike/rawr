@@ -216,6 +216,11 @@ pub struct Signature {
     /// it, and gives it back changed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     assigns: bool,
+    /// A method whose receiver is `self: Pin<&mut Self>`, as
+    /// `Future::poll`'s is: the call lends the receiver `&mut` where its
+    /// slot holds it, pinned there, since a lease doesn't move it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pinned_receiver: bool,
 }
 
 /// The associated types an opaque `impl Trait` type binds, each at the
@@ -987,6 +992,7 @@ impl Signature {
             lasting_receiver: false,
             detached_future: false,
             assigns: false,
+            pinned_receiver: false,
         }
     }
 
@@ -1152,6 +1158,17 @@ impl Signature {
     #[must_use]
     pub const fn detached_future(&self) -> bool {
         self.detached_future
+    }
+
+    pub(crate) fn with_pinned_receiver(mut self, pinned: bool) -> Self {
+        self.pinned_receiver = pinned;
+        self
+    }
+
+    /// Whether the method's receiver is `self: Pin<&mut Self>`.
+    #[must_use]
+    pub const fn pinned_receiver(&self) -> bool {
+        self.pinned_receiver
     }
 
     pub(crate) fn with_assigns(mut self, assigns: bool) -> Self {

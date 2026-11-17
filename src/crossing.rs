@@ -740,6 +740,20 @@ pub fn link(pointer: &Dynamic, link: Link) {
     crate::resolve::lower_nominal::counted::link(pointer, link);
 }
 
+/// A crate value a program lends a `self: Pin<&mut Self>` method, as
+/// `Future::poll`, pinned where it is. The runner's arena holds each value
+/// in a box of its own, and a lease lends it in that box, so it stays put
+/// from one call to the next. Only a move by value takes it out, which the
+/// program's `Pin::new_unchecked` promises won't happen and `pin!` rules
+/// out, as in Rust.
+#[doc(hidden)]
+pub fn pin_in_place<T: ?Sized>(value: &mut T) -> std::pin::Pin<&mut T> {
+    // SAFETY: `value` is in its arena box, which no lease moves; a value
+    // pinned there moves only by value, which the program's pinning rules
+    // out as Rust's does.
+    unsafe { std::pin::Pin::new_unchecked(value) }
+}
+
 /// Rawr's thread handle of a crate's `JoinHandle<T>`, as a crate's function
 /// gives one: its `join` waits for the crate's thread and `give` makes the
 /// thread's `T` rawr's, where it is joined, with the witness of `T` the
