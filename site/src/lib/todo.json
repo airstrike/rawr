@@ -4707,7 +4707,10 @@
     {"issue":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed","category":"Platforms","release":"0.3.228"},
     {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"closed","category":"Platforms","release":"0.3.230"},
     {"issue":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed","category":"Platforms","release":"0.3.229"},
-    {"issue":2145,"title":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns","state":"closed","category":"Divergences from rustc","release":"0.3.230"}
+    {"issue":2145,"title":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
+    {"issue":2146,"title":"pokedex's and markdown's emulator half doesn't build under rawr on 0.3.229 (nightly sweep, Linux)","state":"open","category":"Divergences from rustc"},
+    {"issue":2147,"title":"table's sim_table result is missing from rawr test's output on Linux (nightly sweep)","state":"open","category":"Health"},
+    {"issue":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5436,7 +5439,10 @@
             {"number":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open"},
             {"number":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed"},
             {"number":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"closed"},
-            {"number":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed"}
+            {"number":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed"},
+            {"number":2146,"title":"pokedex's and markdown's emulator half doesn't build under rawr on 0.3.229 (nightly sweep, Linux)","state":"open"},
+            {"number":2147,"title":"table's sim_table result is missing from rawr test's output on Linux (nightly sweep)","state":"open"},
+            {"number":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"open"}
           ],
           "milestone": "0.3"
         },
