@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.227 (2026-11-16)
+
 - A crate future inside what a call gives, such as a `JoinHandle` in an `Option`, a `Vec`, a channel or from `JoinSet::join_next`, can be awaited. (#2135)
 - `tokio::time::timeout` works on an async block, a `Sleep` or a `JoinHandle`, and its `Timeout` is awaited as a `Result` of the future's output. (#2136)
 - `tokio::select!` takes several branches and runs the body of the first future to finish. (#2138; part of #1152)
