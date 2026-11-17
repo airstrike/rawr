@@ -22701,15 +22701,10 @@ fn render_give(
         // its value carries the core's future of it, made here at its
         // type, which `.await` runs and stamps with its own output's
         // witness (`native_future`).
-        convert::Type::Nominal { .. } if let Some(awaited) = nominal_future_output(ty) => {
-            let mut body = Vec::new();
-            body.write_all(b"    let value = take_like(arguments, 0, _w)?;\n")
-                .map_err(request::unwritable)?;
-            render_give_task(&awaited, "value", "imported", &mut body)?;
-            let body = String::from_utf8(body).map_err(request::unwritable)?;
+        convert::Type::Nominal { .. } if let Some(table) = future_table(ty, value)? => {
             writeln!(
                 output,
-                "    let table = {{\n        static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();\n        OpaqueTable(TABLE.get_or_init(|| opaque_table(witness_of(&{value}), [|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w, &arguments);\n{body}\n}}])))\n    }};\n    let handle = insert_native!(arguments.arena, {value})?;\n    arguments.arena.set_opaque(&handle, table);\n    Ok(Dynamic::from(handle))"
+                "    let table = {table};\n    let handle = insert_native!(arguments.arena, {value})?;\n    arguments.arena.set_opaque(&handle, table);\n    Ok(Dynamic::from(handle))"
             )
         }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
@@ -23370,6 +23365,13 @@ fn render_to_dynamic(
             output,
             "{{ let table = {table}; insert_native!(arguments.arena, {value}).map(|handle| {{ arguments.arena.set_opaque(&handle, table); Dynamic::from(handle) }}) }}"
         ),
+        // A crate type that implements `Future`, wherever the value is in
+        // what the call gives, as tokio's `JoinHandle<T>` in an `Option` or
+        // a `Vec`: its table goes with it, as `render_give` gives one.
+        convert::Type::Nominal { .. } if let Some(table) = future_table(ty, value)? => write!(
+            output,
+            "{{ let table = {table}; insert_native!(arguments.arena, {value}).map(|handle| {{ arguments.arena.set_opaque(&handle, table); Dynamic::from(handle) }}) }}"
+        ),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
@@ -23526,6 +23528,24 @@ fn render_to_dynamic(
     .map_err(request::unwritable)
 }
 
+/// The table a value `value` of the crate type `ty` that implements
+/// `Future` carries, as tokio's `JoinHandle<T>`: the core's future of it,
+/// made at its type, which `.await` runs and stamps with its own output's
+/// witness (`native_future`). `None` when `ty` is no future.
+fn future_table(ty: &convert::Type, value: &str) -> Result<Option<String>, request::Error> {
+    let Some(awaited) = nominal_future_output(ty) else {
+        return Ok(None);
+    };
+    let mut body = Vec::new();
+    body.write_all(b"    let value = take_like(arguments, 0, _w)?;\n")
+        .map_err(request::unwritable)?;
+    render_give_task(&awaited, "value", "imported", &mut body)?;
+    let body = String::from_utf8(body).map_err(request::unwritable)?;
+    Ok(Some(format!(
+        "{{\n        static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();\n        OpaqueTable(TABLE.get_or_init(|| opaque_table(witness_of(&{value}), [|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w, &arguments);\n{body}\n}}])))\n    }}"
+    )))
+}
+
 /// The `Output` of the crate's `impl Future` for the nominal `ty`, at its
 /// arguments, when its type is a future (`NOMINAL_FUTURES`).
 fn nominal_future_output(ty: &convert::Type) -> Option<convert::Type> {
@@ -23536,10 +23556,19 @@ fn nominal_future_output(ty: &convert::Type) -> Option<convert::Type> {
     else {
         return None;
     };
-    NOMINAL_FUTURES.with_borrow(|futures| {
-        futures
-            .get(definition.as_bytes())?
-            .with_parameters(&|index| arguments.get(usize::try_from(index).ok()?).cloned())
+    let output =
+        NOMINAL_FUTURES.with_borrow(|futures| futures.get(definition.as_bytes()).cloned())?;
+    // A synthetic position is the `Output` of the future its argument is,
+    // as `T::Output` of tokio's `Timeout<T>` (`signature::with_awaited`).
+    let synthetic = crate::classify::representability::signature::FUTURE_OUTPUT;
+    output.with_parameters(&|index| {
+        let argument = arguments.get(usize::try_from(index & !synthetic).ok()?)?;
+        if index & synthetic == 0 {
+            return Some(argument.clone());
+        }
+        future_output(argument)
+            .cloned()
+            .or_else(|| nominal_future_output(argument))
     })
 }
 

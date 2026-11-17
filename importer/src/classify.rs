@@ -27,7 +27,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 256;
+const CLASSIFIER_VERSION: u32 = 261;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1965,13 +1965,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         trait_id: &api::identity::Definition,
         parameter: &model::Type,
     ) -> Option<Vec<model::Predicate>> {
-        let model::Kind::Trait { associated, .. } = self
+        // A std trait, as core's `IntoFuture`, has no items in the graph:
+        // its blanket implementation's own parameter is all it gives.
+        let associated = match self
             .graph
             .definition_index(trait_id)
             .and_then(|index| self.graph.definitions().nth(index))?
             .kind()
-        else {
-            return None;
+        {
+            model::Kind::Trait { associated, .. } => &associated[..],
+            model::Kind::Sysroot { .. } => &[],
+            _ => return None,
         };
         let mut implementations = self.graph.implementations_of(trait_id);
         let (Some(implementation), None) = (implementations.next(), implementations.next()) else {
@@ -10380,9 +10384,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Self::declare_projected(&projected, &mut parameters);
         let rewrite = |ty: &model::Type| {
             projected_parameters(
-                &future_projections(ty, &futures, |trait_id| {
-                    self.is_core_trait(trait_id, "Future")
-                }),
+                &future_projections(
+                    &self.blanket_projections(ty, &futures),
+                    &futures,
+                    |trait_id| self.is_core_trait(trait_id, "Future"),
+                ),
                 &projected,
             )
         };
@@ -10551,6 +10557,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 // text.
                 None => self.display_output(signature.output()).ok_or(error)?,
             },
+        };
+        // A future parameter `F` the output names, as tokio's `timeout`
+        // gives `Timeout<F::IntoFuture>`, is the core future of its
+        // synthetic output there, as it is where an input takes it.
+        let output = if futures.is_empty() {
+            output
+        } else {
+            futurize(output, &futures)
         };
         // A script future fills `F` as a type Rawr has no name for, so a
         // signature can name `F` only as the input that takes the future
@@ -11963,7 +11977,123 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         } else {
             self.generic_future_impl_output(id, &arguments)
         }?;
+        // The `Output` of a future that fills one of the type's parameters,
+        // as `Result<T::Output, Elapsed>` of tokio's `Timeout<T>`, is that
+        // parameter's synthetic output, which the value's type argument
+        // gives where it is awaited.
+        let parameters = generics
+            .parameters()
+            .filter(|parameter| matches!(parameter.kind(), model::ParameterKind::Type { .. }))
+            .map(|parameter| (parameter.index(), parameter.owner().clone()))
+            .collect::<Vec<_>>();
+        let output = future_projections(&output, &parameters, |trait_id| {
+            self.is_core_trait(trait_id, "Future")
+        });
         self.convert_field(&output).ok()
+    }
+
+    /// `ty` with each projection of a future parameter read through the
+    /// trait's blanket implementation for its own parameter, as rustc
+    /// normalizes it: core's `impl<F: Future> IntoFuture for F` gives
+    /// `F::IntoFuture` as `F`. One the implementation doesn't give over its
+    /// own parameter alone stays as it is.
+    fn blanket_projections(
+        &self,
+        ty: &model::Type,
+        futures: &[(u32, api::identity::Definition)],
+    ) -> model::Type {
+        if futures.is_empty() {
+            return ty.clone();
+        }
+        let argument = |argument: &model::Argument| match argument {
+            model::Argument::Type(ty) => {
+                model::Argument::Type(self.blanket_projections(ty, futures))
+            }
+            other => other.clone(),
+        };
+        match ty {
+            model::Type::Projection {
+                trait_id,
+                associated,
+                arguments,
+            } => {
+                let arguments = arguments.iter().map(argument).collect::<Box<[_]>>();
+                let read = match arguments.first() {
+                    Some(model::Argument::Type(
+                        parameter @ model::Type::Parameter { index, .. },
+                    )) if arguments.len() == 1
+                        && futures.iter().any(|(future, _)| future == index) =>
+                    {
+                        self.blanket_associated(trait_id, associated, parameter)
+                    }
+                    _ => None,
+                };
+                match read {
+                    Some(read) => self.blanket_projections(&read, futures),
+                    None => model::Type::Projection {
+                        trait_id: trait_id.clone(),
+                        associated: associated.clone(),
+                        arguments,
+                    },
+                }
+            }
+            model::Type::Definition { id, arguments } => model::Type::Definition {
+                id: id.clone(),
+                arguments: arguments.iter().map(argument).collect(),
+            },
+            model::Type::Tuple(members) => model::Type::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.blanket_projections(member, futures))
+                    .collect(),
+            ),
+            model::Type::Reference {
+                lifetime,
+                mutability,
+                ty,
+            } => model::Type::Reference {
+                lifetime: lifetime.clone(),
+                mutability: *mutability,
+                ty: Box::new(self.blanket_projections(ty, futures)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// The associated type `associated` of `trait_id` for `parameter`, as
+    /// the trait's implementation for every type `impl<F> Trait for F`
+    /// gives it over its own `F` alone.
+    fn blanket_associated(
+        &self,
+        trait_id: &api::identity::Definition,
+        associated: &api::identity::Definition,
+        parameter: &model::Type,
+    ) -> Option<model::Type> {
+        let name = self.definition_name(associated)?;
+        self.graph
+            .implementations_of(trait_id)
+            .find_map(|implementation| {
+                if implementation.polarity() != model::Polarity::Positive {
+                    return None;
+                }
+                let model::Type::Parameter { owner, index: this } = implementation.self_type()
+                else {
+                    return None;
+                };
+                if owner != implementation.id() {
+                    return None;
+                }
+                // A std implementation's items are std's table's, which the
+                // graph leaves out.
+                let Some(read) = self.associated_type(implementation, name) else {
+                    let trait_name = self.definition_name(trait_id)?;
+                    return std_blanket_is_self(trait_id.unit().crate_name(), trait_name, name)
+                        .then(|| parameter.clone());
+                };
+                relabel_type(read, implementation.id(), &|index| {
+                    (index == *this).then(|| parameter.clone())
+                })
+            })
     }
 
     /// The `Output` of a generic type's `impl<T> Future for Type<T>`, with
@@ -15048,6 +15178,29 @@ fn projects_parameter(ty: &model::Type) -> bool {
         model::Type::Array { element, .. } => projects_parameter(element),
         _ => false,
     }
+}
+
+/// Whether std's table gives the std trait `trait_name` of the crate
+/// `krate` a blanket implementation for its own parameter, bounded by
+/// `Future` alone or by nothing, that sets the associated type `name` to
+/// that parameter, as core's `impl<F: Future> IntoFuture for F` sets
+/// `IntoFuture = F`: what a future parameter's projection is through it.
+fn std_blanket_is_self(krate: &str, trait_name: &str, name: &str) -> bool {
+    const IMPLS: &str = include_str!("../../src/std_table/impls.tsv");
+    IMPLS.lines().any(|line| {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let [path, _, this, _, parameters, bounds, bindings] = fields[..] else {
+            return false;
+        };
+        path.strip_prefix(krate)
+            .and_then(|rest| rest.strip_prefix("::"))
+            .is_some_and(|rest| rest.rsplit("::").next() == Some(trait_name))
+            && this == parameters
+            && (bounds.is_empty() || bounds == format!("{this}: Future"))
+            && bindings
+                .split(", ")
+                .any(|binding| binding == format!("{name} = {this}"))
+    })
 }
 
 fn future_projections(

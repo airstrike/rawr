@@ -53,6 +53,30 @@ pub fn synthetic_name(identity: u32) -> Box<str> {
     format!("{RESERVED}projected_{parameter}_{ordinal}").into_boxed_str()
 }
 
+/// The name a type's facade gives the `Output` of the future that fills
+/// its type parameter at `position`, as `T::Output` of tokio's `impl<T:
+/// Future> Future for Timeout<T>` names it: reserved, as
+/// [`synthetic_name`]'s is.
+#[must_use]
+pub fn awaited_name(position: usize) -> Box<str> {
+    format!("{RESERVED}awaited_{position}").into_boxed_str()
+}
+
+/// A type's `parameters` and, after them, the [`future_output`] of each,
+/// by its [`awaited_name`]: what the `Output` of the type's own `impl
+/// Future` may name.
+#[must_use]
+pub fn with_awaited(parameters: &[Parameter]) -> Vec<Parameter> {
+    let awaited = parameters.iter().enumerate().map(|(position, parameter)| {
+        Parameter::new(
+            future_output(parameter.index()),
+            awaited_name(position),
+            Kind::Type,
+        )
+    });
+    parameters.iter().cloned().chain(awaited).collect()
+}
+
 /// What each synthetic parameter's name starts with, as Rawr's generated
 /// names do, which no crate writes.
 const RESERVED: &str = "__rawr_";
