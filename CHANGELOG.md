@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A runner keeps the git revisions the project's Cargo.lock pins. After `cargo update -p <crate> --precise <sha>` it builds on that revision, and it no longer mixes two revisions of one git source. (#2142)
 
 ## 0.3.227 (2026-11-16)
 
