@@ -5,19 +5,25 @@
 use super::*;
 use crate::resolve::macro_rules;
 
+/// The input after a crate macro call's `!`, as it is ahead.
+#[cfg(feature = "rust-import")]
+type CallInput = std::iter::Peekable<std::vec::IntoIter<(Token, Position)>>;
+
 /// The most expansions one function's parse makes, a bound on a macro that
 /// keeps expanding to more calls without nesting them.
 const EXPANSION_LIMIT: usize = 65_536;
 
 /// Where a macro's call is, which decides what its expansion is parsed as.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Place {
+pub(super) enum Place {
     /// One expression, parenthesised or a block.
     Expression,
     /// The statements it expands to, among the block's.
     Statement,
-    /// A type or a pattern: its tokens as they are.
-    Bare,
+    /// A type: its tokens as they are.
+    Type,
+    /// A pattern: its tokens as they are.
+    Pattern,
 }
 
 impl Parser<'_> {
@@ -174,13 +180,27 @@ impl Parser<'_> {
         }
     }
 
-    /// The path from its crate's root of the crate macro ([`Self::
-    /// crate_macro`]) whose call is the next statement, with how many
-    /// tokens the path is. A call is a statement as rustc parses one: in
-    /// braces not followed by `.` or `?`, or in parentheses or brackets
-    /// followed by `;`. Any other is an expression.
+    /// The crate macro ([`Self::crate_macro`]) whose call is next: its path
+    /// from its crate's root, how many tokens the path is, and the input
+    /// after the call's `!`. The path's first segment reads through the
+    /// `use` that binds it, and a single name through the `use` that binds
+    /// it as a crate macro (#2149).
     #[cfg(feature = "rust-import")]
-    fn crate_statement_ahead(&mut self) -> Option<(String, usize)> {
+    fn crate_call_ahead(&mut self) -> Option<(String, usize, CallInput)> {
+        // Only a path that starts at a dependency or a `use` can name one,
+        // which is known before the input is copied to look further.
+        let Token::Identifier(first) = self.peek() else {
+            return None;
+        };
+        if self.models.import(&first).is_none()
+            && !self
+                .models
+                .crates
+                .as_ref()
+                .is_some_and(|crates| crates.dependency(&first))
+        {
+            return None;
+        }
         let mut ahead = self.input.clone();
         let mut segments = Vec::new();
         let mut taken = 0;
@@ -196,6 +216,31 @@ impl Parser<'_> {
                 _ => return None,
             }
         }
+        let path = match self.models.import(&segments[0]) {
+            Some(binding) if segments.len() > 1 => {
+                let mut path = binding.qualified.to_string();
+                for segment in &segments[1..] {
+                    path.push_str("::");
+                    path.push_str(segment);
+                }
+                path
+            }
+            Some(binding) if binding.target == crate::resolve::item::Import::CrateMacro => {
+                binding.qualified.to_string()
+            }
+            _ => segments.join("::"),
+        };
+        self.crate_macro(&path).then_some((path, taken, ahead))
+    }
+
+    /// The path from its crate's root of the crate macro whose call is the
+    /// next statement ([`Self::crate_call_ahead`]), with how many tokens
+    /// the path is. A call is a statement as rustc parses one: in braces
+    /// not followed by `.` or `?`, or in parentheses or brackets followed
+    /// by `;`. Any other is an expression.
+    #[cfg(feature = "rust-import")]
+    fn crate_statement_ahead(&mut self) -> Option<(String, usize)> {
+        let (path, taken, mut ahead) = self.crate_call_ahead()?;
         let (open, _) = ahead.next()?;
         let braced = matches!(open, Token::LeftBrace | Token::MapStart);
         let mut depth = usize::from(open != Token::Unit);
@@ -217,18 +262,7 @@ impl Parser<'_> {
             matches!(open, Token::LeftParen | Token::LeftBracket | Token::Unit)
                 && matches!(after, Some(Token::SemiColon))
         };
-        let path = match self.models.import(&segments[0]) {
-            Some(binding) if segments.len() > 1 => {
-                let mut path = binding.qualified.to_string();
-                for segment in &segments[1..] {
-                    path.push_str("::");
-                    path.push_str(segment);
-                }
-                path
-            }
-            _ => segments.join("::"),
-        };
-        (statement && self.crate_macro(&path)).then_some((path, taken))
+        statement.then_some((path, taken))
     }
 
     /// A call of the program's own macro as a statement: its expansion
@@ -238,13 +272,8 @@ impl Parser<'_> {
     pub(super) fn parse_macro_statement(&mut self) -> Result<(), Error> {
         #[cfg(feature = "rust-import")]
         if let Some((path, taken)) = self.crate_statement_ahead() {
-            let start = self.position();
-            let mut end = start;
-            for _ in 0..taken {
-                let (token, position) = self.next();
-                end = text_end(position, &token.to_string());
-            }
-            return self.splice_crate_expansion(&path, span(start, end), Place::Statement);
+            let path_span = self.take_path(taken);
+            return self.splice_crate_expansion(&path, path_span, Place::Statement);
         }
         let (token, position) = self.next();
         let Token::Identifier(name) = token else {
@@ -257,10 +286,28 @@ impl Parser<'_> {
         self.splice_expansion(&rules, "crate", name_span, Place::Statement)
     }
 
-    /// When a call of the program's own macro is next, where a type or a
-    /// pattern goes, put its expansion in its place, as rustc parses it
-    /// there, and say so.
-    pub(super) fn splice_macro_ahead(&mut self) -> Result<bool, Error> {
+    /// The span of the `taken` tokens of a call's path, which are read.
+    #[cfg(feature = "rust-import")]
+    fn take_path(&mut self, taken: usize) -> Span {
+        let start = self.position();
+        let mut end = start;
+        for _ in 0..taken {
+            let (token, position) = self.next();
+            end = text_end(position, &token.to_string());
+        }
+        span(start, end)
+    }
+
+    /// When a call of the program's own macro or of a crate macro is next,
+    /// where a type or a pattern goes (`place`), put its expansion in its
+    /// place, as rustc parses it there, and say so.
+    pub(super) fn splice_macro_ahead(&mut self, place: Place) -> Result<bool, Error> {
+        #[cfg(feature = "rust-import")]
+        if let Some((path, taken, _)) = self.crate_call_ahead() {
+            let path_span = self.take_path(taken);
+            self.splice_crate_expansion(&path, path_span, place)?;
+            return Ok(true);
+        }
         let Token::Identifier(name) = self.peek() else {
             return Ok(false);
         };
@@ -274,7 +321,7 @@ impl Parser<'_> {
         let rules = rules?;
         self.next();
         let name_span = span(position, text_end(position, &name));
-        self.splice_expansion(&rules, "crate", name_span, Place::Bare)?;
+        self.splice_expansion(&rules, "crate", name_span, place)?;
         Ok(true)
     }
 
@@ -389,7 +436,7 @@ impl Parser<'_> {
             })
         };
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
-        if place == Place::Bare {
+        if matches!(place, Place::Type | Place::Pattern) {
             spliced.extend(expansion);
         } else if place == Place::Statement && statements {
             // The call's own `;` ends the last statement when it has none.
@@ -419,24 +466,14 @@ impl Parser<'_> {
         self.splice_tokens(spliced);
     }
 
-    /// Whether `path` names a macro of one of the package's dependencies
-    /// that the crates' facades hold no macro at: a proc macro, whose crate
-    /// has no API to extract, or one a library re-exports from its proc
-    /// macro crate. rustc resolves the path when it expands the call, and
-    /// names it in its error when it holds no macro there.
+    /// Whether `path` names a crate macro Rawr has no rules for
+    /// ([`crate::resolve::extern_prelude::Prelude::crate_macro`]).
     #[cfg(feature = "rust-import")]
     pub(super) fn crate_macro(&self, path: &str) -> bool {
-        let Some((root, _)) = path.split_once("::") else {
-            return false;
-        };
         self.models
             .crates
             .as_ref()
-            .is_some_and(|crates| crates.dependency(root))
-            && !self
-                .models
-                .host_items(path)
-                .is_some_and(|items| items.iter().any(|item| item.kind().is_macro()))
+            .is_some_and(|crates| crates.crate_macro(&self.models.host, path))
     }
 
     /// `path!(..)`, `path![..]` or `path! {..}` of a crate's function-like
@@ -484,8 +521,10 @@ impl Parser<'_> {
             delimiter,
             input: token_text(&tokens),
             place: match place {
+                Place::Expression => call::Place::Expression,
                 Place::Statement => call::Place::Statements,
-                Place::Expression | Place::Bare => call::Place::Expression,
+                Place::Type => call::Place::Type,
+                Place::Pattern => call::Place::Pattern,
             },
         };
         let kept =

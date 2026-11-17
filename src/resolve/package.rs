@@ -1800,10 +1800,21 @@ impl<'a> Resolver<'a> {
                 };
                 // A crate's derive macro and nothing else at its path, as
                 // `use serde::Deserialize;`.
+                // A dependency's macro the facades hold no item at, as `use
+                // rust_decimal_macros::dec;` names a proc macro, is bound in
+                // the macro namespace for rustc to expand its calls.
                 let variant = variant.or_else(|| {
                     let qualified = super::std_reexport(&spelled.join("::"), self.host);
-                    (self.host.entry(&qualified).is_none() && self.host.derive_macro(&qualified))
-                        .then_some(item::Import::Derive)
+                    if self.host.entry(&qualified).is_some() {
+                        None
+                    } else if self.host.derive_macro(&qualified) {
+                        Some(item::Import::Derive)
+                    } else {
+                        self.tables
+                            .prelude()
+                            .is_some_and(|prelude| prelude.crate_macro(self.host, &qualified))
+                            .then_some(item::Import::CrateMacro)
+                    }
                 });
                 let target = match variant {
                     Some(_) => Target::Module,

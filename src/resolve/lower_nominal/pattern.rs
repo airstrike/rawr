@@ -1038,7 +1038,7 @@ impl<'a> Parser<'a> {
     /// `let` take.
     pub(super) fn parse_pattern_no_alt(&mut self) -> Result<Syntax, Error> {
         // `p!()`: the pattern the program's own macro expands to.
-        if self.splice_macro_ahead()? {
+        if self.splice_macro_ahead(super::expand::Place::Pattern)? {
             return self.parse_pattern_syntax();
         }
         let start = self.position();

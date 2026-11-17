@@ -1520,6 +1520,12 @@ impl<'a> Parser<'a> {
                     scope,
                 });
             };
+            // `dec!(1.5)` after `use rust_decimal_macros::dec;`: rustc's
+            // expansion of the macro the name is bound to (#2149).
+            #[cfg(feature = "rust-import")]
+            if binding.target == item::Import::CrateMacro {
+                return self.expand_crate_macro(&binding.qualified, name_span);
+            }
             let (item::Import::Item {
                 definitions: items,
                 owner,

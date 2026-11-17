@@ -563,7 +563,8 @@ impl Models {
                     | item::Import::Type { .. }
                     | item::Import::Item { .. }
                     | item::Import::Alias
-                    | item::Import::Derive => {}
+                    | item::Import::Derive
+                    | item::Import::CrateMacro => {}
                 }
             }
         }
