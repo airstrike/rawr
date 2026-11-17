@@ -9,6 +9,7 @@ use super::{
     ImplArguments,
 };
 use crate::resolve::{item, type_ref, Program};
+use crate::tokenizer::Token;
 use crate::{capability, method, type_def, Engine, ImmutableString, Position, Shared, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -151,7 +152,17 @@ pub(super) struct Tables {
         (crate::program::source::Id, Span),
         Result<Shared<crate::resolve::macro_rules::Rules>, crate::resolve::macro_rules::Malformed>,
     >,
+    /// The tokens of the expansion of each call in a body that is laid
+    /// out past its file's lines, inside the braces it is laid out in, by
+    /// its source and where the call is written: the lowering reads the
+    /// call from them, where the resolver read their paths.
+    pub(super) laid_out: LaidOut,
 }
+
+/// The tokens of each call's expansion laid out past its file's lines, by
+/// its source and where the call is written (`Tables::laid_out`).
+pub(super) type LaidOut =
+    BTreeMap<(crate::program::source::Id, Position), Shared<[(Token, Position)]>>;
 
 /// A script's impl of a crate's trait for a script type (`Tables::
 /// script_impls`): `impl<R: renderer::Renderer> Widget<M, T, R> for Quad`.
@@ -987,6 +998,7 @@ impl Models {
             entry: program.source.entry(),
             instances: program.instances.clone(),
             macros: program.macros.clone(),
+            laid_out: laid_out(program, engine),
             macro_rules: program
                 .macros
                 .definitions()
@@ -1067,7 +1079,7 @@ impl Models {
         blocks
             .get(&(self.context, name.into()))?
             .iter()
-            .filter(|(block, _)| crate::resolve::block::contains(*block, self.at))
+            .filter(|(block, _)| self.reaches(*block, self.at))
             .max_by_key(|(block, _)| block.start())
             .map(|(_, bound)| bound)
     }
@@ -1080,11 +1092,7 @@ impl Models {
             || self
                 .block_scopes
                 .get(&(self.context, name.into()))
-                .is_none_or(|blocks| {
-                    blocks
-                        .iter()
-                        .any(|block| block.start() <= at && at <= block.end())
-                })
+                .is_none_or(|blocks| blocks.iter().any(|block| self.reaches(*block, at)))
     }
 
     /// The enum an imported variant's name at `at` stands for in this
@@ -1496,11 +1504,27 @@ impl Models {
             .range((context, ImmutableString::new())..)
             .take_while(move |((source, _), _)| *source == context)
             .flat_map(|(_, bound)| bound)
-            .filter(|(block, _)| {
-                !self.at.is_none() && crate::resolve::block::contains(*block, self.at)
-            })
+            .filter(|(block, _)| self.reaches(*block, self.at))
             .map(|(_, binding)| binding);
         module.chain(blocks)
+    }
+
+    /// The tokens of the expansion laid out of the call written at `at`.
+    pub(super) fn laid_out(&self, at: Position) -> Option<&[(Token, Position)]> {
+        self.tables
+            .laid_out
+            .get(&(self.context, at))
+            .map(AsRef::as_ref)
+    }
+
+    /// Whether `block` holds `at`, or the call of an expansion `at` is in
+    /// (`Table::sites`).
+    pub(super) fn reaches(&self, block: Span, at: Position) -> bool {
+        !at.is_none()
+            && self
+                .macros
+                .sites(self.context, at)
+                .any(|at| crate::resolve::block::contains(block, at))
     }
 
     pub(super) fn for_source(&self, source: crate::program::source::Id) -> Self {
@@ -1557,4 +1581,30 @@ impl Nominal {
     pub(super) fn capabilities(&self) -> capability::Set {
         self.definition().capabilities()
     }
+}
+
+/// The tokens of each expansion the program's bodies lay out
+/// (`Tables::laid_out`), lexed where they are laid out, without the braces
+/// around them.
+fn laid_out(program: &Program, engine: &Engine) -> LaidOut {
+    let mut laid_out = BTreeMap::new();
+    for index in 0..program.source.texts().count() {
+        let source = crate::program::source::Id::from_index(index);
+        for expansion in program.macros.expansions(source) {
+            let lines = |line: usize| u16::try_from(line).unwrap_or(u16::MAX);
+            let span = Span::new(
+                Position::new(lines(expansion.lines.0), 1),
+                Position::new(lines(expansion.lines.1), u16::MAX),
+            );
+            let text = source_span(program.source.text_at(source), span);
+            let mut tokens = lex_rust(engine, &text);
+            tokens.pop_if(|(token, _)| *token == Token::EOF);
+            // A body's call is laid out in braces; a module's is items.
+            let [(Token::LeftBrace, _), inner @ .., (Token::RightBrace, _)] = &tokens[..] else {
+                continue;
+            };
+            laid_out.insert((source, expansion.site.start()), inner.into());
+        }
+    }
+    laid_out
 }

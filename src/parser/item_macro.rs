@@ -28,7 +28,19 @@ pub(super) struct Layout {
     local: Vec<(ImmutableString, Shared<Rules>)>,
     /// How many expansions are made, which keeps each one's locals apart.
     hygiene: usize,
+    /// How many expansions the one being parsed is inside.
+    depth: usize,
 }
+
+/// The first number a laid-out expansion's locals are renamed apart by,
+/// past those the lowering gives the calls it expands itself, whose
+/// locals a laid-out expansion's tokens may sit beside.
+const HYGIENE: usize = 1 << 24;
+
+/// How many expansions deep a call is laid out: a deeper one is left
+/// where it is, for the lowering to expand it from its rules and report a
+/// recursion limit where rustc does, with the parse's stack to spare.
+const DEPTH: usize = 32;
 
 /// Where the text of one expansion was laid out, to take it back when its
 /// tokens hold no item.
@@ -65,7 +77,8 @@ pub(super) fn begin(source: &str) -> Option<Layout> {
         expansions: Vec::new(),
         rules: INHERITED.take(),
         local: Vec::new(),
-        hygiene: 0,
+        hygiene: HYGIENE,
+        depth: 0,
     };
     LAYOUT.replace(Some(layout))
 }
@@ -134,32 +147,36 @@ pub(super) fn lookup(name: &str) -> Option<Shared<Rules>> {
 /// takes it back: the text has as many lines before it as the expansion
 /// starts at, so the lexer gives its tokens their places there. `None`
 /// when no rule matches the call, or no file is being laid out, which
-/// leaves the call where it is, and for an `expression`'s call that
-/// cannot expand to an item ([`Rules::may_declare`]), whose expansion the
-/// lowering reads on its own.
+/// leaves the call where it is, and for a call `in_body` that cannot
+/// expand to an item or a path ([`Rules::may_declare`]), whose expansion
+/// the lowering reads on its own.
 pub(super) fn lay_out(
     rules: &Rules,
     call: &[(Token, Position)],
     krate: &str,
     braced_statements: bool,
-    expression: bool,
+    in_body: bool,
 ) -> Option<(String, Mark)> {
     let ((_, at), rest) = call.split_first()?;
-    let (_, end) = call.last()?;
-    // The tokens inside the delimiters, after the name and `!`.
-    let inner = rest.get(2..rest.len().checked_sub(1)?)?;
+    let (last, end) = call.last()?;
+    // The tokens inside the delimiters, after the name and `!`: none in
+    // `()`, which the lexer reads as one token.
+    let inner = match last {
+        Token::Unit => &[],
+        _ => rest.get(2..rest.len().checked_sub(1)?)?,
+    };
     let input = macro_rules::trees(inner).ok()?;
-    if expression && !rules.may_declare(&input) {
+    if in_body && !rules.may_declare(&input) {
         return None;
     }
     let hygiene = with(|layout| {
         layout.hygiene += 1;
-        layout.hygiene
-    })?;
+        (layout.depth < DEPTH).then_some(layout.hygiene)
+    })??;
     let expansion = rules.expand(&input, krate, *at, *end, hygiene).ok()?;
     Some(place(
         &render(&expansion),
-        Span::new(*at, after(*end)),
+        Span::new(*at, past(*end, last)),
         rules.name(),
         braced_statements,
     ))
@@ -204,6 +221,7 @@ pub(super) fn place(
         layout.expansions.push(Expansion {
             lines: (first, first + count - 1),
             call,
+            site: call_span,
             name: name.into(),
         });
         let mut padded = "\n".repeat(first - 1);
@@ -211,6 +229,15 @@ pub(super) fn place(
         (padded, mark)
     })
     .expect("a call is laid out while its file is")
+}
+
+/// What `parse` gives, the parse of an expansion's text, one expansion
+/// deeper.
+pub(super) fn nested<T>(parse: impl FnOnce() -> T) -> T {
+    with(|layout| layout.depth += 1);
+    let parsed = parse();
+    with(|layout| layout.depth -= 1);
+    parsed
 }
 
 /// Take back the text laid out since `mark`, and every expansion laid out
@@ -227,9 +254,11 @@ fn with<T>(apply: impl FnOnce(&mut Layout) -> T) -> Option<T> {
     LAYOUT.with_borrow_mut(|layout| layout.as_mut().map(apply))
 }
 
-/// The position after `position`'s character.
-fn after(mut position: Position) -> Position {
-    position.advance();
+/// The position after `token`, which is at `position`.
+fn past(mut position: Position, token: &Token) -> Position {
+    for _ in token.to_string().chars() {
+        position.advance();
+    }
     position
 }
 

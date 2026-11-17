@@ -699,10 +699,6 @@ pub(crate) struct MacroCall {
     pub(crate) span: Span,
     /// The block whose statement it is, `None` among a module's items.
     pub(crate) scope: Option<Span>,
-    /// Where the lowering reads the call's expansion: the call itself, or
-    /// the call in a body whose expansion holds it. A block of its
-    /// expansion is that span to the lowering, whose tokens are all there.
-    pub(crate) site: Span,
 }
 
 /// A `macro_rules!` definition among a module's items. Its rules are read

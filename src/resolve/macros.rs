@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::diagnostic::source::Expansion;
 use crate::program::source;
 use crate::{item, ImmutableString, Position, Span};
 
@@ -22,6 +23,9 @@ pub(crate) struct Table {
     /// declares it there.
     parents: BTreeMap<source::Id, (source::Id, Span)>,
     limit: usize,
+    /// The expansions each source lays out past its file's lines
+    /// (`parser::item_macro`).
+    expansions: BTreeMap<source::Id, Box<[Expansion]>>,
 }
 
 /// One `macro_rules!` definition.
@@ -63,6 +67,22 @@ pub(crate) struct Module<'a> {
     pub(crate) items: &'a [item::Parsed],
     pub(crate) macros: &'a [item::MacroRules],
     pub(crate) inner_attributes: &'a [item::Attribute],
+    /// The expansions it lays out past its file's lines.
+    pub(crate) expansions: &'a [Expansion],
+}
+
+/// `at`, then, while it is on the lines of one of `expansions`, the call
+/// that expansion is of, where it is written: a name the program reads in
+/// an expansion is in the scope of each, as rustc resolves an item's name
+/// in an expansion where its call is. The last is on the file's own lines.
+pub(crate) fn sites(expansions: &[Expansion], at: Span) -> impl Iterator<Item = Span> + '_ {
+    std::iter::successors(Some(at), move |at| {
+        let line = at.start().line()?;
+        expansions
+            .iter()
+            .find(|expansion| (expansion.lines.0..=expansion.lines.1).contains(&line))
+            .map(|expansion| expansion.site)
+    })
 }
 
 impl Table {
@@ -139,7 +159,23 @@ impl Table {
                 .map(|(child, (parent, declared))| (child, (parent, declared.span)))
                 .collect(),
             limit,
+            expansions: modules
+                .iter()
+                .filter(|module| !module.expansions.is_empty())
+                .map(|module| (module.source, module.expansions.into()))
+                .collect(),
         }
+    }
+
+    /// Each expansion `source` lays out past its file's lines.
+    pub(crate) fn expansions(&self, source: source::Id) -> &[Expansion] {
+        self.expansions.get(&source).map_or(&[], AsRef::as_ref)
+    }
+
+    /// `at` in `source`, then each place of a call whose expansion it is
+    /// on the lines of ([`sites`]).
+    pub(crate) fn sites(&self, source: source::Id, at: Position) -> impl Iterator<Item = Position> {
+        sites(self.expansions(source), Span::new(at, at)).map(|site| site.start())
     }
 
     /// Every definition.
@@ -153,8 +189,10 @@ impl Table {
         self.limit
     }
 
-    /// The macro `name` names at `at` in `source`.
+    /// The macro `name` names at `at` in `source`: in an expansion, where
+    /// its call is written.
     pub(crate) fn lookup(&self, name: &str, source: source::Id, at: Position) -> Lookup<'_> {
+        let at = self.sites(source, at).last().unwrap_or(at);
         let mut best: Option<(&Definition, (usize, Position))> = None;
         let mut later = None;
         let mut elsewhere = false;

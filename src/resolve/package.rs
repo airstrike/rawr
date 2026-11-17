@@ -166,6 +166,9 @@ struct Resolver<'a> {
     /// The modules the blocks of each unit that has one declare: a
     /// block's module is named in its block only.
     block_modules: BTreeMap<source::Id, BlockModules>,
+    /// The expansions each source lays out past its file's lines, whose
+    /// paths are read in the blocks around their calls (`macros::sites`).
+    expansions: BTreeMap<source::Id, Box<[crate::diagnostic::source::Expansion]>>,
     /// The ids `type_declarations` hold (`type_def::Id::keyed`).
     type_ids: BTreeSet<type_def::Id>,
     /// Each crate trait whose name another module's trait has too, by its
@@ -379,6 +382,7 @@ impl<'a> Resolver<'a> {
             kept: kept.map(|(kept, _)| kept),
             type_declarations: Vec::new(),
             block_modules: BTreeMap::new(),
+            expansions: BTreeMap::new(),
             type_ids: BTreeSet::new(),
             trait_names: BTreeMap::new(),
             expanded,
@@ -601,6 +605,10 @@ impl<'a> Resolver<'a> {
                 }
             }
 
+            if !unit.parsed.expansions().is_empty() {
+                self.expansions
+                    .insert(unit.context.source, unit.parsed.expansions().into());
+            }
             if !block_modules.is_empty() {
                 self.block_modules
                     .insert(unit.context.source, block_modules);
@@ -904,6 +912,7 @@ impl<'a> Resolver<'a> {
                     items: unit.parsed.items(),
                     macros: unit.parsed.macros(),
                     inner_attributes: unit.parsed.inner_attributes(),
+                    expansions: unit.parsed.expansions(),
                 }),
         );
 
@@ -2290,13 +2299,19 @@ impl<'a> Resolver<'a> {
         at: Span,
     ) -> Option<Box<[ImmutableString]>> {
         let (first, rest) = path.split_first()?;
-        let segment = self
-            .block_modules
-            .get(&context.source)?
-            .range(..=at)
-            .rev()
-            .filter(|(block, _)| super::block::encloses(**block, at))
-            .find_map(|(_, modules)| modules.get(first))
+        let blocks = self.block_modules.get(&context.source)?;
+        let expansions = self
+            .expansions
+            .get(&context.source)
+            .map_or(&[][..], AsRef::as_ref);
+        let segment = super::macros::sites(expansions, at)
+            .find_map(|at| {
+                blocks
+                    .range(..=at)
+                    .rev()
+                    .filter(|(block, _)| super::block::encloses(**block, at))
+                    .find_map(|(_, modules)| modules.get(first))
+            })
             .map(|(_, segment)| segment)?;
         Some(std::iter::once(segment).chain(rest).cloned().collect())
     }

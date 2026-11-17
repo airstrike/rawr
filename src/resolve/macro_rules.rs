@@ -51,7 +51,8 @@ pub(crate) enum Delimiter {
 pub(crate) struct Rules {
     name: ImmutableString,
     rules: Vec<Rule>,
-    /// Whether a transcriber holds a token that starts an item.
+    /// Whether a transcriber holds a token that starts an item, or a path
+    /// through a module or a type.
     declares: bool,
 }
 
@@ -279,6 +280,15 @@ fn holds_item(trees: &[Tree]) -> bool {
     })
 }
 
+/// Whether `trees` hold a token that starts an item, or a path's `::`,
+/// at any depth.
+fn holds_item_or_path(trees: &[Tree]) -> bool {
+    trees.iter().any(|tree| match tree {
+        Tree::Leaf(token, _) => starts_item(token) || *token == Token::DoubleColon,
+        Tree::Group(_, _, inner, _) => holds_item_or_path(inner),
+    })
+}
+
 /// Whether `token` is a keyword only an item starts with.
 fn starts_item(token: &Token) -> bool {
     match token {
@@ -416,7 +426,9 @@ impl Rules {
                 None => {}
             }
         }
-        let declares = rules.iter().any(|rule| holds_item(&rule.transcriber));
+        let declares = rules
+            .iter()
+            .any(|rule| holds_item_or_path(&rule.transcriber));
         Ok(Self {
             name: name.into(),
             rules,
@@ -424,9 +436,11 @@ impl Rules {
         })
     }
 
-    /// Whether a call with `input` may expand to an item: its tokens come
-    /// from the rules' transcribers and the input, so one of them holds a
-    /// token that starts one.
+    /// Whether a call with `input` may expand to an item, or to a path the
+    /// resolver resolves before the lowering reads it: its tokens come from
+    /// the rules' transcribers and the input, so one of them holds a token
+    /// that starts an item, or a transcriber a path's `::`. A path in the
+    /// input is resolved where it is written.
     pub(crate) fn may_declare(&self, input: &[Tree]) -> bool {
         self.declares || holds_item(input)
     }

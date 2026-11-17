@@ -52,10 +52,6 @@ std::thread_local! {
     /// parsed, which the parse leaves as they are.
     static CALLS: core::cell::RefCell<Vec<crate::item::MacroCall>> =
         const { core::cell::RefCell::new(Vec::new()) };
-    /// The call in a body whose expansion the body being parsed is, which
-    /// the lowering reads there: each block inside it is that call's span
-    /// to the lowering (`MacroCall::site`).
-    static SITE: core::cell::Cell<Option<Span>> = const { core::cell::Cell::new(None) };
     /// Whether the file being parsed builds as `rustc --test` builds it:
     /// `cfg(test)` holds.
     static TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -251,14 +247,12 @@ fn lay_out_items(
         return Ok(Some(items.into_vec()));
     };
     let parsed = match input.next() {
-        Some((Token::LeftBrace, open)) => {
-            parse_body_at(input, &control, open, Some(call.site)).ok()
-        }
+        Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
         _ => None,
     };
     let held = NESTED.with_borrow_mut(|nested| match parsed {
         Some((braces, _)) if !nested.is_empty() => {
-            declare_expanded(nested, braces, true, Some(scope), call.site);
+            declare_expanded(nested, braces, Some(scope));
             true
         }
         _ => {
@@ -624,7 +618,6 @@ fn crate_call(
         group,
         span: Span::new(at, end),
         scope: None,
-        site: Span::new(at, end),
     })
 }
 
@@ -5058,29 +5051,6 @@ fn parse_body_syntax(
     tokenizer_control: &TokenizerControl,
     open: Position,
 ) -> ParseResult<(Span, crate::item::BodySyntax)> {
-    parse_body_at(input, tokenizer_control, open, None)
-}
-
-/// A body, or the braces a call's expansion in a body is parsed in when
-/// the lowering reads that expansion at `site`: the blocks inside them are
-/// `site` to it, so the items declared there are declared at `site`.
-fn parse_body_at(
-    input: &mut TokenStream,
-    tokenizer_control: &TokenizerControl,
-    open: Position,
-    site: Option<Span>,
-) -> ParseResult<(Span, crate::item::BodySyntax)> {
-    let outer = SITE.replace(site);
-    let parsed = body_tokens(input, tokenizer_control, open);
-    SITE.set(outer);
-    parsed
-}
-
-fn body_tokens(
-    input: &mut TokenStream,
-    tokenizer_control: &TokenizerControl,
-    open: Position,
-) -> ParseResult<(Span, crate::item::BodySyntax)> {
     let mut scan = ScanState::inside_body();
     // Each block owns only imports not already assigned by a nested block/body.
     // Each block's depth, start, first nested item and the count of the
@@ -5099,6 +5069,9 @@ fn body_tokens(
     // inside its delimiters once they open.
     let mut capture: Option<Capture> = None;
     let mut tokens = Vec::new();
+    // The tokens of the calls' expansions laid out from the body, after
+    // its own: the resolver reads the paths among them as the body's.
+    let mut expanded = Vec::new();
     // Whether a statement may start here: a nested `fn` item.
     let mut boundary = true;
     // Whether the last token can end an expression, and what that depends
@@ -5463,13 +5436,7 @@ fn body_tokens(
             let (_, start, (first, first_call), defined) =
                 scopes.pop().expect("matched enclosing block");
             super::item_macro::truncate_local(defined);
-            // A block inside an expansion the lowering reads at a call is
-            // that call to it; the braces the expansion is parsed in are
-            // its caller's to place.
-            let scope = match SITE.get() {
-                Some(site) if !scopes.is_empty() => site,
-                _ => Span::new(start, after(position, 1)),
-            };
+            let scope = Span::new(start, after(position, 1));
             NESTED.with_borrow_mut(|nested| {
                 for item in &mut nested[first..] {
                     item.enclose(scope);
@@ -5493,7 +5460,19 @@ fn body_tokens(
                 token,
                 Token::RightBrace | Token::RightParen | Token::RightBracket
             );
-            if open.is_none() && !macro_head(tokens) {
+            // The lexer reads a call's empty `()` as one token, which
+            // opens and closes its delimiters.
+            let empty = token == Token::Unit
+                && open.is_none()
+                && matches!(tokens.iter().rev().nth(1), Some((Token::Bang, _)))
+                && !matches!(&tokens[0].0, Token::Identifier(word) if word.as_str() == "macro_rules");
+            if empty {
+                let statement = *statement;
+                let (tokens, ..) = capture.take().expect("a body's macro is read");
+                if let Some(syntax) = body_macro(&tokens, statement) {
+                    expanded.extend(syntax.tokens().iter().cloned());
+                }
+            } else if open.is_none() && !macro_head(tokens) {
                 // The name that ends a head may start a call of its own.
                 let restart = matches!(token, Token::Identifier(_))
                     && !matches!(tokens.iter().rev().nth(1), Some((Token::DoubleColon, _)));
@@ -5503,7 +5482,9 @@ fn body_tokens(
             } else if closes && *open == Some(scan.delimiter_depth + 1) {
                 let statement = *statement;
                 let (tokens, ..) = capture.take().expect("a body's macro is read");
-                body_macro(&tokens, statement);
+                if let Some(syntax) = body_macro(&tokens, statement) {
+                    expanded.extend(syntax.tokens().iter().cloned());
+                }
                 // A definition, or a call in braces, is a statement of its
                 // own, which no struct literal's braces end.
                 if statement && token == Token::RightBrace {
@@ -5515,6 +5496,7 @@ fn body_tokens(
         }
         match (token, position) {
             (Token::RightBrace, position) if scan.delimiter_depth == 0 => {
+                tokens.extend(expanded);
                 return Ok((
                     Span::new(open, after(position, 1)),
                     crate::item::BodySyntax::new(tokens),
@@ -5542,27 +5524,26 @@ fn body_tokens(
 /// parses a statement's or an expression's, and the items among them are
 /// declared where rustc declares them (`declare_expanded`). Neither
 /// reports an error here: the body's lowering reads both again and reports
-/// one where rustc does.
-fn body_macro(tokens: &[(Token, Position)], statement: bool) {
+/// one where rustc does. The syntax of a call's expansion that stays laid
+/// out is given back: the lowering reads the call from those tokens, so
+/// the resolver reads the paths among them as the body's.
+fn body_macro(tokens: &[(Token, Position)], statement: bool) -> Option<crate::item::BodySyntax> {
     let Some((Token::Identifier(name), _)) = tokens.first() else {
-        return;
+        return None;
     };
     if name.as_str() == "macro_rules" {
         if statement && let Ok(rules) = crate::resolve::macro_rules::Rules::from_tokens(tokens) {
             super::item_macro::define_local(rules);
         }
-        return;
+        return None;
     }
     let bang = tokens
         .iter()
         .position(|(token, _)| *token == Token::Bang)
         .expect("a macro call's head has its `!`");
-    let (_, close) = tokens.last().expect("a call has its delimiters");
+    let (last, close) = tokens.last().expect("a call has its delimiters");
     let at = tokens[0].1;
-    let span = Span::new(at, after(*close, 1));
-    // The lowering reads the expansion here, or where it reads the
-    // expansion this body is.
-    let site = SITE.get().unwrap_or(span);
+    let span = Span::new(at, after(*close, last.to_string().chars().count()));
     let rules = match &tokens[..bang] {
         [_] => super::item_macro::lookup(name.as_str()),
         _ => None,
@@ -5571,7 +5552,7 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) {
         // A crate's macro where a statement goes: the graph expands it
         // once its facade is known. An expression's is the lowering's.
         if !statement {
-            return;
+            return None;
         }
         let (_, open) = &tokens[bang + 1];
         let (last, last_at) = &tokens[bang - 1];
@@ -5589,15 +5570,11 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) {
                 group,
                 span,
                 scope: None,
-                site,
             });
         });
-        return;
+        return None;
     };
-    let Some((text, mark)) = super::item_macro::lay_out(&rules, tokens, "crate", true, !statement)
-    else {
-        return;
-    };
+    let (text, mark) = super::item_macro::lay_out(&rules, tokens, "crate", true, true)?;
     let engine = Engine::new_raw();
     let inputs = [text.as_str()];
     let (stream, control) = engine.lex(&inputs);
@@ -5605,41 +5582,46 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) {
     let input = &mut stream.peekable();
     let first = NESTED.with_borrow(Vec::len);
     let first_call = CALLS.with_borrow(Vec::len);
-    let parsed = match input.next() {
-        Some((Token::LeftBrace, open)) => parse_body_at(input, &control, open, Some(site)).ok(),
+    let parsed = super::item_macro::nested(|| match input.next() {
+        Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
         _ => None,
-    };
+    });
     // A crate macro's call among the tokens is laid out there, so they
-    // stay for the graph to expand it.
+    // stay for the graph to expand it, and a path among them stays for
+    // the resolver to resolve it before the lowering reads it.
     let calls = CALLS.with_borrow(Vec::len) > first_call;
     NESTED.with_borrow_mut(|nested| match parsed {
-        Some((braces, _)) if nested.len() > first || calls => {
-            declare_expanded(&mut nested[first..], braces, statement, None, site);
+        Some((braces, syntax)) if nested.len() > first || calls || names_path(&syntax) => {
+            // A statement's items are its block's, which its end declares
+            // them in; an expression's are the call's own block's.
+            declare_expanded(&mut nested[first..], braces, (!statement).then_some(span));
+            Some(syntax)
         }
         _ => {
             nested.truncate(first);
             CALLS.with_borrow_mut(|calls| calls.truncate(first_call));
             super::item_macro::take_back(mark);
+            None
         }
-    });
+    })
 }
 
-/// Declare `items`, what a body's call expands to, parsed in `braces`,
-/// which are no block of the program's. A statement's items are its
-/// block's, `block` once it is known; an expression's are its own block's,
-/// which the lowering reads at `site`, as the blocks inside either are.
-fn declare_expanded(
-    items: &mut [crate::item::Parsed],
-    braces: Span,
-    statement: bool,
-    block: Option<Span>,
-    site: Span,
-) {
+/// Whether `syntax` holds a path through a module or a type, `a::b`.
+fn names_path(syntax: &crate::item::BodySyntax) -> bool {
+    syntax
+        .tokens()
+        .iter()
+        .any(|token| matches!(token.kind(), crate::item::BodyTokenKind::DoubleColon))
+}
+
+/// Declare `items`, what a call expands to, parsed in `braces`, which are
+/// no block of the program's: in `block` when it is known, else in the
+/// block whose end comes next. The blocks inside the expansion declare
+/// their own, where they are laid out.
+fn declare_expanded(items: &mut [crate::item::Parsed], braces: Span, block: Option<Span>) {
     for item in items {
         item.leave(braces);
-        if !statement {
-            item.enclose(site);
-        } else if let Some(block) = block {
+        if let Some(block) = block {
             item.enclose(block);
         }
     }
