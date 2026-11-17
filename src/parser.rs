@@ -552,7 +552,8 @@ impl Engine {
                 .iter()
                 .map(crate::item::Parsed::span)
                 .chain(masked)
-                .chain(macros.iter().map(|definition| definition.header.span)),
+                .chain(macros.iter().map(|definition| definition.header.span))
+                .chain(item_macro::laid_out(&expansions)),
         );
         let statements = first_statement(&script_source);
 

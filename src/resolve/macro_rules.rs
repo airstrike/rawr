@@ -51,6 +51,8 @@ pub(crate) enum Delimiter {
 pub(crate) struct Rules {
     name: ImmutableString,
     rules: Vec<Rule>,
+    /// Whether a transcriber holds a token that starts an item.
+    declares: bool,
 }
 
 #[derive(Debug)]
@@ -269,6 +271,24 @@ pub(crate) fn trees(tokens: &[(Token, Position)]) -> Result<Vec<Tree>, Immutable
 }
 
 /// The text a token is written as.
+/// Whether `trees` hold a token that starts an item, at any depth.
+fn holds_item(trees: &[Tree]) -> bool {
+    trees.iter().any(|tree| match tree {
+        Tree::Leaf(token, _) => starts_item(token),
+        Tree::Group(_, _, inner, _) => holds_item(inner),
+    })
+}
+
+/// Whether `token` is a keyword only an item starts with.
+fn starts_item(token: &Token) -> bool {
+    match token {
+        Token::Mod | Token::Struct | Token::Enum | Token::Fn | Token::Impl | Token::Use => true,
+        Token::Identifier(word) => matches!(word.as_str(), "trait" | "type" | "union"),
+        Token::Reserved(word) => word.as_str() == "static",
+        _ => false,
+    }
+}
+
 fn text(token: &Token) -> String {
     match token {
         Token::Identifier(name) => crate::tokenizer::raw_names(name).into_owned(),
@@ -396,10 +416,19 @@ impl Rules {
                 None => {}
             }
         }
+        let declares = rules.iter().any(|rule| holds_item(&rule.transcriber));
         Ok(Self {
             name: name.into(),
             rules,
+            declares,
         })
+    }
+
+    /// Whether a call with `input` may expand to an item: its tokens come
+    /// from the rules' transcribers and the input, so one of them holds a
+    /// token that starts one.
+    pub(crate) fn may_declare(&self, input: &[Tree]) -> bool {
+        self.declares || holds_item(input)
     }
 
     /// The macro's name.
