@@ -124,6 +124,23 @@ export function usesCrate(code: string, crates: string[]): boolean {
   );
 }
 
+/**
+ * Once a frame just shown has had its `resize`. Shown, a hidden frame's
+ * window changes size, and the browser fires `resize` in the window's next
+ * rendering update, before its animation frame callbacks. A program that
+ * starts before then sees that `resize` after its first draw: ratzilla's
+ * DomBackend then builds its grid again, empty and without its key
+ * listener, on the next draw, and ratatui draws only the cells that
+ * changed into it. Reading the window's size lays the frame out at its new
+ * size now, so that `resize` fires in the next rendering update.
+ */
+function settled(element: HTMLIFrameElement): Promise<void> {
+  const window = element.contentWindow;
+  if (!window) return Promise.resolve();
+  void window.innerWidth;
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 /** The page's universe: the module compiled once, an instance per frame. */
 export function universe({ document, fetch, compile }: UniverseEnv) {
   // The manifest alone, for a page that asks which snippets use crates
@@ -175,6 +192,7 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
   const run = async (frame: Frame, code: string): Promise<any> => {
     const { manifest } = await load();
     frame.element.hidden = false;
+    await settled(frame.element);
     try {
       return JSON.parse(frame.instance.run(manifest, code));
     } catch (error) {
