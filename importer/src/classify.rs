@@ -28,7 +28,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 274;
+const CLASSIFIER_VERSION: u32 = 276;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -12340,7 +12340,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         _ => None,
                     }
                 })?;
-                Some(substitute_parameters(output, &substitutions))
+                let output = substitute_parameters(output, &substitutions);
+                // An impl parameter the type's arguments don't fix, as `E`
+                // of `impl<S, A, E> Future for Forward<S, A> where S:
+                // Sink<A, Error = E>` with `Output = Result<(), E>`, is
+                // fixed by a where clause alone: no output over the type's
+                // own parameters names it.
+                let mut unfixed = Vec::new();
+                if let Some(((owner, _), _)) = substitutions.first() {
+                    named_parameters(&output, owner, &mut unfixed);
+                }
+                unfixed.is_empty().then_some(output)
             })
     }
 
