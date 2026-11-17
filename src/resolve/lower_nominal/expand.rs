@@ -443,6 +443,8 @@ impl Parser<'_> {
                 }
                 false
             })
+            // An item is a statement, though no `;` ends it.
+            || expansion.first().is_some_and(|(token, _)| begins_item(token))
         };
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
         if matches!(place, Place::Type | Place::Pattern) {
@@ -587,5 +589,25 @@ impl Parser<'_> {
             .collect();
         self.splice_expanded(expansion, at, end, place, remaining);
         Ok(None)
+    }
+}
+
+/// Whether `token` starts an item: an expansion that starts with one is
+/// statements, as rustc parses a macro's expansion where a statement goes.
+fn begins_item(token: &Token) -> bool {
+    match token {
+        Token::Struct
+        | Token::Enum
+        | Token::Impl
+        | Token::Fn
+        | Token::Mod
+        | Token::Use
+        | Token::Pub
+        | Token::Hash => true,
+        Token::Identifier(word) => {
+            matches!(word.as_str(), "trait" | "type" | "macro_rules" | "union")
+        }
+        Token::Reserved(word) => word.as_str() == "static",
+        _ => false,
     }
 }

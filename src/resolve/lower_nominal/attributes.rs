@@ -50,7 +50,7 @@ impl<'a> Parser<'a> {
             return true;
         }
         match self.peek() {
-            Token::Struct | Token::Enum | Token::Impl | Token::Mod => true,
+            Token::Struct | Token::Enum | Token::Impl | Token::Mod | Token::Pub => true,
             Token::Identifier(name) if name.as_str() == "unsafe" => {
                 matches!(self.peek_second(), Token::Impl)
             }

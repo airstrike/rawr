@@ -53,11 +53,13 @@ impl Output {
         snapshot: &package::snapshot::Snapshot,
         allocation: &mut A,
     ) -> Result<Self, Error> {
-        let graph = engine.load_snapshot_kept(snapshot)?;
+        let mut graph = engine.load_snapshot_kept(snapshot)?;
+        let expanded = graph.expand_crate_macros(&engine.host_registry);
         let sources = graph.diagnostic_sources();
         let source = reload::source::Graph::from_package(&graph);
         let native = resolve::native::Capture::from_graph(&graph, allocation)?;
-        let program = resolve::lower_nominal::kept::resolve(engine, graph, native.clone())
+        let program = expanded
+            .and_then(|()| resolve::lower_nominal::kept::resolve(engine, graph, native.clone()))
             .map_err(|failure| {
                 // A crate derive whose item changed, or a crate macro's
                 // call an edit made, is expanded by preparation, as a

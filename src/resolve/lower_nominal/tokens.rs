@@ -578,7 +578,7 @@ pub(super) fn split_arguments(tokens: Vec<(Token, Position)>) -> Vec<Vec<(Token,
 
 /// An expression's tokens as Rust's `stringify!` prints them: binary
 /// operators spaced, nothing around `.`, `::` and brackets.
-pub(super) fn token_text(tokens: &[(Token, Position)]) -> String {
+pub(crate) fn token_text(tokens: &[(Token, Position)]) -> String {
     let mut text = String::new();
     let mut previous: Option<&Token> = None;
     let mut unary = false;
@@ -606,7 +606,13 @@ pub(super) fn token_text(tokens: &[(Token, Position)]) -> String {
         let tight_after_previous = unary
             || matches!(
                 previous,
-                Some(Token::Period | Token::LeftParen | Token::LeftBracket | Token::DoubleColon)
+                Some(
+                    Token::Period
+                        | Token::LeftParen
+                        | Token::LeftBracket
+                        | Token::DoubleColon
+                        | Token::Apostrophe
+                )
             );
         if previous.is_some() && !tight_before && !tight_after_previous {
             text.push(' ');

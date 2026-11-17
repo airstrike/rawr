@@ -628,6 +628,30 @@ impl Parsed {
         };
         header.scope.get_or_insert(scope);
     }
+
+    /// Take the item out of the block `scope`, when that is its block, so
+    /// the block around `scope` declares it: the braces a macro's
+    /// statements are parsed in are no block of the program's.
+    pub(crate) fn leave(&mut self, scope: Span) {
+        let header = match self {
+            Self::Module(item) => &mut item.header,
+            Self::Use(item) => {
+                if item.scope == Some(scope) {
+                    item.scope = None;
+                }
+                &mut item.header
+            }
+            Self::Struct(item) => &mut item.header,
+            Self::Enum(item) => &mut item.header,
+            Self::Impl(item) => &mut item.header,
+            Self::Trait(item) => &mut item.header,
+            Self::Function(item) => &mut item.header,
+            Self::TypeAlias(item) => &mut item.header,
+        };
+        if header.scope == Some(scope) {
+            header.scope = None;
+        }
+    }
 }
 
 /// A type alias: `type Grid<T> = Vec<Vec<T>>;`. The resolver reads its
@@ -658,6 +682,23 @@ pub struct Module {
     /// `mod name { .. }`: the span inside its braces, whose items are the
     /// module's, read as a file module of their own.
     pub inline: Option<Span>,
+}
+
+/// A call of a crate's macro where an item goes, among a module's items or
+/// a block's statements, which the parse leaves as it is: its expansion is
+/// known once the crate's facade is (`package::item_macro`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MacroCall {
+    /// The macro's path as written.
+    pub(crate) path: Box<[ImmutableString]>,
+    /// Where the path is written.
+    pub(crate) name: Span,
+    /// From the opening delimiter through the closing one.
+    pub(crate) group: Span,
+    /// The whole call, with the `;` after it among a module's items.
+    pub(crate) span: Span,
+    /// The block whose statement it is, `None` among a module's items.
+    pub(crate) scope: Option<Span>,
 }
 
 /// A `macro_rules!` definition among a module's items. Its rules are read

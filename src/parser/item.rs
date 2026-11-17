@@ -17,9 +17,20 @@ pub(super) struct ParsedFile {
     pub inner_attributes: Box<[crate::item::Attribute]>,
     /// The `macro_rules!` definitions among the items.
     pub macros: Box<[crate::item::MacroRules]>,
+    /// The file's text with the expansions of the macro calls among its
+    /// items laid out after it (`super::item_macro`), and where each is,
+    /// when a call expanded.
+    pub expanded: Option<(String, Box<[crate::diagnostic::source::Expansion]>)>,
+    /// The calls of crates' macros where an item goes, which the parse
+    /// leaves as they are.
+    pub calls: Box<[crate::item::MacroCall]>,
 }
 
 type ParsedItems = (Box<[crate::item::Parsed]>, Vec<Span>);
+
+/// The tokens of a statement's macro definition or call as they are read,
+/// and the depth inside its delimiters once they open.
+type Capture = (Vec<(Token, Position)>, Option<usize>);
 
 std::thread_local! {
     /// The items and `use` imports declared inside function bodies of the
@@ -36,6 +47,10 @@ std::thread_local! {
     /// parsed.
     static MACROS: core::cell::RefCell<Vec<crate::item::MacroRules>> =
         const { core::cell::RefCell::new(Vec::new()) };
+    /// The calls of crates' macros where an item goes in the file being
+    /// parsed, which the parse leaves as they are.
+    static CALLS: core::cell::RefCell<Vec<crate::item::MacroCall>> =
+        const { core::cell::RefCell::new(Vec::new()) };
     /// Whether the file being parsed builds as `rustc --test` builds it:
     /// `cfg(test)` holds.
     static TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -51,15 +66,21 @@ pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseR
     let outer_skipped = SKIPPED.take();
     let outer_inner = INNER.take();
     let outer_macros = MACROS.take();
+    let outer_calls = CALLS.take();
     let outer_test = TEST.replace(features.test());
     let outer_features = FEATURES.replace(features.clone());
+    let outer_layout = super::item_macro::begin(source);
     let parsed = parse_items(engine, source);
+    let expanded = super::item_macro::finish(outer_layout);
+    // The items of an expansion are in its text, after the file's.
+    let source = expanded.as_ref().map_or(source, |(text, _)| text.as_str());
     TEST.set(outer_test);
     FEATURES.set(outer_features);
     let mut nested = NESTED.replace(outer);
     let skipped = SKIPPED.replace(outer_skipped);
     let mut inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
     let mut macros = MACROS.replace(outer_macros);
+    let calls = CALLS.replace(outer_calls);
     let (mut items, mut inner) = parsed?;
     attribute_text(source, &mut items, &mut inner_attributes);
     for definition in &mut macros {
@@ -99,7 +120,169 @@ pub(super) fn parse(engine: &Engine, features: &Enabled, source: &str) -> ParseR
         imports: imports.into_boxed_slice(),
         inner_attributes,
         macros: macros.into_boxed_slice(),
+        expanded,
+        calls: calls.into_boxed_slice(),
     })
+}
+
+/// What a crate's macro call where an item goes expands to.
+#[cfg(feature = "rust-import")]
+pub(crate) enum Expansion<'a> {
+    /// A `macro_rules!` macro's, from its rules, `$crate` reading as
+    /// `krate`.
+    Rules {
+        rules: &'a crate::resolve::macro_rules::Rules,
+        krate: &'a str,
+    },
+    /// rustc's, as text.
+    Text(&'a str),
+}
+
+/// Lay out what `call`, a call of the crate macro `name` among `unit`'s
+/// items or a block's statements, expands to after the unit's text, and
+/// add the items it expands to, parsed with `features` enabled, to the
+/// unit's where the call is: a module's, or the call's block's. What is
+/// given back are the calls of crates' macros among them, to expand in
+/// turn, or `None` when nothing is laid out. A call
+/// whose rules match nothing, or one in a block that expands to no item,
+/// is left as it is: the block's lowering reads it again and reports what
+/// rustc does.
+///
+/// # Errors
+///
+/// A module's call whose expansion does not parse as items, reported at
+/// the call.
+#[cfg(feature = "rust-import")]
+pub(crate) fn lay_out_call(
+    unit: &mut crate::parse::Unit,
+    call: &crate::item::MacroCall,
+    name: &str,
+    expansion: &Expansion<'_>,
+    features: &Enabled,
+) -> ParseResult<Option<Vec<crate::item::MacroCall>>> {
+    let outer_nested = NESTED.take();
+    let outer_skipped = SKIPPED.take();
+    let outer_macros = MACROS.take();
+    let outer_calls = CALLS.take();
+    let outer_test = TEST.replace(features.test());
+    let outer_features = FEATURES.replace(features.clone());
+    let outer_layout = super::item_macro::resume(unit.source().text(), unit.expansions());
+    let parsed = lay_out_items(unit.source(), call, name, expansion);
+    let expanded = super::item_macro::finish(outer_layout);
+    TEST.set(outer_test);
+    FEATURES.set(outer_features);
+    let mut nested = NESTED.replace(outer_nested);
+    let skipped = SKIPPED.replace(outer_skipped);
+    MACROS.set(outer_macros);
+    let calls = CALLS.replace(outer_calls);
+    let (Some((text, expansions)), Some(mut items)) = (expanded, parsed?) else {
+        return Ok(None);
+    };
+    attribute_text(&text, &mut items, &mut []);
+    attribute_text(&text, &mut nested, &mut []);
+    items.extend(nested);
+    let mut masked = skipped;
+    // A module's call is no statement of a script.
+    if call.scope.is_none() {
+        masked.push(call.span);
+    }
+    unit.lay_out(text, expansions, items, &masked);
+    Ok(Some(calls))
+}
+
+/// The items `call`'s expansion holds, laid out after `source`'s text:
+/// `None` when it holds none.
+#[cfg(feature = "rust-import")]
+fn lay_out_items(
+    source: &crate::source::Map,
+    call: &crate::item::MacroCall,
+    name: &str,
+    expansion: &Expansion<'_>,
+) -> ParseResult<Option<Vec<crate::item::Parsed>>> {
+    let braced = call.scope.is_some();
+    let laid = match expansion {
+        Expansion::Rules { rules, krate } => {
+            // The call's name, `!` and its delimited tokens, where the
+            // source has them.
+            let mut tokens = vec![
+                (Token::Identifier(Box::new(name.into())), call.name.start()),
+                (Token::Bang, call.name.end()),
+            ];
+            tokens.extend(
+                crate::resolve::lower_nominal::lex_rust(
+                    &Engine::new_raw(),
+                    &source.only([call.group]),
+                )
+                .into_iter()
+                .filter(|(token, _)| *token != Token::EOF),
+            );
+            super::item_macro::lay_out(rules, &tokens, krate, braced)
+        }
+        Expansion::Text(text) => Some(super::item_macro::place(text, call.span, name, braced)),
+    };
+    let Some((text, mark)) = laid else {
+        return Ok(None);
+    };
+    let engine = Engine::new_raw();
+    let inputs = [text.as_str()];
+    let (stream, control) = engine.lex(&inputs);
+    control.borrow_mut().rust = true;
+    let input = &mut stream.peekable();
+    let Some(scope) = call.scope else {
+        let at_call = |mut error: crate::ParseError| {
+            error.1 = call.span.start();
+            error
+        };
+        let (items, masked, stray) = parse_items_in(input, &control).map_err(at_call)?;
+        if stray {
+            return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                name.into(),
+                format!("macro expansion ignores the tokens after `{name}!`'s items"),
+            ))
+            .into_err(call.span.start()));
+        }
+        SKIPPED.with_borrow_mut(|skipped| skipped.extend(masked));
+        return Ok(Some(items.into_vec()));
+    };
+    let parsed = match input.next() {
+        Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
+        _ => None,
+    };
+    let held = NESTED.with_borrow_mut(|nested| match parsed {
+        Some((braces, _)) if !nested.is_empty() => {
+            for item in nested.iter_mut() {
+                item.leave(braces);
+                item.enclose(scope);
+            }
+            true
+        }
+        _ => {
+            nested.clear();
+            false
+        }
+    });
+    if !held {
+        super::item_macro::take_back(mark);
+    }
+    CALLS.with_borrow_mut(|calls| {
+        for nested in calls.iter_mut() {
+            nested.scope.get_or_insert(scope);
+        }
+    });
+    Ok(held.then(Vec::new))
+}
+
+/// What `parse` gives, the program's own macros `inherited` naming theirs
+/// where an item goes among the items it parses, as the macros a module's
+/// `mod` item comes after do in that module (`item_macro::inherit`).
+pub(crate) fn inheriting<T>(
+    inherited: &[crate::Shared<crate::resolve::macro_rules::Rules>],
+    parse: impl FnOnce() -> T,
+) -> T {
+    super::item_macro::inherit(inherited);
+    let parsed = parse();
+    super::item_macro::inherit(&[]);
+    parsed
 }
 
 /// Whether `item` is a `use` of the `rawr` crate's attribute and nothing
@@ -121,12 +304,25 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
     let inputs = [source];
     let (stream, tokenizer_control) = engine.lex(&inputs);
     tokenizer_control.borrow_mut().rust = true;
-    let input = &mut stream.peekable();
+    let (items, inner, _) = parse_items_in(&mut stream.peekable(), &tokenizer_control)?;
+    Ok((items, inner))
+}
+
+/// The items of `input`, the spans it masks, and whether a token outside
+/// any item is among them, as a statement of a script is.
+fn parse_items_in(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+) -> ParseResult<(Box<[crate::item::Parsed]>, Vec<Span>, bool)> {
+    let tokenizer_control = tokenizer_control.clone();
     let mut items = Vec::new();
     let mut inner = Vec::new();
     let mut scan = ScanState::default();
     let mut at_top = true;
     let mut after_name = false;
+    // Whether an item may start here, where a macro call is one.
+    let mut boundary = true;
+    let mut stray = false;
 
     loop {
         let next = input.peek().expect("token streams always end with EOF");
@@ -270,6 +466,53 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
             _ => {
                 let depth = scan.delimiter_depth;
                 let token = scan.next(input);
+                if depth == 0
+                    && boundary
+                    && let Some((Token::Identifier(name), position)) = &token
+                    && matches!(input.peek(), Some((Token::Bang | Token::DoubleColon, _)))
+                {
+                    let start = (Token::Identifier(name.clone()), *position);
+                    let Some(path) = call_path(input, start) else {
+                        stray = true;
+                        boundary = false;
+                        after_name = false;
+                        continue;
+                    };
+                    // The program's own macro, by its name or the crate's.
+                    let own = match path.as_slice() {
+                        [(Token::Identifier(name), _)] => super::item_macro::lookup(name.as_str()),
+                        [(Token::Identifier(first), _), _, (Token::Identifier(name), _)]
+                            if first.as_str() == "crate" =>
+                        {
+                            super::item_macro::lookup(name.as_str())
+                        }
+                        _ => None,
+                    };
+                    match own {
+                        Some(rules) => {
+                            let (expanded, span) = expand_items(input, &rules, path)?;
+                            if let Some((expanded, masked)) = expanded {
+                                items.extend(expanded);
+                                inner.extend(masked);
+                                inner.push(span);
+                            } else {
+                                stray = true;
+                            }
+                        }
+                        None => {
+                            let call = crate_call(input, &path, true)?;
+                            CALLS.with_borrow_mut(|calls| calls.push(call));
+                        }
+                    }
+                    after_name = false;
+                    boundary = true;
+                    continue;
+                }
+                stray |= depth == 0;
+                boundary = depth == 0
+                    && token
+                        .as_ref()
+                        .is_some_and(|(token, _)| matches!(token, Token::SemiColon));
                 after_name = depth == 0
                     && token.is_some_and(|(token, _)| {
                         matches!(token, Token::Identifier(_) | Token::Reserved(_))
@@ -278,10 +521,184 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
             }
         }
         after_name = false;
+        boundary = scan.delimiter_depth == 0;
     }
 
     resolve_const_lengths(&mut items)?;
-    Ok((items.into_boxed_slice(), inner))
+    Ok((items.into_boxed_slice(), inner, stray))
+}
+
+/// The path of a macro call whose first name `first` is read, through its
+/// last name, before the `!` that is next. `None` when the tokens are no
+/// macro's path, which leaves the rest read.
+fn call_path(input: &mut TokenStream, first: (Token, Position)) -> Option<Vec<(Token, Position)>> {
+    let mut path = vec![first];
+    loop {
+        match input.peek() {
+            Some((Token::Bang, _)) => return Some(path),
+            Some((Token::DoubleColon, _)) => {
+                path.push(input.next().expect("peeked `::`"));
+            }
+            _ => return None,
+        }
+        match input.peek() {
+            Some((Token::Identifier(_), _)) => path.push(input.next().expect("peeked a name")),
+            _ => return None,
+        }
+    }
+}
+
+/// The call of a crate's macro at `path`, read through its closing
+/// delimiter, and among a module's items (`module`) the `;` after a call in
+/// parentheses or brackets.
+fn crate_call(
+    input: &mut TokenStream,
+    path: &[(Token, Position)],
+    module: bool,
+) -> ParseResult<crate::item::MacroCall> {
+    let at = path[0].1;
+    let (last, last_at) = path.last().expect("a path has a name");
+    let name = Span::new(at, after(*last_at, last.to_string().chars().count()));
+    expect(input, Token::Bang, "after a macro's path")?;
+    let (open, start) = input.next().expect("token streams always end with EOF");
+    if !matches!(
+        open,
+        Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket
+    ) {
+        return Err(unexpected(
+            format!("expected one of `(`, `[`, or `{{`, found {}", found(&open)),
+            "expected one of `(`, `[`, or `{`",
+            None,
+            &open,
+            start,
+        ));
+    }
+    let braced = matches!(open, Token::LeftBrace | Token::MapStart);
+    let mut depth = 1_usize;
+    let mut close = start;
+    while depth > 0 {
+        let (token, position) = input.next().expect("token streams always end with EOF");
+        match token {
+            Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightBrace | Token::RightParen | Token::RightBracket => depth -= 1,
+            Token::EOF => {
+                return Err(PERR::MissingToken(
+                    Token::RightBrace.into(),
+                    "to close a macro call".into(),
+                )
+                .into_err(position));
+            }
+            Token::LexError(error) => return Err(error.into_err(position)),
+            _ => {}
+        }
+        close = position;
+    }
+    let group = Span::new(start, after(close, 1));
+    let mut end = group.end();
+    if module && !braced {
+        end = after(
+            expect(
+                input,
+                Token::SemiColon,
+                "after a macro call in item position",
+            )?,
+            1,
+        );
+    }
+    Ok(crate::item::MacroCall {
+        path: path
+            .iter()
+            .filter_map(|(token, _)| match token {
+                Token::Identifier(name) => Some(ImmutableString::from(name.as_str())),
+                _ => None,
+            })
+            .collect(),
+        name,
+        group,
+        span: Span::new(at, end),
+        scope: None,
+    })
+}
+
+/// The call of `rules` whose name `name` is read, from its `!` through its
+/// closing delimiter and the `;` after it, where an item goes: the items it
+/// expands to, with the spans they mask, and the call's span. No items
+/// when the expansion is something else, as a script's statement is.
+fn expand_items(
+    input: &mut TokenStream,
+    rules: &crate::resolve::macro_rules::Rules,
+    path: Vec<(Token, Position)>,
+) -> ParseResult<(Option<ParsedItems>, Span)> {
+    let at = path[0].1;
+    // The expansion reads the name, `!` and the delimited tokens.
+    let mut call = vec![path.last().cloned().expect("a path has a name")];
+    call.push(input.next().expect("peeked `!`"));
+    let (open, position) = input.next().expect("token streams always end with EOF");
+    let braced = matches!(open, Token::LeftBrace | Token::MapStart);
+    if !matches!(
+        open,
+        Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket
+    ) {
+        return Err(unexpected(
+            format!("expected one of `(`, `[`, or `{{`, found {}", found(&open)),
+            "expected one of `(`, `[`, or `{`",
+            None,
+            &open,
+            position,
+        ));
+    }
+    call.push((open, position));
+    let mut depth = 1_usize;
+    let mut end = position;
+    while depth > 0 {
+        let (token, position) = input.next().expect("token streams always end with EOF");
+        match &token {
+            Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightBrace | Token::RightParen | Token::RightBracket => depth -= 1,
+            Token::EOF => {
+                return Err(PERR::MissingToken(
+                    Token::RightBrace.into(),
+                    "to close a macro call".into(),
+                )
+                .into_err(position));
+            }
+            Token::LexError(error) => return Err(error.clone().into_err(position)),
+            _ => {}
+        }
+        end = position;
+        call.push((token, position));
+    }
+    if !braced {
+        end = expect(
+            input,
+            Token::SemiColon,
+            "after a macro call in item position",
+        )?;
+    }
+    let span = Span::new(at, after(end, 1));
+    let Some((text, mark)) = super::item_macro::lay_out(rules, &call, "crate", false) else {
+        return Ok((None, span));
+    };
+    // An error in the expansion is the call's, as rustc reports it there.
+    let at_call = |mut error: crate::ParseError| {
+        error.1 = at;
+        error
+    };
+    let engine = Engine::new_raw();
+    let inputs = [text.as_str()];
+    let (stream, control) = engine.lex(&inputs);
+    control.borrow_mut().rust = true;
+    let (items, masked, stray) =
+        parse_items_in(&mut stream.peekable(), &control).map_err(at_call)?;
+    if stray {
+        super::item_macro::take_back(mark);
+        return Ok((None, span));
+    }
+    Ok((Some((items, masked)), span))
 }
 
 /// `[T; N]` naming a crate `const N: usize = 3;` reads as `[T; 3]`, as rustc
@@ -910,7 +1327,7 @@ fn parse_macro_rules(
     if !braced {
         end = expect(input, Token::SemiColon, "after a macro definition")?;
     }
-    crate::resolve::macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| {
+    let rules = crate::resolve::macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| {
         PERR::Unexpected {
             message: malformed.message().into(),
             label: malformed.label().into(),
@@ -919,6 +1336,8 @@ fn parse_macro_rules(
         }
         .into_err(malformed.at())
     })?;
+    // A call where an item goes expands with it from here on.
+    super::item_macro::define(rules);
     let end = after(end, 1);
     Ok(crate::item::MacroRules {
         header: crate::item::Header {
@@ -4635,7 +5054,21 @@ fn parse_body_syntax(
 ) -> ParseResult<(Span, crate::item::BodySyntax)> {
     let mut scan = ScanState::inside_body();
     // Each block owns only imports not already assigned by a nested block/body.
-    let mut scopes = vec![(1, open, NESTED.with_borrow(|nested| nested.len()))];
+    // Each block's depth, start, first nested item and the count of the
+    // macros the blocks around it define.
+    let mut scopes = vec![(
+        1,
+        open,
+        (
+            NESTED.with_borrow(|nested| nested.len()),
+            CALLS.with_borrow(|calls| calls.len()),
+        ),
+        super::item_macro::local_count(),
+    )];
+    // A `macro_rules!` definition, or a call of the program's own macro,
+    // that starts a statement: its tokens as they are read, and the depth
+    // inside its delimiters once they open.
+    let mut capture: Option<Capture> = None;
     let mut tokens = Vec::new();
     // Whether a statement may start here: a nested `fn` item.
     let mut boundary = true;
@@ -4666,6 +5099,7 @@ fn parse_body_syntax(
 
     loop {
         if (boundary || const_start.is_some())
+            && macros.is_empty()
             && let Some((Token::Fn, position)) = input.peek()
         {
             let position = match const_start.take() {
@@ -4715,10 +5149,14 @@ fn parse_body_syntax(
             continue;
         }
         // `struct`, `enum`, `impl`, `trait` and `type` items inside a body,
-        // with their attributes, join the file's items as `fn` items do.
+        // with their attributes, join the file's items as `fn` items do,
+        // and so does any item with a visibility, as a macro's `pub struct`.
         if boundary
+            && macros.is_empty()
             && let Some((token, position)) = input.peek()
-            && (is_attribute_marker(token) || begins_body_item(token))
+            && (is_attribute_marker(token)
+                || begins_body_item(token)
+                || matches!(token, Token::Pub))
         {
             let start = *position;
             let mut attributes = Vec::new();
@@ -4728,15 +5166,17 @@ fn parse_body_syntax(
             {
                 attributes.extend(parse_attribute(input)?);
             }
-            if input
-                .peek()
-                .is_some_and(|(token, _)| begins_body_item(token))
+            let visibility = parse_item_visibility(input);
+            if visibility.is_some()
+                || input
+                    .peek()
+                    .is_some_and(|(token, _)| begins_body_item(token))
             {
                 let item = parse_item_with_leading(
                     input,
                     tokenizer_control,
                     attributes.into_boxed_slice(),
-                    None,
+                    visibility,
                     start,
                 )?;
                 if let Some(item) = item {
@@ -4751,6 +5191,7 @@ fn parse_body_syntax(
         }
         // `unsafe impl Send for T {}` is an item; `unsafe { .. }` is a block.
         if boundary
+            && macros.is_empty()
             && let Some((Token::Identifier(text), position)) = input.peek()
             && text.as_str() == "unsafe"
         {
@@ -4774,7 +5215,10 @@ fn parse_body_syntax(
         // `mod name { .. }` in a block is an item of the block, loaded as an
         // inline module of the enclosing one: `super` in it names that
         // module, as in rustc, where a block is no module of its own.
-        if boundary && let Some((Token::Mod, position)) = input.peek() {
+        if boundary
+            && macros.is_empty()
+            && let Some((Token::Mod, position)) = input.peek()
+        {
             let position = *position;
             let module = parse_module(input, Box::default(), None, position)?;
             if module.inline.is_none() {
@@ -4788,7 +5232,10 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Module(module)));
             continue;
         }
-        if boundary && let Some((Token::Use, position)) = input.peek() {
+        if boundary
+            && macros.is_empty()
+            && let Some((Token::Use, position)) = input.peek()
+        {
             let position = *position;
             let used = parse_use(input, Box::default(), None, position)?;
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
@@ -4797,6 +5244,7 @@ fn parse_body_syntax(
         // `extern crate serde as _serde;` in a block imports the crate's
         // root there, as a `use` does.
         if boundary
+            && macros.is_empty()
             && let Some((token, position)) = input.peek()
             && is_word(token, "extern")
         {
@@ -4848,6 +5296,13 @@ fn parse_body_syntax(
                 token,
                 *position,
             ));
+        }
+        if capture.is_none()
+            && boundary
+            && macros.is_empty()
+            && let Some((Token::Identifier(_), _)) = input.peek()
+        {
+            capture = Some((Vec::new(), None));
         }
         const_start = match input.peek() {
             Some((Token::Const, position)) if boundary => Some(*position),
@@ -4960,20 +5415,59 @@ fn parse_body_syntax(
             scopes.push((
                 scan.delimiter_depth,
                 position,
-                NESTED.with_borrow(|nested| nested.len()),
+                (
+                    NESTED.with_borrow(|nested| nested.len()),
+                    CALLS.with_borrow(|calls| calls.len()),
+                ),
+                super::item_macro::local_count(),
             ));
         } else if matches!(token, Token::RightBrace)
             && scopes
                 .last()
-                .is_some_and(|(depth, _, _)| *depth == scan.delimiter_depth + 1)
+                .is_some_and(|(depth, ..)| *depth == scan.delimiter_depth + 1)
         {
-            let (_, start, first) = scopes.pop().expect("matched enclosing block");
+            let (_, start, (first, first_call), defined) =
+                scopes.pop().expect("matched enclosing block");
+            super::item_macro::truncate_local(defined);
             let scope = Span::new(start, after(position, 1));
             NESTED.with_borrow_mut(|nested| {
                 for item in &mut nested[first..] {
                     item.enclose(scope);
                 }
             });
+            CALLS.with_borrow_mut(|calls| {
+                for call in &mut calls[first_call..] {
+                    call.scope.get_or_insert(scope);
+                }
+            });
+        }
+        // After its block's end, so a definition names its macro to the
+        // end of the block around it.
+        if let Some((tokens, open)) = &mut capture {
+            tokens.push((token.clone(), position));
+            let opens = matches!(
+                token,
+                Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart
+            );
+            let closes = matches!(
+                token,
+                Token::RightBrace | Token::RightParen | Token::RightBracket
+            );
+            if open.is_none() && !macro_head(tokens) {
+                capture = None;
+            } else if opens && open.is_none() {
+                *open = Some(scan.delimiter_depth);
+            } else if closes && *open == Some(scan.delimiter_depth + 1) {
+                let (tokens, _) = capture.take().expect("a statement's macro is read");
+                statement_macro(&tokens);
+                // A definition, or a call in braces, is a statement of its
+                // own, which no struct literal's braces end.
+                if token == Token::RightBrace {
+                    literals.pop_if(|depth| *depth == scan.delimiter_depth);
+                    boundary = true;
+                    ends_expression = false;
+                }
+            }
         }
         match (token, position) {
             (Token::RightBrace, position) if scan.delimiter_depth == 0 => {
@@ -4994,6 +5488,104 @@ fn parse_body_syntax(
                 tokens.push(body_token(token, position));
             }
         }
+    }
+}
+
+/// `tokens`, a `macro_rules!` definition or a call of the program's own
+/// macro that starts a statement, through its closing delimiter. A
+/// definition names its macro from here to its block's end. A call's
+/// expansion is parsed as the block's statements, as rustc parses it, and
+/// the items among them are the block's. Neither reports an error here:
+/// the body's lowering reads both again and reports one where rustc does.
+fn statement_macro(tokens: &[(Token, Position)]) {
+    let Some((Token::Identifier(name), _)) = tokens.first() else {
+        return;
+    };
+    if name.as_str() == "macro_rules" {
+        if let Ok(rules) = crate::resolve::macro_rules::Rules::from_tokens(tokens) {
+            super::item_macro::define_local(rules);
+        }
+        return;
+    }
+    let bang = tokens
+        .iter()
+        .position(|(token, _)| *token == Token::Bang)
+        .expect("a macro call's head has its `!`");
+    let rules = match &tokens[..bang] {
+        [_] => super::item_macro::lookup(name.as_str()),
+        _ => None,
+    };
+    let Some(rules) = rules else {
+        // A crate's macro: the graph expands it once its facade is known.
+        let (_, close) = tokens.last().expect("a call has its delimiters");
+        let (_, open) = &tokens[bang + 1];
+        let (last, last_at) = &tokens[bang - 1];
+        let at = tokens[0].1;
+        let group = Span::new(*open, after(*close, 1));
+        CALLS.with_borrow_mut(|calls| {
+            calls.push(crate::item::MacroCall {
+                path: tokens[..bang]
+                    .iter()
+                    .filter_map(|(token, _)| match token {
+                        Token::Identifier(name) => Some(ImmutableString::from(name.as_str())),
+                        _ => None,
+                    })
+                    .collect(),
+                name: Span::new(at, after(*last_at, last.to_string().chars().count())),
+                group,
+                span: Span::new(at, group.end()),
+                scope: None,
+            });
+        });
+        return;
+    };
+    let Some((text, mark)) = super::item_macro::lay_out(&rules, tokens, "crate", true) else {
+        return;
+    };
+    let engine = Engine::new_raw();
+    let inputs = [text.as_str()];
+    let (stream, control) = engine.lex(&inputs);
+    control.borrow_mut().rust = true;
+    let input = &mut stream.peekable();
+    let first = NESTED.with_borrow(Vec::len);
+    let parsed = match input.next() {
+        Some((Token::LeftBrace, open)) => parse_body_syntax(input, &control, open).ok(),
+        _ => None,
+    };
+    NESTED.with_borrow_mut(|nested| match parsed {
+        Some((scope, _)) if nested.len() > first => {
+            for item in &mut nested[first..] {
+                item.leave(scope);
+            }
+        }
+        _ => {
+            nested.truncate(first);
+            super::item_macro::take_back(mark);
+        }
+    });
+}
+
+/// Whether `tokens`, a statement's first tokens up to a delimiter, may
+/// still be a macro call's head, `a::b!`, or a `macro_rules! name`.
+fn macro_head(tokens: &[(Token, Position)]) -> bool {
+    let definition =
+        matches!(&tokens[0].0, Token::Identifier(word) if word.as_str() == "macro_rules");
+    let [.., (previous, _), (last, _)] = tokens else {
+        return true;
+    };
+    let opens = matches!(
+        last,
+        Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart
+    );
+    match (previous, last) {
+        (Token::Identifier(_), Token::DoubleColon) | (Token::DoubleColon, Token::Identifier(_)) => {
+            !definition
+        }
+        (Token::Identifier(_), Token::Bang) => tokens.len() == 2 || !definition,
+        (Token::Bang, Token::Identifier(_)) => definition && tokens.len() == 3,
+        (Token::Bang, _) => opens && !definition,
+        (Token::Identifier(_), _) => opens && definition && tokens.len() == 4,
+        _ => false,
     }
 }
 

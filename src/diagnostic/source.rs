@@ -11,6 +11,9 @@ struct Data {
     identity: ImmutableString,
     text: ImmutableString,
     origin: Option<Origin>,
+    /// The lines past the file's own where macro calls among its items
+    /// are expanded.
+    expansions: Box<[Expansion]>,
 }
 
 /// Where a macro's expansion was asked for: every position in an expansion
@@ -21,6 +24,20 @@ pub(crate) struct Origin {
     pub(crate) source: Source,
     pub(crate) span: crate::Span,
     /// The macro, as the program writes it (`Serialize`).
+    pub(crate) name: ImmutableString,
+}
+
+/// Lines a source holds past its file's own, where the expansion of a
+/// macro call among its items is laid out (`parser::item_macro`): every
+/// position on them is reported at the call, as rustc reports an error in
+/// a macro's output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Expansion {
+    /// The first and the last of the lines.
+    pub(crate) lines: (usize, usize),
+    /// The call, in the file's own lines.
+    pub(crate) call: crate::Span,
+    /// The macro, as the call writes it.
     pub(crate) name: ImmutableString,
 }
 
@@ -42,6 +59,7 @@ impl Source {
             identity,
             text: text.into(),
             origin: None,
+            expansions: Box::default(),
         })))
     }
 
@@ -61,7 +79,32 @@ impl Source {
             identity,
             text: text.into(),
             origin: Some(origin),
+            expansions: Box::default(),
         })))
+    }
+
+    /// This source with its `text` past the file's own lines, which holds
+    /// the `expansions` of the calls among its items.
+    pub(crate) fn with_expansions(
+        &self,
+        text: impl Into<ImmutableString>,
+        expansions: Box<[Expansion]>,
+    ) -> Self {
+        Self(Shared::new(Data {
+            identity: self.0.identity.clone(),
+            text: text.into(),
+            origin: self.0.origin.clone(),
+            expansions,
+        }))
+    }
+
+    /// The expansion laid out on the line of `position`, if any.
+    pub(crate) fn expansion_at(&self, position: crate::Position) -> Option<&Expansion> {
+        let line = position.line()?;
+        self.0
+            .expansions
+            .iter()
+            .find(|expansion| (expansion.lines.0..=expansion.lines.1).contains(&line))
     }
 
     /// Where this expansion was asked for, when it is a macro's expansion.
