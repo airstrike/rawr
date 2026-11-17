@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-16",
+  "updated": "2026-11-17",
   "version": "0.3.231",
   "examples": {
     "running": 56,
@@ -12,7 +12,9 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs.","issues":[2148]}
+        {"text":"The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs.","issues":[2148]},
+        {"text":"A marked module can call a dependency's function-like proc macro by its path, such as `rust_decimal_macros::dec!(1.5)`, directly or through a library's re-export. rustc expands the call, and a save that changes its input expands it again.","issues":[1125],"refs":[1152]},
+        {"text":"When an iced example's build fails with no compiler error, the parity harness shows the last line the build printed rather than \"no error line\".","issues":[2154],"refs":[2146]}
       ]
     },
     "releases": [
@@ -3693,7 +3695,7 @@
     {"issue":1122,"title":"rawr mcp input tools on Windows and Linux","state":"open","category":"Health"},
     {"issue":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed","category":"Health","release":"0.3.168"},
     {"issue":1124,"title":"A direct proc-macro dependency fails rawr check as if Cargo.toml changed during the build","state":"closed","category":"Health","release":"0.3.169"},
-    {"issue":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"open","category":"Divergences from rustc"},
+    {"issue":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"closed","category":"Divergences from rustc"},
     {"issue":1126,"title":"A direct dependency whose only library is a Rust dylib stops the build","state":"open","category":"Health"},
     {"issue":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"open","category":"Health"},
@@ -4715,7 +4717,13 @@
     {"issue":2145,"title":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
     {"issue":2146,"title":"pokedex's and markdown's emulator half doesn't build under rawr on 0.3.229 (nightly sweep, Linux)","state":"open","category":"Divergences from rustc"},
     {"issue":2147,"title":"table's sim_table result is missing from rawr test's output on Linux (nightly sweep)","state":"open","category":"Health"},
-    {"issue":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"closed","category":"Health"}
+    {"issue":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"closed","category":"Health"},
+    {"issue":2149,"title":"A crate's proc macro named through `use` can't be called from a marked module","state":"open","category":"Divergences from rustc"},
+    {"issue":2150,"title":"A crate's function-like macro called in type or pattern position isn't expanded","state":"open","category":"Divergences from rustc"},
+    {"issue":2151,"title":"Crate macro calls are expanded one per check round","state":"open","category":"Platforms"},
+    {"issue":2152,"title":"Kept macro expansions aren't keyed by the macro crate's build, and call expansions are never removed","state":"open","category":"Platforms"},
+    {"issue":2153,"title":"rawr's cold build of a large iced example's test runner takes about 18 minutes and about 16 GB","state":"open","category":"Health"},
+    {"issue":2154,"title":"When an iced example's build fails with no compiler error, the parity harness shows the last…","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -5447,7 +5455,12 @@
             {"number":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed"},
             {"number":2146,"title":"pokedex's and markdown's emulator half doesn't build under rawr on 0.3.229 (nightly sweep, Linux)","state":"open"},
             {"number":2147,"title":"table's sim_table result is missing from rawr test's output on Linux (nightly sweep)","state":"open"},
-            {"number":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"closed"}
+            {"number":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"closed"},
+            {"number":2149,"title":"A crate's proc macro named through `use` can't be called from a marked module","state":"open"},
+            {"number":2150,"title":"A crate's function-like macro called in type or pattern position isn't expanded","state":"open"},
+            {"number":2151,"title":"Crate macro calls are expanded one per check round","state":"open"},
+            {"number":2152,"title":"Kept macro expansions aren't keyed by the macro crate's build, and call expansions are never removed","state":"open"},
+            {"number":2153,"title":"rawr's cold build of a large iced example's test runner takes about 18 minutes and about 16 GB","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -5745,7 +5758,7 @@
             {"number":1120,"title":"A lock with a path package and a git package of one name and version is refused as ambiguous","state":"closed"},
             {"number":1123,"title":"A lock's qualified spelling of a git dependency was read with its commit, so it was not found","state":"closed"},
             {"number":1124,"title":"A direct proc-macro dependency fails rawr check as if Cargo.toml changed during the build","state":"closed"},
-            {"number":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"open"},
+            {"number":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"closed"},
             {"number":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"closed"},
             {"number":1135,"title":"The generated target/rawr/crate manifest puts src/main.rs in both its lib and bin targets, so cargo warns","state":"closed"},
             {"number":1136,"title":"The runner's copy of a crate misses the files the crate reads at compile time, such as include_bytes! assets","state":"closed"},
