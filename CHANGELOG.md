@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A `&mut` destructuring inside a closure binds the place it names, whether of a `&mut` reference the closure captured, one that shadows its place's local, or the closure's own local. Each was refused with a false E0596 or panicked at run time. (#2200; part of #1152)
+- `tokio::select!` expands from tokio's own definition, so every form tokio accepts runs as tokio runs it, and rawr's separate `select!` expansion is gone. (#2204; part of #1152)
+- A match arm that an earlier arm makes unreachable is accepted, as rustc accepts it with a warning, rather than rejected. (#2205)
+- A crate macro that another of its macros calls through `$crate::` is extracted with it, and a dependency's macro written where a pattern goes expands there. (#2206; part of #1152)
+- An assignment in parentheses, such as `(sum += v)`, is an expression of type `()`, and macro hygiene no longer renames a closure parameter's type. (#2207)
 
 ## 0.3.248 (2026-11-17)
 

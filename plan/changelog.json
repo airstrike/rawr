@@ -5,7 +5,11 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A `&mut` destructuring inside a closure binds the place it names, whether of a `&mut` reference the closure captured, one that shadows its place's local, or the closure's own local. Each was refused with a false E0596 or panicked at run time.","issues":[2200],"refs":[1152]}
+      {"text":"A `&mut` destructuring inside a closure binds the place it names, whether of a `&mut` reference the closure captured, one that shadows its place's local, or the closure's own local. Each was refused with a false E0596 or panicked at run time.","issues":[2200],"refs":[1152]},
+      {"text":"`tokio::select!` expands from tokio's own definition, so every form tokio accepts runs as tokio runs it, and rawr's separate `select!` expansion is gone.","issues":[2204],"refs":[1152]},
+      {"text":"A match arm that an earlier arm makes unreachable is accepted, as rustc accepts it with a warning, rather than rejected.","issues":[2205]},
+      {"text":"A crate macro that another of its macros calls through `$crate::` is extracted with it, and a dependency's macro written where a pattern goes expands there.","issues":[2206],"refs":[1152]},
+      {"text":"An assignment in parentheses, such as `(sum += v)`, is an expression of type `()`, and macro hygiene no longer renames a closure parameter's type.","issues":[2207]}
     ]
   },
   "releases": [
