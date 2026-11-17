@@ -603,3 +603,29 @@ fn retirement_charges_the_excess_from_the_larger_measurement() {
     drop(repair);
     fixture.retire();
 }
+
+#[test]
+fn seal_settles_delayed_allocation_before_it_measures() {
+    /// `generated/b` grows a block at writeback, as ext4's delayed
+    /// allocation adds an extent index block after the writer closed it.
+    fn populate_delayed(attempt: &Attempt) {
+        populate(attempt);
+        seam::delay(&attempt.generated().join("b"), 3 * BLOCK_BYTES);
+    }
+    let mut fixture = Fixture::new("delayed-allocation");
+    let (root, pending) = fixture.sealed(populate_delayed, &[]);
+    // Writeback comes after the seal whether or not the seal pushed.
+    seam::settle(&root.join("generated/b"));
+    let reference = pending.reference;
+    let digest: [u8; 32] = Sha256::digest(SEAL).into();
+    assert_eq!(
+        measure(&root, true).unwrap(),
+        pending.charge,
+        "the seal records the settled allocation"
+    );
+    pending
+        .validate_unpublished(reference, SEAL.len(), digest)
+        .expect("a settled seal admits its own allocation");
+    drop(pending);
+    fixture.retire();
+}

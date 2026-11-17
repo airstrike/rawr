@@ -359,9 +359,10 @@ impl Attempt {
             None => root.join("seal"),
         };
         write_new(&path, &bytes)?;
-        let Measured { charge, geometry } = survey_observed_members(
+        let Measured { charge, geometry } = walk(
             &root,
             View::Pending,
+            Settle::Flush,
             budget,
             false,
             |path| Error::Corrupt {
@@ -1848,6 +1849,45 @@ fn survey_observed_members(
     require_frozen: bool,
     writable_member: impl Fn(PathBuf) -> Error,
     misshapen_member: impl Fn(PathBuf) -> Error,
+    member: impl FnMut(&Path, &fs::Metadata) -> Result<(), Error>,
+) -> Result<Measured, Error> {
+    walk(
+        root,
+        view,
+        Settle::Measure,
+        budget,
+        require_frozen,
+        writable_member,
+        misshapen_member,
+        member,
+    )
+}
+
+/// Whether a walk settles each regular member's allocation before it
+/// measures it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Settle {
+    /// Push each regular member's writes to the drive first. A filesystem
+    /// with delayed allocation (ext4, APFS) picks a written file's blocks,
+    /// and the extent blocks that index them, only at writeback, so its
+    /// allocated size can still grow after the writer closed it. Pushed, the
+    /// size the seal records is the one every later walk measures (#2146).
+    Flush,
+    /// Measure each member as it stands.
+    Measure,
+}
+
+/// [`survey_observed_members`], with each regular member settled first when
+/// `settle` asks.
+#[allow(clippy::too_many_arguments)]
+fn walk(
+    root: &Path,
+    view: View,
+    settle: Settle,
+    budget: Option<&crate::node::GraphBudget>,
+    require_frozen: bool,
+    writable_member: impl Fn(PathBuf) -> Error,
+    misshapen_member: impl Fn(PathBuf) -> Error,
     mut member: impl FnMut(&Path, &fs::Metadata) -> Result<(), Error>,
 ) -> Result<Measured, Error> {
     let future_allocation = view == View::Pending;
@@ -1870,13 +1910,16 @@ fn survey_observed_members(
                 // part of the bundle Rawr reads, charges or freezes.
                 continue;
             }
-            let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
+            let mut metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
                 operation: "inspect runner bundle member",
                 path: path.clone(),
                 source,
             })?;
             if metadata.file_type().is_symlink() {
                 return Err(misshapen_member(path));
+            }
+            if settle == Settle::Flush && metadata.is_file() && !hard_linked(&metadata) {
+                metadata = settled(&path)?;
             }
             if require_frozen && writable(&metadata) {
                 return Err(writable_member(path));
@@ -1923,6 +1966,25 @@ fn survey_observed_members(
             charge,
             geometry: geometry.finish()?,
         })
+    })
+}
+
+/// Push a regular member's writes so its allocation is final, then inspect
+/// it again: the walk measures the allocation the push left.
+fn settled(path: &Path) -> Result<fs::Metadata, Error> {
+    File::open(path)
+        .and_then(|file| super::entry::push_file(&file))
+        .map_err(|source| Error::Io {
+            operation: "settle runner bundle member",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    #[cfg(test)]
+    geometry::seam::settle(path);
+    fs::symlink_metadata(path).map_err(|source| Error::Io {
+        operation: "inspect runner bundle member",
+        path: path.to_path_buf(),
+        source,
     })
 }
 
