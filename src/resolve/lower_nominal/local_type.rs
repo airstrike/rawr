@@ -431,6 +431,9 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_reverse(&name) && self.models.get("Reverse").is_none() {
                 return self.parse_reverse_type();
             }
+            if self.pin_named(&name) && matches!(self.peek(), Token::LessThan) {
+                return self.parse_pin_type();
+            }
             if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
                 return self.parse_phantom_type();
             }
@@ -576,6 +579,9 @@ impl<'a> Parser<'a> {
         }
         if self.cow_named(&name) && matches!(self.peek(), Token::LessThan) && qualified.is_none() {
             return self.parse_cow_type();
+        }
+        if qualified.is_none() && matches!(self.peek(), Token::LessThan) && self.pin_named(&name) {
+            return self.parse_pin_type();
         }
         if name.as_str() == "PhantomData" && qualified.is_none() && self.models.get(&name).is_none()
         {

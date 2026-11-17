@@ -423,6 +423,62 @@ async fn main() {
     assert_eq!(ran(main), "quick Ok(3)\nslow true\njoined 4\n");
 }
 
+/// `std::future::poll_fn` polls futures by hand (#1152): its closure takes
+/// the task's `Context`, pins a script future and a crate future made a
+/// core one by `IntoFuture`, polls each with `Future::poll`, and matches
+/// `Poll::Ready` and `Poll::Pending`; `ready!` returns `Pending` from the
+/// closure, and a waker woken by hand polls it again. The output is
+/// `cargo run`'s.
+#[test]
+fn poll_fn_polls_script_and_crate_futures_by_hand() {
+    let main = r#"// rawr
+use std::future::{Future, IntoFuture};
+use std::pin::Pin;
+use std::task::{ready, Context, Poll};
+use std::time::Duration;
+
+async fn seven() -> i32 {
+    tokio::task::yield_now().await;
+    7
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let mut polls = 0;
+    let mut fut = seven();
+    let got = std::future::poll_fn(|cx: &mut Context<'_>| {
+        polls += 1;
+        let fut = unsafe { Pin::new_unchecked(&mut fut) };
+        match Future::poll(fut, cx) {
+            Poll::Ready(value) => Poll::Ready(value * 6),
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await;
+    println!("got {got} after {polls} polls");
+    let mut sleep = IntoFuture::into_future(tokio::time::sleep(Duration::from_millis(5)));
+    let slept = std::future::poll_fn(|cx| {
+        ready!(unsafe { Pin::new_unchecked(&mut sleep) }.poll(cx));
+        Poll::Ready("slept")
+    })
+    .await;
+    println!("{slept}");
+    let mut woken = 0;
+    let counted = std::future::poll_fn(|cx| {
+        woken += 1;
+        if woken < 3 {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        Poll::Ready(woken)
+    })
+    .await;
+    println!("counted {counted} {}", Poll::Ready(1).is_ready());
+}
+"#;
+    assert_eq!(ran(main), "got 42 after 2 polls\nslept\ncounted 3 true\n");
+}
+
 /// `select!` of several branches gives the body of the first future to
 /// end, whose pattern binds its output, and drops the others (#1152): a
 /// `Sleep` against a channel's `recv`, two sleeps, and a `biased;` select

@@ -1419,6 +1419,9 @@ impl Parser<'_> {
                         (**inner).clone()
                     }
                     (Ty::Result(_, inner), Prelude::Err) => (**inner).clone(),
+                    (polled, Prelude::Ready) if let Some(output) = self.poll_output(polled) => {
+                        output
+                    }
                     _ => return Ok(false),
                 };
                 let Some(payload) = payload else {
