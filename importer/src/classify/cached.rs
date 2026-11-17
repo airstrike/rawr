@@ -367,6 +367,47 @@ mod tests {
         assert_eq!(shared.allocation, decoded.allocation);
     }
 
+    /// The store writes support edges by the span of the item that required
+    /// them, so the edges of one provenance sit together, as the edges a
+    /// round adds sit beside their neighbours in the file, and a read puts
+    /// them back in the graph's order.
+    #[test]
+    fn a_stored_classification_writes_support_in_source_order_and_reads_it_in_graph_order() {
+        let limits = crate::limits::Limits::standard();
+        let policy = Policy::standard();
+        let graph = crate::test_fixture::interleaved_support_outcomes();
+        let product = Product::capture(&graph, &policy, &limits).expect("classify the graph");
+        let stored: serde_json::Value =
+            serde_json::from_slice(&product.canonical).expect("the stored bytes are JSON");
+        let provenances = stored["support"]
+            .as_array()
+            .expect("support is a sequence")
+            .iter()
+            .map(|edge| {
+                let (_, edge) = edge
+                    .as_object()
+                    .and_then(|edge| edge.iter().next())
+                    .expect("an edge is its outcome");
+                edge["provenance"].clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(provenances.len(), 3);
+        assert_eq!(
+            provenances
+                .windows(2)
+                .filter(|pair| pair[0] != pair[1])
+                .count(),
+            1,
+            "each provenance's edges are adjacent"
+        );
+        let captured = &product.captured.as_ref().expect("captured").parts;
+        let decoded = ClassifiedParts::decode(&product.canonical, &graph, &policy)
+            .expect("the stored bytes replay");
+        assert_eq!(decoded.support, captured.support);
+        assert_eq!(decoded.definitions, captured.definitions);
+        assert_eq!(decoded.outcomes, captured.outcomes);
+    }
+
     #[test]
     fn identical_generic_contract_validates_from_the_shared_node_without_reclassification() {
         let root = std::env::temp_dir().join(format!(
