@@ -18,16 +18,24 @@ use super::identity;
 use super::ledger;
 use super::model;
 
-/// Put `definitions` in source order.
-pub(crate) fn definitions(definitions: &mut [&model::Definition]) {
-    definitions
-        .sort_unstable_by(|left, right| (left.span(), left.id()).cmp(&(right.span(), right.id())));
+/// The places of `definitions` in their source order.
+pub(crate) fn definitions(definitions: &[&model::Definition]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..definitions.len()).collect();
+    order.sort_unstable_by(|left, right| {
+        let (left, right) = (definitions[*left], definitions[*right]);
+        (left.span(), left.id()).cmp(&(right.span(), right.id()))
+    });
+    order
 }
 
-/// Put `implementations` in source order.
-pub(crate) fn implementations(implementations: &mut [&model::Implementation]) {
-    implementations
-        .sort_unstable_by(|left, right| (left.span(), left.id()).cmp(&(right.span(), right.id())));
+/// The places of `implementations` in their source order.
+pub(crate) fn implementations(implementations: &[&model::Implementation]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..implementations.len()).collect();
+    order.sort_unstable_by(|left, right| {
+        let (left, right) = (implementations[*left], implementations[*right]);
+        (left.span(), left.id()).cmp(&(right.span(), right.id()))
+    });
+    order
 }
 
 /// Put `support` in the source order of each edge's provenance, the

@@ -413,7 +413,7 @@ impl Sysroot {
 impl Definition {
     pub(super) fn retain(&self, retained: &mut Retained) -> Option<()> {
         retained.node()?;
-        self.unit.retain(retained)?;
+        retained.unit(&self.unit)?;
         retained.string(&self.def_path_hash)
     }
 
@@ -459,7 +459,7 @@ impl Definition {
 impl Reexport {
     pub(super) fn retain(&self, retained: &mut Retained) -> Option<()> {
         retained.node()?;
-        self.unit.retain(retained)?;
+        retained.unit(&self.unit)?;
         retained.string(&self.def_path_hash)
     }
 

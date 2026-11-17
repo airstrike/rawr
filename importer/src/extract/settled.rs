@@ -27,6 +27,8 @@ use super::{raw_pair, Allocation, Catalog, EvidenceCategory, SealMode};
 #[derive(Clone)]
 pub(super) struct Settled {
     pub(super) body: Arc<[u8]>,
+    /// Where the selected ledgers sit in the body.
+    pub(super) places: api::selected::Places,
     pub(super) definitions: Arc<[model::Definition]>,
     pub(super) paths: Arc<[ledger::Path]>,
     pub(super) implementations: Arc<[model::Implementation]>,
@@ -54,6 +56,7 @@ impl Settled {
             semantic,
             context.resolution_universe(),
             Some(head),
+            self.places,
         );
         allocation.category(EvidenceCategory::Graph);
         allocation.final_graph(

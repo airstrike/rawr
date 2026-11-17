@@ -547,11 +547,12 @@ mod tests {
         assert_eq!(again, manifest);
     }
 
-    /// The store writes definitions in source order, so the ones a round
-    /// adds sit beside their neighbours in the file, and reads them back in
-    /// identity order.
+    /// A stored API writes each definition once, in its canonical body, and
+    /// each compiler unit once, in the body's table. A replay reads the
+    /// definitions back sharing one unit, and the retained graph is charged
+    /// for it once.
     #[test]
-    fn a_stored_api_writes_definitions_in_source_order_and_reads_them_in_identity_order() {
+    fn a_stored_api_writes_each_definition_and_each_unit_once() {
         use crate::api::{identity, model};
 
         let limits = Limits::standard();
@@ -592,16 +593,34 @@ mod tests {
         )
         .unwrap();
         let product = capture(graph);
-        let selected = String::from_utf8(product.stored().unwrap().selected.to_vec()).unwrap();
-        assert!(
-            selected.find("earlier_in_source").unwrap() < selected.find("later_in_source").unwrap()
-        );
         let bytes = product.encode().unwrap();
-        let replayed = replay(&read(&bytes), &limits).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
         assert_eq!(
-            replayed.definitions().cloned().collect::<Vec<_>>(),
-            definitions
+            text.matches("earlier_in_source").count(),
+            1,
+            "the selected ledger names the body's definition by its place"
         );
+        assert_eq!(
+            text.matches("\"cargo_id\"").count(),
+            1,
+            "both definitions name their unit by key"
+        );
+        let stored = product.stored().unwrap();
+        let decode = stored
+            .preflight(&limits, &Allocation::new(&limits))
+            .unwrap();
+        assert!(
+            decode.items >= stored.selected_usage.items
+                && decode.bytes >= stored.selected_usage.bytes,
+            "a unit both definitions share is charged once, as its table holds it once"
+        );
+        let replayed = replay(&read(&bytes), &limits).unwrap();
+        let read: Vec<_> = replayed.definitions().cloned().collect();
+        assert_eq!(read, definitions);
+        assert!(std::sync::Arc::ptr_eq(
+            read[0].id().shared_unit(),
+            read[1].id().shared_unit()
+        ));
     }
 
     #[test]
@@ -703,7 +722,13 @@ mod tests {
             std::sync::Arc::default(),
             std::sync::Arc::default(),
             std::sync::Arc::default(),
-            Graph::raw_pair(raw.clone(), semantic, Some(universe), None),
+            Graph::raw_pair(
+                raw.clone(),
+                semantic,
+                Some(universe),
+                None,
+                super::super::selected::Places::default(),
+            ),
             &mut allocation,
         )
         .expect("the pre-policy raw graph seals");
@@ -778,11 +803,11 @@ mod tests {
     fn replay_preflight_ignores_understated_ownership_and_honors_prior_spending() {
         let limits = Limits::standard();
         let mut product = capture(crate::test_fixture::captured_support_outcomes());
-        let decode = crate::extract::protocol::selected_preflight(
-            &product.stored().unwrap().selected,
-            &limits,
-        )
-        .unwrap();
+        let decode = product
+            .stored()
+            .unwrap()
+            .preflight(&limits, &Allocation::new(&limits))
+            .unwrap();
         assert!(decode.items >= product.stored().unwrap().selected_usage.items);
         assert!(decode.bytes >= product.stored().unwrap().selected_usage.bytes);
         eprintln!("API_DECODE_FIXTURE support retained_items={} retained_bytes={} decode_items={} decode_bytes={}",
@@ -811,11 +836,11 @@ mod tests {
         // A syntactically valid but ill-typed ledger reaches serde only after
         // the independent debit, irrespective of its zero ownership header.
         malformed.stored_mut().selected = br#"{"universe":null,"definitions":[false],"exports":[],"implementations":[],"scalar_predicate_proofs":[],"support":[],"anonymous":[]}"#.to_vec().into();
-        let decode = crate::extract::protocol::selected_preflight(
-            &malformed.stored().unwrap().selected,
-            &limits,
-        )
-        .unwrap();
+        let decode = malformed
+            .stored()
+            .unwrap()
+            .preflight(&limits, &Allocation::new(&limits))
+            .unwrap();
         let mut allocation = Allocation::new(&limits);
         let error = malformed
             .replay(&Context::fixture(), Vec::new(), &limits, &mut allocation)
@@ -883,11 +908,11 @@ mod tests {
         )
         .unwrap();
         let product = capture(graph);
-        let decode = crate::extract::protocol::selected_preflight(
-            &product.stored().unwrap().selected,
-            &limits,
-        )
-        .unwrap();
+        let decode = product
+            .stored()
+            .unwrap()
+            .preflight(&limits, &Allocation::new(&limits))
+            .unwrap();
         assert!(decode.items >= product.stored().unwrap().selected_usage.items);
         assert!(decode.bytes >= product.stored().unwrap().selected_usage.bytes);
         eprintln!("API_DECODE_FIXTURE nested retained_items={} retained_bytes={} decode_items={} decode_bytes={}",

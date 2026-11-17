@@ -131,6 +131,14 @@ pub(crate) fn read_fragments<T: DeserializeOwned>(bytes: &[u8]) -> serde_json::R
 /// Read one JSON value at any depth.
 #[cfg(feature = "rustc-driver")]
 pub(crate) fn read<T: DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
+    read_borrowed(bytes)
+}
+
+/// Read one JSON value at any depth, borrowing from `bytes` where it can.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn read_borrowed<'bytes, T: Deserialize<'bytes>>(
+    bytes: &'bytes [u8],
+) -> serde_json::Result<T> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     deserializer.disable_recursion_limit();
     let value = T::deserialize(serde_stacker::Deserializer::new(&mut deserializer))?;
