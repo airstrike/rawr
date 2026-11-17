@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs. (#2148)
 
 ## 0.3.231 (2026-11-16)
 

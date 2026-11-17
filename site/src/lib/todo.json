@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The iced parity harness gives an example's direct iced_winit or winit dependency x11 and wayland on Linux and the BSDs, as iced's workspace does, so integration builds there. The nightly sweep keeps each example's logs.","issues":[2148]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.231",
@@ -4710,7 +4715,7 @@
     {"issue":2145,"title":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
     {"issue":2146,"title":"pokedex's and markdown's emulator half doesn't build under rawr on 0.3.229 (nightly sweep, Linux)","state":"open","category":"Divergences from rustc"},
     {"issue":2147,"title":"table's sim_table result is missing from rawr test's output on Linux (nightly sweep)","state":"open","category":"Health"},
-    {"issue":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"open","category":"Health"}
+    {"issue":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -5442,7 +5447,7 @@
             {"number":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed"},
             {"number":2146,"title":"pokedex's and markdown's emulator half doesn't build under rawr on 0.3.229 (nightly sweep, Linux)","state":"open"},
             {"number":2147,"title":"table's sim_table result is missing from rawr test's output on Linux (nightly sweep)","state":"open"},
-            {"number":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"open"}
+            {"number":2148,"title":"The parity harness can't build iced's integration example on Linux: winit has no platform feature","state":"closed"}
           ],
           "milestone": "0.3"
         },

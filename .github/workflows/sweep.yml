@@ -124,6 +124,14 @@ jobs:
           name: iced-${{ matrix.shard }}
           path: target/iced-parity-report.json
           retention-days: 14
+      # Each example's logs, so a divergence seen only here can be read later.
+      - uses: actions/upload-artifact@v4
+        if: always() && env.NAMES != ''
+        with:
+          name: iced-logs-${{ matrix.shard }}
+          path: target/scratch/iced-examples/*/target/iced-parity/logs
+          if-no-files-found: ignore
+          retention-days: 14
 
   rustlings:
     needs: tools
@@ -171,7 +179,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: iced-*
+          pattern: iced-[0-9]*
           path: reports
       - name: Count the examples that agree
         run: |
