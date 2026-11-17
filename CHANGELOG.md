@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr run --web` runs a program with no dependencies, such as one marked .rs file, in the browser and reloads its saves there. Every such program shares one runner of rawr and std, built once per rawr version, and the page shows what the program prints. (#2122)
 
 ## 0.3.225 (2026-11-16)
 

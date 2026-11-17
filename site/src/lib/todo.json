@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr run --web` runs a program with no dependencies, such as one marked .rs file, in the browser and reloads its saves there. Every such program shares one runner of rawr and std, built once per rawr version, and the page shows what the program prints.","issues":[2122]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.225",
@@ -4635,7 +4640,7 @@
     {"issue":2119,"title":"`rawr run --web` builds a project's crates and runner for wasm32, serves its page on localhost…","state":"closed","category":"Platforms","release":"0.3.219"},
     {"issue":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"closed","category":"Platforms","release":"0.3.221"},
-    {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open","category":"Platforms"},
+    {"issue":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"closed","category":"Platforms"},
     {"issue":2123,"title":"`rawr run --web script.rs` runs a cargo script with dependencies in its frontmatter in a…","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2124,"title":"`rawr run --web` packs a runner for a project that doesn't itself depend on wasm-bindgen","state":"closed","category":"Platforms","release":"0.3.220"},
     {"issue":2125,"title":"On Linux, rustlings' iterators1 exercise fails its tests' build with E0282 under rawr where rustc gives E0599","state":"closed","category":"Divergences from rustc"},
@@ -4649,7 +4654,8 @@
     {"issue":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
     {"issue":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"open","category":"Divergences from rustc"},
     {"issue":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"open","category":"Divergences from rustc"},
-    {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"open","category":"Divergences from rustc"}
+    {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"open","category":"Divergences from rustc"},
+    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -6386,8 +6392,9 @@
             {"number":2117,"title":"An edit to the async loop a browser program is suspended in kills the instance with no message on the page","state":"closed"},
             {"number":2120,"title":"A browser project's uncovered crate use says 'not available in this prebuilt runner', and its errors name absolute paths","state":"closed"},
             {"number":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"closed"},
-            {"number":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"open"},
-            {"number":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed"}
+            {"number":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"closed"},
+            {"number":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed"},
+            {"number":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open"}
           ]
         },
         {
