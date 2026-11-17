@@ -71,9 +71,9 @@ enum Kind {
     Native(Make),
     /// Futures polled together; their outputs in order, as a tuple.
     Join(Vec<Future>),
-    /// Futures polled in order till one ends: a tuple of an `Option` per
-    /// future, the one that ended's output in its own.
-    Select(Vec<Future>),
+    /// Futures polled till one ends with `Some`: a tuple of an `Option` per
+    /// future, that one's in its own. Polled in order when biased.
+    Select(Vec<Future>, bool),
     /// A value already there.
     Ready(Dynamic),
 }
@@ -121,13 +121,16 @@ impl Future {
         Self::of(Kind::Join(parts))
     }
 
-    /// The futures in `parts`, polled in order till the first ends, as
-    /// `select!` polls its branches: a tuple of an `Option` per future,
-    /// `Some` of that one's output. The others are dropped then, as
-    /// `select!` drops them.
+    /// The futures in `parts`, each giving an `Option`, polled as
+    /// `select!` polls its branches: from a random one each time, or in
+    /// order when `biased`. A part that ends with `None` is a branch whose
+    /// pattern didn't match: it is dropped and the rest polled on. The
+    /// output is a tuple of an `Option` per part, the `Some` that ended one
+    /// in its own, or all `None` once every part has ended so. The others
+    /// are dropped then, as `select!` drops them.
     #[must_use]
-    pub fn select(parts: Vec<Self>) -> Self {
-        Self::of(Kind::Select(parts))
+    pub fn select(parts: Vec<Self>, biased: bool) -> Self {
+        Self::of(Kind::Select(parts, biased))
     }
 
     /// A future whose output is `value`.
@@ -353,6 +356,25 @@ fn failure(message: impl Into<String>) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into().into(), Position::NONE).into()
 }
 
+/// A number below `count`, from a generator each thread seeds at random,
+/// as tokio picks the branch an unbiased `select!` polls first.
+fn random_below(count: usize) -> usize {
+    use std::hash::{BuildHasher, RandomState};
+    thread_local! {
+        static STATE: Cell<u64> = Cell::new(RandomState::new().hash_one(0_u8) | 1);
+    }
+    STATE.with(|state| {
+        // xorshift64: the next state is the number.
+        let mut next = state.get();
+        next ^= next << 13;
+        next ^= next >> 7;
+        next ^= next << 17;
+        state.set(next);
+        let count = u64::try_from(count.max(1)).unwrap_or(u64::MAX);
+        usize::try_from(next % count).unwrap_or(0)
+    })
+}
+
 enum Poller {
     Script(Box<Stepper>),
     Native {
@@ -363,8 +385,9 @@ enum Poller {
     /// Each part until it ends, then its output: a part that ended is
     /// dropped then, with what it captured, as `join!` drops it.
     Join(Vec<(Option<Poller>, Option<Dynamic>)>),
-    /// Each part till the first ends; all of them are dropped then.
-    Select(Vec<Poller>),
+    /// Each part still polled, till one ends with `Some`; all of them are
+    /// dropped then. A part that ended with `None` is gone.
+    Select(Vec<Option<Poller>>, bool),
     Ready(Option<Dynamic>),
     Failed(Option<Box<EvalAltResult>>),
 }
@@ -392,7 +415,10 @@ impl From<&Future> for Poller {
                     .map(|part| (Some(Self::from(part)), None))
                     .collect(),
             ),
-            Some(Kind::Select(parts)) => Self::Select(parts.iter().map(Self::from).collect()),
+            Some(Kind::Select(parts, biased)) => Self::Select(
+                parts.iter().map(|part| Some(Self::from(part))).collect(),
+                biased,
+            ),
             Some(Kind::Ready(value)) => Self::Ready(Some(value)),
         }
     }
@@ -458,23 +484,33 @@ impl Poller {
                         .collect(),
                 )))
             }
-            Self::Select(parts) => {
-                let ended = parts.iter_mut().enumerate().find_map(|(index, poller)| {
-                    match poller.poll(cx) {
-                        Pending => None,
-                        Ready(output) => Some((index, output)),
-                    }
-                });
-                let Some((index, output)) = ended else {
-                    return Pending;
-                };
+            Self::Select(parts, biased) => {
                 let count = parts.len();
+                let start = if *biased { 0 } else { random_below(count) };
+                let mut ended = None;
+                for index in (start..count).chain(0..start) {
+                    let Some(poller) = parts[index].as_mut() else {
+                        continue;
+                    };
+                    match poller.poll(cx) {
+                        Pending => {}
+                        Ready(Err(error)) => return Ready(Err(error)),
+                        Ready(Ok(output)) if crate::option::read(&output).flatten().is_some() => {
+                            ended = Some((index, output));
+                            break;
+                        }
+                        // Its pattern didn't match: the branch is disabled.
+                        Ready(Ok(_)) => parts[index] = None,
+                    }
+                }
+                if ended.is_none() && parts.iter().any(Option::is_some) {
+                    return Pending;
+                }
                 *self = Self::Failed(None);
-                let mut output = Some(output?);
                 Ready(Ok(Dynamic::from_array(
                     (0..count)
-                        .map(|at| match output.take_if(|_| at == index) {
-                            Some(value) => crate::option::some(value),
+                        .map(|at| match ended.take_if(|(index, _)| *index == at) {
+                            Some((_, output)) => output,
                             None => crate::option::none(),
                         })
                         .collect(),
