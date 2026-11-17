@@ -1,5 +1,7 @@
 //! Canonical export-path, implementation, and completeness outcomes.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::{identity, model, Retained};
@@ -38,20 +40,22 @@ pub struct AnonymousImport {
 }
 
 /// One exact compiler-recorded hop in a public re-export chain.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "canonical re-export evidence stays inline so identity and span cannot separate"
-)]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum Reexport {
-    /// A source item with inseparable compiler identity and diagnostic position.
-    Identified {
-        kind: ReexportKind,
-        item: identity::Reexport,
-        span: model::Span,
-    },
+    /// A source item with inseparable compiler identity and diagnostic
+    /// position, shared by every export through it: a stored API writes
+    /// each hop once and names it by key (`keyed`).
+    Identified(#[serde(with = "super::keyed")] Arc<Hop>),
     /// A compiler-created macro import/export without an addressable item.
     IdentitylessMacro { kind: ReexportKind },
+}
+
+/// A re-export hop through a source `use` item.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub struct Hop {
+    kind: ReexportKind,
+    item: identity::Reexport,
+    span: model::Span,
 }
 
 /// rustc's closed classification for a re-export hop.
@@ -404,20 +408,17 @@ impl Reexport {
     fn retain(&self, retained: &mut Retained) -> Option<()> {
         retained.node()?;
         match self {
-            Self::Identified { item, span, .. } => {
-                item.retain(retained)?;
-                span.retain(retained)
-            }
+            Self::Identified(hop) => retained.hop(hop),
             Self::IdentitylessMacro { .. } => Some(()),
         }
     }
 
-    pub(crate) const fn identified(
+    pub(crate) fn identified(
         kind: ReexportKind,
         item: identity::Reexport,
         span: model::Span,
     ) -> Self {
-        Self::Identified { kind, item, span }
+        Self::Identified(Arc::new(Hop { kind, item, span }))
     }
 
     pub(crate) const fn identityless_macro(kind: ReexportKind) -> Self {
@@ -425,26 +426,40 @@ impl Reexport {
     }
 
     /// The compiler's closed re-export kind.
-    pub const fn kind(&self) -> ReexportKind {
+    pub fn kind(&self) -> ReexportKind {
         match self {
-            Self::Identified { kind, .. } | Self::IdentitylessMacro { kind } => *kind,
+            Self::Identified(hop) => hop.kind,
+            Self::IdentitylessMacro { kind } => *kind,
         }
     }
 
     /// Exact use-item identity, absent only for compiler macro-use/export hops.
-    pub const fn item(&self) -> Option<&identity::Reexport> {
+    pub fn item(&self) -> Option<&identity::Reexport> {
         match self {
-            Self::Identified { item, .. } => Some(item),
+            Self::Identified(hop) => Some(&hop.item),
             Self::IdentitylessMacro { .. } => None,
         }
     }
 
     /// Use-item metadata diagnostic position, absent for identityless macro hops.
-    pub const fn span(&self) -> Option<&model::Span> {
+    pub fn span(&self) -> Option<&model::Span> {
         match self {
-            Self::Identified { span, .. } => Some(span),
+            Self::Identified(hop) => Some(&hop.span),
             Self::IdentitylessMacro { .. } => None,
         }
+    }
+}
+
+impl Hop {
+    pub(crate) fn retain(&self, retained: &mut Retained) -> Option<()> {
+        retained.node()?;
+        self.item.retain(retained)?;
+        self.span.retain(retained)
+    }
+
+    /// The `use` item's identity.
+    pub const fn item(&self) -> &identity::Reexport {
+        &self.item
     }
 }
 

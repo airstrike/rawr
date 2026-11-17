@@ -4053,7 +4053,7 @@ impl Candidate {
         allocation.sort_keys(paths.len());
         let (paths, exports): (Vec<_>, Vec<_>) = paths.into_iter().unzip();
         let places = api::selected::Places::new(
-            body.units,
+            body.tables,
             body.definitions
                 .iter()
                 .map(|place| retained_definitions[*place]),
@@ -4929,8 +4929,8 @@ fn insert_fixed_support(
 /// their context and invocations.
 struct Body {
     bytes: Vec<u8>,
-    /// The units the body names by key.
-    units: api::units::Keyed,
+    /// The re-export hops and units the body names by key.
+    tables: api::keyed::Tables,
     /// The place of each definition the body writes, in its order, among
     /// the candidate's.
     definitions: Vec<usize>,
@@ -4979,16 +4979,18 @@ fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Body> 
         implementations: &implementations,
         scalar_predicate_proofs: &candidate.scalar_predicate_proofs,
     };
-    let (bytes, units) =
-        api::units::Keyed::default().write(|| api::semantic::encode_once(&body, allocation));
+    let (bytes, tables) =
+        api::keyed::Tables::default().write(|| api::semantic::encode_once(&body, allocation));
     let mut bytes = bytes?;
-    units.close(&mut bytes).map_err(|error| Error::Extraction {
-        code: "raw-canonical-encoding",
-        reason: error.to_string().into_boxed_str(),
-    })?;
+    tables
+        .close(&api::keyed::Tables::default(), &mut bytes)
+        .map_err(|error| Error::Extraction {
+            code: "raw-canonical-encoding",
+            reason: error.to_string().into_boxed_str(),
+        })?;
     Ok(Body {
         bytes,
-        units,
+        tables,
         definitions: definition_order,
         implementations: implementation_order,
     })
@@ -6250,13 +6252,11 @@ fn anonymous_import(
         return Err(extraction("anonymous-import-alias", target.def_path_hash()));
     }
     validate_alias_chain(&export, definitions, spellings)?;
-    if !matches!(
-        export.reexports.last(),
-        Some(ledger::Reexport::Identified {
-            kind: ledger::ReexportKind::Single,
-            ..
-        })
-    ) {
+    if !export
+        .reexports
+        .last()
+        .is_some_and(|hop| hop.item().is_some() && hop.kind() == ledger::ReexportKind::Single)
+    {
         return Err(extraction(
             "anonymous-import-provenance",
             target.def_path_hash(),
