@@ -1171,3 +1171,20 @@ main();
 "#;
     assert_eq!(printed(source), "[5, 6]\n2 0 3\n");
 }
+
+/// `()` is a scrutinee as any other value is, matched by `()`, `_` or a
+/// binding, through a reference too. The output is rustc's build of the
+/// same program.
+#[test]
+fn a_unit_value_is_matched() {
+    let source = r#"
+fn main() {
+    let out = ();
+    let a = match &out { () => true, _ => false };
+    let b = match out { () => 1 };
+    println!("{a} {b}");
+}
+main();
+"#;
+    assert_eq!(printed(source), "true 1\n");
+}

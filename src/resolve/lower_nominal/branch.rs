@@ -151,6 +151,7 @@ impl<'a> Parser<'a> {
             | Ty::String
             | Ty::Str
             | Ty::Bool
+            | Ty::Unit
             | Ty::Float(_)
             | Ty::Ordering
             | Ty::Host { .. } => subject.rendered_source(),
