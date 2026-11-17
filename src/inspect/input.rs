@@ -12,7 +12,9 @@
 //! title bar included, as a capture of the window shows it. The window
 //! also shows an agent cursor where the last pointer event was, drawn
 //! above the program's own drawing: the program's layout and events don't
-//! change for it.
+//! change for it. A pointer input moves that cursor from where it rests to
+//! its point along a short curve, the pointer moving with it, before a
+//! button goes down there (see [`travel`]).
 //!
 //! Input sent before the program's first window opens waits for it, as a
 //! program just started or restarted opens it a few turns of its event
@@ -24,6 +26,8 @@
 
 #[cfg(target_os = "macos")]
 pub(super) mod appkit;
+#[cfg(target_os = "macos")]
+mod travel;
 
 #[cfg(target_os = "macos")]
 pub(super) use appkit::capture;
