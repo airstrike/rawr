@@ -8,8 +8,8 @@
 //! implementations it keeps as runs of their places in the body, and each
 //! path as a run of the body exports it is imported from, or whole when the
 //! policy excluded or rejected it. The body and the selected ledger name
-//! their units by key (`units::Keyed`), and the selected ledger's table
-//! holds only the units the body's does not.
+//! their re-export hops and units by key (`keyed::Tables`), and the
+//! selected ledger's tables hold only the ones the body's do not.
 
 use std::ops::Range;
 #[cfg(feature = "rustc-driver")]
@@ -19,14 +19,14 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "rustc-driver")]
 use serde_json::value::RawValue;
 
-use super::{layout, ledger, model, units, Captured, Graph};
+use super::{keyed, layout, ledger, model, Captured, Graph};
 use crate::{Error, Result};
 
 /// Where a graph's selected ledgers sit in its canonical body.
 #[derive(Clone, Default)]
 pub(crate) struct Places {
-    /// The units the body names, by key.
-    units: units::Keyed,
+    /// The re-export hops and units the body names, by key.
+    tables: keyed::Tables,
     /// The kept definitions, as runs of their places in the body's.
     definitions: Box<[Range<u32>]>,
     /// The kept implementations, as runs of their places in the body's.
@@ -79,7 +79,10 @@ struct Stored<'bytes> {
     anonymous: &'bytes RawValue,
     #[serde(borrow)]
     index: &'bytes RawValue,
-    units: units::Keyed,
+    #[serde(borrow)]
+    reexports: &'bytes RawValue,
+    #[serde(borrow)]
+    units: &'bytes RawValue,
 }
 
 /// The ledgers a stored selected ledger gives, in the identity order a
@@ -97,18 +100,18 @@ pub(super) struct Read {
 }
 
 impl Places {
-    /// The places of the ledgers selected from a body whose units `units`
-    /// names: `definitions` and `implementations` say, for each of the
+    /// The places of the ledgers selected from a body whose hops and units
+    /// `tables` names: `definitions` and `implementations` say, for each of the
     /// body's in its order, whether it is kept, and `exports` names each
     /// selected path's body export, if it is imported from one.
     pub(crate) fn new(
-        units: units::Keyed,
+        tables: keyed::Tables,
         definitions: impl IntoIterator<Item = bool>,
         implementations: impl IntoIterator<Item = bool>,
         exports: Box<[Option<u32>]>,
     ) -> Result<Self> {
         Ok(Self {
-            units,
+            tables,
             definitions: runs(definitions)?,
             implementations: runs(implementations)?,
             exports,
@@ -116,16 +119,16 @@ impl Places {
     }
 
     /// The places of a graph whose body is its selected ledgers and names
-    /// their units in `units`, with its paths written whole.
+    /// their hops and units in `tables`, with its paths written whole.
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn whole(
-        units: units::Keyed,
+        tables: keyed::Tables,
         definitions: usize,
         implementations: usize,
         exports: usize,
     ) -> Result<Self> {
         Self::new(
-            units,
+            tables,
             std::iter::repeat_n(true, definitions),
             std::iter::repeat_n(true, implementations),
             std::iter::repeat_n(None, exports).collect(),
@@ -160,11 +163,11 @@ impl Places {
             index: &graph.index,
         };
         let (encoded, taken) = self
-            .units
+            .tables
             .write(|| super::semantic::encode_once(&written, allocation));
         let mut encoded = encoded?;
         taken
-            .close(&mut encoded)
+            .close(&self.tables, &mut encoded)
             .map_err(|error| Error::Extraction {
                 code: "semantic-api-encoding",
                 reason: error.to_string().into_boxed_str(),
@@ -182,17 +185,16 @@ pub(super) fn read(selected: &[u8], body: &super::semantic::Sections<'_>) -> Res
         reason: error.to_string().into_boxed_str(),
     };
     let stored: Stored<'_> = crate::extract::sidecar::read_borrowed(selected).map_err(schema)?;
-    let units = match body.units {
-        Some(units) => {
-            crate::extract::sidecar::read::<units::Keyed>(units.get().as_bytes()).map_err(schema)?
-        }
-        None => units::Keyed::default(),
-    };
-    let units = units.with(stored.units).ok_or_else(|| Error::Extraction {
+    let tables = keyed::Tables::of([
+        (body.reexports, body.units),
+        (Some(stored.reexports), Some(stored.units)),
+    ])
+    .map_err(schema)?
+    .ok_or_else(|| Error::Extraction {
         code: "stored-selected-schema",
-        reason: "the selected ledger's units take keys its body's hold".into(),
+        reason: "the selected ledger's tables take keys its body's hold".into(),
     })?;
-    units.read(|| {
+    tables.read(|| {
         let mut definitions = kept(
             decode::<model::Definition>(body.definitions).map_err(schema)?,
             &stored.definitions,

@@ -623,6 +623,104 @@ mod tests {
         ));
     }
 
+    /// Two exports through one `pub use` write its re-export hop once, in
+    /// the body's table; a replay reads both back sharing the hop, and the
+    /// retained graph is charged for it once.
+    #[test]
+    fn a_stored_api_writes_each_reexport_hop_once() {
+        use crate::api::{identity, ledger, model};
+
+        let limits = Limits::standard();
+        let fixture = crate::test_fixture::captured_support_outcomes();
+        let unit = fixture
+            .definitions()
+            .next()
+            .unwrap()
+            .id()
+            .shared_unit()
+            .clone();
+        let span = |at: u32| model::Span::new("src/lib.rs".into(), at, at + 1, 1, at, 1, at + 1);
+        let module = |hash: &str, name: &str| {
+            model::Definition::new(
+                identity::Definition::new(unit.clone(), hash.into(), identity::Namespace::Type),
+                Box::from([Box::<str>::from(name)]),
+                model::Owner::Free,
+                model::Visibility::Public,
+                model::Kind::Module,
+                span(1),
+                model::Origin::Source,
+            )
+        };
+        let definitions = vec![
+            module("00000000000000000000000000000001", "first"),
+            module("00000000000000000000000000000002", "second"),
+        ];
+        let export = |definition: &model::Definition, name: &str| {
+            ledger::Path::Imported(ledger::Export::new(
+                identity::Export::new(
+                    "dependency".into(),
+                    Box::from([Box::<str>::from(name)]),
+                    identity::Namespace::Type,
+                ),
+                definition.id().clone(),
+                Box::default(),
+                // Each export holds its own allocation of the one hop.
+                Box::from([ledger::Reexport::identified(
+                    ledger::ReexportKind::Glob,
+                    identity::Reexport::new(
+                        unit.clone(),
+                        "00000000000000000000000000000003".into(),
+                    ),
+                    model::Span::new("src/glob_hop.rs".into(), 5, 6, 1, 5, 1, 6),
+                )]),
+                span(2),
+            ))
+        };
+        let exports = vec![
+            export(&definitions[0], "first"),
+            export(&definitions[1], "second"),
+        ];
+        let graph = Graph::seal(
+            &Context::fixture(),
+            Vec::new(),
+            definitions,
+            exports.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &mut Allocation::new(&limits),
+        )
+        .unwrap();
+        let product = capture(graph);
+        let bytes = product.encode().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&bytes).matches("glob_hop").count(),
+            1,
+            "both exports name the hop by key"
+        );
+        let stored = product.stored().unwrap();
+        let decode = stored
+            .preflight(&limits, &Allocation::new(&limits))
+            .unwrap();
+        assert!(
+            decode.items >= stored.selected_usage.items
+                && decode.bytes >= stored.selected_usage.bytes,
+            "a hop both exports share is charged once, as its table holds it once"
+        );
+        let replayed = replay(&read(&bytes), &limits).unwrap();
+        let read: Vec<_> = replayed.exports().cloned().collect();
+        assert_eq!(read, exports);
+        let hop = |path: &ledger::Path| match path {
+            ledger::Path::Imported(export) => match export.reexports().next() {
+                Some(ledger::Reexport::Identified(hop)) => hop.clone(),
+                _ => panic!("the export keeps its hop"),
+            },
+            _ => panic!("the path is imported"),
+        };
+        assert!(std::sync::Arc::ptr_eq(&hop(&read[0]), &hop(&read[1])));
+    }
+
     #[test]
     fn stored_graph_roundtrips_and_replays_the_same_semantic_graph() {
         let limits = Limits::standard();

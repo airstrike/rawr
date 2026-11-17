@@ -13,6 +13,7 @@ use crate::{Error, Result};
 pub(crate) mod decode;
 pub(crate) mod frame;
 pub mod identity;
+pub(crate) mod keyed;
 pub(crate) mod layout;
 pub mod ledger;
 pub mod model;
@@ -174,7 +175,8 @@ pub(crate) struct Usage {
 /// storage contributes its exact byte length. A compiler unit is charged
 /// once, where an identity first names it: every identity of one unit
 /// shares it, as a stored graph's identities read back share each unit of
-/// its table (#2166).
+/// its table (#2166). A re-export hop is charged once the same way, where
+/// an export first names it (#2169).
 pub(crate) struct Retained {
     items: usize,
     bytes: usize,
@@ -185,6 +187,10 @@ pub(crate) struct Retained {
     /// The units charged so far. Two allocations of one unit are one
     /// unit, so a graph is charged the same whichever its identities share.
     units: std::collections::BTreeSet<Arc<identity::Unit>>,
+    /// The allocations of the re-export hops charged so far.
+    hop_allocations: std::collections::BTreeSet<*const ledger::Hop>,
+    /// The re-export hops charged so far, each once, as for units.
+    hops: std::collections::BTreeSet<Arc<ledger::Hop>>,
 }
 
 #[derive(Clone, Copy)]
@@ -269,6 +275,8 @@ impl Retained {
             categories: [Usage { items: 0, bytes: 0 }; RetainedCategory::COUNT],
             allocations: std::collections::BTreeSet::new(),
             units: std::collections::BTreeSet::new(),
+            hop_allocations: std::collections::BTreeSet::new(),
+            hops: std::collections::BTreeSet::new(),
         }
     }
 
@@ -278,6 +286,14 @@ impl Retained {
             return Some(());
         }
         unit.retain(self)
+    }
+
+    /// Charge `hop` the first time an export names it.
+    pub(crate) fn hop(&mut self, hop: &Arc<ledger::Hop>) -> Option<()> {
+        if !self.hop_allocations.insert(Arc::as_ptr(hop)) || !self.hops.insert(Arc::clone(hop)) {
+            return Some(());
+        }
+        hop.retain(self)
     }
 
     pub(crate) fn node(&mut self) -> Option<()> {
@@ -1044,9 +1060,9 @@ impl Graph<Captured> {
             code: "canonical-encoding",
             reason: error.to_string().into_boxed_str(),
         };
-        // The semantic encoding names the canonical's units by the same
-        // keys: it is the canonical under another head.
-        let (canonical, units) = units::Keyed::default().write(|| {
+        // The semantic encoding names the canonical's hops and units by the
+        // same keys: it is the canonical under another head.
+        let (canonical, tables) = keyed::Tables::default().write(|| {
             semantic::encode_once(
                 &Canonical {
                     context,
@@ -1062,10 +1078,12 @@ impl Graph<Captured> {
             )
         });
         let mut canonical = canonical?;
-        units.close(&mut canonical).map_err(encoding)?;
+        tables
+            .close(&keyed::Tables::default(), &mut canonical)
+            .map_err(encoding)?;
         semantic::admit(canonical.len(), allocation)?;
         let head = frame::Head::of(&canonical, None, context, &invocations);
-        let (semantic, _) = units.write(|| {
+        let (semantic, _) = tables.write(|| {
             semantic::encode_once(
                 &Canonical {
                     context: semantic::Context(context),
@@ -1081,10 +1099,12 @@ impl Graph<Captured> {
             )
         });
         let mut semantic = semantic?;
-        units.close(&mut semantic).map_err(encoding)?;
+        tables
+            .close(&keyed::Tables::default(), &mut semantic)
+            .map_err(encoding)?;
         semantic::admit(semantic.len(), allocation)?;
         let places = selected::Places::whole(
-            units,
+            tables,
             definitions.len(),
             implementations.len(),
             exports.len(),
@@ -1303,13 +1323,9 @@ impl Graph<Captured> {
         for import in self.anonymous.iter() {
             if import.binding_path().len() == 0
                 || import.aliases().len() == 0
-                || !matches!(
-                    import.reexports().last(),
-                    Some(ledger::Reexport::Identified {
-                        kind: ledger::ReexportKind::Single,
-                        ..
-                    })
-                )
+                || !import.reexports().last().is_some_and(|hop| {
+                    hop.item().is_some() && hop.kind() == ledger::ReexportKind::Single
+                })
             {
                 return Err(Error::Extraction {
                     code: "anonymous-import-ledger-evidence",
