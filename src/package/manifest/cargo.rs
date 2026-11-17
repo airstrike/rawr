@@ -220,36 +220,46 @@ impl Cargo {
     /// build's dev-dependencies, the general ones and then the tables',
     /// join the normal list after its own, as `cargo test` links them
     /// into the test harness alone. A key the list already has keeps its
-    /// first entry.
+    /// first entry, which gains the features of each later one whose table
+    /// holds there, as Cargo unifies one package's declarations.
     #[must_use]
     pub(crate) fn on_host(mut self, host: Host<'_>) -> Self {
         let (crates, build_crates, mode) = match host {
             Host::Built(unit) => (Some(unit.crates()), Some(unit.build_crates()), unit.mode()),
             Host::Unasked(mode) => (None, None, mode),
         };
-        let targets: Vec<Targeted> = std::mem::take(&mut self.targets)
+        // Each table that may hold, and whether its `cfg(..)` is known to
+        // hold, so its features reach an entry another table declares.
+        let targets: Vec<(Targeted, bool)> = std::mem::take(&mut self.targets)
             .into_vec()
             .into_iter()
-            .filter(|target| match host {
-                Host::Built(unit) => {
-                    platform_holds(&target.platform, unit.features()) != Some(false)
-                }
-                Host::Unasked(_) => true,
+            .filter_map(|target| match host {
+                Host::Built(unit) => match platform_holds(&target.platform, unit.features()) {
+                    Some(false) => None,
+                    held => Some((target, held.is_some())),
+                },
+                Host::Unasked(_) => Some((target, false)),
             })
             .collect();
-        for target in &targets {
-            join(&mut self.dependencies, &target.dependencies, crates);
+        for (target, holds) in &targets {
+            join(&mut self.dependencies, &target.dependencies, crates, *holds);
             join(
                 &mut self.build_dependencies,
                 &target.build_dependencies,
                 build_crates,
+                *holds,
             );
         }
         let dev_dependencies = std::mem::take(&mut self.dev_dependencies);
         if mode == crate::project::cargo::Mode::Test {
-            join(&mut self.dependencies, &dev_dependencies, crates);
-            for target in &targets {
-                join(&mut self.dependencies, &target.dev_dependencies, crates);
+            join(&mut self.dependencies, &dev_dependencies, crates, true);
+            for (target, holds) in &targets {
+                join(
+                    &mut self.dependencies,
+                    &target.dev_dependencies,
+                    crates,
+                    *holds,
+                );
             }
         }
         self
@@ -362,19 +372,37 @@ fn predicate(rest: &mut &str, features: &Enabled) -> Option<bool> {
 
 /// `more` joined to `list`: each whose name is one of `crates`, the names
 /// Cargo links on the host, or each when Cargo was not asked. A key the
-/// list already has keeps its first entry.
+/// list already has keeps its first entry. When `unify`, the table of
+/// `more` holds on the host, and a later entry Cargo builds whenever the
+/// first one is built adds its features and default features to it.
 fn join(
     list: &mut Box<[rust::Dependency]>,
     more: &[rust::Dependency],
     crates: Option<&[Box<str>]>,
+    unify: bool,
 ) {
     let holds = |dependency: &rust::Dependency| {
         crates.is_none_or(|crates| crates.iter().any(|name| **name == *dependency.alias))
     };
     let mut joined = std::mem::take(list).into_vec();
-    for dependency in more {
-        if holds(dependency) && !joined.iter().any(|known| known.alias == dependency.alias) {
+    for dependency in more.iter().filter(|dependency| holds(dependency)) {
+        let Some(known) = joined
+            .iter_mut()
+            .find(|known| known.alias == dependency.alias)
+        else {
             joined.push(dependency.clone());
+            continue;
+        };
+        if unify && (known.optional || !dependency.optional) {
+            let mut features = known.features.to_vec();
+            for feature in &dependency.features {
+                if !features.contains(feature) {
+                    features.push(feature.clone());
+                }
+            }
+            known.features = features.into_boxed_slice();
+            known.default_features |= dependency.default_features;
+            known.optional &= dependency.optional;
         }
     }
     *list = joined.into_boxed_slice();
@@ -473,6 +501,60 @@ tokio = { version = "1", features = ["rt"] }
         assert_eq!(
             features(&["target_arch=\"aarch64\"", "unix"]),
             ["rt-multi-thread"]
+        );
+    }
+
+    /// A dependency the general table declares and a holding
+    /// `[target.'cfg(..)']` table declares again has the features of both,
+    /// as Cargo unifies them, and a table that doesn't hold adds none.
+    #[test]
+    fn a_holding_target_table_adds_its_features_to_a_general_dependency() {
+        let text = r#"
+[package]
+name = "integration"
+version = "0.1.0"
+
+[dependencies]
+iced_winit = { version = "0.14", default-features = false }
+
+[target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
+iced_winit = { version = "0.14", default-features = false, features = ["wayland", "x11"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+iced_winit = { version = "0.14", features = ["webgl"] }
+"#;
+        let cargo = Cargo::parse(
+            PathBuf::from("/integration/Cargo.toml"),
+            text.to_owned(),
+            Path::new("/integration"),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        let winit = |lines: &[&str]| {
+            let unit = crate::project::cargo::Unit::linking_for(&["iced_winit"], lines);
+            let cargo = cargo.clone().on_host(super::Host::Built(&unit));
+            let [winit] = &*cargo.dependencies else {
+                panic!("one iced_winit: {:?}", cargo.dependencies);
+            };
+            let features = winit
+                .features
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            (features.join(","), winit.default_features)
+        };
+        assert_eq!(
+            winit(&[
+                "target_arch=\"x86_64\"",
+                "target_vendor=\"unknown\"",
+                "unix"
+            ]),
+            (String::from("wayland,x11"), false)
+        );
+        assert_eq!(
+            winit(&["target_arch=\"aarch64\"", "target_vendor=\"apple\"", "unix"]),
+            (String::new(), false)
         );
     }
 
