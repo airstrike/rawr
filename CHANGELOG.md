@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.241 (2026-11-17)
+
 - Marked code polls futures by hand: `std::future::poll_fn`, `Pin::new` and `Pin::new_unchecked`, `Future::poll`, `Context`, `Waker`, `Poll::Ready` and `Poll::Pending` in expressions and patterns, and `ready!`. Script futures are polled directly, and crate futures after `IntoFuture::into_future`. (#2172; part of #1152)
 
 ## 0.3.240 (2026-11-17)
