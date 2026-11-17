@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api::{self, identity, ledger, model};
 use crate::cargo;
@@ -1134,8 +1134,10 @@ struct Candidate {
     index: Vec<ledger::Index>,
 }
 
-#[derive(Clone, Serialize)]
-struct Export {
+/// A public path as a canonical body holds it, before the policy decides
+/// whether the selected ledger imports it.
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct Export {
     key: identity::Export,
     target: ExportTarget,
     aliases: Box<[ledger::Alias]>,
@@ -1144,7 +1146,21 @@ struct Export {
     variant: Option<Box<str>>,
 }
 
-#[derive(Clone, Serialize)]
+impl Export {
+    /// The path a selected ledger imports this export as, when its target
+    /// is available.
+    pub(crate) fn imported(self) -> Option<ledger::Path> {
+        let ExportTarget::Available(target) = self.target else {
+            return None;
+        };
+        Some(ledger::Path::Imported(
+            ledger::Export::new(self.key, target, self.aliases, self.reexports, self.span)
+                .with_variant(self.variant),
+        ))
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 enum ExportTarget {
     Available(identity::Definition),
     ExternalAuthorityUnavailable {
@@ -3946,8 +3962,9 @@ impl Candidate {
             support,
         } = self.fixed_closure(policy, limits, allocation)?;
         allocation.category(EvidenceCategory::Retained);
+        // Each path with the place of the body export it is imported from.
         let mut paths = Vec::new();
-        for export in self.exports.into_values() {
+        for (place, export) in (0_u32..).zip(self.exports.into_values()) {
             let path_key = key(&export.key, allocation)?;
             let rejection = match &export.target {
                 ExportTarget::Available(target) => match outcomes.get(target) {
@@ -4000,43 +4017,51 @@ impl Candidate {
                 allocation.span(&exclusion.span)?;
                 allocation.cloned_ownership(2);
                 allocation.reserve(&mut paths, 1)?;
-                paths.push(ledger::Path::Excluded {
-                    key: export.key,
-                    reason: exclusion.reason.clone(),
-                    policy_span: exclusion.span.clone(),
-                    source_span: export.span,
-                });
+                paths.push((
+                    ledger::Path::Excluded {
+                        key: export.key,
+                        reason: exclusion.reason.clone(),
+                        policy_span: exclusion.span.clone(),
+                        source_span: export.span,
+                    },
+                    None,
+                ));
                 continue;
             }
             if let Some(rejection) = rejection {
                 allocation.reserve(&mut paths, 1)?;
-                paths.push(ledger::Path::Rejected {
-                    key: export.key,
-                    reason: rejection.reason,
-                    span: rejection.span,
-                });
+                paths.push((
+                    ledger::Path::Rejected {
+                        key: export.key,
+                        reason: rejection.reason,
+                        span: rejection.span,
+                    },
+                    None,
+                ));
             } else {
-                let ExportTarget::Available(target) = export.target else {
+                let Some(path) = export.imported() else {
                     return Err(extraction(
                         "missing-external-rejection",
                         "unavailable external export was not rejected",
                     ));
                 };
                 allocation.reserve(&mut paths, 1)?;
-                paths.push(ledger::Path::Imported(
-                    ledger::Export::new(
-                        export.key,
-                        target,
-                        export.aliases,
-                        export.reexports,
-                        export.span,
-                    )
-                    .with_variant(export.variant),
-                ));
+                paths.push((path, Some(place)));
             }
         }
-        paths.sort_unstable_by(|left, right| left.key().cmp(right.key()));
+        paths.sort_unstable_by(|(left, _), (right, _)| left.key().cmp(right.key()));
         allocation.sort_keys(paths.len());
+        let (paths, exports): (Vec<_>, Vec<_>) = paths.into_iter().unzip();
+        let places = api::selected::Places::new(
+            body.units,
+            body.definitions
+                .iter()
+                .map(|place| retained_definitions[*place]),
+            body.implementations
+                .iter()
+                .map(|place| retained_implementations[*place]),
+            exports.into_boxed_slice(),
+        )?;
         let expected_definitions = retained_definitions
             .iter()
             .filter(|retained| **retained)
@@ -4087,7 +4112,8 @@ impl Candidate {
         allocation.reserve(&mut anonymous, self.anonymous.len())?;
         anonymous.extend(self.anonymous);
         let settled = settled::Settled {
-            body: body.into(),
+            body: body.bytes.into(),
+            places,
             definitions: definitions.into(),
             paths: paths.into(),
             implementations: implementations.into(),
@@ -4899,19 +4925,40 @@ fn insert_fixed_support(
     Ok(())
 }
 
-/// The encoding of `candidate`'s raw body: everything of its raw and
-/// semantic documents but their context and invocations.
-fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Vec<u8>> {
-    let mut definitions = Vec::new();
+/// A candidate's raw body: everything of its raw and semantic documents but
+/// their context and invocations.
+struct Body {
+    bytes: Vec<u8>,
+    /// The units the body names by key.
+    units: api::units::Keyed,
+    /// The place of each definition the body writes, in its order, among
+    /// the candidate's.
+    definitions: Vec<usize>,
+    /// The place of each implementation the body writes, in its order,
+    /// among the candidate's.
+    implementations: Vec<usize>,
+}
+
+/// The raw body of `candidate`, with its definitions and implementations
+/// in source order (`api::layout`).
+fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Body> {
+    let mut identities = Vec::new();
     allocation.temporary_conversions(candidate.definitions.len());
-    allocation.reserve(&mut definitions, candidate.definitions.len())?;
-    definitions.extend(candidate.definitions.values());
-    api::layout::definitions(&mut definitions);
+    allocation.reserve(&mut identities, candidate.definitions.len())?;
+    identities.extend(candidate.definitions.values());
+    let definition_order = api::layout::definitions(&identities);
+    let mut definitions = Vec::new();
+    allocation.reserve(&mut definitions, identities.len())?;
+    definitions.extend(definition_order.iter().map(|place| identities[*place]));
     let mut implementations = Vec::new();
     allocation.temporary_conversions(candidate.implementations.len());
     allocation.reserve(&mut implementations, candidate.implementations.len())?;
     implementations.extend(candidate.implementations.iter());
-    api::layout::implementations(&mut implementations);
+    let implementation_order = api::layout::implementations(&implementations);
+    let implementations: Vec<_> = implementation_order
+        .iter()
+        .map(|place| implementations[*place])
+        .collect();
     let mut rejected = Vec::new();
     allocation.temporary_conversions(candidate.rejected.len());
     allocation.reserve(&mut rejected, candidate.rejected.len())?;
@@ -4932,7 +4979,19 @@ fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Vec<u8
         implementations: &implementations,
         scalar_predicate_proofs: &candidate.scalar_predicate_proofs,
     };
-    api::semantic::encode_once(&body, allocation)
+    let (bytes, units) =
+        api::units::Keyed::default().write(|| api::semantic::encode_once(&body, allocation));
+    let mut bytes = bytes?;
+    units.close(&mut bytes).map_err(|error| Error::Extraction {
+        code: "raw-canonical-encoding",
+        reason: error.to_string().into_boxed_str(),
+    })?;
+    Ok(Body {
+        bytes,
+        units,
+        definitions: definition_order,
+        implementations: implementation_order,
+    })
 }
 
 /// The raw and semantic encodings of one pre-policy graph, whose body

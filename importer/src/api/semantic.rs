@@ -132,44 +132,49 @@ impl Serialize for Artifact<'_> {
     }
 }
 
-/// The stored body stays borrowed while the current owner replaces its header.
+/// The stored body stays borrowed while the current owner replaces its
+/// header, and while the selected ledger reads the entries it keeps.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Sections<'body> {
+pub(super) struct Sections<'body> {
     schema: Option<u32>,
     #[serde(borrow)]
     context: &'body RawValue,
     #[serde(borrow)]
     invocations: &'body RawValue,
     #[serde(borrow)]
-    definitions: &'body RawValue,
+    pub(super) definitions: &'body RawValue,
     #[serde(borrow)]
     rejected: Option<&'body RawValue>,
     #[serde(borrow)]
-    exports: &'body RawValue,
+    pub(super) exports: &'body RawValue,
     #[serde(borrow)]
     anonymous: &'body RawValue,
     #[serde(borrow)]
-    implementations: &'body RawValue,
+    pub(super) implementations: &'body RawValue,
     #[serde(borrow)]
     scalar_predicate_proofs: &'body RawValue,
     #[serde(borrow)]
     support: Option<&'body RawValue>,
+    /// The table of the units the body names by key (`units::Keyed`).
+    #[serde(borrow)]
+    pub(super) units: Option<&'body RawValue>,
 }
 
 struct Current<'value> {
-    sections: Sections<'value>,
+    sections: &'value Sections<'value>,
     context: &'value super::Context,
     invocations: &'value [super::Invocation],
 }
 
 impl Serialize for Current<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let body = &self.sections;
+        let body = self.sections;
         let fields = 7
             + usize::from(body.schema.is_some())
             + usize::from(body.rejected.is_some())
-            + usize::from(body.support.is_some());
+            + usize::from(body.support.is_some())
+            + usize::from(body.units.is_some());
         let mut value = serializer.serialize_struct("RawCanonical", fields)?;
         if let Some(schema) = body.schema {
             value.serialize_field("schema", &schema)?;
@@ -193,23 +198,31 @@ impl Serialize for Current<'_> {
         if body.schema.is_none() {
             value.serialize_field("anonymous", body.anonymous)?;
         }
+        if let Some(units) = body.units {
+            value.serialize_field("units", units)?;
+        }
         value.end()
     }
 }
 
-/// The current encoding of the stored semantic `bytes` under `context`
+impl<'body> Sections<'body> {
+    /// The sections of the stored semantic `bytes`.
+    pub(super) fn of(bytes: &'body [u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
+            code: "semantic-api-sections",
+            reason: error.to_string().into_boxed_str(),
+        })
+    }
+}
+
+/// The current encoding of the stored semantic `sections` under `context`
 /// and `invocations`, with the schema its head names.
 pub(super) fn current(
-    bytes: &[u8],
+    sections: &Sections<'_>,
     context: &super::Context,
     invocations: &[super::Invocation],
     allocation: &mut crate::extract::Allocation,
 ) -> Result<(Vec<u8>, Option<u32>)> {
-    let sections: Sections<'_> =
-        serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
-            code: "semantic-api-sections",
-            reason: error.to_string().into_boxed_str(),
-        })?;
     require(sections.context.get().as_bytes(), &Context(context))?;
     require(
         sections.invocations.get().as_bytes(),

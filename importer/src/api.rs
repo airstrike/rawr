@@ -17,6 +17,8 @@ pub(crate) mod layout;
 pub mod ledger;
 pub mod model;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod selected;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod semantic;
 pub(crate) mod units;
 
@@ -31,7 +33,7 @@ pub use retained::Continuation;
 #[cfg(feature = "rustc-driver")]
 pub use retained::{Deferred, Kept};
 
-const CANONICALIZER_VERSION: u32 = 20;
+const CANONICALIZER_VERSION: u32 = 22;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -169,12 +171,20 @@ pub(crate) struct Usage {
 ///
 /// Fixed-size values are charged by the containing slice or box. Every
 /// semantic node and owned string is one retained item; dynamically owned
-/// storage contributes its exact byte length.
+/// storage contributes its exact byte length. A compiler unit is charged
+/// once, where an identity first names it: every identity of one unit
+/// shares it, as a stored graph's identities read back share each unit of
+/// its table (#2166).
 pub(crate) struct Retained {
     items: usize,
     bytes: usize,
     category: RetainedCategory,
     categories: [Usage; RetainedCategory::COUNT],
+    /// The allocations of the units charged so far.
+    allocations: std::collections::BTreeSet<*const identity::Unit>,
+    /// The units charged so far. Two allocations of one unit are one
+    /// unit, so a graph is charged the same whichever its identities share.
+    units: std::collections::BTreeSet<Arc<identity::Unit>>,
 }
 
 #[derive(Clone, Copy)]
@@ -257,7 +267,17 @@ impl Retained {
             bytes: 0,
             category: RetainedCategory::Context,
             categories: [Usage { items: 0, bytes: 0 }; RetainedCategory::COUNT],
+            allocations: std::collections::BTreeSet::new(),
+            units: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// Charge `unit` the first time an identity names it.
+    pub(crate) fn unit(&mut self, unit: &Arc<identity::Unit>) -> Option<()> {
+        if !self.allocations.insert(Arc::as_ptr(unit)) || !self.units.insert(Arc::clone(unit)) {
+            return Some(());
+        }
+        unit.retain(self)
     }
 
     pub(crate) fn node(&mut self) -> Option<()> {
@@ -344,11 +364,14 @@ impl Retained {
 }
 
 /// Pre-policy semantic evidence encoded before selected-outcome filtering.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Raw {
     canonical: Vec<u8>,
     semantic: Vec<u8>,
     universe: Option<[u8; 32]>,
     head: Option<frame::Head>,
+    /// Where the selected ledgers sit in the body.
+    places: selected::Places,
 }
 
 /// Capability-free graph bytes retained by the content store.
@@ -434,6 +457,32 @@ impl StoredGraph {
             selected_usage: self.selected_usage,
         }
     }
+
+    /// The most decoding the selected ledgers allocates, from a scan of
+    /// both documents they are read from: the selected ledger and the
+    /// canonical body whose entries it keeps. A scan failure is reported
+    /// through `allocation`.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn preflight(
+        &self,
+        limits: &cargo::Limits,
+        allocation: &crate::extract::Allocation,
+    ) -> Result<crate::extract::protocol::Preflight> {
+        let selected = crate::extract::protocol::selected_preflight_accounted(
+            &self.selected,
+            limits,
+            allocation,
+        )?;
+        let body = crate::extract::protocol::selected_preflight_accounted(
+            &self.canonical,
+            limits,
+            allocation,
+        )?;
+        Ok(crate::extract::protocol::Preflight {
+            items: selected.items.saturating_add(body.items),
+            bytes: selected.bytes.saturating_add(body.bytes),
+        })
+    }
 }
 
 impl Shared {
@@ -477,8 +526,14 @@ impl AsRef<[u8]> for Shared {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum Semantic {
-    Captured(Vec<u8>),
+    /// The semantic encoding, and where the selected ledgers sit in its
+    /// body.
+    Captured {
+        semantic: Vec<u8>,
+        places: selected::Places,
+    },
     Replayed(Fingerprint),
 }
 
@@ -557,33 +612,6 @@ struct Canonical<'a, C: Serialize, I: Serialize> {
     anonymous: &'a [ledger::AnonymousImport],
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct StoredSelected {
-    universe: Option<[u8; 32]>,
-    definitions: Box<[model::Definition]>,
-    exports: Box<[ledger::Path]>,
-    implementations: Box<[model::Implementation]>,
-    scalar_predicate_proofs: Box<[model::ScalarPredicateProof]>,
-    support: Box<[ledger::Support]>,
-    anonymous: Box<[ledger::AnonymousImport]>,
-    index: Box<[ledger::Index]>,
-}
-
-/// The selected ledger as the store writes it: definitions, implementations
-/// and support in source order (`layout`).
-#[derive(Serialize)]
-struct Selected<'graph> {
-    universe: Option<[u8; 32]>,
-    definitions: &'graph [&'graph model::Definition],
-    exports: &'graph [ledger::Path],
-    implementations: &'graph [&'graph model::Implementation],
-    scalar_predicate_proofs: &'graph [model::ScalarPredicateProof],
-    support: &'graph [&'graph ledger::Support],
-    anonymous: &'graph [ledger::AnonymousImport],
-    index: &'graph [ledger::Index],
-}
-
 struct ExactCanonical<'expected> {
     expected: &'expected [u8],
     offset: usize,
@@ -603,12 +631,6 @@ impl std::io::Write for ExactCanonical<'_> {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-}
-
-/// Counts the bytes of an encoding without keeping them.
-#[cfg(any(test, feature = "test-fixtures"))]
-struct Measured {
-    bytes: usize,
 }
 
 /// Charge a full intrinsic fact copy through the model's existing recursive
@@ -898,23 +920,27 @@ impl Graph<Captured> {
             canonical,
             universe,
             head: None,
+            places: selected::Places::default(),
         }
     }
 
     /// The raw and semantic encodings of one graph, each a head that names
     /// its context and invocations, of `head` bytes in `canonical`,
-    /// followed by the same body.
+    /// followed by the same body, in which the selected ledgers sit at
+    /// `places`.
     pub(crate) const fn raw_pair(
         canonical: Vec<u8>,
         semantic: Vec<u8>,
         universe: Option<[u8; 32]>,
         head: Option<frame::Head>,
+        places: selected::Places,
     ) -> Raw {
         Raw {
             canonical,
             semantic,
             universe,
             head,
+            places,
         }
     }
 
@@ -949,27 +975,15 @@ impl Graph<Captured> {
         (|| {
             // The scan folds the targets it crossed into this canonical
             // transaction on every exit, including a scan that then fails.
-            let decode = crate::extract::protocol::selected_preflight_accounted(
-                &stored.selected,
-                limits,
-                allocation,
-            )?;
+            let decode = stored.preflight(limits, allocation)?;
             allocation.admit_decode()?;
             allocation.items(decode.items)?;
             allocation.bytes(decode.bytes)?;
-            // The stored ledger is content-addressed and was encoded
-            // canonically when captured: it is decoded once, never encoded
-            // again to prove it.
-            let mut selected: StoredSelected = crate::extract::sidecar::read(&stored.selected)
-                .map_err(|error| Error::Extraction {
-                    code: "stored-selected-schema",
-                    reason: error.to_string().into_boxed_str(),
-                })?;
-            layout::restore(
-                &mut selected.definitions,
-                &mut selected.implementations,
-                &mut selected.support,
-            );
+            // The stored ledgers are content-addressed and were encoded
+            // canonically when captured: they are decoded once, never
+            // encoded again to prove it.
+            let sections = semantic::Sections::of(&stored.canonical)?;
+            let selected = selected::read(&stored.selected, &sections)?;
             if selected.universe != context.resolution_universe() {
                 return Err(Error::Extraction {
                     code: "stored-api-universe",
@@ -977,17 +991,17 @@ impl Graph<Captured> {
                 });
             }
             let (canonical, schema) =
-                semantic::current(&stored.canonical, context, &invocations, allocation)?;
+                semantic::current(&sections, context, &invocations, allocation)?;
             let head = frame::Head::of(&canonical, schema, context, &invocations);
             let graph = Self::seal_canonical(
                 invocations,
-                selected.definitions.into(),
-                selected.exports.into(),
-                selected.implementations.into(),
-                selected.scalar_predicate_proofs.into(),
-                selected.support.into(),
-                selected.anonymous.into(),
-                selected.index.into(),
+                selected.definitions,
+                selected.exports,
+                selected.implementations,
+                selected.scalar_predicate_proofs,
+                selected.support,
+                selected.anonymous,
+                selected.index,
                 canonical,
                 Semantic::Replayed(Fingerprint(Sha256::digest(&stored.canonical).into())),
                 selected.universe,
@@ -1021,71 +1035,54 @@ impl Graph<Captured> {
         anonymous: Vec<ledger::AnonymousImport>,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Self> {
-        let mut measured = Measured { bytes: 0 };
-        let result = serde_json::to_writer(
-            &mut measured,
-            &Canonical {
-                context,
-                invocations: &invocations,
-                definitions: &definitions,
-                exports: &exports,
-                implementations: &implementations,
-                scalar_predicate_proofs: &scalar_predicate_proofs,
-                support: &support,
-                anonymous: &anonymous,
-            },
-        );
-        result.map_err(|error| Error::Extraction {
+        let encoding = |error: serde_json::Error| Error::Extraction {
             code: "canonical-encoding",
             reason: error.to_string().into_boxed_str(),
-        })?;
-        allocation.items(1)?;
-        allocation.bytes(measured.bytes)?;
-        let mut canonical = Vec::new();
-        canonical
-            .try_reserve_exact(measured.bytes)
-            .map_err(|source| {
-                allocation.failure(Error::Allocation {
-                    operation: "canonical graph allocation",
-                    source,
-                })
-            })?;
-        serde_json::to_writer(
-            &mut canonical,
-            &Canonical {
-                context,
-                invocations: &invocations,
-                definitions: &definitions,
-                exports: &exports,
-                implementations: &implementations,
-                scalar_predicate_proofs: &scalar_predicate_proofs,
-                support: &support,
-                anonymous: &anonymous,
-            },
-        )
-        .map_err(|error| Error::Extraction {
-            code: "canonical-encoding",
-            reason: error.to_string().into_boxed_str(),
-        })?;
-        if canonical.len() != measured.bytes {
-            return Err(Error::Extraction {
-                code: "canonical-measurement",
-                reason: "canonical graph changed between measurement and encoding".into(),
-            });
-        }
+        };
+        // The semantic encoding names the canonical's units by the same
+        // keys: it is the canonical under another head.
+        let (canonical, units) = units::Keyed::default().write(|| {
+            semantic::encode_once(
+                &Canonical {
+                    context,
+                    invocations: &invocations,
+                    definitions: &definitions,
+                    exports: &exports,
+                    implementations: &implementations,
+                    scalar_predicate_proofs: &scalar_predicate_proofs,
+                    support: &support,
+                    anonymous: &anonymous,
+                },
+                allocation,
+            )
+        });
+        let mut canonical = canonical?;
+        units.close(&mut canonical).map_err(encoding)?;
+        semantic::admit(canonical.len(), allocation)?;
         let head = frame::Head::of(&canonical, None, context, &invocations);
-        let semantic = semantic::encode(
-            &Canonical {
-                context: semantic::Context(context),
-                invocations: semantic::Invocations(&invocations),
-                definitions: &definitions,
-                exports: &exports,
-                implementations: &implementations,
-                scalar_predicate_proofs: &scalar_predicate_proofs,
-                support: &support,
-                anonymous: &anonymous,
-            },
-            allocation,
+        let (semantic, _) = units.write(|| {
+            semantic::encode_once(
+                &Canonical {
+                    context: semantic::Context(context),
+                    invocations: semantic::Invocations(&invocations),
+                    definitions: &definitions,
+                    exports: &exports,
+                    implementations: &implementations,
+                    scalar_predicate_proofs: &scalar_predicate_proofs,
+                    support: &support,
+                    anonymous: &anonymous,
+                },
+                allocation,
+            )
+        });
+        let mut semantic = semantic?;
+        units.close(&mut semantic).map_err(encoding)?;
+        semantic::admit(semantic.len(), allocation)?;
+        let places = selected::Places::whole(
+            units,
+            definitions.len(),
+            implementations.len(),
+            exports.len(),
         )?;
         Self::seal_canonical(
             invocations,
@@ -1097,7 +1094,7 @@ impl Graph<Captured> {
             anonymous.into(),
             Arc::default(),
             canonical,
-            Semantic::Captured(semantic),
+            Semantic::Captured { semantic, places },
             context.resolution_universe(),
             head,
             allocation,
@@ -1127,6 +1124,7 @@ impl Graph<Captured> {
             semantic,
             universe,
             head,
+            places,
         } = raw;
         Self::seal_canonical(
             invocations,
@@ -1138,7 +1136,7 @@ impl Graph<Captured> {
             anonymous,
             index,
             canonical,
-            Semantic::Captured(semantic),
+            Semantic::Captured { semantic, places },
             universe,
             head,
             allocation,
@@ -1162,7 +1160,7 @@ impl Graph<Captured> {
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Self> {
         let semantic_fingerprint = match &semantic {
-            Semantic::Captured(bytes) => Fingerprint(Sha256::digest(bytes).into()),
+            Semantic::Captured { semantic, .. } => Fingerprint(Sha256::digest(semantic).into()),
             Semantic::Replayed(fingerprint) => *fingerprint,
         };
         let fingerprint = Fingerprint(Sha256::digest(&canonical).into());
@@ -1189,26 +1187,14 @@ impl Graph<Captured> {
         graph
             .validate_cardinality(allocation)
             .map_err(|error| allocation.failure(error))?;
-        if let Semantic::Captured(canonical) = semantic {
-            let mut definitions = references(&graph.definitions)?;
-            layout::definitions(&mut definitions);
-            let mut implementations = references(&graph.implementations)?;
-            layout::implementations(&mut implementations);
-            let mut support = references(&graph.support)?;
-            layout::support(&mut support, &graph.definitions, &graph.implementations);
-            let selected = Selected {
-                universe: graph.universe,
-                definitions: &definitions,
-                exports: &graph.exports,
-                implementations: &implementations,
-                scalar_predicate_proofs: &graph.scalar_predicate_proofs,
-                support: &support,
-                anonymous: &graph.anonymous,
-                index: &graph.index,
-            };
+        if let Semantic::Captured {
+            semantic: canonical,
+            places,
+        } = semantic
+        {
             // The selected ledger is stored as node content; its size is
             // recorded on `allocation`, never refused.
-            let selected = semantic::encode_once(&selected, allocation)?;
+            let selected = places.encode(&graph, allocation)?;
             semantic::admit(selected.len(), allocation)?;
             let selected_usage = graph.selected_usage()?;
             let stored = stored(canonical, selected.len(), selected_usage, |output| {
@@ -1711,18 +1697,6 @@ fn nominal_self_of(implementation: &model::Implementation) -> Option<&identity::
     match implementation.self_type() {
         model::Type::Definition { id, .. } => Some(id),
         _ => None,
-    }
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-impl std::io::Write for Measured {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.bytes = self.bytes.saturating_add(buffer.len());
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 
