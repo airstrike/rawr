@@ -1351,9 +1351,12 @@ fn find_driver_in() -> Result<PathBuf> {
         "rawr-import-driver{}",
         std::env::consts::EXE_SUFFIX
     ));
+    #[cfg(not(test))]
     if !candidate.exists() {
         fetch_driver(target_directory)?;
     }
+    #[cfg(test)]
+    build_driver(target_directory)?;
     canonical_program_in("metadata probe driver", &candidate)
 }
 
@@ -1394,17 +1397,46 @@ fn fetch_driver(directory: &Path) -> Result<PathBuf> {
     archive.install("rawr-import-driver", directory)
 }
 
-/// Tests never download: a test build's driver is built beside it.
+/// A test build's driver, built beside it from these sources: `--lib`
+/// tests build no binaries, and one left by older sources, such as one from
+/// before an extraction protocol bump, would refuse the probe. The first
+/// test that runs the driver builds it, once per test process, with Cargo
+/// into the same target directory and profile; Cargo's freshness check
+/// makes that a no-op when the driver is current. Tests that ask meanwhile
+/// wait for that build. Tests never download.
 #[cfg(all(feature = "rustc-driver", test))]
-fn fetch_driver(directory: &Path) -> Result<PathBuf> {
-    Err(Error::Request {
-        reason: format!(
-            "`rawr-import-driver` is not built in `{}`; run `cargo build -p rawr-import \
-             --features rustc-driver --bin rawr-import-driver`",
-            directory.display()
-        )
-        .into_boxed_str(),
-    })
+fn build_driver(directory: &Path) -> Result<()> {
+    static BUILT: std::sync::OnceLock<std::result::Result<(), Box<str>>> =
+        std::sync::OnceLock::new();
+    let built = BUILT.get_or_init(|| {
+        let profile = match directory.file_name().and_then(OsStr::to_str) {
+            Some("debug") | None => "dev",
+            Some(name) => name,
+        };
+        let target = directory
+            .parent()
+            .ok_or("the test's profile directory is not in a target directory")?;
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = process::Command::new(cargo)
+            .arg("build")
+            .arg("--manifest-path")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .args(["-p", "rawr-import", "--features", "rustc-driver"])
+            .args(["--bin", "rawr-import-driver", "--profile", profile])
+            .arg("--target-dir")
+            .arg(target)
+            .env_remove("CARGO_TARGET_DIR")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .map_err(|error| format!("cargo did not start: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("cargo could not build rawr-import-driver: {status}").into())
+        }
+    });
+    built.clone().map_err(|reason| Error::Request { reason })
 }
 
 /// The environment variable and value that let the driver load the pinned
