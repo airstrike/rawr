@@ -1153,8 +1153,16 @@ impl Models {
             .map(AsRef::as_ref)
     }
 
+    /// The type a pattern's path names through a module: as a match arm's
+    /// pattern resolves, or as any path among the body's tokens does at
+    /// that place, which covers a pattern a macro call's expansion lays
+    /// out after the body.
     pub(super) fn qualified_pattern_owner(&self, span: Span) -> Option<&Nominal> {
-        let identity = self.qualified_pattern_owners.get(&(self.context, span))?;
+        let key = (self.context, span);
+        let identity = self
+            .qualified_pattern_owners
+            .get(&key)
+            .or_else(|| self.qualified_owners.get(&key))?;
         self.by_identity.get(identity)
     }
 

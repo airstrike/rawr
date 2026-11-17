@@ -133,7 +133,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // forwards the associated type a parameter's projection names to its own
 // parameter's, with that item (#2060). `driver.rs`, `cargo/toolchain.rs` and
 // `extract/protocol.rs` hold the same number and move with it.
-const PROTOCOL_SCHEMA: u32 = 102;
+const PROTOCOL_SCHEMA: u32 = 103;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3530,6 +3530,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let Some(source) = text.get(start..).and_then(macro_rules_source) else {
             return Ok(None);
         };
+        // The macros its rules call through `$crate`, which an expansion
+        // names though the program never does, come with it.
+        for path in crate_macro_calls(source) {
+            self.edge(1)?;
+            if let Some(called) = crate_macro(self.tcx, def_id.krate, &path) {
+                self.ensure(called, Namespace::Macro)?;
+            }
+        }
         Ok(Some(Shape::MacroRules {
             source: self.budget.owned(source)?,
             krate: self.budget.owned(&crate_segment(self.tcx, def_id.krate))?,
@@ -5402,6 +5410,53 @@ fn crate_segment(tcx: TyCtxt<'_>, krate: CrateNum) -> String {
 }
 
 const CRATE_SEGMENT: &str = "__rawr_crate_";
+
+/// The paths after `$crate::` of the macro calls `source` writes,
+/// `$crate::name!` or `$crate::module::name!`, each once.
+fn crate_macro_calls(source: &str) -> BTreeSet<Vec<&str>> {
+    let mut calls = BTreeSet::new();
+    for (at, _) in source.match_indices("$crate") {
+        let mut rest = &source[at + "$crate".len()..];
+        let mut path = Vec::new();
+        while let Some(after) = rest.trim_start().strip_prefix("::") {
+            let after = after.trim_start();
+            let end = after
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            if end == 0 {
+                break;
+            }
+            path.push(&after[..end]);
+            rest = &after[end..];
+        }
+        if !path.is_empty() && rest.trim_start().starts_with('!') {
+            calls.insert(path);
+        }
+    }
+    calls
+}
+
+/// The macro `path` names from the root of `krate`: its modules, then the
+/// macro.
+fn crate_macro(tcx: TyCtxt<'_>, krate: CrateNum, path: &[&str]) -> Option<DefId> {
+    let (name, modules) = path.split_last()?;
+    let mut module = krate.as_def_id();
+    for segment in modules {
+        module = tcx
+            .module_children(module)
+            .iter()
+            .find_map(|child| match child.res {
+                Res::Def(DefKind::Mod, id) if child.ident.name.as_str() == *segment => Some(id),
+                _ => None,
+            })?;
+    }
+    tcx.module_children(module)
+        .iter()
+        .find_map(|child| match child.res {
+            Res::Def(DefKind::Macro(..), id) if child.ident.name.as_str() == *name => Some(id),
+            _ => None,
+        })
+}
 
 /// `macro_rules! name { .. }` at the start of `text`, through the close of
 /// its body (and the `;` after a `(..)` or `[..]` body). Strings, chars and

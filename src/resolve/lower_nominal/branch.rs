@@ -201,10 +201,6 @@ impl<'a> Parser<'a> {
         }
         let subject_span = subject.span;
         let scrutinee_span = self.scrutinee_span(&subject);
-        let owner: ImmutableString = match &subject_ty {
-            Ty::Script(definition_id, ..) => self.models.definition(*definition_id).name().into(),
-            ty => ty.name(&self.models),
-        };
         // A catch-all binding arm binds the scrutinee as written, `&T` included.
         let binding_ty = self.inference.resolve(&subject.ty);
         let scrutinee = self.temporary("match");
@@ -237,13 +233,13 @@ impl<'a> Parser<'a> {
             if self.arm_left_out()? {
                 continue;
             }
-            if wildcard {
-                return Err(Error::InvalidMatch {
-                    owner: owner.clone(),
-                    reason: "patterns after `_` are unreachable".into(),
-                    pattern: point_span(self.position()),
-                });
-            }
+            // An arm no value reaches, after `_` or under arms that cover
+            // its pattern, is checked as any arm is and never runs: rustc
+            // warns of it (`unreachable_patterns`) and builds no path to
+            // it, so it adds nothing to the match.
+            let mut unreachable = wildcard;
+            let (copies, after) = (match_copies.len(), match_after.len());
+            let placed = matched_place.is_some();
 
             let arm_start = self.position();
             self.flow().arm(tested);
@@ -325,7 +321,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => None,
             };
-            let (label, guard, is_wildcard, bound) = if let Some(bound) = catch_all {
+            let (label, guard, bound) = if let Some(bound) = catch_all {
                 if matches!(self.peek(), Token::If) {
                     self.next();
                     let normalize_private_calls =
@@ -344,10 +340,10 @@ impl<'a> Parser<'a> {
                         guard.prelude = origin::Fragment::default();
                     }
                     self.require_type(&Ty::Bool, &guard.ty, guard.span)?;
-                    ("_".to_string(), Some(guard.rendered_source()), false, bound)
+                    ("_".to_string(), Some(guard.rendered_source()), bound)
                 } else {
                     wildcard = true;
-                    ("_".to_string(), None, true, bound)
+                    ("_".to_string(), None, bound)
                 }
             } else {
                 let syntax = self.parse_pattern_syntax()?;
@@ -366,15 +362,7 @@ impl<'a> Parser<'a> {
                         std::slice::from_ref(alternative),
                     )
                 }) {
-                    return Err(Error::InvalidMatch {
-                        owner: owner.clone(),
-                        reason: format!(
-                            "pattern `{}` is unreachable after an unguarded arm",
-                            resolved.coverage.render()
-                        )
-                        .into(),
-                        pattern: resolved.span,
-                    });
+                    unreachable = true;
                 }
 
                 let arm_place =
@@ -480,14 +468,16 @@ impl<'a> Parser<'a> {
                 if matched_place.is_none() {
                     matched_place = arm_place;
                 }
-                (label, guard, false, None)
+                (label, guard, None)
             };
 
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
             let action = self.parse_match_action();
-            arm_ends.push(self.flow().arm_end());
+            if !unreachable {
+                arm_ends.push(self.flow().arm_end());
+            }
             let mut action = action?;
             let arm_drops = self.close_drops()?;
             if !clears.is_empty() || !arm_drops.is_empty() {
@@ -505,9 +495,17 @@ impl<'a> Parser<'a> {
                 action.value.source = block;
                 action.value.prelude = origin::Fragment::default();
             }
-            arm_bindings.push(self.bindings.clone());
+            if unreachable {
+                match_copies.truncate(copies);
+                match_after.truncate(after);
+                if !placed {
+                    matched_place = None;
+                }
+            } else {
+                arm_bindings.push(self.bindings.clone());
+                arms.push((label, guard, action, bound));
+            }
             self.bindings = original_bindings.clone();
-            arms.push((label, guard, action, bound));
 
             if matches!(self.peek(), Token::Comma) {
                 self.next();
@@ -515,14 +513,6 @@ impl<'a> Parser<'a> {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "match arms require ','".into(),
                     source: span(arm_start, self.position()),
-                });
-            }
-
-            if is_wildcard && !matches!(self.peek(), Token::RightBrace) {
-                return Err(Error::InvalidMatch {
-                    owner: owner.clone(),
-                    reason: "patterns after `_` are unreachable".into(),
-                    pattern: point_span(self.position()),
                 });
             }
         }
@@ -818,13 +808,10 @@ impl<'a> Parser<'a> {
             let pattern_start = self.position();
             self.flow().arm(tested);
             tested = self.flow().split();
-            if exhaustive {
-                return Err(Error::InvalidMatch {
-                    owner: subject_ty.name(&self.models),
-                    reason: "patterns after a catch-all arm are unreachable".into(),
-                    pattern: point_span(pattern_start),
-                });
-            }
+            // An arm after a catch-all is checked as any arm is, and never
+            // runs: rustc warns of it (`unreachable_patterns`) and builds
+            // no path to it.
+            let unreachable = exhaustive;
             let syntax = self.parse_pattern_syntax()?;
             let mut binding = None;
             let test = self.scalar_condition(&syntax, &subject_ty, &temporary, &mut binding)?;
@@ -883,17 +870,17 @@ impl<'a> Parser<'a> {
                     Some(covered)
                 });
             }
-            exhaustive = catch_all && !guarded || (saw_true && saw_false);
+            exhaustive |= catch_all && !guarded || (saw_true && saw_false);
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
             let action = self.parse_match_action()?;
-            arm_ends.push(self.flow().arm_end());
-            arm_bindings.push(std::mem::replace(
-                &mut self.bindings,
-                original_bindings.clone(),
-            ));
-            arms.push((condition, bind, action));
+            let bindings = std::mem::replace(&mut self.bindings, original_bindings.clone());
+            if !unreachable {
+                arm_ends.push(self.flow().arm_end());
+                arm_bindings.push(bindings);
+                arms.push((condition, bind, action));
+            }
             if matches!(self.peek(), Token::Comma) {
                 self.next();
             } else if !matches!(self.peek(), Token::RightBrace) && !block_arm {

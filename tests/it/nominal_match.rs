@@ -337,34 +337,35 @@ fn recursive_constructor_matrix_reports_nested_missing_witnesses_and_guarded_gap
 }
 
 #[test]
-fn recursive_constructor_matrix_rejects_binding_and_discard_subsumption() {
+fn recursive_constructor_matrix_accepts_arms_a_binding_or_discard_subsumes() {
+    // As rustc, which only warns: the subsumed arm is checked and never runs.
     let cases = [
         r#"
             enum Child { First, Second }
             enum Root { Wrap(Child) }
-            pub fn inspect(value: Root) -> i64 {
+            fn inspect(value: Root) -> i64 {
                 match value {
                     Root::Wrap(child) => 1,
                     Root::Wrap(Child::First) => 2,
                 }
             }
+            inspect(Root::Wrap(Child::First)) * 10 + inspect(Root::Wrap(Child::Second))
         "#,
         r#"
             enum Child { First, Second }
             enum Root { Wrap(Child) }
-            pub fn inspect(value: Root) -> i64 {
+            fn inspect(value: Root) -> i64 {
                 match value {
                     Root::Wrap(_) => 1,
                     Root::Wrap(Child::First) => 2,
                 }
             }
+            inspect(Root::Wrap(Child::First)) * 10 + inspect(Root::Wrap(Child::Second))
         "#,
     ];
 
     for source in cases {
-        let error = assert_resolution(source, Category::InvalidMatch, "pattern `Root::Wrap(Child::First)` is unreachable after an unguarded arm");
-        // As in rustc, the unreachable pattern is reported from its path.
-        assert_eq!(error.primary_span().start(), position_of(source, "Root::Wrap(Child::First) => 2"));
+        assert_eq!(Engine::new().eval::<i64>(source).unwrap(), 11, "{source}");
     }
 }
 
@@ -689,7 +690,7 @@ pub fn invalid() -> Element<Message> { if true { text() } else { false } }
 }
 
 #[test]
-fn exhaustiveness_duplicates_unreachable_arms_and_binding_escape_are_rejected() {
+fn exhaustiveness_unreachable_arm_bodies_and_binding_escape_are_rejected() {
     let cases = [
         (
             "enum Message { Tick, Tock } pub fn f(message: Message) { match message { Message::Tick => () } }",
@@ -701,12 +702,12 @@ fn exhaustiveness_duplicates_unreachable_arms_and_binding_escape_are_rejected() 
             Category::NonExhaustive,
             "non-exhaustive patterns: `Message::Tick` not covered",
         ),
+        // An unreachable arm is still checked, as rustc checks it.
         (
-            "enum Message { Tick } pub fn f(message: Message) { match message { Message::Tick => (), Message::Tick => () } }",
-            Category::InvalidMatch,
-            "unreachable after an unguarded arm",
+            "enum Message { Tick } pub fn f(message: Message) -> i64 { match message { _ => 1, Message::Tick => missing } }",
+            Category::UnknownVariable,
+            "cannot find value `missing` in this scope",
         ),
-        ("enum Message { Tick } pub fn f(message: Message) { match message { _ => (), Message::Tick => () } }", Category::InvalidMatch, "patterns after `_` are unreachable"),
         (
             "enum Message { Value(i64) } pub fn f(message: Message) -> i64 { let selected = match message { Message::Value(value) => value }; value }",
             Category::UnknownVariable,

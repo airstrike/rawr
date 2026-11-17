@@ -955,6 +955,11 @@ impl<'a> Parser<'a> {
             left_out = true;
         }
         let mut value = self.parse_expr()?;
+        // `(x += 1)`: an assignment is an expression of type `()`, and
+        // parentheses take any expression.
+        if assignment_token(&self.peek()) {
+            value = self.parse_assignment_expr(value)?;
+        }
         if left_out && !matches!(self.peek(), Token::Comma) {
             let end = self.expect(Token::RightParen, "')' after a tuple")?;
             self.move_local(&mut value)?;

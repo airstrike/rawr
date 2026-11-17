@@ -187,6 +187,15 @@ impl Parser<'_> {
     /// it as a crate macro (#2149).
     #[cfg(feature = "rust-import")]
     fn crate_call_ahead(&mut self) -> Option<(String, usize, CallInput)> {
+        self.dependency_call_ahead()
+            .filter(|(path, ..)| self.crate_macro(path))
+    }
+
+    /// The path from its crate's root of a dependency's macro whose call
+    /// is next, how many tokens the path is, and the input after the
+    /// call's `!`, whatever kind of macro it is.
+    #[cfg(feature = "rust-import")]
+    fn dependency_call_ahead(&mut self) -> Option<(String, usize, CallInput)> {
         // Only a path that starts at a dependency or a `use` can name one,
         // which is known before the input is copied to look further.
         let Token::Identifier(first) = self.peek() else {
@@ -230,7 +239,7 @@ impl Parser<'_> {
             }
             _ => segments.join("::"),
         };
-        self.crate_macro(&path).then_some((path, taken, ahead))
+        Some((path, taken, ahead))
     }
 
     /// The path from its crate's root of the crate macro whose call is the
@@ -312,10 +321,39 @@ impl Parser<'_> {
     /// place, as rustc parses it there, and say so.
     pub(super) fn splice_macro_ahead(&mut self, place: Place) -> Result<bool, Error> {
         #[cfg(feature = "rust-import")]
-        if let Some((path, taken, _)) = self.crate_call_ahead() {
-            let path_span = self.take_path(taken);
-            self.splice_crate_expansion(&path, path_span, place)?;
-            return Ok(true);
+        if let Some((path, taken, _)) = self.dependency_call_ahead() {
+            if self.crate_macro(&path) {
+                let path_span = self.take_path(taken);
+                self.splice_crate_expansion(&path, path_span, place)?;
+                return Ok(true);
+            }
+            // A dependency's `macro_rules!` expands from its rules, as an
+            // expression's call does (`parse_host_macro`).
+            let host = crate::Shared::clone(&self.models.host);
+            if let Some(rules) = host
+                .overloads(&path)
+                .filter(|items| {
+                    !items
+                        .iter()
+                        .any(|item| item.kind() == crate::host::item::Kind::IntrinsicMacro)
+                })
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find_map(crate::host::item::Definition::macro_rules_source)
+                })
+            {
+                let path_span = self.take_path(taken);
+                let parsed = rules
+                    .rules()
+                    .map_err(|reason| Error::InvalidHostOperation {
+                        item: "macro_rules!".into(),
+                        reason: format!("the macro's definition cannot be read: {reason}").into(),
+                        operation: path_span,
+                    })?;
+                self.splice_expansion(parsed, rules.krate(), path_span, place)?;
+                return Ok(true);
+            }
         }
         let Token::Identifier(name) = self.peek() else {
             return Ok(false);

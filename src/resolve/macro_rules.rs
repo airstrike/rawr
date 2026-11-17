@@ -1174,7 +1174,12 @@ fn rename_locals(output: &mut Output, hygiene: usize) {
             }
             _ => continue,
         };
+        let closure = matches!(token, Token::Pipe);
         let mut depth = 0_usize;
+        // A closure parameter's `: Type`, to its `,` outside the type's
+        // `<..>`, names a type and binds nothing.
+        let mut typed = false;
+        let mut angles = 0_usize;
         for position in index + 1..output.len() {
             let (token, _, own) = &output[position];
             match token {
@@ -1186,9 +1191,15 @@ fn rename_locals(output: &mut Output, hygiene: usize) {
                     depth -= 1;
                 }
                 token if depth == 0 && end(token) => break,
+                Token::Colon if closure && depth == 0 => typed = true,
+                Token::LessThan if typed => angles += 1,
+                Token::GreaterThan if typed => angles = angles.saturating_sub(1),
+                Token::RightShift if typed => angles = angles.saturating_sub(2),
+                Token::Comma if depth == 0 && angles == 0 => typed = false,
                 _ => {}
             }
-            if *own
+            if !typed
+                && *own
                 && let Token::Identifier(name) = token
                 && binding_name(name)
                 && !matches!(
@@ -1301,6 +1312,16 @@ mod tests {
         assert_eq!(
             expand(color, "0xff, hex"),
             "{ let mut __rawr_macro1_hex = 255 as u32 ; packed ( __rawr_macro1_hex , hex ) }"
+        );
+    }
+
+    #[test]
+    fn a_closure_parameter_type_is_not_renamed() {
+        let add = "macro_rules! add { ($v:expr) => {{ let f = |c: i32, m: Vec<u8>, d| c + d; f($v, vec![], 1) }}; }";
+        assert_eq!(
+            expand(add, "2"),
+            "{ let __rawr_macro1_f = | __rawr_macro1_c : i32 , __rawr_macro1_m : Vec < u8 > , \
+             __rawr_macro1_d | __rawr_macro1_c + __rawr_macro1_d ; __rawr_macro1_f ( 2 , vec ! [ ] , 1 ) }"
         );
     }
 
