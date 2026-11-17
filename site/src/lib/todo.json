@@ -12,7 +12,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A crate-facts capture deletes the extraction driver's protocol output once its facts are built, and a crate's facts promoted to rawr's home no longer keep a second copy in the project.","issues":[2161,2162]}
+        {"text":"A crate-facts capture deletes the extraction driver's protocol output once its facts are built, and a crate's facts promoted to rawr's home no longer keep a second copy in the project.","issues":[2161,2162]},
+        {"text":"A cold `rawr test` keeps only the last demand round's API, classification, facade and overlay values, because binding the program retires the rounds it superseded. A round that grows the API writes far fewer new stored parts. On download_progress the project's stored parts went from 606 MB to 288 MB, and the last round's new API parts from 41.3 MB to 10.9 MB.","issues":[2160]}
       ]
     },
     "releases": [
@@ -4770,11 +4771,15 @@
     {"issue":2157,"title":"A `mod` item inside a block expression works as in rustc: its items, `use super::*` reaching the…","state":"closed","category":"Divergences from rustc","release":"0.3.235"},
     {"issue":2158,"title":"A `tokio::select!` branch may have a precondition (`pattern = future, if condition => body`)","state":"closed","category":"Divergences from rustc","release":"0.3.235"},
     {"issue":2159,"title":"A `mod` in a block is named across the whole enclosing module, not only in its block","state":"closed","category":"Divergences from rustc","release":"0.3.236"},
-    {"issue":2160,"title":"Each demand round stores a full API and generic value, and their parts deduplicate poorly","state":"open","category":"Platforms"},
+    {"issue":2160,"title":"Each demand round stores a full API and generic value, and their parts deduplicate poorly","state":"closed","category":"Platforms"},
     {"issue":2161,"title":"The extraction driver's protocol output stays in target/rawr after its entries are made","state":"closed","category":"Platforms"},
     {"issue":2162,"title":"A promoted inventory entry is kept both in the project and in rawr's home","state":"closed","category":"Platforms"},
     {"issue":2163,"title":"rawr's home keeps an old protocol's inventories, 4.8 GB, beside the current protocol's","state":"closed","category":"Platforms"},
-    {"issue":2164,"title":"Tests that run rawr-import-driver use a stale debug driver after a protocol bump","state":"open","category":"Health"}
+    {"issue":2164,"title":"Tests that run rawr-import-driver use a stale debug driver after a protocol bump","state":"open","category":"Health"},
+    {"issue":2165,"title":"The stored classification (generic) value is digest-ordered, so a round's additions rewrite parts throughout it","state":"open","category":"Platforms"},
+    {"issue":2166,"title":"A stored API writes each definition's compiler unit in full, about 70% of its bytes","state":"open","category":"Platforms"},
+    {"issue":2167,"title":"A stored API keeps its definitions, exports and implementations twice, in the semantic canonical and the selected ledger","state":"open","category":"Platforms"},
+    {"issue":2168,"title":"A run that never binds keeps superseded demand rounds' values","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -5515,11 +5520,15 @@
             {"number":2155,"title":"An unused `use` of a missing macro under a dependency isn't reported","state":"closed"},
             {"number":2156,"title":"A cached check isn't keyed by the text of crate macro call expansions","state":"closed"},
             {"number":2159,"title":"A `mod` in a block is named across the whole enclosing module, not only in its block","state":"closed"},
-            {"number":2160,"title":"Each demand round stores a full API and generic value, and their parts deduplicate poorly","state":"open"},
+            {"number":2160,"title":"Each demand round stores a full API and generic value, and their parts deduplicate poorly","state":"closed"},
             {"number":2161,"title":"The extraction driver's protocol output stays in target/rawr after its entries are made","state":"closed"},
             {"number":2162,"title":"A promoted inventory entry is kept both in the project and in rawr's home","state":"closed"},
             {"number":2163,"title":"rawr's home keeps an old protocol's inventories, 4.8 GB, beside the current protocol's","state":"closed"},
-            {"number":2164,"title":"Tests that run rawr-import-driver use a stale debug driver after a protocol bump","state":"open"}
+            {"number":2164,"title":"Tests that run rawr-import-driver use a stale debug driver after a protocol bump","state":"open"},
+            {"number":2165,"title":"The stored classification (generic) value is digest-ordered, so a round's additions rewrite parts throughout it","state":"open"},
+            {"number":2166,"title":"A stored API writes each definition's compiler unit in full, about 70% of its bytes","state":"open"},
+            {"number":2167,"title":"A stored API keeps its definitions, exports and implementations twice, in the semantic canonical and the selected ledger","state":"open"},
+            {"number":2168,"title":"A run that never binds keeps superseded demand rounds' values","state":"open"}
           ],
           "milestone": "0.3"
         },
