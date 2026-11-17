@@ -4771,6 +4771,23 @@ fn parse_body_syntax(
             after_extern = false;
             continue;
         }
+        // `mod name { .. }` in a block is an item of the block, loaded as an
+        // inline module of the enclosing one: `super` in it names that
+        // module, as in rustc, where a block is no module of its own.
+        if boundary && let Some((Token::Mod, position)) = input.peek() {
+            let position = *position;
+            let module = parse_module(input, Box::default(), None, position)?;
+            if module.inline.is_none() {
+                return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                    "mod".into(),
+                    "cannot declare a file module inside a block unless it has a path attribute"
+                        .into(),
+                ))
+                .into_err(position));
+            }
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Module(module)));
+            continue;
+        }
         if boundary && let Some((Token::Use, position)) = input.peek() {
             let position = *position;
             let used = parse_use(input, Box::default(), None, position)?;
