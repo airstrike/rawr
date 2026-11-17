@@ -194,8 +194,11 @@ jobs:
             rows.push(...(Array.isArray(report) ? report : report.examples ?? []));
           }
           const differ = rows.filter((row) => !row.agrees);
-          console.log(`## iced: ${rows.length - differ.length} of ${rows.length} examples agree\n`);
+          const headless = rows.filter((row) => row.agrees && row.runnable === false);
+          const agree = rows.length - differ.length - headless.length;
+          console.log(`## iced: ${agree} of ${rows.length} examples agree${headless.length ? ` (${headless.length} not runnable headless here)` : ""}\n`);
           for (const row of differ) console.log(`- ${row.name}: ${row.verdict}`);
+          for (const row of headless) console.log(`- ${row.name}: ${row.verdict}`);
           if (differ.length > 0) fs.writeFileSync("differ", "");
           JS
           test ! -e differ
