@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A browser program whose `main` panics shows Rust's panic on its page. `std::thread::spawn` there panics with cargo's own wasm32 message. (#1160)
+- The import pipeline builds a runner for a package with no library and no dependency, so `rawr run --web`'s shared runner for plain programs is rawr and std alone. (#2137)
 
 ## 0.3.230 (2026-11-16)
 

@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A browser program whose `main` panics shows Rust's panic on its page. `std::thread::spawn` there panics with cargo's own wasm32 message.","issues":[1160]},
+        {"text":"The import pipeline builds a runner for a package with no library and no dependency, so `rawr run --web`'s shared runner for plain programs is rawr and std alone.","issues":[2137]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.230",
@@ -3715,7 +3721,7 @@
     {"issue":1157,"title":"Link preview cards and favicons in the site's palette","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1158,"title":"Embedding: a host's enums, Vec, usize and derives cross as they are, and an export root takes a glob import","state":"open","category":"Divergences from rustc"},
     {"issue":1159,"title":"Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc"},
-    {"issue":1160,"title":"std::thread::spawn fails in the browser playground","state":"open","category":"Platforms"},
+    {"issue":1160,"title":"std::thread::spawn fails in the browser playground","state":"closed","category":"Platforms"},
     {"issue":1161,"title":"A Rustlings group in the playground","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1162,"title":"The landing page's reload section covers any library","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -3942,15 +3948,15 @@
     {"issue":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"closed","category":"Health","release":"0.3.218"},
     {"issue":1385,"title":"The landing page warms its snippets after load so Run answers at once","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1386,"title":"Unresolved imports and paths get rustc's E0432/E0433 wording; the help \"isn't available in Rawr…","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open","category":"Importer"},
+    {"issue":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"closed","category":"Importer"},
     {"issue":1388,"title":"A rawr command warms the runtime, driver and std table for the active toolchain after cargo…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.172"},
     {"issue":1389,"title":"A host in rawr's home is pruned by mtime while a running rawr uses it; a live process leases its…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.172"},
     {"issue":1390,"title":"A program's From<String> call reaches the crate's From<Cow<str>> adapter: a Cow<str> input looks…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1391,"title":"A literal lent to a crate method whose output borrows its &str arguments still opens a scope frame","state":"open","category":"No glue (D593)"},
     {"issue":1392,"title":"The site's Run strips say nothing about where a snippet runs","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open","category":"Importer"},
+    {"issue":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"closed","category":"Importer"},
     {"issue":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"closed","category":"Importer","release":"0.3.172"},
-    {"issue":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open","category":"Importer"},
+    {"issue":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"closed","category":"Importer"},
     {"issue":1396,"title":"The universe runner fails E0597: an iced adapter's `pins` drops while `made` (Button<'_, Script…","state":"closed","category":"No glue (D593)","release":"0.3.172"},
     {"issue":1397,"title":"A body or type path through a present module with a missing middle segment reads as rustc's…","state":"open","category":"Divergences from rustc"},
     {"issue":1398,"title":"E0599 for a missing associated item uses rustc's current wording and labels (struct or enum…","state":"open","category":"Divergences from rustc"},
@@ -4691,7 +4697,7 @@
     {"issue":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
-    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open","category":"Platforms"},
+    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"closed","category":"Platforms"},
     {"issue":2138,"title":"`tokio::select!` takes several branches and runs the body of the first future to finish","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
     {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
@@ -6401,13 +6407,13 @@
           "start": 58,
           "size": 6,
           "state": "now",
-          "note": "?play's universe builds for wasm32 and runs in the browser (#1448). elevato.rs runs on it. The playground runs iced snippets in the browser, drawn in the output pane and taking clicks (#435), and an edit reloads in place with its state kept (#1455). A runner for wasm32 builds without starting (#1753). The landing page's ratatui snippet runs in the browser and takes keys while focused (#1384).",
+          "note": "`rawr run --web` runs any Cargo project, cargo script or plain program in the browser and reloads saves there with state kept (#2119, #2122, #2123), with cargo's wasm32 cfg (#2121) and its own runner rebuilt for an uncovered crate use. The landing page's ratatui snippet runs in the browser (#1384). Next: ratzilla's resize (#2116, upstream) and the engine's per-frame preparation (#1520, #1529).",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"closed"},
             {"number":1384,"title":"The landing page's iced and ratatui snippets run in the browser's rawr-web, iced interactively…","state":"closed"},
-            {"number":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"open"},
+            {"number":1393,"title":"rawr-import's runner-side model builds for wasm32, split from the host's build and store code…","state":"closed"},
             {"number":1394,"title":"rawr-import extracts bindings for a selected target other than the host, such as wasm32 (blocks…","state":"closed"},
-            {"number":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"open"},
+            {"number":1395,"title":"A universe runner for the browser: the universe built for wasm with a page entry, one instance…","state":"closed"},
             {"number":1454,"title":"A universe depending on a crate with a build-dependency panics: unit package absent from…","state":"closed"},
             {"number":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"closed"},
             {"number":1497,"title":"An or-pattern over crate variants below a program variant is refused as binding different names","state":"closed"},
@@ -6424,7 +6430,7 @@
             {"number":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed"},
             {"number":1380,"title":"The ?play image builds and deploys on a push that changes the universe or the bot, not only in a release","state":"closed"},
             {"number":1385,"title":"The landing page warms its snippets after load so Run answers at once","state":"closed"},
-            {"number":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"open"},
+            {"number":1387,"title":"A crate links rawr with its dependencies' generated bindings (the universe shape) and reloads a…","state":"closed"},
             {"number":1392,"title":"The site's Run strips say nothing about where a snippet runs","state":"closed"},
             {"number":1396,"title":"The universe runner fails E0597: an iced adapter's `pins` drops while `made` (Button<'_, Script…","state":"closed"},
             {"number":1424,"title":"rawr::universe loads a marked file against a binary's linked generated bindings and reloads it in process","state":"closed"},
@@ -6444,7 +6450,7 @@
             {"number":2121,"title":"rawr run --web reads only the nearest Cargo.toml, so a workspace member's inherited dependencies aren't seen","state":"closed"},
             {"number":2122,"title":"rawr run --web refuses a script with frontmatter dependencies and a program with no dependencies","state":"closed"},
             {"number":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed"},
-            {"number":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open"}
+            {"number":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"closed"}
           ]
         },
         {

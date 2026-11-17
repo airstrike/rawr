@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A browser program whose `main` panics shows Rust's panic on its page. `std::thread::spawn` there panics with cargo's own wasm32 message.","issues":[1160]},
+      {"text":"The import pipeline builds a runner for a package with no library and no dependency, so `rawr run --web`'s shared runner for plain programs is rawr and std alone.","issues":[2137]}
+    ]
   },
   "releases": [
     {
