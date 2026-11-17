@@ -231,7 +231,7 @@ pub fn run(
     profile: &dyn crate::Profile,
 ) -> Result<bool, diagnostic::Report> {
     let mut kept = crate::Kept::default();
-    let cells = cells(target, &mut kept);
+    let cells = cells(target, profile, &mut kept);
     let ran = session(
         target,
         Origin::graph(graph),
@@ -311,7 +311,7 @@ pub fn run_program(
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
     // The API graph each session's saves share, kept across restarts.
     let mut kept = crate::Kept::default();
-    let cells = cells(target, &mut kept);
+    let cells = cells(target, profile, &mut kept);
     let mut ran = session(
         target,
         Origin::graph(graph),
@@ -443,7 +443,7 @@ pub fn run_tests(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
     let mut kept = crate::Kept::default();
-    let cells = cells(target, &mut kept);
+    let cells = cells(target, profile, &mut kept);
     let ran = loop {
         match session(
             target,
@@ -504,15 +504,17 @@ fn load(
     rawr::package::Graph::load_with_cells(&rawr::Engine::new(), target, cells)
 }
 
-/// The parse cells of the program `target` selects, remembered across its
-/// loads: each save and each session of a run reads a source again only
-/// when its text changed (#1604, #1762). They are `kept`'s, so a
-/// preparation that reads the same cells shares them (#1849).
+/// The parse cells of the program `target` selects, built as `profile`
+/// builds it, remembered across its loads: each save and each session of
+/// a run reads a source again only when its text changed (#1604, #1762).
+/// They are `kept`'s, so a preparation that reads the same cells shares
+/// them (#1849), and a test build's parses stay apart from the program's.
 fn cells(
     target: &rawr::project::Target,
+    profile: &dyn crate::Profile,
     kept: &mut crate::Kept,
 ) -> std::rc::Rc<rawr::package::Cells> {
-    kept.cells(rawr_cli::cells::directory(target))
+    kept.cells(profile.build().cells(target))
 }
 
 /// Where the program is: the crate's root, or its single file.
@@ -623,6 +625,9 @@ fn session(
     // The preparation a restart was last announced for.
     let mut announced = None;
     let mut watched = resident::Watched::default();
+    // Each save parses the program as its start did: a test build's with
+    // `cfg(test)` holding, so the tests its runner runs stay in it.
+    let parser = profile.build().parser();
     // The last save the runner compiled in place, which a restart as the
     // program refuses it, or panics after it, starts from.
     let mut swap = None;
@@ -710,6 +715,7 @@ fn session(
                     refresh_required,
                     &mut watched,
                     &scope,
+                    &parser,
                     cells,
                     &source,
                 ) {
