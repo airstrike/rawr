@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A call of the program's own `macro_rules!` used as an expression declares the items of the blocks it expands to, so the expansion can name them, as rustc does. (#2191; part of #2188)
 
 ## 0.3.245 (2026-11-17)
 
