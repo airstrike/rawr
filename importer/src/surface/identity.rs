@@ -110,15 +110,15 @@ pub enum Hook {}
 
 /// Stable semantic identity of one Rust definition.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Definition([u8; 32]);
+pub struct Definition(#[serde(with = "crate::hex")] [u8; 32]);
 
 /// Stable semantic identity of one public export alias.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Export([u8; 32]);
+pub struct Export(#[serde(with = "crate::hex")] [u8; 32]);
 
 /// Stable semantic identity of one implementation edge.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Implementation([u8; 32]);
+pub struct Implementation(#[serde(with = "crate::hex")] [u8; 32]);
 
 /// One named field in exact constructor grammar order.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -275,6 +275,7 @@ pub struct Identity {
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     impls: Box<[super::instance::ScriptImpl]>,
     hook: Option<Hook>,
+    #[serde(with = "crate::hex")]
     semantic: [u8; 32],
 }
 

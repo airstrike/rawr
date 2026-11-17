@@ -222,6 +222,7 @@ pub struct Signature {
 /// position of the type's argument that is its value.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Opaque {
+    #[serde(with = "crate::hex")]
     definition: [u8; 32],
     associated: Box<[(Associated, u32)]>,
     /// Its traits besides auto traits, at the bound's arguments after
@@ -290,6 +291,7 @@ impl Outputs {
 /// One trait a value held through the proxy implements (`Forwarding`).
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Implemented {
+    #[serde(with = "crate::hex")]
     definition: [u8; 32],
     /// Its arguments after `Self`, each written in the arguments of the
     /// opaque type's trait (`Written::Parameter`).
@@ -342,6 +344,7 @@ pub enum Written {
     },
     /// A crate's type at its lifetimes and type arguments, as `Layout<'a>`.
     Nominal {
+        #[serde(with = "crate::hex")]
         definition: [u8; 32],
         lifetimes: Box<[Lifetime]>,
         arguments: Box<[Written]>,
@@ -353,6 +356,7 @@ pub enum Written {
     },
     /// A trait object of a crate's trait, as `dyn Operation + 'a`.
     Object {
+        #[serde(with = "crate::hex")]
         definition: [u8; 32],
         arguments: Box<[Written]>,
         lifetime: Lifetime,
@@ -585,7 +589,11 @@ pub struct Relation {
     /// headers may fix what no case does (D604): `W: Widget<M, T, R>`
     /// where `W` is `Column<Element<M, Theme, R>>` and the impl for
     /// `Column<W>` has its own `W: Widget<M, T, R>`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
     trait_identity: Option<[u8; 32]>,
     /// The associated type a projection's synthetic parameter stands for,
     /// as `P::State` of iced's `Application<P>::subscription`: an opaque
@@ -609,6 +617,7 @@ pub struct Relation {
 /// the associated type's name: `Program::State`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Associated {
+    #[serde(with = "crate::hex")]
     trait_identity: [u8; 32],
     name: Box<str>,
 }

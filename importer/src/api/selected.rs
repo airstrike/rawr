@@ -49,6 +49,7 @@ enum Export<P> {
 /// (`layout`).
 #[derive(Serialize)]
 struct Written<'graph> {
+    #[serde(with = "crate::hex::option")]
     universe: Option<[u8; 32]>,
     definitions: &'graph [Range<u32>],
     exports: Vec<Export<&'graph ledger::Path>>,
@@ -64,6 +65,7 @@ struct Written<'graph> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored<'bytes> {
+    #[serde(with = "crate::hex::option")]
     universe: Option<[u8; 32]>,
     definitions: Box<[Range<u32>]>,
     #[serde(borrow)]

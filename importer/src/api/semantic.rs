@@ -4,6 +4,7 @@ use serde::ser::{SerializeSeq as _, SerializeStruct as _};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::value::RawValue;
 
+use crate::hex::Written;
 use crate::{Error, Result};
 
 /// The exact aggregate metadata/unit/completion digests remain in the raw
@@ -36,12 +37,15 @@ impl Serialize for Context<'_> {
         value.serialize_field("host", &context.host)?;
         value.serialize_field("target", &context.target)?;
         value.serialize_field("profile", &context.profile)?;
-        value.serialize_field("resolution_universe", &context.resolution_universe)?;
-        value.serialize_field("final_lock", &context.final_lock)?;
+        value.serialize_field(
+            "resolution_universe",
+            &Written(&context.resolution_universe),
+        )?;
+        value.serialize_field("final_lock", &context.final_lock.as_ref().map(Written))?;
         let unassociated = context.final_lock.is_none().then_some((
-            &context.metadata,
-            &context.build_unit,
-            &context.resolution_proof,
+            Written(&context.metadata),
+            Written(&context.build_unit),
+            Written(&context.resolution_proof),
         ));
         value.serialize_field("unassociated_derivation", &unassociated)?;
         value.serialize_field("selections", &Selections(&context.selections))?;

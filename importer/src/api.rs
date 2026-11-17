@@ -34,7 +34,7 @@ pub use retained::Continuation;
 #[cfg(feature = "rustc-driver")]
 pub use retained::{Deferred, Kept};
 
-const CANONICALIZER_VERSION: u32 = 24;
+const CANONICALIZER_VERSION: u32 = 26;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -594,7 +594,9 @@ pub struct Context {
     graph_schema: u32,
     probe_schema: u32,
     canonicalizer: u32,
+    #[serde(with = "crate::hex")]
     metadata: [u8; 32],
+    #[serde(with = "crate::hex")]
     build_unit: [u8; 32],
     toolchain_channel: Box<str>,
     compiler_commit: Box<str>,
@@ -602,8 +604,11 @@ pub struct Context {
     host: Box<str>,
     target: Box<str>,
     profile: Box<str>,
+    #[serde(with = "crate::hex")]
     resolution_universe: [u8; 32],
+    #[serde(with = "crate::hex")]
     resolution_proof: [u8; 32],
+    #[serde(with = "crate::hex::option")]
     final_lock: Option<[u8; 32]>,
     selections: Box<[Selection]>,
 }

@@ -62,10 +62,15 @@ pub struct Application {
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Invocation {
+    #[serde(with = "crate::hex")]
     pub(crate) identity: [u8; 32],
+    #[serde(with = "crate::hex")]
     pub(crate) proof: [u8; 32],
+    #[serde(with = "crate::hex")]
     pub(crate) catalog: [u8; 32],
+    #[serde(with = "crate::hex")]
     pub(crate) source: [u8; 32],
+    #[serde(with = "crate::hex")]
     pub(crate) scope: [u8; 32],
     /// The lowering request this application answers.
     pub(crate) call: Call,

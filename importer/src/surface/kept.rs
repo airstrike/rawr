@@ -21,7 +21,7 @@ use super::{
 use crate::bridge::BuildRequestKey;
 
 /// The layout of a kept demand. One of another is read as none.
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 4;
 
 /// The demand of the runner a project last built or took from the store,
 /// with the build key that names it.
@@ -29,6 +29,7 @@ const SCHEMA: u32 = 1;
 #[serde(deny_unknown_fields)]
 pub struct Kept {
     schema: u32,
+    #[serde(with = "crate::hex")]
     build: [u8; 32],
     stored: StoredCanonical,
     plans: Box<[adapter::Plan]>,
@@ -38,6 +39,7 @@ pub struct Kept {
 #[derive(Serialize)]
 struct Written<'a> {
     schema: u32,
+    #[serde(with = "crate::hex")]
     build: &'a [u8; 32],
     stored: &'a StoredCanonical,
     plans: &'a [adapter::Plan],

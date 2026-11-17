@@ -7,7 +7,6 @@ use crate::classify::representability::{self, Representability};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
-mod digest;
 pub mod image;
 mod reexport;
 
@@ -18,7 +17,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 75;
+const SCHEMA: u32 = 80;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -42,10 +41,14 @@ pub struct AliasSite {
     root: Box<str>,
     path: Box<str>,
     namespace: Namespace,
+    #[serde(with = "crate::hex")]
     export: [u8; 32],
+    #[serde(with = "crate::hex")]
     alias: [u8; 32],
+    #[serde(with = "crate::hex")]
     target: [u8; 32],
     parameters: Box<[AliasParameter]>,
+    #[serde(with = "crate::hex")]
     selector: [u8; 32],
 }
 
@@ -55,11 +58,15 @@ pub struct ProjectionSourceSite {
     root: Box<str>,
     path: Box<str>,
     namespace: Namespace,
+    #[serde(with = "crate::hex")]
     export: [u8; 32],
+    #[serde(with = "crate::hex")]
     alias: [u8; 32],
+    #[serde(with = "crate::hex")]
     source: [u8; 32],
     shape: SourceShape,
     parameters: Box<[AliasParameter]>,
+    #[serde(with = "crate::hex")]
     selector: [u8; 32],
 }
 
@@ -73,9 +80,13 @@ pub struct AbiSite {
     root: Box<str>,
     path: Box<str>,
     namespace: Namespace,
+    #[serde(with = "crate::hex")]
     export: [u8; 32],
+    #[serde(with = "crate::hex")]
     definition: [u8; 32],
+    #[serde(with = "crate::hex")]
     shape: [u8; 32],
+    #[serde(with = "crate::hex")]
     selector: [u8; 32],
 }
 
@@ -90,16 +101,21 @@ pub struct OperationSite {
     root: Box<str>,
     path: Box<str>,
     namespace: Namespace,
+    #[serde(with = "crate::hex")]
     export: [u8; 32],
+    #[serde(with = "crate::hex")]
     definition: [u8; 32],
     formals: Box<[OperationParameter]>,
+    #[serde(with = "crate::hex")]
     shape: [u8; 32],
+    #[serde(with = "crate::hex")]
     selector: [u8; 32],
 }
 
 /// One exact compiler formal retained by a support-only operation site.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OperationParameter {
+    #[serde(with = "crate::hex")]
     owner: [u8; 32],
     index: u32,
     kind: ParameterKind,
@@ -206,7 +222,7 @@ pub struct Facade {
 #[derive(Deserialize, Serialize)]
 pub struct TraitHeader {
     path: Box<str>,
-    #[serde(with = "digest")]
+    #[serde(with = "crate::hex")]
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
     defaults: Box<[Option<Type>]>,
@@ -264,7 +280,7 @@ impl TraitHeader {
 #[derive(Deserialize, Serialize)]
 pub struct ImplHeader {
     parameters: Box<[Box<str>]>,
-    #[serde(with = "digest")]
+    #[serde(with = "crate::hex")]
     trait_identity: [u8; 32],
     arguments: Box<[Type]>,
     self_type: Type,
@@ -316,7 +332,7 @@ impl ImplProjection {
 #[derive(Deserialize, Serialize)]
 pub struct ImplBound {
     ty: Type,
-    #[serde(with = "digest")]
+    #[serde(with = "crate::hex")]
     trait_identity: [u8; 32],
     arguments: Box<[Type]>,
 }
@@ -616,7 +632,7 @@ pub struct TypeDefinition {
 /// A type definition apart from its path.
 #[derive(Deserialize, Serialize)]
 struct TypeBody {
-    #[serde(with = "digest")]
+    #[serde(with = "crate::hex")]
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
     /// Each parameter's default type, by position.
@@ -913,7 +929,11 @@ pub struct Relation {
     cases: Box<[Case]>,
     /// The bound's trait, by its definition identity, whose impl headers
     /// may fix what no case does (D604).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
     trait_identity: Option<[u8; 32]>,
     /// The associated type a projection's parameter stands for, which an
     /// opaque type that fills the bound parameter gives
@@ -1023,7 +1043,7 @@ pub enum Type {
     Primitive(Box<str>),
     /// Imported nominal type with exact semantic identity.
     Nominal {
-        #[serde(with = "digest")]
+        #[serde(with = "crate::hex")]
         identity: [u8; 32],
         arguments: Box<[Type]>,
     },
@@ -1061,7 +1081,7 @@ pub enum Type {
     /// its type `arguments` (D872).
     Object {
         pointer: crate::classify::representability::object::Pointer,
-        #[serde(with = "digest")]
+        #[serde(with = "crate::hex")]
         identity: [u8; 32],
         arguments: Box<[Type]>,
     },

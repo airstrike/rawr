@@ -28,6 +28,7 @@ pub enum Step {
 pub struct Plan {
     result: identity::Identity,
     steps: Box<[Step]>,
+    #[serde(with = "crate::hex")]
     semantic: [u8; 32],
 }
 
