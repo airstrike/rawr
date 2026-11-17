@@ -19,14 +19,20 @@ fn printed(source: &str) -> String {
     written.lock().unwrap().clone()
 }
 
-/// rustc's message and primary label for `source`, which rawr refuses.
+/// rustc's message and primary label for `source`, which rawr refuses. A
+/// position on the lines the calls' expansions are laid out on is reported
+/// at the call, as the package's source reports it.
 fn refused(source: &str) -> (String, Option<String>) {
     let source = format!("{source}\nmain();\n");
-    let error = Engine::new()
+    let engine = Engine::new();
+    let error = engine
         .compile(&source)
         .map(|_| ())
         .expect_err("rawr refuses this program");
-    let source = Source::new("main.rs", source).expect("a test source has an identity");
+    let unit = engine.parse_unit(&source).expect("the program parses");
+    let source = Source::new("main.rs", source)
+        .expect("a test source has an identity")
+        .with_expansions(unit.source().text(), unit.expansions().into());
     let report = Report::from_parse(source, &error).expect("the error is in the source");
     assert_eq!(report.code().as_str(), "", "rustc gives these no code");
     (
@@ -243,6 +249,64 @@ fn main() {
 }
 "#;
     assert_eq!(printed(source), "a b\n");
+}
+
+/// A path through a module in a call's expansion resolves as a written
+/// one does (#2192): `m::of()` names the module-level `mod m`, and
+/// `m::E::A` the module a block of the expansion declares. The output is
+/// rustc's.
+#[test]
+fn a_path_in_an_expansion_names_a_module() {
+    let source = r#"
+mod m {
+    pub fn of() -> i32 { 7 }
+}
+macro_rules! pick {
+    () => {{ m::of() }};
+}
+macro_rules! inner {
+    () => {{
+        mod m { #[derive(Debug)] pub enum E { A } }
+        m::E::A
+    }};
+}
+fn main() {
+    let e = inner!();
+    let n = pick!();
+    println!("{n} {e:?}");
+}
+"#;
+    assert_eq!(printed(source), "7 A\n");
+}
+
+/// An item in a call's expansion names the items beside it in its block
+/// (#2193), as rustc resolves them there: an expression's own block, and
+/// the block a statement's call is in. The output is rustc's.
+#[test]
+fn an_expanded_item_names_its_block_siblings() {
+    let source = r#"
+macro_rules! pick {
+    () => {{
+        #[derive(Debug)]
+        enum E { A }
+        fn of() -> E { E::A }
+        of()
+    }};
+}
+macro_rules! declare {
+    () => {
+        #[derive(Debug)]
+        enum F { B }
+        fn of() -> F { F::B }
+    };
+}
+fn main() {
+    let e = pick!();
+    declare!();
+    println!("{e:?} {:?}", of());
+}
+"#;
+    assert_eq!(printed(source), "A B\n");
 }
 
 #[test]

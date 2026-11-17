@@ -37,6 +37,9 @@ pub(crate) struct Expansion {
     pub(crate) lines: (usize, usize),
     /// The call, in the file's own lines.
     pub(crate) call: crate::Span,
+    /// The call where it is written: on the lines of the expansion that
+    /// holds it, for a call an expansion makes.
+    pub(crate) site: crate::Span,
     /// The macro, as the call writes it.
     pub(crate) name: ImmutableString,
 }

@@ -671,6 +671,7 @@ fn resolve_with_evidence_and_namespace(
         items: unit.items(),
         macros: unit.macros(),
         inner_attributes: unit.inner_attributes(),
+        expansions: unit.expansions(),
     }]);
     let (source, parsed_items, _, statement_source) = unit.into_parts();
     if let Some(module) = parsed_items.iter().find_map(|item| match item {

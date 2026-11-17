@@ -335,7 +335,9 @@ impl Parser<'_> {
     }
 
     /// Expand the call of `rules` from its `!` and put its tokens next in
-    /// the input, as its `place` parses them.
+    /// the input, as its `place` parses them. A call the parse laid out
+    /// (`parser::item_macro`) is read from those tokens, where the items
+    /// among them are declared and the resolver read their paths.
     fn splice_expansion(
         &mut self,
         rules: &macro_rules::Rules,
@@ -352,6 +354,11 @@ impl Parser<'_> {
         };
         let call = span(name_span.start(), text_end(end, " "));
         let remaining = self.nest_expansion(&name, call)?;
+        if let Some(laid_out) = self.models.laid_out(name_span.start()) {
+            let expansion = laid_out.to_vec();
+            self.splice_expanded(expansion, name_span.start(), end, place, remaining);
+            return Ok(());
+        }
         let input = macro_rules::trees(&tokens).map_err(|reason| Error::Syntax {
             message: reason,
             label: ImmutableString::new(),
@@ -582,11 +589,16 @@ impl Parser<'_> {
         let text = call::kept(&text).unwrap_or_default();
         let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;
         let at = name_span.start();
-        let expansion = lex_rust(&crate::Engine::new_raw(), text)
-            .into_iter()
-            .filter(|(token, _)| *token != Token::EOF)
-            .map(|(token, _)| (token, at))
-            .collect();
+        // A call the graph laid out is read from those tokens, where the
+        // items among them are declared.
+        let expansion = match self.models.laid_out(at) {
+            Some(laid_out) => laid_out.to_vec(),
+            None => lex_rust(&crate::Engine::new_raw(), text)
+                .into_iter()
+                .filter(|(token, _)| *token != Token::EOF)
+                .map(|(token, _)| (token, at))
+                .collect(),
+        };
         self.splice_expanded(expansion, at, end, place, remaining);
         Ok(None)
     }
