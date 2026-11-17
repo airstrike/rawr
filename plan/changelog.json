@@ -4,14 +4,19 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A marked module calls a dependency's function-like proc macro by the name a `use` binds, such as `dec!(1.5)` after `use rust_decimal_macros::dec;`, from the proc macro crate or a library's re-export.","issues":[2149]},
-      {"text":"A dependency's function-like proc macro called where a type or a pattern goes expands through rustc, as calls in expression and statement position do.","issues":[2150],"refs":[1152]},
-      {"text":"Editing a dependency's proc-macro crate expands each of its calls and derives again against the new build, and expansions no passing check reads are deleted from `target/rawr/expand`.","issues":[2152]},
-      {"text":"Every new call of a dependency's function-like proc macro in a check goes to rustc in one expansion run, rather than one run and one round per call.","issues":[2151]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.233",
+      "date": "2026-11-17",
+      "entries": [
+        {"text":"A marked module calls a dependency's function-like proc macro by the name a `use` binds, such as `dec!(1.5)` after `use rust_decimal_macros::dec;`, from the proc macro crate or a library's re-export.","issues":[2149]},
+        {"text":"A dependency's function-like proc macro called where a type or a pattern goes expands through rustc, as calls in expression and statement position do.","issues":[2150],"refs":[1152]},
+        {"text":"Editing a dependency's proc-macro crate expands each of its calls and derives again against the new build, and expansions no passing check reads are deleted from `target/rawr/expand`.","issues":[2152]},
+        {"text":"Every new call of a dependency's function-like proc macro in a check goes to rustc in one expansion run, rather than one run and one round per call.","issues":[2151]}
+      ]
+    },
     {
       "version": "0.3.232",
       "date": "2026-11-17",
