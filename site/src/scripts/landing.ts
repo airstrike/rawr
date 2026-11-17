@@ -67,4 +67,32 @@ export function setup(): void {
     // The intro peek animates --pos itself; once it ends, the inline value holds.
     fig.addEventListener("animationend", () => fig.classList.remove("intro"));
   }
+
+  tabAnchors(document, location, history);
+}
+
+/** The library tabs' radio inputs by the anchor each one has in the address bar. */
+export const TAB_ANCHORS: Record<string, string> = { iced: "lib-iced", ratatui: "lib-ratatui", loop: "lib-std" };
+
+/**
+ * The library tabs follow the address bar's anchor: `#iced`, `#ratatui` or
+ * `#loop` opens that tab and brings it into view, and choosing a tab writes
+ * its anchor without scrolling, so a tab can be linked to.
+ */
+export function tabAnchors(doc: Document, place: Location, past: History): void {
+  const radio = (anchor: string) => {
+    const id = TAB_ANCHORS[anchor];
+    return id ? doc.getElementById(id) as HTMLInputElement | null : null;
+  };
+  const open = () => {
+    const tab = radio(place.hash.slice(1));
+    if (!tab) return;
+    tab.checked = true;
+    tab.closest("figure")?.scrollIntoView({ block: "start" });
+  };
+  for (const [anchor, id] of Object.entries(TAB_ANCHORS)) {
+    doc.getElementById(id)?.addEventListener("change", () => past.replaceState(null, "", `#${anchor}`));
+  }
+  doc.defaultView?.addEventListener("hashchange", open);
+  open();
 }
