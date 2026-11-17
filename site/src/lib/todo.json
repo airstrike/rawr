@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.227",
+  "version": "0.3.228",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A runner keeps the git revisions the project's Cargo.lock pins. After `cargo update -p <crate> --precise <sha>` it builds on that revision, and it no longer mixes two revisions of one git source.","issues":[2142]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.228",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"A runner keeps the git revisions the project's Cargo.lock pins. After `cargo update -p <crate> --precise <sha>` it builds on that revision, and it no longer mixes two revisions of one git source.","issues":[2142]}
+        ]
+      },
       {
         "version": "0.3.227",
         "date": "2026-11-16",
@@ -4677,7 +4679,7 @@
     {"issue":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"open","category":"Divergences from rustc"},
     {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"open","category":"Divergences from rustc"},
     {"issue":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open","category":"Divergences from rustc"},
-    {"issue":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed","category":"Platforms"},
+    {"issue":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed","category":"Platforms","release":"0.3.228"},
     {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"open","category":"Platforms"}
   ],
   "groups": [
