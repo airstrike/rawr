@@ -195,6 +195,9 @@ impl Engine {
             ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into()
         };
         if let Some(local) = name.strip_prefix(KEYWORD_SLOT_OF) {
+            if let Some(holder) = local.strip_prefix(KEYWORD_HELD) {
+                return Self::held_located(scope, holder, name, expr);
+            }
             let slot = if local == KEYWORD_THIS {
                 -1
             } else {
@@ -232,6 +235,36 @@ impl Engine {
             Self::held_path(scope.get_mut_by_index(path)).ok_or_else(|| missing(name))?;
         let index = scope.search(holder).ok_or_else(|| missing(holder))?;
         Self::reach(scope.get_mut_by_index(index), &steps, name, expr)
+    }
+
+    /// `__rawr_slot_of___rawr_in_held_h`: the path of the place a closure
+    /// reaches through the shared handle `h` (`held_place`), as a path
+    /// that starts at `h` by its name, then the steps `h_at` holds. A part
+    /// of the place is located below it (`KEYWORD_LOCATE`), and a use of
+    /// that path finds `h` by its name wherever the body's locals are.
+    fn held_located<'s>(
+        scope: &'s mut Scope,
+        holder: &str,
+        name: &str,
+        expr: &Expr,
+    ) -> RawrResultOf<Target<'s>> {
+        let missing = |name: &str| -> crate::RawrError {
+            ERR::ErrorVariableNotFound(name.to_string(), expr.position()).into()
+        };
+        let mut at = SmartString::new_const();
+        at.push_str(holder);
+        at.push_str(HELD_STEPS);
+        let index = scope.search(&at).ok_or_else(|| missing(&at))?;
+        let (_, steps) =
+            Self::held_path(scope.get_mut_by_index(index)).ok_or_else(|| missing(name))?;
+        let mut path = crate::Array::with_capacity(steps.len() + 1);
+        path.push(Dynamic::from(crate::ImmutableString::from(holder)));
+        path.extend(
+            steps
+                .iter()
+                .map(|&step| Dynamic::from_int(step as crate::INT)),
+        );
+        Ok(Dynamic::from_array(path).into())
     }
 
     /// The place `root` (a local's slot, `-1` for `this`, or in an async

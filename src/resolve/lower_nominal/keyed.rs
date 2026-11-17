@@ -277,6 +277,32 @@ impl Parser<'_> {
         self.coerce_expr(&expected, argument).map(|_| ())
     }
 
+    /// A change to the place `lvalue` needs its root binding `mut`, unless
+    /// the place is below a `&mut` reference that binding is: the
+    /// reference lends it mutably with no `mut` of its own, as `&mut *r`
+    /// or `r.0 = 1` does. A `&mut` borrow used where a local shadows its
+    /// place's local, or captured by a closure, is that reference.
+    pub(super) fn require_mutable_place(
+        &mut self,
+        lvalue: &Lvalue,
+        mutation: Span,
+    ) -> Result<(), Error> {
+        let through_reference = !matches!(lvalue, Lvalue::Binding { .. })
+            && self
+                .mutation_binding(lvalue.binding())
+                .is_some_and(|binding| {
+                    matches!(
+                        self.inference.resolve(&binding.ty),
+                        Ty::Reference { mutable: true, .. }
+                    )
+                });
+        if through_reference {
+            self.mutable_binding_use(mutation);
+            return Ok(());
+        }
+        self.require_mutable_binding(lvalue.binding(), mutation)
+    }
+
     pub(super) fn require_mutable_binding(
         &mut self,
         name: &ImmutableString,

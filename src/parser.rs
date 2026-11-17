@@ -588,10 +588,15 @@ impl Engine {
         _pos: Position,
     ) -> (Option<NonZeroUsize>, bool) {
         // `__rawr_in_held_h` is the place reached through the locals `h` and
-        // `h_at`: a closure captures those, and the name itself is found
-        // where it is used.
+        // `h_at`, as is `__rawr_slot_of___rawr_in_held_h`, its path: a
+        // closure captures those, and the name itself is found where it is
+        // used.
+        let held = name
+            .strip_prefix(crate::engine::KEYWORD_SLOT_OF)
+            .unwrap_or(name)
+            .strip_prefix(crate::engine::KEYWORD_HELD);
         if state.allow_capture
-            && let Some(holder) = name.strip_prefix(crate::engine::KEYWORD_HELD)
+            && let Some(holder) = held
         {
             let mut at = crate::SmartString::new_const();
             at.push_str(holder);
@@ -618,8 +623,26 @@ impl Engine {
 
         let is_func_name = state.lib.values().any(|f| f.name == name);
 
+        // `__rawr_slot_of_b`, `__rawr_through_r` and `__rawr_some_through_r`
+        // are found through the locals `b` and `r` where they are used: a
+        // closure captures those locals, not the names, which no scope
+        // declares.
+        let place_local = [
+            crate::engine::KEYWORD_SLOT_OF,
+            crate::engine::KEYWORD_THROUGH,
+            crate::engine::KEYWORD_SOME_THROUGH,
+        ]
+        .into_iter()
+        .find_map(|prefix| name.strip_prefix(prefix));
         if state.allow_capture {
-            if !is_func_name && index == 0 && !state.external_vars.iter().any(|v| v.name == name) {
+            if let Some(local) = place_local {
+                if index == 0 {
+                    let _ = self.access_var(state, local, _pos);
+                }
+            } else if !is_func_name
+                && index == 0
+                && !state.external_vars.iter().any(|v| v.name == name)
+            {
                 let name = self.get_interned_string(name);
                 state.external_vars.push(Ident { name, pos: _pos });
             }
