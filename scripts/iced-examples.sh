@@ -43,6 +43,41 @@ git = "https://github.com/iced-rs/iced"
 with open(os.path.join(iced_src, "Cargo.toml"), "rb") as f:
     workspace = tomllib.load(f)["workspace"]["dependencies"]
 
+# iced's workspace pins iced_winit and winit with no default features and
+# turns their windowing systems on through the iced crate's defaults, which
+# reach iced_winit's own defaults. A standalone crate that names either
+# directly gets none of them, and winit then has no platform on the Unixes
+# that aren't Apple's or Android, where winit needs x11 or wayland.
+with open(os.path.join(iced_src, "winit", "Cargo.toml"), "rb") as f:
+    winit_features = tomllib.load(f)["features"]
+windowing = {
+    "iced_winit": winit_features["default"],
+    "winit": [
+        enabled.split("/", 1)[1]
+        for feature in winit_features["default"]
+        for enabled in winit_features[feature]
+        if enabled.startswith("winit/")
+    ],
+}
+free_unix = 'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android"), not(target_os = "emscripten")))'
+
+def add_windowing(manifest):
+    """Gives a direct iced_winit or winit dependency its windowing systems
+    where winit needs one."""
+    extra = {}
+    for name, spec in manifest.get("dependencies", {}).items():
+        package = spec.get("package", name) if isinstance(spec, dict) else name
+        if package not in windowing:
+            continue
+        spec = resolve(name, spec)
+        spec = {"version": spec} if isinstance(spec, str) else dict(spec)
+        spec["features"] = sorted(set(spec.get("features", []) + windowing[package]))
+        extra[name] = spec
+    if extra:
+        targets = manifest.setdefault("target", {})
+        table = targets.setdefault(free_unix, {}).setdefault("dependencies", {})
+        table.update(extra)
+
 def resolve(name, spec):
     """Turns a workspace or path dependency into a standalone one."""
     if not isinstance(spec, dict):
@@ -125,6 +160,7 @@ for name in names:
         manifest = tomllib.load(f)
     manifest.pop("lints", None)
     manifest.pop("workspace", None)
+    add_windowing(manifest)
     lines = []
     emit([], manifest, lines)
     lines += ["", "[workspace]", ""]
