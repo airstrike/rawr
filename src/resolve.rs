@@ -266,6 +266,9 @@ impl LoweringFailure {
             Error::ImportedApplicationRequired {
                 miss: Some(miss), ..
             } => Some(miss),
+            // A crate macro's call with no expansion yet: rustc expands
+            // every such call the pass finds in one run (#2151).
+            Error::MacroExpansionRequired { .. } => Some(error),
             _ => None,
         }
     }

@@ -474,43 +474,63 @@ fn keep_expansions(
     let expanded = expand::expand(items, &basis, &edition, &directory, &native, limits)
         .map_err(Error::other)?;
     for (item, expanded) in items.iter().zip(&expanded) {
-        expand::keep_sources(project, item, expanded).map_err(Error::other)?;
+        expand::keep_sources(project, item, &basis, expanded).map_err(Error::other)?;
     }
     Ok(())
 }
 
-/// Expand through rustc the call of a crate's function-like macro `error`
-/// asks for, keeping its expansion where loading the program reads it in
-/// the call's place (#1125). `basis` is what the run's own resolution
-/// built, when it built one. `false` when the call's expansion is kept
-/// already, so checking again can't help.
-fn expand_call(
+/// Expand through rustc, in one driver run, every call of a crate's
+/// function-like macro `error` asks for, keeping each expansion where
+/// loading the program reads it in the call's place (#1125, #2151).
+/// `basis` is what the run's own resolution built, when it built one.
+/// `false` when each call's expansion is kept already, so checking again
+/// can't help.
+fn expand_calls(
     graph: &rawr::package::Graph,
     error: &rawr::package::Error,
     basis: Option<rawr_import::expand::Basis>,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<bool, crate::Error> {
     use rawr_import::expand::call;
-    let Some(called) = error.rust_macro_call() else {
-        return Ok(false);
-    };
     let project = graph.entry_package().root();
-    let kept = std::fs::read_to_string(called.source_path(project));
-    if kept.ok().as_deref().and_then(call::kept).is_some() {
+    let pending = error
+        .rust_macro_calls()
+        .into_iter()
+        .filter(|called| {
+            let kept = std::fs::read_to_string(called.source_path(project));
+            kept.ok().as_deref().and_then(call::kept).is_none()
+        })
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
         return Ok(false);
     }
-    let root = called.path.split("::").next().unwrap_or_default();
-    let (basis, native) = expansion_basis(graph, basis, &[root], limits)?;
-    call::expand(
-        std::slice::from_ref(&called),
-        project,
+    keep_calls(graph, &pending, basis, limits)?;
+    Ok(true)
+}
+
+/// rustc's expansion of each of `calls`, in one driver run, kept where
+/// loading the program reads it in the call's place, against
+/// [`expansion_basis`].
+fn keep_calls(
+    graph: &rawr::package::Graph,
+    calls: &[rawr_import::expand::call::Call],
+    basis: Option<rawr_import::expand::Basis>,
+    limits: &rawr_import::cargo::Limits,
+) -> Result<(), crate::Error> {
+    let roots = calls
+        .iter()
+        .map(|called| called.path.split("::").next().unwrap_or_default())
+        .collect::<Vec<_>>();
+    let (basis, native) = expansion_basis(graph, basis, &roots, limits)?;
+    rawr_import::expand::call::expand(
+        calls,
+        graph.entry_package().root(),
         &basis,
         &graph.rust_edition(),
         &native,
         limits,
     )
-    .map_err(crate::Error::other)?;
-    Ok(true)
+    .map_err(crate::Error::other)
 }
 
 /// What rustc's expansions for `graph` run against, with the pinned
@@ -816,7 +836,20 @@ fn prepare_resolving(
             continue;
         }
         // What a crate derive's expansion runs against: this run's own build.
+        // An expansion kept against another build of its macro's crate is
+        // retired (#2152): a call's is expanded again in its place, and a
+        // derive's once the program, loaded again, asks for it.
         let basis = prepared.expansion_basis();
+        if let Some(basis) = &basis {
+            let retired =
+                rawr_import::expand::kept::retire(&project, basis).map_err(Error::other)?;
+            if !retired.calls.is_empty() {
+                keep_calls(&graph, &retired.calls, Some(basis.clone()), &limits)?;
+            }
+            if retired.derives {
+                return prepare(build, target, None, revision, scope, kept);
+            }
+        }
         rawr_import::progress::phase("reading API");
         let api = prepared.retain_api(&limits).map_err(Error::import)?;
         let input = api.input_identity();
@@ -874,6 +907,9 @@ fn prepare_resolving(
                     Some(kept) => (kept.graph(api).map_err(Error::cache)?, Some(kept)),
                     None => (api, None),
                 };
+                // Whether a check of the program ran and passed, rather than
+                // the cache replaying an earlier one.
+                let mut passed = false;
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
                     kept_api,
@@ -904,6 +940,7 @@ fn prepare_resolving(
                             rawr_import::progress::lowered(checker.checked_sources() - lowered);
                             let error = match compiled {
                                 Ok(demand) => {
+                                    passed = true;
                                     let checked =
                                         Checked(*demand.contract_fingerprint().as_bytes());
                                     return Ok((demand, checked));
@@ -938,6 +975,13 @@ fn prepare_resolving(
                     },
                 );
                 let completed = match completed {
+                    // A check that passed read every expansion the program
+                    // needs: the others are removed (#2152). A check the
+                    // cache replayed read none, so it removes none.
+                    Ok(completed) if passed => {
+                        rawr_import::expand::kept::prune(&project).map_err(Error::other)?;
+                        completed
+                    }
                     Ok(completed) => completed,
                     // rustc expands a crate's derive on a program type, and
                     // the expansion is program code (D740): kept beside its
@@ -953,9 +997,9 @@ fn prepare_resolving(
                     // So does a crate macro's call in a body (#1125): kept
                     // at the call's text, the next load reads it there.
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
-                        if error.rust_macro_call().is_some() =>
+                        if !error.rust_macro_calls().is_empty() =>
                     {
-                        if !expand_call(&graph, &error, basis, &limits)? {
+                        if !expand_calls(&graph, &error, basis, &limits)? {
                             return Err(Error::Rawr(error));
                         }
                         return prepare(build, target, None, revision, scope, kept);

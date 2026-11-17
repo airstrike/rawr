@@ -2062,7 +2062,38 @@ fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
         )
         .unwrap();
     };
+    // How many rounds a check of the program takes.
+    let rounds = || {
+        let checked = crate::support::rawr_import()
+            .arg("check")
+            .arg(&root)
+            .env("RAWR_HOME", crate::support::runtime_home())
+            .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+            .env("RAWR_VERBOSE", "1")
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        let stderr = text(&checked.stderr);
+        assert!(checked.status.success(), "{stderr}");
+        stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("rawr-import: check rounds "))
+            .and_then(|rest| rest.split(',').next()?.parse::<usize>().ok())
+            .unwrap_or_else(|| panic!("{stderr}"))
+    };
+    let calls = || {
+        fs::read_dir(root.join("target/rawr/expand"))
+            .unwrap()
+            .filter(|entry| {
+                let name = entry.as_ref().unwrap().file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("call-") && name.ends_with(".rs")
+            })
+            .count()
+    };
     scale("3");
+    let one = rounds();
     let run = rawr_import(&root, &["run"]);
     assert!(
         run.status.success(),
@@ -2071,6 +2102,27 @@ fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "42 value 48\n");
+
+    // Two calls an edit adds go to one driver run (#2151), and the call
+    // the edit took out is removed once the check passes (#2152).
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\npub fn label(value: i64) -> String {\n    \
+         format!(\"value {}\", value + numerals::double!(5) + numerals::double!(6))\n}\n",
+    )
+    .unwrap();
+    assert_eq!(rounds(), one);
+    assert_eq!(calls(), 2);
+    // An edit to the macro's crate expands each call again (#2152).
+    let numerals = root.join("numerals/src/lib.rs");
+    let macro_source = fs::read_to_string(&numerals).unwrap();
+    fs::write(&numerals, macro_source.replace("* 2", "* 3")).unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert_eq!(text(&run.stdout), "63 value 96\n", "{}", text(&run.stderr));
+    fs::write(&numerals, macro_source).unwrap();
+    scale("3");
+    let run = rawr_import(&root, &["run"]);
+    assert_eq!(text(&run.stdout), "42 value 48\n", "{}", text(&run.stderr));
 
     // A save that changes the call's input expands it again, and the
     // running program prints the new expansion's value.
