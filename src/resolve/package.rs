@@ -30,6 +30,21 @@ type PatternOwners = BTreeMap<(program::source::Id, Span), type_def::Identity>;
 /// (`super::block`).
 type BlockItems = BTreeMap<Span, BTreeMap<ImmutableString, (Span, Target)>>;
 
+/// The modules each block of a unit declares, by block, each name with
+/// where it is declared and its module's segment
+/// (`super::block::module_segment`).
+type BlockModules = BTreeMap<Span, BTreeMap<ImmutableString, (Span, ImmutableString)>>;
+
+/// The qualified paths of items' headers one pass resolves: those that
+/// start at a module's own names, which the module's names hold, or those
+/// through a block's module (`Resolver::in_blocks`), which that block's
+/// names hold.
+#[derive(Clone, Copy, PartialEq)]
+enum HeaderPaths {
+    Module,
+    Block,
+}
+
 /// Each name of Rust's namespaces a scope binds, with where, and whether an
 /// import bound it: two imports are rustc's E0252.
 type Bound = BTreeMap<(ImmutableString, item::Namespace), (source::Id, Span, bool)>;
@@ -148,6 +163,9 @@ struct Resolver<'a> {
     /// (#1876).
     kept: Option<&'a RefCell<Resolutions>>,
     type_declarations: Vec<type_def::Declaration>,
+    /// The modules the blocks of each unit that has one declare: a
+    /// block's module is named in its block only.
+    block_modules: BTreeMap<source::Id, BlockModules>,
     /// The ids `type_declarations` hold (`type_def::Id::keyed`).
     type_ids: BTreeSet<type_def::Id>,
     /// Each crate trait whose name another module's trait has too, by its
@@ -360,6 +378,7 @@ impl<'a> Resolver<'a> {
             tables: Tables::new(packages, prelude),
             kept: kept.map(|(kept, _)| kept),
             type_declarations: Vec::new(),
+            block_modules: BTreeMap::new(),
             type_ids: BTreeSet::new(),
             trait_names: BTreeMap::new(),
             expanded,
@@ -400,11 +419,31 @@ impl<'a> Resolver<'a> {
             let items = unit.parsed.items();
             let mut slots = Vec::with_capacity(items.len());
             let mut blocks = BlockItems::new();
+            let mut block_modules = BlockModules::new();
             let ordinals = super::block::ordinals(items);
 
             for (index, parsed) in items.iter().enumerate() {
                 if let crate::item::Parsed::Module(module) = parsed {
-                    let address = context.address(&module.name.text);
+                    let segment = super::block::module_segment(&module.name.text, ordinals[index]);
+                    // Each block's modules are named apart, so a second
+                    // module of one name in one block is rustc's E0428.
+                    if let Some(block) = parsed.scope()
+                        && let Some((previous, _)) = block_modules.entry(block).or_default().insert(
+                            module.name.text.clone(),
+                            (module.name.span, segment.clone()),
+                        )
+                    {
+                        return Err(Failure {
+                            primary: context.source,
+                            secondary: Some(context.source),
+                            error: Error::DuplicateItem {
+                                name: module.name.text.clone(),
+                                declaration: module.name.span,
+                                previous_declaration: previous,
+                            },
+                        });
+                    }
+                    let address = context.address(&segment);
                     self.insert_declaration(
                         address.clone(),
                         Declaration {
@@ -562,6 +601,10 @@ impl<'a> Resolver<'a> {
                 }
             }
 
+            if !block_modules.is_empty() {
+                self.block_modules
+                    .insert(unit.context.source, block_modules);
+            }
             unit.slots = slots;
             unit.blocks = blocks;
         }
@@ -690,13 +733,15 @@ impl<'a> Resolver<'a> {
         let mut resolved = ResolvedQualifiedCalls::default();
         for parsed in unit.parsed.items() {
             for call in qualified_calls(parsed) {
-                if !self.is_script_path(&unit.context, &call.path) {
+                let scoped = self.in_blocks(&unit.context, &call.path, call.path_span);
+                let path = scoped.as_deref().unwrap_or(&call.path);
+                if !self.is_script_path(&unit.context, path) {
                     continue;
                 }
                 let source = program::source::Id::from_index(unit.context.source.index());
                 // `crate::model::Thing::new` into a `.rs` module
                 // is the app crate's `polyglot::model::Thing::new`.
-                if let Some(spelled) = self.rust_spelling(&unit.context, &call.path) {
+                if let Some(spelled) = self.rust_spelling(&unit.context, path) {
                     resolved
                         .rust
                         .insert((source, call.path_span), spelled.into_boxed_slice());
@@ -704,8 +749,8 @@ impl<'a> Resolver<'a> {
                 }
                 // `kinds::Secondary` after `pub use self::Kind::Secondary;`
                 // in `kinds`: the variant of the enum the import names.
-                let (origin_context, origin_path) = self.origin(&unit.context, &call.path);
-                if *origin_path != *call.path {
+                let (origin_context, origin_path) = self.origin(&unit.context, path);
+                if *origin_path != *path {
                     match self.variant(&origin_context, &origin_path) {
                         Some(item::Import::Variant { identity, .. }) => {
                             resolved.owners.insert((source, call.owner_span), identity);
@@ -716,7 +761,7 @@ impl<'a> Resolver<'a> {
                             let spelled = owner
                                 .split("::")
                                 .map(ImmutableString::from)
-                                .chain(call.path.last().cloned())
+                                .chain(path.last().cloned())
                                 .collect();
                             resolved.rust.insert((source, call.path_span), spelled);
                             continue;
@@ -725,11 +770,11 @@ impl<'a> Resolver<'a> {
                     }
                 }
 
-                if call.path.len() >= 3 {
+                if path.len() >= 3 {
                     let mut active = BTreeSet::new();
                     match self.resolve_path(
                         &unit.context,
-                        &call.path[..call.path.len() - 1],
+                        &path[..path.len() - 1],
                         call.owner_span,
                         &mut active,
                     )? {
@@ -758,7 +803,7 @@ impl<'a> Resolver<'a> {
 
                 let mut active = BTreeSet::new();
                 match self
-                    .resolve_path(&unit.context, &call.path, call.path_span, &mut active)
+                    .resolve_path(&unit.context, path, call.path_span, &mut active)
                     .map_err(|failure| self.not_in_module(&unit.context, &call, failure))?
                 {
                     Target::Item(key) => {
@@ -800,11 +845,13 @@ impl<'a> Resolver<'a> {
         let mut resolved = BTreeMap::new();
         for parsed in unit.parsed.items() {
             for (path, owner) in qualified_pattern_owners(parsed) {
-                if !self.is_script_path(&unit.context, &path) {
+                let scoped = self.in_blocks(&unit.context, &path, owner);
+                let path = scoped.as_deref().unwrap_or(&path);
+                if !self.is_script_path(&unit.context, path) {
                     continue;
                 }
                 let mut active = BTreeSet::new();
-                match self.resolve_path(&unit.context, &path, owner, &mut active)? {
+                match self.resolve_path(&unit.context, path, owner, &mut active)? {
                     Target::Type(type_ref::Target::Script { identity, .. }) => {
                         resolved.insert(
                             (
@@ -1340,6 +1387,11 @@ impl<'a> Resolver<'a> {
             return Ok(Vec::new());
         };
         let segments = path_segments(prefix);
+        let segments = parsed
+            .header
+            .scope
+            .and_then(|block| self.in_blocks(context, &segments, block))
+            .unwrap_or(segments);
         let module: ImmutableString = segments.join("::").into();
         let local = self.enum_glob(context, &segments)
             || super::std_ordering(&module)
@@ -1681,7 +1733,12 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        self.resolve_qualified_header_types(context, parsed_items, &mut types)?;
+        self.resolve_qualified_header_types(
+            context,
+            parsed_items,
+            HeaderPaths::Module,
+            &mut types,
+        )?;
         let mut uses = vec![None; parsed_items.len()];
 
         let members = (0..parsed_items.len())
@@ -1754,6 +1811,9 @@ impl<'a> Resolver<'a> {
 
             let globbed = self.glob_paths(context, parsed, bound)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
+                let path = scope
+                    .and_then(|block| self.in_blocks(context, &path, block))
+                    .unwrap_or(path);
                 let module_only = parsed.binds_module_only(&name);
                 // `use ::image::ColorType;` names the crate `image`, never a
                 // module of this crate or one another `use` brought in.
@@ -2001,19 +2061,30 @@ impl<'a> Resolver<'a> {
                 .filter(|index| parsed_items[*index].scope() == Some(block))
                 .collect::<Vec<_>>();
             let declared = blocks.get(&block);
-            let binds_type = declared.is_some_and(|items| {
-                items
-                    .values()
-                    .any(|(_, target)| matches!(target, Target::Type(_)))
-            }) || members
-                .iter()
-                .any(|index| matches!(parsed_items[*index], crate::item::Parsed::Use(_)));
+            // The types its items' headers name through a block's module.
+            let mut through = BTreeMap::new();
+            self.resolve_qualified_header_types(
+                context,
+                members.iter().map(|index| &parsed_items[*index]),
+                HeaderPaths::Block,
+                &mut through,
+            )?;
+            let binds_type = !through.is_empty()
+                || declared.is_some_and(|items| {
+                    items
+                        .values()
+                        .any(|(_, target)| matches!(target, Target::Type(_)))
+                })
+                || members
+                    .iter()
+                    .any(|index| matches!(parsed_items[*index], crate::item::Parsed::Use(_)));
             if !binds_type {
                 continue;
             }
             let mut scoped = super::block::innermost(&block_types, block)
                 .unwrap_or(types)
                 .clone();
+            scoped.extend(through);
             let mut bound = Bound::new();
             let mut occupied = BTreeMap::new();
             for (name, (span, target)) in declared.into_iter().flatten() {
@@ -2065,32 +2136,45 @@ impl<'a> Resolver<'a> {
         Ok(block_types)
     }
 
-    fn resolve_qualified_header_types(
+    /// The types the `paths` among the qualified paths of `parsed_items`'
+    /// headers name, into `types` by how they are written.
+    fn resolve_qualified_header_types<'p>(
         &self,
         context: &Context,
-        parsed_items: &[crate::item::Parsed],
+        parsed_items: impl IntoIterator<Item = &'p crate::item::Parsed>,
+        paths: HeaderPaths,
         types: &mut BTreeMap<ImmutableString, type_ref::Target>,
     ) -> Result<(), Failure> {
-        let mut paths = Vec::new();
+        let mut written_paths = Vec::new();
         for item in parsed_items {
-            collect_item_type_paths(item, &mut paths);
+            collect_item_type_paths(item, &mut written_paths);
         }
-        for path in paths {
-            let segments = path_segments(path);
-            if path.global {
-                self.reject_local_global(context, &segments, path.span)?;
+        for path in written_paths {
+            let written = path_segments(path);
+            let scoped = self.in_blocks(context, &written, path.span);
+            let through = if scoped.is_some() {
+                HeaderPaths::Block
+            } else {
+                HeaderPaths::Module
+            };
+            if through != paths {
                 continue;
             }
-            if segments.len() < 2 || !self.is_script_path(context, &segments) {
+            let segments = scoped.as_deref().unwrap_or(&written);
+            if path.global {
+                self.reject_local_global(context, segments, path.span)?;
+                continue;
+            }
+            if segments.len() < 2 || !self.is_script_path(context, segments) {
                 continue;
             }
             let mut active = BTreeSet::new();
             let target = self
-                .resolve_path(context, &segments, path.span, &mut active)
+                .resolve_path(context, segments, path.span, &mut active)
                 .map_err(|failure| self.unresolved_type_path(context, path, failure))?;
             match target {
                 Target::Type(target) => {
-                    types.insert(segments.join("::").into(), target);
+                    types.insert(written.join("::").into(), target);
                 }
                 Target::Module
                 | Target::Trait(_)
@@ -2191,6 +2275,30 @@ impl<'a> Resolver<'a> {
         } else {
             first
         })
+    }
+
+    /// `path` as `context`'s module resolves it when it is written at
+    /// `at`, when a block around `at` declares a module of its first
+    /// segment: the path through that module's segment
+    /// (`super::block::module_segment`), the innermost block's first. A
+    /// block's module is no module's child, so nowhere else does its name
+    /// reach it.
+    fn in_blocks(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+        at: Span,
+    ) -> Option<Box<[ImmutableString]>> {
+        let (first, rest) = path.split_first()?;
+        let segment = self
+            .block_modules
+            .get(&context.source)?
+            .range(..=at)
+            .rev()
+            .filter(|(block, _)| super::block::encloses(**block, at))
+            .find_map(|(_, modules)| modules.get(first))
+            .map(|(_, segment)| segment)?;
+        Some(std::iter::once(segment).chain(rest).cloned().collect())
     }
 
     fn is_child_module(&self, context: &Context, name: &str) -> bool {

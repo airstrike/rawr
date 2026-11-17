@@ -485,14 +485,45 @@ fn main() {
 /// A `mod` in a block is a module of the enclosing one, as rustc reads it:
 /// its items are its own, its `use super::*;` reaches the enclosing
 /// module's items, and its private function is rustc's E0603 from the
-/// block.
+/// block. Its name is its block's only: two blocks' `mod helper` and the
+/// module's are three modules, and outside its block the name is rustc's
+/// E0433.
 #[test]
 fn a_module_in_a_block_sees_the_enclosing_module() {
     let output = printed(
         r#"
 const BASE: i32 = 10;
 
+mod helper {
+    pub fn f() -> i32 {
+        100
+    }
+}
+
 fn main() {
+    let first = {
+        mod helper {
+            pub struct T(pub i32);
+            pub fn f() -> T {
+                T(1)
+            }
+        }
+        fn g(t: helper::T) -> i32 {
+            t.0
+        }
+        let t: helper::T = helper::f();
+        g(t)
+    };
+    let second = {
+        mod helper {
+            pub fn f() -> i32 {
+                2
+            }
+        }
+        use helper::f;
+        f()
+    };
+    println!("{first} {second} {}", helper::f());
     let total = {
         mod helper {
             use super::*;
@@ -514,7 +545,44 @@ fn main() {
 }
 "#,
     );
-    assert_eq!(output, "13\n");
+    assert_eq!(output, "1 2 100\n13\n");
+    let output = printed(
+        r#"
+fn main() {
+    let first = {
+        mod util {
+            pub enum Out<A> {
+                Value(A),
+                Disabled,
+            }
+        }
+        let out = util::Out::Value(3);
+        match out {
+            util::Out::Value(x) => x,
+            util::Out::Disabled => 0,
+        }
+    };
+    let second = {
+        mod util {
+            pub enum Out<A> {
+                Value(A),
+                Disabled,
+            }
+        }
+        use util::*;
+        let out: Out<i32> = Out::Disabled;
+        {
+            match out {
+                util::Out::Value(x) => x,
+                util::Out::Disabled => 7,
+            }
+        }
+    };
+    println!("{first} {second}");
+}
+"#,
+    );
+    assert_eq!(output, "3 7\n");
     let report = rejected(
         r#"
 fn main() {
@@ -529,6 +597,25 @@ fn main() {
     );
     assert!(
         report.starts_with("error[E0603]: function `g` is private\n"),
+        "{report}"
+    );
+    let report = rejected(
+        r#"
+fn main() {
+    {
+        mod helper {
+            pub fn f() -> i32 {
+                1
+            }
+        }
+        println!("{}", helper::f());
+    }
+    println!("{}", helper::f());
+}
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0433]: cannot find module or crate `helper` in this scope\n"),
         "{report}"
     );
 }

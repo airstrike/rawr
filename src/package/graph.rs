@@ -1446,11 +1446,19 @@ impl<'a> Builder<'a> {
                 .parse_unit_with(source.text(), features)
                 .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?,
         };
+        // A block's module is named by its segment
+        // (`resolve::block::module_segment`), so that each block's module
+        // of a name is a module of its own.
+        let ordinals = crate::resolve::block::ordinals(parsed.items());
         let declarations = parsed
             .items()
             .iter()
-            .filter_map(|item| match item {
-                item::Parsed::Module(module) => Some(module.clone()),
+            .zip(ordinals)
+            .filter_map(|(item, ordinal)| match item {
+                item::Parsed::Module(module) => {
+                    let segment = crate::resolve::block::module_segment(&module.name.text, ordinal);
+                    Some((module.clone(), segment))
+                }
                 item::Parsed::Use(_)
                 | item::Parsed::Struct(_)
                 | item::Parsed::Enum(_)
@@ -1480,9 +1488,9 @@ impl<'a> Builder<'a> {
             }),
         );
 
-        for module in declarations {
+        for (module, segment) in declarations {
             let mut child_modules = modules.to_vec();
-            child_modules.push(module.name.text.clone());
+            child_modules.push(segment.clone());
             let label = error::Label {
                 source: evidence,
                 span: module.span,
@@ -1490,7 +1498,7 @@ impl<'a> Builder<'a> {
             // `mod name { .. }`: the text inside its braces, where it is in
             // the file, so its positions stay the file's.
             if let Some(inline) = module.inline {
-                let child_key = key.join(format!("#{}", module.name.text));
+                let child_key = key.join(format!("#{segment}"));
                 self.load_module_text(
                     package,
                     package_name,

@@ -60,6 +60,18 @@ pub(crate) fn ordinals(items: &[Parsed]) -> Vec<Option<u32>> {
         .collect()
 }
 
+/// The segment a module's path has for the module `name`, whose place
+/// among its module's block items of its name is `ordinal`: its name for a
+/// module's item. A block's module is a module of its own, named in its
+/// block only, so its segment is one no path can write: two blocks'
+/// `mod helper` are two modules, and neither is the module's `helper`.
+pub(crate) fn module_segment(name: &ImmutableString, ordinal: Option<u32>) -> ImmutableString {
+    match ordinal {
+        Some(ordinal) => format!("{name}#{ordinal}").into(),
+        None => name.clone(),
+    }
+}
+
 /// The name an item declares, in either namespace.
 fn name(parsed: &Parsed) -> Option<&ImmutableString> {
     match parsed {
