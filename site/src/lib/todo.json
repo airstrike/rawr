@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.230",
+  "version": "0.3.231",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A browser program whose `main` panics shows Rust's panic on its page. `std::thread::spawn` there panics with cargo's own wasm32 message.","issues":[1160]},
-        {"text":"The import pipeline builds a runner for a package with no library and no dependency, so `rawr run --web`'s shared runner for plain programs is rawr and std alone.","issues":[2137]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.231",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"A browser program whose `main` panics shows Rust's panic on its page. `std::thread::spawn` there panics with cargo's own wasm32 message.","issues":[1160]},
+          {"text":"The import pipeline builds a runner for a package with no library and no dependency, so `rawr run --web`'s shared runner for plain programs is rawr and std alone.","issues":[2137]}
+        ]
+      },
       {
         "version": "0.3.230",
         "date": "2026-11-16",
@@ -3721,7 +3723,7 @@
     {"issue":1157,"title":"Link preview cards and favicons in the site's palette","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1158,"title":"Embedding: a host's enums, Vec, usize and derives cross as they are, and an export root takes a glob import","state":"open","category":"Divergences from rustc"},
     {"issue":1159,"title":"Embedding: a typed handle over the script's own type, checked at lookup and lent by &mut, and Script::replace","state":"open","category":"Divergences from rustc"},
-    {"issue":1160,"title":"std::thread::spawn fails in the browser playground","state":"closed","category":"Platforms"},
+    {"issue":1160,"title":"std::thread::spawn fails in the browser playground","state":"closed","category":"Platforms","release":"0.3.231"},
     {"issue":1161,"title":"A Rustlings group in the playground","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1162,"title":"The landing page's reload section covers any library","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1163,"title":"The generated runner's own items share a namespace with the program's types (a program `struct Program` fails to build)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -4697,7 +4699,7 @@
     {"issue":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
-    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"closed","category":"Platforms"},
+    {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"closed","category":"Platforms","release":"0.3.231"},
     {"issue":2138,"title":"`tokio::select!` takes several branches and runs the body of the first future to finish","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
     {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
