@@ -1028,7 +1028,7 @@ impl<'store> Evaluator<'store> {
         let mut admitted = None;
         let mut rejected = candidates.rejected;
         let mut repair = candidates.rejected;
-        let mut rejected_actions = [None; MAX_DEEP_VALIDATIONS_PER_LOOKUP];
+        let mut rejected_actions = [const { None }; MAX_DEEP_VALIDATIONS_PER_LOOKUP];
         // A candidate its inputs' change superseded costs no deep
         // validation and stays in its bucket, for a return to those inputs
         // (#1794). The rest are validated up to the per-lookup bound.

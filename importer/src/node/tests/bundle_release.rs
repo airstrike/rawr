@@ -289,6 +289,24 @@ fn candidate_matrix() -> Vec<Mutation> {
 }
 
 #[test]
+fn census_corruption_names_the_total_and_the_grown_member() {
+    let published = publish("release-census-message", plain);
+    seam::set(&published.bundle.join("generated/extra"), MIB);
+    let message = match published.validate_complete() {
+        Err(Error::CandidateCorrupt(corruption)) => corruption.to_string(),
+        other => panic!("allocation growth is census corruption, got {other:?}"),
+    };
+    assert!(
+        message.contains("charged bytes: sealed ")
+            && message.contains(
+                "`generated/extra` allocated beyond its length (length 5000, allocated 1048576)"
+            ),
+        "the census names the total that differs and the grown member, got {message}"
+    );
+    published.retire();
+}
+
+#[test]
 fn candidate_sites_reject_the_matrix_as_corruption_and_inventory_checks_placement() {
     type Apply = Box<dyn Fn(&Path)>;
     let mut cases: Vec<(&str, &str, Apply)> = candidate_matrix()
