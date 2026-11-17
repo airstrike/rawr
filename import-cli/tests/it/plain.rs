@@ -2185,6 +2185,64 @@ fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
     assert!(!stderr.contains("changed during the build"), "{stderr}");
 }
 
+/// A `use` of a crate's proc macro, from its own crate or a library's
+/// re-export of it, binds the name in the macro namespace, and a call by
+/// the name alone is rustc's expansion, as a call by its path is (#2149).
+#[test]
+fn a_used_crate_macro_expands_by_its_name() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::fresh("plain-proc-macro-use");
+    copy(Path::new(PROC_MACRO), &root);
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\nuse numerals::double;\nuse wrap::double as twice;\n\n\
+         pub fn label(value: i64) -> String {\n    \
+         format!(\"value {}\", value + double!(3) + twice!(2))\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value 52\n");
+}
+
+/// A crate macro's call where a type or a pattern goes is rustc's
+/// expansion of the call in that place (#2150).
+#[test]
+fn a_crate_macro_expands_in_type_and_pattern_position() {
+    const PROC_MACRO: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-proc-macro"
+    );
+    let root = crate::support::fresh("plain-proc-macro-places");
+    copy(Path::new(PROC_MACRO), &root);
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\npub fn label(value: i64) -> String {\n    \
+         let twice: numerals::verbatim!(i64) = value * 2;\n    \
+         let name = match twice {\n        \
+         numerals::verbatim!(84 | 85) => \"eighty-four\",\n        \
+         _ => \"other\",\n    };\n    \
+         format!(\"value {name}\")\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "42 value eighty-four\n");
+}
+
 /// An edit that changes only a derive's expansion's bodies, as a new
 /// `#[serde(rename)]` does, swaps into the running program (#1040): rustc
 /// expands the item again, its expansion's source changes in place, and the

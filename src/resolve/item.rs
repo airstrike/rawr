@@ -109,6 +109,10 @@ pub(crate) enum Import {
     /// `Deserialize` when the program names no trait of that name: only a
     /// `#[derive(..)]` reads the name.
     Derive,
+    /// A dependency's function-like macro the crates' facades hold no item
+    /// at, as `use rust_decimal_macros::dec;` binds a proc macro: a call by
+    /// the name is rustc's to expand (#2149).
+    CrateMacro,
 }
 
 /// The Rust namespace a name is bound in. A module, a type or a trait is
@@ -116,13 +120,14 @@ pub(crate) enum Import {
 /// module `badge` and a function `badge` are two names, as rustc binds
 /// `use badge::{self, badge};`. A variant, a module with a function of its
 /// name, or a declaration whose kind the import table doesn't keep, is in
-/// both.
+/// both. A crate's macro is in the macro namespace, apart from both.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Serialize))]
 pub(crate) enum Namespace {
     Type,
     Value,
     Both,
+    Macro,
 }
 
 impl Namespace {
@@ -132,6 +137,7 @@ impl Namespace {
             Self::Type => &[Self::Type],
             Self::Value => &[Self::Value],
             Self::Both => &[Self::Type, Self::Value],
+            Self::Macro => &[Self::Macro],
         }
     }
 }
@@ -150,6 +156,7 @@ impl Import {
             | Self::Variant { .. }
             | Self::OrderingVariant
             | Self::HostVariant { .. } => Namespace::Both,
+            Self::CrateMacro => Namespace::Macro,
         }
     }
 }

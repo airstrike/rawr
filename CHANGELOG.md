@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A marked module calls a dependency's function-like proc macro by the name a `use` binds, such as `dec!(1.5)` after `use rust_decimal_macros::dec;`, from the proc macro crate or a library's re-export. (#2149)
+- A dependency's function-like proc macro called where a type or a pattern goes expands through rustc, as calls in expression and statement position do. (#2150; part of #1152)
 
 ## 0.3.232 (2026-11-17)
 

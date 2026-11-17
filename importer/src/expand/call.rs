@@ -20,6 +20,10 @@ pub enum Place {
     Expression,
     /// The statements of the block it is in.
     Statements,
+    /// A type.
+    Type,
+    /// A pattern.
+    Pattern,
 }
 
 /// The delimiters a call's input is in.
@@ -83,17 +87,18 @@ impl Call {
     pub fn source_path(&self, project: &Path) -> PathBuf {
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.expand.call/v1");
-        digest.update([u8::from(self.place == Place::Statements)]);
+        // The place's byte is its order in `Place`.
+        digest.update([self.place as u8]);
         digest.update(self.text().as_bytes());
         super::directory(project).join(format!("call-{}.rs", super::hex(&digest.finalize())))
     }
 
     /// The call's function in the small crate: the call is its one `let`'s
-    /// initializer, or its body, as the driver reads it back. A call in
-    /// statement position is one as rustc parses it: in braces, which keep
-    /// the last expression it expands to as the body's value, or in
-    /// parentheses or brackets before a `;`, which rustc puts after the
-    /// last statement it expands to.
+    /// initializer, type or pattern, or its body, as the driver reads it
+    /// back. A call in statement position is one as rustc parses it: in
+    /// braces, which keep the last expression it expands to as the body's
+    /// value, or in parentheses or brackets before a `;`, which rustc puts
+    /// after the last statement it expands to.
     #[cfg_attr(
         not(feature = "rustc-driver"),
         allow(dead_code, reason = "only the driver's build runs an expansion")
@@ -106,6 +111,8 @@ impl Call {
                     self.text()
                 )
             }
+            Place::Type => format!("fn __rawr_type() {{\n    let _: {};\n}}\n", self.text()),
+            Place::Pattern => format!("fn __rawr_pattern() {{\n    let {};\n}}\n", self.text()),
             Place::Statements => {
                 let end = if self.delimiter == Delimiter::Brace {
                     ""
