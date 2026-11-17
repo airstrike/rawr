@@ -13,6 +13,7 @@ use crate::{Error, Result};
 pub(crate) mod decode;
 pub(crate) mod frame;
 pub mod identity;
+pub(crate) mod layout;
 pub mod ledger;
 pub mod model;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,7 +31,7 @@ pub use retained::Continuation;
 #[cfg(feature = "rustc-driver")]
 pub use retained::{Deferred, Kept};
 
-const CANONICALIZER_VERSION: u32 = 19;
+const CANONICALIZER_VERSION: u32 = 20;
 
 /// The stored API product's schema: its codec with the versions the action
 /// key carries, so an entry an older canonicalizer or extraction protocol
@@ -392,6 +393,20 @@ fn stored(
     })
 }
 
+/// A reference to each of `values`, for a ledger the store writes in an
+/// order of its own (`layout`).
+fn references<T>(values: &[T]) -> crate::Result<Vec<&T>> {
+    let mut references = Vec::new();
+    references
+        .try_reserve_exact(values.len())
+        .map_err(|source| crate::Error::Allocation {
+            operation: "stored API layout",
+            source,
+        })?;
+    references.extend(values);
+    Ok(references)
+}
+
 pub(crate) fn header(usage: Usage, canonical: usize, selected: usize) -> [u8; HEADER_BYTES] {
     let mut header = [0; HEADER_BYTES];
     header[..8].copy_from_slice(MAGIC);
@@ -555,14 +570,16 @@ struct StoredSelected {
     index: Box<[ledger::Index]>,
 }
 
+/// The selected ledger as the store writes it: definitions, implementations
+/// and support in source order (`layout`).
 #[derive(Serialize)]
 struct Selected<'graph> {
     universe: Option<[u8; 32]>,
-    definitions: &'graph [model::Definition],
+    definitions: &'graph [&'graph model::Definition],
     exports: &'graph [ledger::Path],
-    implementations: &'graph [model::Implementation],
+    implementations: &'graph [&'graph model::Implementation],
     scalar_predicate_proofs: &'graph [model::ScalarPredicateProof],
-    support: &'graph [ledger::Support],
+    support: &'graph [&'graph ledger::Support],
     anonymous: &'graph [ledger::AnonymousImport],
     index: &'graph [ledger::Index],
 }
@@ -943,11 +960,16 @@ impl Graph<Captured> {
             // The stored ledger is content-addressed and was encoded
             // canonically when captured: it is decoded once, never encoded
             // again to prove it.
-            let selected: StoredSelected = crate::extract::sidecar::read(&stored.selected)
+            let mut selected: StoredSelected = crate::extract::sidecar::read(&stored.selected)
                 .map_err(|error| Error::Extraction {
                     code: "stored-selected-schema",
                     reason: error.to_string().into_boxed_str(),
                 })?;
+            layout::restore(
+                &mut selected.definitions,
+                &mut selected.implementations,
+                &mut selected.support,
+            );
             if selected.universe != context.resolution_universe() {
                 return Err(Error::Extraction {
                     code: "stored-api-universe",
@@ -1168,13 +1190,19 @@ impl Graph<Captured> {
             .validate_cardinality(allocation)
             .map_err(|error| allocation.failure(error))?;
         if let Semantic::Captured(canonical) = semantic {
+            let mut definitions = references(&graph.definitions)?;
+            layout::definitions(&mut definitions);
+            let mut implementations = references(&graph.implementations)?;
+            layout::implementations(&mut implementations);
+            let mut support = references(&graph.support)?;
+            layout::support(&mut support, &graph.definitions, &graph.implementations);
             let selected = Selected {
                 universe: graph.universe,
-                definitions: &graph.definitions,
+                definitions: &definitions,
                 exports: &graph.exports,
-                implementations: &graph.implementations,
+                implementations: &implementations,
                 scalar_predicate_proofs: &graph.scalar_predicate_proofs,
-                support: &graph.support,
+                support: &support,
                 anonymous: &graph.anonymous,
                 index: &graph.index,
             };
