@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A demand round rewrites less of the stored classification, because its support, definition plans and implementation ledgers are written in source order: counter's second round writes 30.8 MB of new parts rather than 41.9 MB. (#2165)
+- `rawr check` retires the API, classification, facade and overlay values of the demand rounds its final demand superseded, as a bind does. (#2168)
 
 ## 0.3.238 (2026-11-17)
 
