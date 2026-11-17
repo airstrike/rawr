@@ -125,16 +125,28 @@ pub(super) enum Syntax {
 }
 
 /// A constructor of Rust's prelude enums `Option<T>` and
-/// `Result<T, E>`, builtin generics until Rawr has its own.
+/// `Result<T, E>`, builtin generics until Rawr has its own, or of std's
+/// `task::Poll<T>`, which is an `Option<T>` at runtime: `Ready` is `Some`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Prelude {
     Some,
     None,
     Ok,
     Err,
+    Ready,
+    Pending,
 }
 
 impl Prelude {
+    /// The variant of std's `Poll` named `name`.
+    pub(super) fn from_poll(name: &str) -> Option<Self> {
+        match name {
+            "Ready" => Some(Self::Ready),
+            "Pending" => Some(Self::Pending),
+            _ => None,
+        }
+    }
+
     pub(super) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "Some" => Self::Some,
@@ -151,6 +163,8 @@ impl Prelude {
             Self::None => "None",
             Self::Ok => "Ok",
             Self::Err => "Err",
+            Self::Ready => "Ready",
+            Self::Pending => "Pending",
         }
     }
 
@@ -159,6 +173,7 @@ impl Prelude {
         match self {
             Self::Some | Self::None => "Option",
             Self::Ok | Self::Err => "Result",
+            Self::Ready | Self::Pending => "Poll",
         }
     }
 }
@@ -1304,9 +1319,17 @@ impl<'a> Parser<'a> {
                 span: span(start, end),
             });
         }
+        // std's `Poll::Ready(..)` and `Poll::Pending`, as `Some(..)` and
+        // `None` are at runtime.
+        let poll = match written.split_last() {
+            Some((variant, owner)) if !mutable => Prelude::from_poll(variant)
+                .filter(|_| self.names_std_poll(owner))
+                .map(|prelude| (prelude, segments.last().expect("a variant").1)),
+            _ => None,
+        };
         // The prelude's `Some(..)`, `None`, `Ok(..)` and `Err(..)`, also as
         // `Option::Some(..)` or `Result::Ok(..)`.
-        let prelude = match segments.as_slice() {
+        let prelude = poll.or_else(|| match segments.as_slice() {
             [(name, span)] if !mutable => Prelude::from_name(name).map(|variant| (variant, *span)),
             [(owner, _), (name, span)] => Prelude::from_name(name)
                 .filter(|variant| {
@@ -1314,10 +1337,10 @@ impl<'a> Parser<'a> {
                 })
                 .map(|variant| (variant, *span)),
             _ => None,
-        };
+        });
         if let Some((variant, name_span)) = prelude {
             let start = segments[0].1.start();
-            if variant == Prelude::None {
+            if matches!(variant, Prelude::None | Prelude::Pending) {
                 let end = text_end(name_span.start(), variant.name());
                 return Ok(Syntax::Prelude {
                     variant,
@@ -2227,11 +2250,14 @@ impl<'a> Parser<'a> {
             unreachable!("only prelude constructor patterns resolve here")
         };
         let expected = self.inference.resolve(expected);
+        let polled = self.poll_output(&expected);
         let element = match (&expected, variant) {
             (Ty::Option(element), Prelude::Some) => Some(&**element),
             (Ty::Option(_), Prelude::None) => None,
             (Ty::Result(ok, _), Prelude::Ok) => Some(&**ok),
             (Ty::Result(_, err), Prelude::Err) => Some(&**err),
+            (_, Prelude::Ready) if let Some(output) = &polled => Some(output),
+            (_, Prelude::Pending) if polled.is_some() => None,
             _ => {
                 return Err(Error::TypeMismatch {
                     expected: expected.name(&self.models),
@@ -2357,7 +2383,7 @@ impl<'a> Parser<'a> {
             ) => match variant {
                 Prelude::Ok => self.infer_from_pattern(payload, ok),
                 Prelude::Err => self.infer_from_pattern(payload, error),
-                Prelude::Some | Prelude::None => {}
+                Prelude::Some | Prelude::None | Prelude::Ready | Prelude::Pending => {}
             },
             (Syntax::Or { alternatives, .. }, _) => {
                 for alternative in alternatives.iter() {
@@ -3256,14 +3282,28 @@ impl<'a> Parser<'a> {
                 payload,
                 span,
             } => {
-                let Ty::Option(element) = &ty else {
-                    return Err(Error::TypeMismatch {
-                        expected: ty.name(&self.models),
-                        actual: variant.name().into(),
-                        expression: *span,
-                    });
+                // std's `Poll<T>` is an `Option<T>` at runtime.
+                let (element, variant) = match (&ty, variant) {
+                    (Ty::Option(element), Prelude::Some | Prelude::None) => {
+                        ((**element).clone(), *variant)
+                    }
+                    (polled, Prelude::Ready | Prelude::Pending)
+                        if let Some(output) = self.poll_output(polled) =>
+                    {
+                        let variant = match variant {
+                            Prelude::Ready => Prelude::Some,
+                            _ => Prelude::None,
+                        };
+                        (output, variant)
+                    }
+                    _ => {
+                        return Err(Error::TypeMismatch {
+                            expected: ty.name(&self.models),
+                            actual: variant.name().into(),
+                            expression: *span,
+                        });
+                    }
                 };
-                let element = (**element).clone();
                 let test = self.prelude_op(PreludeOp::IsSome, [value.clone()]);
                 match (variant, payload) {
                     (Prelude::None, _) => {

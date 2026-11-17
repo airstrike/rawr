@@ -1884,6 +1884,17 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
             return reexported.into();
         }
     }
+    // A std item the core future runs, by its definition, as
+    // `std::task::Poll` or `core::future::poll_fn` (`future::facade::STD`).
+    if crate::std_table::is_root(qualified.split("::").next().unwrap_or_default())
+        && let Some(std) = crate::std_table::any(qualified)
+        && let Some((_, item)) = crate::future::facade::STD
+            .iter()
+            .find(|(definition, _)| *definition == std.definition)
+        && host.entry(item).is_some()
+    {
+        return (*item).into();
+    }
     qualified.into()
 }
 
@@ -1927,6 +1938,27 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
         .into_iter()
         .find(|macro_name| *macro_name == name)?;
     core_futures(host).then_some(name)
+}
+
+/// std's `task::ready!`, by its definition.
+pub(crate) const STD_READY: &str = "core::task::ready::ready";
+
+/// `new` or `new_unchecked` of `std::pin::Pin` as a path is written in
+/// full: a `Pin` is the pointer it pins at runtime, as rawr's values don't
+/// move once a reference reaches them.
+pub(crate) fn std_pin_constructor(path: &str) -> Option<&'static str> {
+    let member = path
+        .strip_prefix("std::pin::Pin::")
+        .or_else(|| path.strip_prefix("core::pin::Pin::"))?;
+    ["new", "new_unchecked"]
+        .into_iter()
+        .find(|name| *name == member)
+}
+
+/// Whether a type path names `std::pin::Pin`, which a type is the pointer
+/// it pins as.
+pub(crate) fn std_pin(path: &str) -> bool {
+    matches!(path, "std::pin::Pin" | "core::pin::Pin")
 }
 
 /// Whether async code in this program gives the core's

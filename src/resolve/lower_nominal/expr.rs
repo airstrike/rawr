@@ -1261,6 +1261,14 @@ impl<'a> Parser<'a> {
                 span(name_span.start(), close),
             ));
         }
+        // `ready!(poll)` after `use std::task::ready;`.
+        if !std_macro
+            && matches!(self.peek(), Token::Bang)
+            && let Some(binding) = self.models.import(&name)
+            && self.names_std_ready(&binding.qualified.clone())
+        {
+            return self.parse_ready_macro();
+        }
         // `join!`, `try_join!` and `select!` after `use tokio::join;`.
         if !std_macro
             && matches!(self.peek(), Token::Bang)

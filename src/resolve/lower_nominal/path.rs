@@ -201,6 +201,24 @@ impl<'a> Parser<'a> {
                 }
                 _ => written,
             };
+            // `Poll::Ready(value)` and `Poll::Pending`, std's `task::Poll`.
+            if let [owner @ .., (variant, variant_span)] = segments.as_slice()
+                && let Some(prelude) = Prelude::from_poll(variant)
+                && !owner.is_empty()
+                && self.names_std_poll(
+                    &owner
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            {
+                let start = span(first_span.start(), variant_span.end());
+                return self.parse_poll_constructor(prelude, start);
+            }
+            // `std::task::ready!(poll)`, or a crate's re-export of it.
+            if matches!(self.peek(), Token::Bang) && self.names_std_ready(&full) {
+                return self.parse_ready_macro();
+            }
             // `tokio::join!(..)`, `try_join!` and `select!` without tokio.
             if matches!(self.peek(), Token::Bang)
                 && let Some(name) = crate::resolve::tokio_macro(&full, &self.models.host)
@@ -222,6 +240,9 @@ impl<'a> Parser<'a> {
             let turbofish = matches!(self.peek(), Token::DoubleColon)
                 && matches!(self.peek_second(), Token::LessThan);
             if matches!(self.peek(), Token::LeftParen | Token::Unit) || turbofish {
+                if let Some(member) = crate::resolve::std_pin_constructor(&full) {
+                    return self.parse_pin_constructor(member, first_span.start());
+                }
                 match full.as_str() {
                     "std::thread::spawn" => return self.parse_thread_spawn(first_span.start()),
                     "std::thread::scope" => return self.parse_thread_scope(first_span.start()),

@@ -997,6 +997,12 @@ impl<'a> Parser<'a> {
                     prelude(Prelude::Err, &[*err]),
                 ]);
             }
+            ref polled if let Some(output) = self.poll_output(polled) => {
+                return Some(vec![
+                    prelude(Prelude::Ready, &[output]),
+                    prelude(Prelude::Pending, &[]),
+                ]);
+            }
             Ty::Cow(borrowed) => {
                 let owned = self.owned_of(&borrowed).unwrap_or(Ty::Unknown);
                 return Some(
@@ -1111,6 +1117,25 @@ impl<'a> Parser<'a> {
                     .map(|alternative| self.host_coverage(alternative, &referenced))
                     .collect::<Result<_, _>>()?,
             )),
+            // std's `Poll::Ready(p)` and `Poll::Pending`.
+            pattern::Syntax::Prelude {
+                variant: variant @ (Prelude::Ready | Prelude::Pending),
+                payload,
+                ..
+            } if self.poll_output(&referenced).is_some() => Ok(Pattern::Constructor {
+                key: Key::Prelude(*variant),
+                name: variant.name().into(),
+                payload: payload
+                    .iter()
+                    .map(|payload| {
+                        if payload.may_refute() {
+                            partial()
+                        } else {
+                            Pattern::Wildcard
+                        }
+                    })
+                    .collect(),
+            }),
             pattern::Syntax::Enum(written) if !written.host_struct => {
                 let Some(constructor) = self.coverage_constructors(&referenced).and_then(|all| {
                     all.into_iter().find(|constructor| {

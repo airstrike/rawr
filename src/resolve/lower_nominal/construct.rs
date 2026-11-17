@@ -190,7 +190,9 @@ impl<'a> Parser<'a> {
                 err.clone(),
                 Ty::Result(Box::new(ok), Box::new(err)),
             ),
-            Prelude::None => unreachable!("`None` is a value, not a function"),
+            Prelude::None | Prelude::Ready | Prelude::Pending => {
+                unreachable!("only `Some`, `Ok` and `Err` are prelude functions")
+            }
         };
         let call = self.prelude_op(op, [origin::Fragment::plain("__rawr_argument_0")]);
         let mut source = origin::Fragment::plain("(|__rawr_argument_0| ");
@@ -228,7 +230,7 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect_close_angle("'>' after turbofish type arguments")?;
         let expected = match variant {
-            Prelude::Some | Prelude::None => 1,
+            Prelude::Some | Prelude::None | Prelude::Ready | Prelude::Pending => 1,
             Prelude::Ok | Prelude::Err => 2,
         };
         if types.len() != expected {
@@ -649,6 +651,7 @@ impl<'a> Parser<'a> {
         let stored = match variant {
             Prelude::Some | Prelude::None => "stored in an `Option`",
             Prelude::Ok | Prelude::Err => "stored in a `Result`",
+            Prelude::Ready | Prelude::Pending => "stored in a `Poll`",
         };
         self.reject_invocation(&value.ty, value.span, stored)?;
         // The payload is the turbofish's type, or the value's own.
@@ -662,7 +665,7 @@ impl<'a> Parser<'a> {
         match variant {
             Prelude::Err => self.err_payloads.insert(start.start(), value.span),
             Prelude::Some => self.some_payloads.insert(start.start(), value.span),
-            Prelude::Ok | Prelude::None => None,
+            Prelude::Ok | Prelude::None | Prelude::Ready | Prelude::Pending => None,
         };
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
@@ -683,7 +686,9 @@ impl<'a> Parser<'a> {
             Prelude::Some => (PreludeOp::Some, Ty::Option(payload)),
             Prelude::Ok => (PreludeOp::Ok, Ty::Result(payload, Box::new(err))),
             Prelude::Err => (PreludeOp::Err, Ty::Result(Box::new(ok), payload)),
-            Prelude::None => unreachable!("`None` returned above"),
+            Prelude::None | Prelude::Ready | Prelude::Pending => {
+                unreachable!("`None` returned above, and `Poll` is no prelude enum")
+            }
         };
         // `Some(&mut self.a)` returned as an `Option<&mut T>` output keeps
         // its place (`places::returned_place`).

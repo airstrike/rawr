@@ -297,6 +297,22 @@ impl<'a> Parser<'a> {
                 value = parsed;
                 continue;
             }
+            // `future.poll(cx)` of a future the program holds, as
+            // `Future::poll(Pin::new(&mut future), cx)` calls it.
+            if member.as_str() == "poll"
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(polled) = self.parse_future_poll(&value)?
+            {
+                value = polled;
+                continue;
+            }
+            if member.as_str() == "into_future"
+                && matches!(self.peek(), Token::Unit)
+                && let Some(future) = self.parse_into_future(&value)?
+            {
+                value = future;
+                continue;
+            }
             // `builder.spawn(f)`: a thread std's own `thread::Builder`
             // configures, which rawr starts as `thread::spawn` starts one.
             if member.as_str() == "spawn"

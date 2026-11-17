@@ -76,6 +76,13 @@ enum Kind {
     Select(Vec<Future>, bool),
     /// A value already there.
     Ready(Dynamic),
+    /// `std::future::poll_fn`'s closure, called with a [`Context`] each
+    /// time the future is polled, and the program that made it: its
+    /// `Poll<T>` is an `Option` at runtime, `Some` once it is ready.
+    PollFn(item::Value, Option<Program>),
+    /// A future that code polled by hand (`Future::poll`), where its
+    /// poller goes on from.
+    Polled(Box<Poller>),
 }
 
 impl std::fmt::Debug for Future {
@@ -139,8 +146,39 @@ impl Future {
         Self::of(Kind::Ready(value))
     }
 
+    /// The future `std::future::poll_fn` makes of the closure `poll`,
+    /// which each poll calls with a [`Context`] and which gives `Some` of
+    /// its output once it is ready, `None` while it is pending.
+    #[must_use]
+    pub fn poll_fn(poll: item::Value) -> Self {
+        Self::of(Kind::PollFn(poll, here()))
+    }
+
     fn of(kind: Kind) -> Self {
         Self(Arc::new(Mutex::new(Some(kind))))
+    }
+
+    /// Poll this future once, as `Future::poll` does, with the task's
+    /// waker `waker`: `Some` of its output once it ends, `None` while it is
+    /// pending. Its poller stays with it between polls, so a later poll or
+    /// `.await` goes on from where this one left it, and a poll after it
+    /// ended fails as Rust's futures may.
+    pub fn poll_once(&self, waker: &Waker) -> RawrResultOf<Option<Dynamic>> {
+        let kind = lock(&self.0).take();
+        let mut poller = match kind {
+            Some(Kind::Polled(poller)) => *poller,
+            kind => Poller::of(kind),
+        };
+        let polled = poller.poll(&mut Context::from_waker(waker));
+        let left = match polled {
+            std::task::Poll::Pending => poller,
+            std::task::Poll::Ready(_) => Poller::Failed(None),
+        };
+        *lock(&self.0) = Some(Kind::Polled(Box::new(left)));
+        match polled {
+            std::task::Poll::Pending => Ok(None),
+            std::task::Poll::Ready(output) => output.map(Some),
+        }
     }
 
     /// Run this future as a std future. Its first run takes it: a copy
@@ -390,15 +428,20 @@ enum Poller {
     Select(Vec<Option<Poller>>, bool),
     Ready(Option<Dynamic>),
     Failed(Option<Box<EvalAltResult>>),
+    /// `poll_fn`'s closure, called on each poll.
+    PollFn(Box<Called>),
 }
 
 impl From<&Future> for Poller {
     fn from(future: &Future) -> Self {
-        let kind = future
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        Self::of(lock(&future.0).take())
+    }
+}
+
+impl Poller {
+    /// The poller of a future of `kind`, which it takes; `None` is one
+    /// already awaited.
+    fn of(kind: Option<Kind>) -> Self {
         match kind {
             None => Self::Failed(Some(failure("rawr: this future was already awaited"))),
             Some(Kind::Script(step, program, _)) => {
@@ -420,6 +463,8 @@ impl From<&Future> for Poller {
                 biased,
             ),
             Some(Kind::Ready(value)) => Self::Ready(Some(value)),
+            Some(Kind::PollFn(poll, program)) => Self::PollFn(Box::new(Called::new(poll, program))),
+            Some(Kind::Polled(poller)) => *poller,
         }
     }
 }
@@ -523,7 +568,147 @@ impl Poller {
             Self::Failed(error) => Ready(Err(error
                 .take()
                 .unwrap_or_else(|| failure("rawr: a future was polled after it ended")))),
+            Self::PollFn(called) => called.poll(cx),
         }
+    }
+}
+
+/// The context a future is polled with, as Rawr code holds it: what
+/// `poll_fn`'s closure and `Future::poll` take, the polling task's waker.
+#[derive(Clone)]
+pub struct Waking(Waker);
+
+impl std::fmt::Debug for Waking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Context { waker: .. }")
+    }
+}
+
+impl Waking {
+    /// The polling task's waker.
+    #[must_use]
+    pub fn waker(&self) -> &Waker {
+        &self.0
+    }
+}
+
+/// The `Poll` a call of `poll_fn`'s closure gave, `Some` once it is ready.
+/// A closure gives back each `&mut` parameter it takes after its value
+/// (`Callable::call_places`), as it does its `&mut Context`.
+fn polled(output: Dynamic) -> Option<Dynamic> {
+    let output = if output.is_array() {
+        output.into_array().ok()?.into_iter().next()?
+    } else {
+        output
+    };
+    crate::option::take_value(output)
+}
+
+/// `poll_fn`'s closure, called on the owner thread or where it is polled,
+/// as an async body's steps are ([`Stepper`]).
+struct Called {
+    shared: Arc<Mutex<Call>>,
+    program: Option<Program>,
+}
+
+struct Call {
+    /// The closure, with what it captured; dropped once it is ready.
+    poll: Option<item::Value>,
+    /// What a call the owner ran gave: `Some` of the output once ready.
+    output: Option<RawrResultOf<Option<Dynamic>>>,
+    /// Whether a call waits for the owner.
+    queued: bool,
+    /// Whether the task polled again while a call waited: what the call
+    /// polled woke it before the call ended, so the call's end wakes it.
+    repolled: bool,
+    waker: Option<Waker>,
+}
+
+impl Called {
+    fn new(poll: item::Value, program: Option<Program>) -> Self {
+        Self {
+            shared: Arc::new(Mutex::new(Call {
+                poll: Some(poll),
+                output: None,
+                queued: false,
+                repolled: false,
+                waker: None,
+            })),
+            program,
+        }
+    }
+
+    fn poll(&mut self, cx: &mut Context<'_>) -> std::task::Poll<RawrResultOf<Dynamic>> {
+        use std::task::Poll::{Pending, Ready};
+        let ready = |output: RawrResultOf<Option<Dynamic>>| match output {
+            Ok(Some(value)) => Ready(Ok(value)),
+            Ok(None) => Pending,
+            Err(error) => Ready(Err(error)),
+        };
+        let mut call = lock(&self.shared);
+        // A call the owner ran: a pending one registered the waker with
+        // what it polled, which woke this poll to call again.
+        if let Some(output @ (Ok(Some(_)) | Err(_))) = call.output.take() {
+            call.poll = None;
+            return ready(output);
+        }
+        if call.queued {
+            call.repolled = true;
+            call.waker = Some(cx.waker().clone());
+            return Pending;
+        }
+        let Some(poll) = call.poll.clone() else {
+            return Ready(Err(failure("rawr: a future was polled after it ended")));
+        };
+        let context = Dynamic::from(Waking(cx.waker().clone()));
+        let output = if owns() {
+            drop(call);
+            let _entry = trampoline();
+            with_host(|host| host.invoke(&poll, &mut [context]))
+        } else if !served() {
+            drop(call);
+            self.program.clone().map(|program| {
+                let _entry = entry();
+                let _running = Running::enter(&program);
+                program.invoke(&poll, &mut [context])
+            })
+        } else {
+            call.queued = true;
+            call.waker = Some(cx.waker().clone());
+            drop(call);
+            let shared = Arc::downgrade(&self.shared);
+            send(Job::new(move || {
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
+                let _entry = trampoline();
+                let output = with_host(|host| host.invoke(&poll, &mut [context]))
+                    .unwrap_or_else(|| Err(failure("rawr: no program runs async code here")))
+                    .map(polled);
+                let waker = {
+                    let mut call = lock(&shared);
+                    call.queued = false;
+                    let ended = !matches!(output, Ok(None));
+                    call.output = Some(output);
+                    // A pending call registered the waker with what it
+                    // polled, which wakes the task to call again; one that
+                    // ended, or that was woken while it ran, wakes it now.
+                    let repolled = std::mem::take(&mut call.repolled);
+                    call.waker.take().filter(|_| ended || repolled)
+                };
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }));
+            return Pending;
+        };
+        let output = output
+            .unwrap_or_else(|| Err(failure("rawr: no program runs async code on this thread")))
+            .map(polled);
+        if matches!(output, Ok(Some(_)) | Err(_)) {
+            lock(&self.shared).poll = None;
+        }
+        ready(output)
     }
 }
 

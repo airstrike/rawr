@@ -51,6 +51,13 @@ pub fn cast<T: Variant + Clone>(value: Dynamic) -> Option<Option<T>> {
     }
 }
 
+/// The option `value` is, as Rust's `Option` of its payload; `None` when
+/// `value` is not an option either.
+#[must_use]
+pub fn take_value(value: Dynamic) -> Value {
+    value.try_cast::<Value>().flatten()
+}
+
 /// A copy of the option `value` holds; `None` when it is not an option.
 pub(crate) fn read(value: &Dynamic) -> Option<Value> {
     value.read_lock::<Value>().map(|option| option.clone())
