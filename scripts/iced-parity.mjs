@@ -50,6 +50,12 @@
 // when both cargo runs agree on it, so frames that show the clock or a random
 // seed don't count as mismatches.
 //
+// An example whose own Rust names the wgpu backend (integration's controls
+// are typed to iced_wgpu's renderer, so tiny-skia can't draw them) needs a
+// GPU. Where iced_test can't make that renderer, its tests aren't compared,
+// and an example with no other test is reported as not runnable headless: a
+// verdict of its own, not a mismatch.
+//
 // Examples run `--jobs` at a time (default 4); cargo's lock on the shared
 // target serializes their builds, not their tests. The tests run with HOME and
 // the XDG directories under the example's target/iced-parity, so an example
@@ -120,7 +126,11 @@ fs.writeFileSync(
   JSON.stringify(rows, null, 2) + "\n",
 );
 const agreeing = rows.filter((result) => result.agrees).length;
-console.log(`\n${agreeing} of ${rows.length} agree; logs in <example>/target/iced-parity/logs`);
+const unrunnable = rows.filter((result) => result.runnable === false).length;
+const without = unrunnable > 0 ? ` (${unrunnable} not runnable headless)` : "";
+console.log(
+  `\n${agreeing} of ${rows.length} agree${without}; logs in <example>/target/iced-parity/logs`,
+);
 process.exit(agreeing === examples.length ? 0 : 1);
 
 async function worker() {
@@ -471,6 +481,16 @@ async function runTests(dir, label, command, args) {
     const test = match[1].replace(/^.*::/, "");
     tests[test] = match[2] ?? (failures.has(test) ? "FAILED" : "ok");
   }
+  // A test whose simulator or emulator can't make iced_test's headless
+  // renderer (an example drawn only with wgpu, on a machine with no GPU) has
+  // no outcome to compare.
+  const panics = /^thread '([^']+)'(?: \(\d+\))? panicked at [^\n]*\n([^\n]*)/gm;
+  for (const match of output.matchAll(panics)) {
+    const test = match[1].replace(/^.*::/, "");
+    if (match[2].startsWith("Create new headless renderer") && test in tests) {
+      tests[test] = "headless";
+    }
+  }
   const details = {};
   for (const match of output.matchAll(/iced-parity (\S+) ((?:passed|failed)\b.*)$/gm)) {
     details[match[1]] = match[2].trim();
@@ -517,7 +537,7 @@ function describe(run, filter = () => true) {
   if (!run.ran) {
     return "build fails";
   }
-  const counts = { ok: 0, FAILED: 0, ignored: 0, crashed: 0 };
+  const counts = { ok: 0, FAILED: 0, ignored: 0, crashed: 0, headless: 0 };
   for (const [test, status] of Object.entries(run.tests)) {
     if (filter(test)) counts[status] += 1;
   }
@@ -525,6 +545,7 @@ function describe(run, filter = () => true) {
   if (counts.FAILED > 0) text += `, ${counts.FAILED} failed`;
   if (counts.crashed > 0) text += `, ${counts.crashed} crashed`;
   if (counts.ignored > 0) text += `, ${counts.ignored} ignored`;
+  if (counts.headless > 0) text += `, ${counts.headless} without a headless renderer`;
   return text;
 }
 
@@ -565,9 +586,13 @@ async function check(name) {
     differences.push(`simulator half doesn't build: ${rawr.error}`);
   }
   const unstable = [];
+  // Tests cargo can't draw headless here aren't compared: neither runner can
+  // give them an outcome on this machine.
+  const headless = Object.keys(cargo.tests).filter((test) => cargo.tests[test] === "headless");
   const names = new Set([...Object.keys(cargo.tests), ...Object.keys(rawr.tests)]);
   for (const test of [...names].sort()) {
     if (!rawr.ran) break;
+    if (headless.includes(test)) continue;
     const ours = cargo.tests[test];
     const theirs = rawr.tests[test];
     if (ours !== theirs) {
@@ -587,7 +612,14 @@ async function check(name) {
   if (unstable.length > 0) notes.push(`frame varies between cargo runs: ${unstable.join(", ")}`);
   const failing = Object.entries(emulator.tests).filter(([, status]) => status === "FAILED");
   if (failing.length > 0) notes.push(`fails under cargo too: ${failing.map(([t]) => t).join(", ")}`);
-  const verdict = differences.length === 0 ? "same" : `MISMATCH: ${differences.join("; ")}`;
+  const compared = names.size > headless.length;
+  const verdict =
+    differences.length > 0
+      ? `MISMATCH: ${differences.join("; ")}`
+      : compared
+        ? "same"
+        : "NOT RUNNABLE HEADLESS";
+  if (headless.length > 0) notes.push(`no headless renderer here: ${headless.join(", ")}`);
   const rawrText =
     emulated === null || emulated.ran
       ? describe(rawr)
@@ -598,6 +630,8 @@ async function check(name) {
     rawr: rawrText,
     verdict: notes.length > 0 ? `${verdict} (${notes.join("; ")})` : verdict,
     agrees: differences.length === 0,
+    // False when no test could run here; such an example isn't a mismatch.
+    runnable: compared,
     differences,
     cargoDetails: cargo.details,
     rawrDetails: rawr.details,
