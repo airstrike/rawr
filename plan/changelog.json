@@ -4,7 +4,12 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"`vec![return x]` and `[return x, ..]` type their element as a variable a later use settles, so a later `v.push(String::new())` compiles as it does with rustc.","issues":[2139]},
+      {"text":"A `select!` branch whose pattern doesn't match is disabled and the others keep running. With every branch disabled the select runs `else`, and branches are polled from a random one unless `biased;` is given, as tokio does.","issues":[2140],"refs":[1152]},
+      {"text":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns.","issues":[2145]},
+      {"text":"A git dependency's percent-encoded branch, tag or rev in Cargo.lock (`feature%2Fx`) is decoded as cargo reads it.","issues":[2143]}
+    ]
   },
   "releases": [
     {

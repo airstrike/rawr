@@ -5,6 +5,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `vec![return x]` and `[return x, ..]` type their element as a variable a later use settles, so a later `v.push(String::new())` compiles as it does with rustc. (#2139)
+- A `select!` branch whose pattern doesn't match is disabled and the others keep running. With every branch disabled the select runs `else`, and branches are polled from a random one unless `biased;` is given, as tokio does. (#2140; part of #1152)
+- A `match` on `()` or a reference to it takes `()`, `_` and binding patterns. (#2145)
+- A git dependency's percent-encoded branch, tag or rev in Cargo.lock (`feature%2Fx`) is decoded as cargo reads it. (#2143)
 
 ## 0.3.229 (2026-11-16)
 
