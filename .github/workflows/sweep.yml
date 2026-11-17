@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: sweep
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
