@@ -477,21 +477,65 @@ pub(super) fn retire_superseded(
         newest,
         &mut recovery::Budget::new(),
     )? {}
-    recover_unreached(store, project, newest, &mut recovery::Budget::new())?;
+    recover_unreached(
+        store,
+        project,
+        &[],
+        &SUPERSEDED,
+        newest,
+        &mut recovery::Budget::new(),
+    )?;
+    Ok(())
+}
+
+/// Retire the demand rounds a check that binds nothing superseded, once it
+/// settles its final demand, whose closure is `settled`: each of the
+/// project's API, classification, facade and overlay actions published
+/// before the closure's newest unit that no root holds, the closure does not
+/// hold, and no kept action reaches through its parents, as a bind retires
+/// them ([`recover_unreached`]). The check retires no execution, so each
+/// kind [`KEPT`] keeps reaches its parents still: a kept runner keeps its
+/// generation. Another project's units are never retired here.
+pub(super) fn retire_settled(
+    store: &Path,
+    project: Digest,
+    settled: &[crate::node::read_set::Entry],
+) -> Result<(), Error> {
+    let settled = accounting::references(store, settled)?;
+    let Some(newest) = accounting::registered(store)?
+        .iter()
+        .filter(|registered| settled.binary_search(&registered.reference()).is_ok())
+        .map(|registered| registered.sequence())
+        .max()
+    else {
+        return Ok(());
+    };
+    recover_unreached(
+        store,
+        project,
+        &settled,
+        &KEPT,
+        newest,
+        &mut recovery::Budget::new(),
+    )?;
     Ok(())
 }
 
 /// Retire what a newly bound generation leaves behind once the executions
 /// it supersedes are gone: each of the project's API, classification,
 /// facade and overlay actions published before its newest unit, `before`,
-/// that no root holds and no kept action reaches through its parents, with
-/// its content and the parts only it named (`generation`). A demand round's
-/// values are such actions once a later round of the same build supersedes
-/// them: the next run starts from the last round's demand, so no current
-/// key names them (#2160). Returns whether anything was retired.
+/// that no root and no unit of `held` holds and no action `kept` keeps
+/// reaches through its parents, with its content and the parts only it
+/// named (`generation`). A demand round's values are such actions once a
+/// later round of the same build supersedes them: the next run starts from
+/// the last round's demand, so no current key names them (#2160). `held`
+/// is a check's settled closure, which no root holds ([`retire_settled`]).
+/// Returns whether anything was retired.
 fn recover_unreached(
     store: &Path,
     project: Digest,
+    held: &[Reference],
+    kept: &[(Kind, usize)],
     before: u64,
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
@@ -500,7 +544,8 @@ fn recover_unreached(
      -> Result<Option<Box<[Registered]>>, Error> {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        let rooted = rooted(store, &snapshot);
+        let mut rooted = rooted(store, &snapshot);
+        rooted.extend(held.iter().copied());
         // With nothing older left unrooted no envelope is read: a bind
         // after a bind finds only what the last one kept.
         if !registrations.iter().any(|registered| {
@@ -511,15 +556,7 @@ fn recover_unreached(
         }) {
             return Ok(None);
         }
-        let mut released = generation(
-            store,
-            &rooted,
-            &registrations,
-            project,
-            &SUPERSEDED,
-            before,
-            None,
-        )?;
+        let mut released = generation(store, &rooted, &registrations, project, kept, before, None)?;
         released.retain(|reference| {
             registrations.iter().any(|registered| {
                 registered.reference() == *reference

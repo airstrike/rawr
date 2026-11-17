@@ -286,6 +286,50 @@ fn a_bind_retires_the_rounds_it_superseded() {
     drop(pins);
 }
 
+// A check binds nothing: once it settles on the second round's generic, the
+// first round's goes with its parts, and the settled one stays for the next
+// run to hit (#2168).
+#[test]
+fn a_settled_check_retires_the_rounds_it_superseded() {
+    let fixture = Fixture::new("settled");
+    let evaluator = Evaluator::new(&fixture.store, &crate::metrics::Current);
+    let context = [0x12; 32];
+    let executions = Cell::new(0);
+    let round = |round: usize| {
+        let resolution = evaluator
+            .direct(
+                &node::Direct::<Unit<RESOLUTION>>::capture(context, b"resolution", &[]).unwrap(),
+                || Ok(Unit(b"lock".to_vec().into())),
+            )
+            .unwrap();
+        evaluator
+            .direct(
+                &node::Direct::<Unit<GENERIC>>::capture(
+                    context,
+                    format!("generic of round {round}").as_bytes(),
+                    &[Parent::validated(&resolution)],
+                )
+                .unwrap(),
+                || {
+                    executions.set(executions.get() + 1);
+                    Ok(Unit(large(2, round)))
+                },
+            )
+            .unwrap()
+    };
+    round(0);
+    let settled = round(1);
+    assert_eq!(fixture.actions(Kind::Generic), 2);
+    fixture
+        .store
+        .retire_settled(settled.receipt().read_set().entries())
+        .unwrap();
+    assert_eq!(fixture.actions(Kind::Generic), 1, "the first round's goes");
+    assert_eq!(fixture.parts(), fixture.named(), "and its parts with it");
+    round(1);
+    assert_eq!(executions.get(), 2, "the settled round hits");
+}
+
 // A part no stored manifest names goes at the next retirement; the parts the
 // kept manifests name stay.
 #[test]

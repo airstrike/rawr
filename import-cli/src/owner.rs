@@ -54,7 +54,12 @@ pub fn check(
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
             None,
         )
-        .map_err(|error| unchecked(error, fallback))?;
+        .map_err(|error| unchecked(error, fallback.clone()))?;
+    // The check settled its final demand and binds nothing: the rounds
+    // before it go now, as a bind would retire them (#2168).
+    prepared
+        .retire_superseded_rounds()
+        .map_err(|error| Unchecked::Report(framework(error, fallback)))?;
     Ok((source, prepared.take_settlement()))
 }
 

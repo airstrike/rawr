@@ -1659,6 +1659,19 @@ impl Store {
         Ok(admitted)
     }
 
+    /// Once a check that binds nothing settles its final demand, whose
+    /// closure is `settled`, retire the values of the demand rounds it
+    /// superseded, as a bind retires them (#2168). Runs under the project
+    /// lease, outside any publication.
+    pub(crate) fn retire_settled(
+        &self,
+        settled: &[crate::node::read_set::Entry],
+    ) -> Result<(), Error> {
+        lease::with_project(&self.root, self.project, || {
+            eviction::retire_settled(&self.root, self.project, settled)
+        })
+    }
+
     fn with_pin_roles<T, E, const N: usize>(
         &self,
         roles: [PinRole; N],
