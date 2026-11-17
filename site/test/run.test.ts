@@ -53,6 +53,23 @@ test("a universe frame imports the glue, hides WebKit's WebGPU and takes the mod
   assert.match(html, /<div id="iced"><\/div>/, "iced's web shell puts its canvas in place of #iced");
 });
 
+test("a key the focused program reads doesn't scroll the frame or the page", async () => {
+  const { frameDocument } = await import("../src/scripts/universe.ts");
+  const script = frameDocument("https://example.org/web/universe.js").match(/const scrolls[\s\S]*?\n\}\);/)![0];
+  let listener: (event: { key: string; preventDefault(): void }) => void = () => {};
+  const document = { body: {}, activeElement: {} as object };
+  new Function("addEventListener", "document", script)((_: string, f: typeof listener) => (listener = f), document);
+  const pressed = (key: string) => {
+    let prevented = false;
+    listener({ key, preventDefault: () => (prevented = true) });
+    return prevented;
+  };
+  assert.ok(pressed("ArrowDown") && pressed(" ") && pressed("PageDown"), "the focused program's keys don't scroll");
+  assert.ok(!pressed("Tab") && !pressed("a"), "Tab still moves focus, and other keys keep their defaults");
+  document.activeElement = document.body;
+  assert.ok(!pressed("ArrowDown"), "with the program unfocused, the arrows scroll as usual");
+});
+
 test("a universe program starts after its shown frame's next animation frame, which follows the frame's resize", async () => {
   const { universe } = await import("../src/scripts/universe.ts");
   const events: string[] = [];

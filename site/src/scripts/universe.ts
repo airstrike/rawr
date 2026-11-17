@@ -88,6 +88,13 @@ if (navigator.vendor === "Apple Computer, Inc.") {
   Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true });
 }
 const say = (detail) => frameElement.dispatchEvent(new CustomEvent("universe", { detail }));
+// A key the focused program reads is its own: the browser's default for it,
+// scrolling the frame or the page around it, doesn't run. The program's
+// listeners have already seen it. Tab still moves focus.
+const scrolls = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "PageUp", "PageDown", "Home", "End"]);
+addEventListener("keydown", (event) => {
+  if (document.activeElement !== document.body && scrolls.has(event.key)) event.preventDefault();
+});
 addEventListener("message", (event) => {
   glue.default({ module_or_path: event.data }).then(
     () => say({ instance: glue }),
