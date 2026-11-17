@@ -220,6 +220,31 @@ fn main() {
     assert_eq!(printed(source), "one 4\ntrue\n120\n");
 }
 
+/// A call used as an expression declares the items of the blocks it
+/// expands to, as rustc declares them before it resolves a name (#2188):
+/// each call's `enum E` and `fn double` are its own block's, so two calls
+/// in one block each declare them. The output is rustc's.
+#[test]
+fn an_expression_call_declares_the_items_of_its_blocks() {
+    let source = r#"
+macro_rules! pick {
+    ($n:expr) => {{
+        #[derive(Clone, Copy)]
+        enum E { A, B }
+        fn double(n: i32) -> i32 { n * 2 }
+        let e = if double($n) == 0 { E::A } else { E::B };
+        match e { E::A => "a", E::B => "b" }
+    }};
+}
+fn main() {
+    let first = pick!(0);
+    let second = pick!(1);
+    println!("{first} {second}");
+}
+"#;
+    assert_eq!(printed(source), "a b\n");
+}
+
 #[test]
 fn a_later_definition_shadows_an_earlier_one_from_where_it_is() {
     let source = r#"

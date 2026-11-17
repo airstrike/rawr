@@ -134,18 +134,24 @@ pub(super) fn lookup(name: &str) -> Option<Shared<Rules>> {
 /// takes it back: the text has as many lines before it as the expansion
 /// starts at, so the lexer gives its tokens their places there. `None`
 /// when no rule matches the call, or no file is being laid out, which
-/// leaves the call where it is.
+/// leaves the call where it is, and for an `expression`'s call that
+/// cannot expand to an item ([`Rules::may_declare`]), whose expansion the
+/// lowering reads on its own.
 pub(super) fn lay_out(
     rules: &Rules,
     call: &[(Token, Position)],
     krate: &str,
     braced_statements: bool,
+    expression: bool,
 ) -> Option<(String, Mark)> {
     let ((_, at), rest) = call.split_first()?;
     let (_, end) = call.last()?;
     // The tokens inside the delimiters, after the name and `!`.
     let inner = rest.get(2..rest.len().checked_sub(1)?)?;
     let input = macro_rules::trees(inner).ok()?;
+    if expression && !rules.may_declare(&input) {
+        return None;
+    }
     let hygiene = with(|layout| {
         layout.hygiene += 1;
         layout.hygiene
@@ -245,4 +251,16 @@ fn render(tokens: &[(Token, Position)]) -> String {
     }
     text.push_str(&crate::resolve::lower_nominal::token_text(&line));
     text
+}
+
+/// The lines `expansions` are laid out on, past the file's own, which hold
+/// no statement of a script: a body's call expands where the lowering
+/// reads it, and the items there are the parse's.
+pub(crate) fn laid_out(expansions: &[Expansion]) -> Option<Span> {
+    let first = expansions.iter().map(|expansion| expansion.lines.0).min()?;
+    let line = u16::try_from(first).unwrap_or(u16::MAX);
+    Some(Span::new(
+        Position::new(line, 1),
+        Position::new(u16::MAX, u16::MAX),
+    ))
 }
