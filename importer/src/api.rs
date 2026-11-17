@@ -17,6 +17,7 @@ pub mod ledger;
 pub mod model;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod semantic;
+pub(crate) mod units;
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod cached;

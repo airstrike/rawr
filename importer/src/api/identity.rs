@@ -83,6 +83,7 @@ impl Namespace {
 /// never share one, so an ordering reads no unit.
 #[derive(Clone, Debug, Deserialize, Eq, Serialize)]
 pub struct Definition {
+    #[serde(with = "crate::api::units")]
     unit: Arc<Unit>,
     def_path_hash: Box<str>,
     namespace: Namespace,
@@ -91,6 +92,7 @@ pub struct Definition {
 /// Exact identity of a compiler-recorded re-export item, which has no Rust namespace.
 #[derive(Clone, Debug, Deserialize, Eq, Serialize)]
 pub struct Reexport {
+    #[serde(with = "crate::api::units")]
     unit: Arc<Unit>,
     def_path_hash: Box<str>,
 }
