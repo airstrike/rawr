@@ -70,6 +70,12 @@ fn home_format(home: &Path, kind: &str) -> PathBuf {
     }
 }
 
+/// The crate an intrinsic entry's `entry.json` names: the file holds its
+/// units table and then the entry itself, `{"units": [..], "entry": {..}}`.
+fn entry_crate(entry: &serde_json::Value) -> Option<&str> {
+    entry["entry"]["crate_name"].as_str()
+}
+
 fn nightly_directory(home: &Path) -> PathBuf {
     home.join("nightly")
         .join(rawr_import::cargo::toolchain::CHANNEL)
@@ -322,7 +328,7 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
                         let entry = serde_json::from_str::<serde_json::Value>(&entry).ok()?;
                         let name = ["facts_a", "facts_b", "facts_c"]
                             .into_iter()
-                            .find(|name| entry["crate_name"] == *name)?;
+                            .find(|name| entry_crate(&entry) == Some(*name))?;
                         Some((name, path, generation))
                     })
                     .collect::<Vec<_>>()
@@ -608,7 +614,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
                         let generation = fs::read_to_string(path.join(".generation")).ok()?;
                         let entry = fs::read_to_string(path.join("entry.json")).ok()?;
                         let entry = serde_json::from_str::<serde_json::Value>(&entry).ok()?;
-                        Some((entry["crate_name"].as_str()?.to_owned(), generation))
+                        Some((entry_crate(&entry)?.to_owned(), generation))
                     })
                     .collect::<Vec<_>>()
             })
@@ -628,14 +634,18 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     );
     // camino runs a build script: the first project captured its entry, and
     // published it once its own build gave the nightly's outputs (#403).
+    // The project reads the home's copy from then on, so it keeps none of
+    // its own (#2162): only the path crates' entries stay with the project.
     let local = entries(&kept(&first, Kept::Inventories));
     let local = local
         .iter()
         .map(|(name, _)| name.as_str())
         .collect::<Vec<_>>();
-    for name in ["facts_a", "facts_b", "facts_c", "camino"] {
-        assert!(local.contains(&name), "{name} is kept locally: {local:?}");
-    }
+    assert_eq!(
+        local,
+        ["facts_a", "facts_b", "facts_c"],
+        "the path crates are kept locally, and a promoted entry only in the home"
+    );
     let second = project("second");
     assert_eq!(
         entries(&home_format(&home, "inventories")),
