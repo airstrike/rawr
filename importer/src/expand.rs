@@ -10,6 +10,7 @@
 //! expansion's bodies, as a `#[serde(rename)]` does, changes that one source
 //! in place, as an edit to a body changes its file (#1040).
 
+pub mod call;
 pub mod request;
 
 use std::path::{Path, PathBuf};
@@ -244,6 +245,12 @@ impl Basis {
         }
     }
 
+    /// Whether an expansion against this basis can name the crate `alias`.
+    #[must_use]
+    pub fn names(&self, alias: &str) -> bool {
+        self.externs.iter().any(|(name, ..)| **name == *alias)
+    }
+
     /// The selected crates' artifacts, beside which each generated crate's
     /// check keeps its records (`crate::record`, `crate::uses`).
     pub fn artifacts(&self) -> impl Iterator<Item = &Path> {
@@ -358,6 +365,29 @@ fn run(
     native: &crate::process::Native,
     limits: &crate::limits::Limits,
 ) -> crate::Result<Vec<request::Expanded>> {
+    let (text, spans) = crate_source(items);
+    let roots = items
+        .iter()
+        .flat_map(|item| &item.derives)
+        .map(|(_, path)| path.split("::").next().unwrap_or_default())
+        .collect::<std::collections::BTreeSet<_>>();
+    let expanded = drive(&text, &roots, basis, edition, directory, native, limits)?;
+    Ok(split(expanded, items, &spans))
+}
+
+/// rustc's expansion of the small crate `text`, whose macros come from the
+/// crates `roots` names, in one driver run in a directory of its own under
+/// `directory`.
+#[cfg(feature = "rustc-driver")]
+fn drive(
+    text: &str,
+    roots: &std::collections::BTreeSet<&str>,
+    basis: &Basis,
+    edition: &str,
+    directory: &Path,
+    native: &crate::process::Native,
+    limits: &crate::limits::Limits,
+) -> crate::Result<request::Expanded> {
     use crate::process::{Command, Program, ToolPaths as _};
     let protocol = crate::extract::protocol::SCHEMA;
     let io = |operation: &'static str, path: &Path| {
@@ -368,16 +398,10 @@ fn run(
             source,
         }
     };
-    let (text, spans) = crate_source(items);
     let work = directory.join(format!(".expand.{}", std::process::id()));
     std::fs::create_dir_all(&work).map_err(io("create the expansion directory", &work))?;
     let source_path = work.join("lib.rs");
     std::fs::write(&source_path, text).map_err(io("write the expansion source", &source_path))?;
-    let roots = items
-        .iter()
-        .flat_map(|item| &item.derives)
-        .map(|(_, path)| path.split("::").next().unwrap_or_default())
-        .collect::<std::collections::BTreeSet<_>>();
     let request = request::Request {
         protocol,
         edition: edition.to_owned(),
@@ -430,7 +454,7 @@ fn run(
             })
         });
     let _ = std::fs::remove_dir_all(&work);
-    Ok(split(expanded?, items, &spans))
+    expanded
 }
 
 #[cfg_attr(
@@ -451,6 +475,7 @@ fn split(
         .map(|_| request::Expanded {
             protocol: expanded.protocol,
             expansions: Vec::new(),
+            calls: Vec::new(),
         })
         .collect::<Vec<_>>();
     for expansion in expanded.expansions {
@@ -563,6 +588,7 @@ mod tests {
                 // rustc names an expansion by the name the item writes.
                 expansion("Load", at("Load)]")),
             ],
+            calls: Vec::new(),
         };
         let each = split(expanded, &items, &spans);
         let derives = |index: usize| {

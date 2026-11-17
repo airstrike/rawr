@@ -550,6 +550,18 @@ pub enum Error {
         /// Every item a crate derive needs expanding for.
         items: Box<[Expansion]>,
     },
+    /// A call of a crate's function-like macro whose expansion the program
+    /// has not loaded (#1125): rustc expands it, and checking the program
+    /// again reads the expansion in the call's place. `call` is the encoded
+    /// `rawr_import::expand::call::Call`.
+    MacroExpansionRequired {
+        /// The macro's path from its crate's root (`rust_decimal_macros::dec`).
+        path: ImmutableString,
+        /// The encoded call.
+        call: Box<[u8]>,
+        /// Exact source span of the call's path.
+        reference: Span,
+    },
     /// A struct field or enum variant name is declared twice, or a generic
     /// parameter name in one item's generics.
     DuplicateMember {
@@ -1227,7 +1239,9 @@ impl Error {
             Self::NotInModule { .. } => Category::NotInModule,
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
-            Self::UnknownMacro { .. } => Category::UnknownMacro,
+            Self::UnknownMacro { .. } | Self::MacroExpansionRequired { .. } => {
+                Category::UnknownMacro
+            }
             Self::WrongKind { .. } => Category::WrongKind,
             Self::Unimplemented { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
@@ -1282,6 +1296,7 @@ impl Error {
             | Self::UnknownFunction { name, .. }
             | Self::UnknownVariable { name, .. }
             | Self::UnknownMacro { name, .. }
+            | Self::MacroExpansionRequired { path: name, .. }
             | Self::WrongKind { name, .. }
             | Self::MovedValue { name, .. } => name.as_str(),
             Self::BorrowConflict { message, .. } => message.as_str(),
@@ -1360,6 +1375,7 @@ impl Error {
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. }
             | Self::UnknownMacro { reference, .. }
+            | Self::MacroExpansionRequired { reference, .. }
             | Self::WrongKind { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } => *access,
@@ -1448,6 +1464,7 @@ impl Error {
             | Self::UnknownFunction { .. }
             | Self::UnknownVariable { .. }
             | Self::UnknownMacro { .. }
+            | Self::MacroExpansionRequired { .. }
             | Self::WrongKind { .. }
             | Self::Unimplemented { .. }
             | Self::InvalidConstruction { .. }
@@ -2059,6 +2076,10 @@ impl fmt::Display for Written<'_> {
             } => {
                 write!(formatter, "{} at {reference}", NotFound::Macro(name))
             }
+            Error::MacroExpansionRequired { path, reference, .. } => write!(
+                formatter,
+                "the call of `{path}!` at {reference} has not been expanded"
+            ),
             Error::Unimplemented { message, at, .. } => write!(formatter, "{message} at {at} (E0277)"),
             Error::WrongKind {
                 expected,

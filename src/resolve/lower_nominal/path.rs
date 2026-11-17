@@ -212,6 +212,12 @@ impl<'a> Parser<'a> {
                 }
                 return self.parse_tokio_macro(name, first_span);
             }
+            // `rust_decimal_macros::dec!(1.5)`: a dependency's macro Rawr has
+            // no rules for, as a proc macro is, is rustc's to expand (#1125).
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::Bang) && self.crate_macro(&full) {
+                return self.expand_crate_macro(&full, first_span);
+            }
             // `std::thread::spawn(f)` and `std::sync::mpsc::channel()`.
             let turbofish = matches!(self.peek(), Token::DoubleColon)
                 && matches!(self.peek_second(), Token::LessThan);

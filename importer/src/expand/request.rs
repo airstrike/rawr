@@ -45,6 +45,18 @@ pub struct Expansion {
     pub items: Vec<String>,
 }
 
+/// What one function-like macro call expanded to, at the module the
+/// source holds the call in (#1125).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Called {
+    /// The byte offset in the source of the call's module.
+    pub at: u32,
+    /// The expansion as rustc prints it: one expression, or each
+    /// statement of a call in statement position.
+    pub items: Vec<String>,
+}
+
 /// What `--expand` writes.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -53,4 +65,7 @@ pub struct Expanded {
     pub protocol: u32,
     /// Each derive's expansion, in source order.
     pub expansions: Vec<Expansion>,
+    /// Each macro call's expansion, in source order.
+    #[serde(default)]
+    pub calls: Vec<Called>,
 }

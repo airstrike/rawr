@@ -237,6 +237,13 @@ impl crate::Engine {
                     return Err(super::Error::resolution(sources.clone(), failure)
                         .with_rust_application(call));
                 }
+                // rustc expands a crate macro's call first (#1125).
+                if matches!(
+                    failure.error,
+                    crate::resolve::Error::MacroExpansionRequired { .. }
+                ) {
+                    return Err(super::Error::resolution(sources.clone(), failure));
+                }
                 if let Some(report) = imported_resolution_report(&failure, &sources, &paths)
                     .map_err(super::Error::diagnostic)?
                 {
@@ -297,6 +304,16 @@ impl crate::Engine {
                         misses.extend(hidden_member_misses(contract, unknown));
                     }
                     let (evidence, mut error) = failure.into_parts();
+                    // rustc expands a crate macro's call first, and checking
+                    // again reads its expansion (#1125).
+                    if matches!(
+                        error.err_type(),
+                        crate::ParseErrorType::Resolution(
+                            crate::resolve::Error::MacroExpansionRequired { .. }
+                        )
+                    ) {
+                        return Err(super::Error::compilation(sources.clone(), evidence, error));
+                    }
                     // A miss a proof may settle is reported and demanded as
                     // the ordinary miss, carrying the call to prove first.
                     let mut proving = None;
@@ -1140,6 +1157,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::LoweringUnavailable { .. }
         | R::InvalidDerive { .. }
         | R::ExpansionRequired { .. }
+        | R::MacroExpansionRequired { .. }
         | R::DuplicateMember { .. }
         | R::ImmutableBinding { .. }
         | R::InvalidImplOwner { .. }

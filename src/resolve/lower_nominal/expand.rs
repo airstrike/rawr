@@ -157,8 +157,14 @@ impl Parser<'_> {
         self.parse_primary()
     }
 
-    /// Whether a call of the program's own macro starts the next statement.
+    /// Whether a call of the program's own macro starts the next statement,
+    /// or a crate macro's call is the next statement
+    /// ([`Self::crate_statement_ahead`]).
     pub(super) fn macro_statement_ahead(&mut self) -> bool {
+        #[cfg(feature = "rust-import")]
+        if self.crate_statement_ahead().is_some() {
+            return true;
+        }
         let Token::Identifier(name) = self.peek() else {
             return false;
         };
@@ -168,10 +174,78 @@ impl Parser<'_> {
         }
     }
 
+    /// The path from its crate's root of the crate macro ([`Self::
+    /// crate_macro`]) whose call is the next statement, with how many
+    /// tokens the path is. A call is a statement as rustc parses one: in
+    /// braces not followed by `.` or `?`, or in parentheses or brackets
+    /// followed by `;`. Any other is an expression.
+    #[cfg(feature = "rust-import")]
+    fn crate_statement_ahead(&mut self) -> Option<(String, usize)> {
+        let mut ahead = self.input.clone();
+        let mut segments = Vec::new();
+        let mut taken = 0;
+        loop {
+            let Some((Token::Identifier(name), _)) = ahead.next() else {
+                return None;
+            };
+            segments.push(name.to_string());
+            taken += 1;
+            match ahead.next() {
+                Some((Token::DoubleColon, _)) => taken += 1,
+                Some((Token::Bang, _)) => break,
+                _ => return None,
+            }
+        }
+        let (open, _) = ahead.next()?;
+        let braced = matches!(open, Token::LeftBrace | Token::MapStart);
+        let mut depth = usize::from(open != Token::Unit);
+        while depth > 0 {
+            match ahead.next()? {
+                (Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart, _) => {
+                    depth += 1;
+                }
+                (Token::RightParen | Token::RightBracket | Token::RightBrace, _) => depth -= 1,
+                (Token::EOF, _) => return None,
+                _ => {}
+            }
+        }
+        let after = ahead.next().map(|(token, _)| token);
+        let statement = if braced {
+            !matches!(&after, Some(Token::Period))
+                && !matches!(&after, Some(Token::Reserved(word)) if word.as_str() == "?")
+        } else {
+            matches!(open, Token::LeftParen | Token::LeftBracket | Token::Unit)
+                && matches!(after, Some(Token::SemiColon))
+        };
+        let path = match self.models.import(&segments[0]) {
+            Some(binding) if segments.len() > 1 => {
+                let mut path = binding.qualified.to_string();
+                for segment in &segments[1..] {
+                    path.push_str("::");
+                    path.push_str(segment);
+                }
+                path
+            }
+            _ => segments.join("::"),
+        };
+        (statement && self.crate_macro(&path)).then_some((path, taken))
+    }
+
     /// A call of the program's own macro as a statement: its expansion
     /// takes its place among the block's statements, so a `let` of a name
-    /// the caller passed in binds it after the call, as in Rust.
+    /// the caller passed in binds it after the call, as in Rust. So does a
+    /// crate macro's, as rustc expands it (#1125).
     pub(super) fn parse_macro_statement(&mut self) -> Result<(), Error> {
+        #[cfg(feature = "rust-import")]
+        if let Some((path, taken)) = self.crate_statement_ahead() {
+            let start = self.position();
+            let mut end = start;
+            for _ in 0..taken {
+                let (token, position) = self.next();
+                end = text_end(position, &token.to_string());
+            }
+            return self.splice_crate_expansion(&path, span(start, end), Place::Statement);
+        }
         let (token, position) = self.next();
         let Token::Identifier(name) = token else {
             unreachable!("`macro_statement_ahead` saw a name");
@@ -221,35 +295,7 @@ impl Parser<'_> {
             open => self.group_rest(&open, position, &name)?,
         };
         let call = span(name_span.start(), text_end(end, " "));
-        // rustc's recursion limit bounds how deep calls nest: the
-        // expansions this call is inside are those whose tokens are not all
-        // read yet.
-        let remaining = self.input.len();
-        while self
-            .expansion_ends
-            .last()
-            .is_some_and(|after| *after >= remaining)
-        {
-            self.expansion_ends.pop();
-        }
-        self.expansions += 1;
-        if self.expansion_ends.len() >= self.models.macros.limit()
-            || self.expansions > EXPANSION_LIMIT
-        {
-            return Err(Error::Syntax {
-                message: format!("recursion limit reached while expanding `{name}!`").into(),
-                label: ImmutableString::new(),
-                help: Some(
-                    format!(
-                        "consider increasing the recursion limit by adding a \
-                         `#![recursion_limit = \"{}\"]` attribute to your crate",
-                        self.models.macros.limit() * 2
-                    )
-                    .into(),
-                ),
-                at: call,
-            });
-        }
+        let remaining = self.nest_expansion(&name, call)?;
         let input = macro_rules::trees(&tokens).map_err(|reason| Error::Syntax {
             message: reason,
             label: ImmutableString::new(),
@@ -277,6 +323,57 @@ impl Parser<'_> {
                     at,
                 }
             })?;
+        self.splice_expanded(expansion, name_span.start(), end, place, remaining);
+        Ok(())
+    }
+
+    /// Count one more expansion of the macro `name` at `call`, inside the
+    /// expansions whose tokens are not all read yet: rustc's recursion
+    /// limit bounds how deep calls nest. The input's length is where this
+    /// expansion's tokens end.
+    fn nest_expansion(&mut self, name: &str, call: Span) -> Result<usize, Error> {
+        let remaining = self.input.len();
+        while self
+            .expansion_ends
+            .last()
+            .is_some_and(|after| *after >= remaining)
+        {
+            self.expansion_ends.pop();
+        }
+        self.expansions += 1;
+        if self.expansion_ends.len() >= self.models.macros.limit()
+            || self.expansions > EXPANSION_LIMIT
+        {
+            return Err(Error::Syntax {
+                message: format!("recursion limit reached while expanding `{name}!`").into(),
+                label: ImmutableString::new(),
+                help: Some(
+                    format!(
+                        "consider increasing the recursion limit by adding a \
+                         `#![recursion_limit = \"{}\"]` attribute to your crate",
+                        self.models.macros.limit() * 2
+                    )
+                    .into(),
+                ),
+                at: call,
+            });
+        }
+        Ok(remaining)
+    }
+
+    /// Put a call's `expansion` next in the input, as its `place` parses
+    /// it: one expression is parenthesised, statements in an expression's
+    /// place are a block. `at` is where the call starts, `end` where its
+    /// closing delimiter is, and `remaining` where the expansion's tokens
+    /// end ([`Self::nest_expansion`]).
+    fn splice_expanded(
+        &mut self,
+        expansion: Vec<(Token, Position)>,
+        at: Position,
+        end: Position,
+        place: Place,
+        remaining: usize,
+    ) {
         let statements = {
             let mut depth = 0_usize;
             expansion.iter().any(|(token, _)| {
@@ -291,7 +388,6 @@ impl Parser<'_> {
                 false
             })
         };
-        let at = name_span.start();
         let mut spliced = Vec::with_capacity(expansion.len() + 2);
         if place == Place::Bare {
             spliced.extend(expansion);
@@ -321,6 +417,96 @@ impl Parser<'_> {
         }
         self.expansion_ends.push(remaining);
         self.splice_tokens(spliced);
+    }
+
+    /// Whether `path` names a macro of one of the package's dependencies
+    /// that the crates' facades hold no macro at: a proc macro, whose crate
+    /// has no API to extract, or one a library re-exports from its proc
+    /// macro crate. rustc resolves the path when it expands the call, and
+    /// names it in its error when it holds no macro there.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn crate_macro(&self, path: &str) -> bool {
+        let Some((root, _)) = path.split_once("::") else {
+            return false;
+        };
+        self.models
+            .crates
+            .as_ref()
+            .is_some_and(|crates| crates.dependency(root))
+            && !self
+                .models
+                .host_items(path)
+                .is_some_and(|items| items.iter().any(|item| item.kind().is_macro()))
+    }
+
+    /// `path!(..)`, `path![..]` or `path! {..}` of a crate's function-like
+    /// macro Rawr has no rules for, as a proc macro is, from its `!`:
+    /// rustc's expansion of the call, parsed in its place as one
+    /// expression (#1125).
+    #[cfg(feature = "rust-import")]
+    pub(super) fn expand_crate_macro(
+        &mut self,
+        path: &str,
+        name_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        self.splice_crate_expansion(path, name_span, Place::Expression)?;
+        self.parse_primary()
+    }
+
+    /// Put rustc's expansion of the call of the crate macro at `path`, from
+    /// its `!`, next in the input, as its `place` parses it. The project
+    /// keeps each call's expansion by its macro, delimiters, input and
+    /// place (`rawr_import::expand::call`), so a call whose input an edit
+    /// changed has none yet: it is rustc's to expand, and checking again
+    /// reads it. The expansion's tokens are reported at the call, as
+    /// rustc reports a proc macro's.
+    #[cfg(feature = "rust-import")]
+    fn splice_crate_expansion(
+        &mut self,
+        path: &str,
+        name_span: Span,
+        place: Place,
+    ) -> Result<(), Error> {
+        use rawr_import::expand::call;
+        self.expect(Token::Bang, "'!' after a macro name")?;
+        let (open, position) = self.next();
+        let delimiter = match open {
+            Token::LeftBracket => call::Delimiter::Bracket,
+            Token::LeftBrace | Token::MapStart => call::Delimiter::Brace,
+            _ => call::Delimiter::Parenthesis,
+        };
+        let (tokens, end) = match open {
+            Token::Unit => (Vec::new(), position),
+            open => self.group_rest(&open, position, path)?,
+        };
+        let call = call::Call {
+            path: path.to_owned(),
+            delimiter,
+            input: token_text(&tokens),
+            place: match place {
+                Place::Statement => call::Place::Statements,
+                Place::Expression | Place::Bare => call::Place::Expression,
+            },
+        };
+        let kept =
+            self.models.crates.as_ref().and_then(|crates| {
+                std::fs::read_to_string(call.source_path(crates.project())).ok()
+            });
+        let Some(text) = kept.as_deref().and_then(call::kept) else {
+            return Err(Error::MacroExpansionRequired {
+                path: path.into(),
+                call: serde_json::to_vec(&call).unwrap_or_default().into(),
+                reference: name_span,
+            });
+        };
+        let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;
+        let at = name_span.start();
+        let expansion = lex_rust(&crate::Engine::new_raw(), text)
+            .into_iter()
+            .filter(|(token, _)| *token != Token::EOF)
+            .map(|(token, _)| (token, at))
+            .collect();
+        self.splice_expanded(expansion, at, end, place, remaining);
         Ok(())
     }
 }

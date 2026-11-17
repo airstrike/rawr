@@ -276,6 +276,27 @@ impl Error {
             .collect()
     }
 
+    /// The call of a crate's function-like macro this failure needs rustc
+    /// to expand (#1125). Checking again with its expansion kept reads it
+    /// in the call's place.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_macro_call(&self) -> Option<rawr_import::expand::call::Call> {
+        let error = match &self.kind {
+            Kind::Resolution { error, .. } => error,
+            Kind::Compilation { error, .. } => match error.err_type() {
+                crate::ParseErrorType::Resolution(error) => error,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let crate::resolve::Error::MacroExpansionRequired { call, .. } = error else {
+            return None;
+        };
+        serde_json::from_slice(call).ok()
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn with_rust_demand(
         mut self,

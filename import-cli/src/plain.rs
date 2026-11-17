@@ -453,9 +453,7 @@ pub fn refresh_expansions(graph: &rawr::package::Graph) -> Result<bool, crate::E
 }
 
 /// rustc's expansion of each of `items`, in one driver run, kept as its
-/// source beside its item. The basis is `basis`, else the one the last
-/// expansion kept, else a resolution's of its own, which is kept for the
-/// next.
+/// source beside its item, against [`expansion_basis`].
 fn keep_expansions(
     graph: &rawr::package::Graph,
     items: &[rawr_import::expand::Item],
@@ -466,6 +464,68 @@ fn keep_expansions(
     use rawr_import::expand;
     let project = graph.entry_package().root();
     let directory = expand::directory(project);
+    let roots = items
+        .iter()
+        .flat_map(|item| &item.derives)
+        .map(|(_, resolved)| resolved.split("::").next().unwrap_or_default())
+        .collect::<Vec<_>>();
+    let (basis, native) = expansion_basis(graph, basis, &roots, limits)?;
+    let edition = graph.rust_edition();
+    let expanded = expand::expand(items, &basis, &edition, &directory, &native, limits)
+        .map_err(Error::other)?;
+    for (item, expanded) in items.iter().zip(&expanded) {
+        expand::keep_sources(project, item, expanded).map_err(Error::other)?;
+    }
+    Ok(())
+}
+
+/// Expand through rustc the call of a crate's function-like macro `error`
+/// asks for, keeping its expansion where loading the program reads it in
+/// the call's place (#1125). `basis` is what the run's own resolution
+/// built, when it built one. `false` when the call's expansion is kept
+/// already, so checking again can't help.
+fn expand_call(
+    graph: &rawr::package::Graph,
+    error: &rawr::package::Error,
+    basis: Option<rawr_import::expand::Basis>,
+    limits: &rawr_import::cargo::Limits,
+) -> Result<bool, crate::Error> {
+    use rawr_import::expand::call;
+    let Some(called) = error.rust_macro_call() else {
+        return Ok(false);
+    };
+    let project = graph.entry_package().root();
+    let kept = std::fs::read_to_string(called.source_path(project));
+    if kept.ok().as_deref().and_then(call::kept).is_some() {
+        return Ok(false);
+    }
+    let root = called.path.split("::").next().unwrap_or_default();
+    let (basis, native) = expansion_basis(graph, basis, &[root], limits)?;
+    call::expand(
+        std::slice::from_ref(&called),
+        project,
+        &basis,
+        &graph.rust_edition(),
+        &native,
+        limits,
+    )
+    .map_err(crate::Error::other)?;
+    Ok(true)
+}
+
+/// What rustc's expansions for `graph` run against, with the pinned
+/// toolchain that runs them: `basis`, else the one the last expansion kept,
+/// each while it names every crate in `roots`, else a resolution's of its
+/// own. It is kept for the next expansion.
+fn expansion_basis(
+    graph: &rawr::package::Graph,
+    basis: Option<rawr_import::expand::Basis>,
+    roots: &[&str],
+    limits: &rawr_import::cargo::Limits,
+) -> Result<(rawr_import::expand::Basis, rawr_import::process::Native), crate::Error> {
+    use crate::Error;
+    use rawr_import::expand;
+    let directory = expand::directory(graph.entry_package().root());
     let environment = Environment::capture().map_err(Error::other)?;
     let request = graph
         .rust_inventory_plain(
@@ -475,20 +535,18 @@ fn keep_expansions(
             &mut rawr::package::Copies::default(),
         )
         .map_err(Error::other)?
-        .ok_or_else(|| Error::other("cannot expand a derive in a crate with no Rust dependency"))?;
+        .ok_or_else(|| Error::other("cannot expand a macro in a crate with no Rust dependency"))?;
     let native = request.pinned_native(limits).map_err(Error::other)?;
-    let basis = match basis.or_else(|| expand::Basis::kept(&directory)) {
+    let names_roots = |basis: &expand::Basis| roots.iter().all(|root| basis.names(root));
+    let basis = match basis
+        .filter(names_roots)
+        .or_else(|| expand::Basis::kept(&directory).filter(names_roots))
+    {
         Some(basis) => basis,
         None => expand::Basis::capture(request, &native, limits).map_err(Error::other)?,
     };
     basis.keep(&directory).map_err(Error::other)?;
-    let edition = graph.rust_edition();
-    let expanded = expand::expand(items, &basis, &edition, &directory, &native, limits)
-        .map_err(Error::other)?;
-    for (item, expanded) in items.iter().zip(&expanded) {
-        expand::keep_sources(project, item, expanded).map_err(Error::other)?;
-    }
-    Ok(())
+    Ok((basis, native))
 }
 
 /// Whether a preparation resolves the API its project's last runner was
@@ -888,6 +946,16 @@ fn prepare_resolving(
                         if !error.rust_expansions().is_empty() =>
                     {
                         if !expand(&graph, &error, basis, &limits)? {
+                            return Err(Error::Rawr(error));
+                        }
+                        return prepare(build, target, None, revision, scope, kept);
+                    }
+                    // So does a crate macro's call in a body (#1125): kept
+                    // at the call's text, the next load reads it there.
+                    Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
+                        if error.rust_macro_call().is_some() =>
+                    {
+                        if !expand_call(&graph, &error, basis, &limits)? {
                             return Err(Error::Rawr(error));
                         }
                         return prepare(build, target, None, revision, scope, kept);
